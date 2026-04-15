@@ -6,5 +6,6 @@
 
 /docs/plans
 /app/frontend/dist
+/app/frontend/node_modules
 
 .DS_Store
