@@ -1,0 +1,14 @@
+{
+  "name": "grass-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bunx vite --host 0.0.0.0 --port 5173 --strictPort",
+    "build": "bunx vite build",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "typescript": "latest",
+    "vite": "latest"
+  }
+}
