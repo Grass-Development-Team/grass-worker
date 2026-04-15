@@ -1,0 +1,10 @@
+/target
+
+/temp
+/tmp
+/.tmp
+
+/docs/plans
+/app/frontend/dist
+
+.DS_Store

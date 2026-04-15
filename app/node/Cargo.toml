@@ -1,0 +1,16 @@
+[package]
+name = "grass-node"
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+axum.workspace = true
+grass-config = { path = "../../crates/config" }
+serde.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tower.workspace = true
