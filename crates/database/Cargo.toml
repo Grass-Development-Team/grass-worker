@@ -6,6 +6,11 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+async-trait.workspace = true
+grass-worker-config.workspace = true
 sea-orm.workspace = true
 uuid.workspace = true
-grass-worker-config.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
+tokio.workspace = true

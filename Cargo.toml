@@ -20,6 +20,7 @@ rust-version = "1.90"
 axum = "0.8"
 axum-reverse-proxy = "1.0"
 async-trait = "0.1"
+chrono = "0.4"
 mime_guess = "2"
 rustls = { version = "0.23", features = ["ring"] }
 rust-embed = { version = "8.11", features = ["interpolate-folder-path"] }
@@ -29,7 +30,7 @@ tempfile = "3"
 tokio = { version = "1", features = ["fs", "macros", "net", "rt-multi-thread"] }
 toml = "0.9"
 tower = { version = "0.5", features = ["util"] }
-sea-orm = { version = "1.1", features = ["sqlx-postgres", "runtime-tokio-rustls", "with-uuid", "with-chrono"] }
+sea-orm = { version = "1.1", features = ["sqlx-postgres", "runtime-tokio-rustls", "with-uuid", "with-chrono", "mock"] }
 sea-orm-migration = { version = "1.1", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
 uuid = { version = "1", features = ["v4"] }
 
