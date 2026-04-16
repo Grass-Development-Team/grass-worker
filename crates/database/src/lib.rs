@@ -32,7 +32,10 @@ mod tests {
 
     #[test]
     fn deployment_artifact_entity_uses_expected_table_name() {
-        assert_eq!(deployment_artifact::Entity.table_name(), "deployment_artifacts");
+        assert_eq!(
+            deployment_artifact::Entity.table_name(),
+            "deployment_artifacts"
+        );
     }
 
     #[test]
@@ -145,7 +148,10 @@ mod tests {
             .into_connection();
         let repository = SeaOrmProjectRepository::new(database);
 
-        let projects = repository.list_by_owner(project.owner_user_id).await.unwrap();
+        let projects = repository
+            .list_by_owner(project.owner_user_id)
+            .await
+            .unwrap();
 
         assert_eq!(projects, vec![project]);
     }
@@ -349,7 +355,10 @@ mod tests {
             })
             .await
             .unwrap();
-        let found = repository.find_by_token_hash("sha256$session").await.unwrap();
+        let found = repository
+            .find_by_token_hash("sha256$session")
+            .await
+            .unwrap();
 
         assert_eq!(session.token_hash, "sha256$session");
         assert_eq!(session.expires_at, expires_at);

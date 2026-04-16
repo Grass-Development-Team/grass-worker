@@ -4,8 +4,8 @@ use crate::entities::{
 use async_trait::async_trait;
 use sea_orm::entity::prelude::DateTimeUtc;
 use sea_orm::{
-    sea_query::OnConflict, ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait,
-    QueryFilter, Set,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set,
+    sea_query::OnConflict,
 };
 use uuid::Uuid;
 
@@ -108,7 +108,10 @@ pub trait UserPasswordCredentialRepository {
 #[async_trait]
 pub trait UserSessionRepository {
     async fn create(&self, new_session: NewUserSession) -> Result<user_session::Model, DbErr>;
-    async fn find_by_token_hash(&self, token_hash: &str) -> Result<Option<user_session::Model>, DbErr>;
+    async fn find_by_token_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<user_session::Model>, DbErr>;
 }
 
 #[derive(Debug)]
@@ -416,7 +419,10 @@ impl UserSessionRepository for SeaOrmUserSessionRepository {
         Ok(model)
     }
 
-    async fn find_by_token_hash(&self, token_hash: &str) -> Result<Option<user_session::Model>, DbErr> {
+    async fn find_by_token_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<user_session::Model>, DbErr> {
         user_session::Entity::find()
             .filter(user_session::Column::TokenHash.eq(token_hash))
             .one(&self.database)

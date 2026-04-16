@@ -16,7 +16,9 @@ pub enum ConfigError {
         source: toml::de::Error,
     },
     InvalidArguments(String),
-    MissingSection { section: &'static str },
+    MissingSection {
+        section: &'static str,
+    },
 }
 
 impl std::fmt::Display for ConfigError {
@@ -26,7 +28,11 @@ impl std::fmt::Display for ConfigError {
                 write!(f, "failed to read config file {}: {source}", path.display())
             }
             Self::Parse { path, source } => {
-                write!(f, "failed to parse config file {}: {source}", path.display())
+                write!(
+                    f,
+                    "failed to parse config file {}: {source}",
+                    path.display()
+                )
             }
             Self::InvalidArguments(message) => write!(f, "{message}"),
             Self::MissingSection { section } => {
@@ -158,13 +164,13 @@ impl AppConfig {
         }
 
         match Self::load_for_api_from_path(&default_path) {
-            Ok(config) => return Ok(config),
+            Ok(config) => Ok(config),
             Err(ConfigError::Io { source, .. })
                 if source.kind() == std::io::ErrorKind::NotFound =>
             {
                 Ok(Self::default())
             }
-            Err(error) => return Err(error),
+            Err(error) => Err(error),
         }
     }
 
@@ -493,9 +499,11 @@ listen = "127.0.0.1:4100"
         )
         .unwrap();
 
-        let config =
-            AppConfig::load_for_api_in_dir(["grass-worker-api", "--config", "missing.toml"], temp_dir.path())
-                .unwrap();
+        let config = AppConfig::load_for_api_in_dir(
+            ["grass-worker-api", "--config", "missing.toml"],
+            temp_dir.path(),
+        )
+        .unwrap();
 
         assert_eq!(config.server.listen.to_string(), "127.0.0.1:4100");
         assert!(config.database.is_none());
@@ -536,7 +544,11 @@ password = "secret"
         let error = AppConfig::load_for_api_in_dir(args, temp_dir.path()).unwrap_err();
 
         assert!(matches!(error, ConfigError::Io { .. }));
-        assert!(error.to_string().contains(&explicit_dir.display().to_string()));
+        assert!(
+            error
+                .to_string()
+                .contains(&explicit_dir.display().to_string())
+        );
     }
 
     #[test]
@@ -621,8 +633,9 @@ listen = "127.0.0.1:4101"
     #[test]
     fn load_from_args_rejects_missing_config_value() {
         let temp_dir = tempdir().unwrap();
-        let error = AppConfig::load_for_api_in_dir(["grass-worker-api", "--config"], temp_dir.path())
-            .unwrap_err();
+        let error =
+            AppConfig::load_for_api_in_dir(["grass-worker-api", "--config"], temp_dir.path())
+                .unwrap_err();
 
         assert!(matches!(error, ConfigError::InvalidArguments(_)));
     }
@@ -630,8 +643,9 @@ listen = "127.0.0.1:4101"
     #[test]
     fn load_from_args_rejects_unknown_flags() {
         let temp_dir = tempdir().unwrap();
-        let error = AppConfig::load_for_api_in_dir(["grass-worker-api", "--verbose"], temp_dir.path())
-            .unwrap_err();
+        let error =
+            AppConfig::load_for_api_in_dir(["grass-worker-api", "--verbose"], temp_dir.path())
+                .unwrap_err();
 
         assert!(matches!(error, ConfigError::InvalidArguments(_)));
     }
@@ -642,9 +656,14 @@ listen = "127.0.0.1:4101"
         let default_path = temp_dir.path().join(DEFAULT_CONFIG_FILE);
         fs::write(&default_path, "server = [").unwrap();
 
-        let error = AppConfig::load_for_api_in_dir(["grass-worker-api"], temp_dir.path()).unwrap_err();
+        let error =
+            AppConfig::load_for_api_in_dir(["grass-worker-api"], temp_dir.path()).unwrap_err();
 
         assert!(matches!(error, ConfigError::Parse { .. }));
-        assert!(error.to_string().contains(&default_path.display().to_string()));
+        assert!(
+            error
+                .to_string()
+                .contains(&default_path.display().to_string())
+        );
     }
 }

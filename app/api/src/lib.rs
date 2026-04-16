@@ -5,10 +5,10 @@ mod startup;
 use axum::routing::any;
 use axum::{Json, Router, routing::get};
 use frontend::{FrontendMode, install_frontend};
-use setup::install_setup;
 use grass_worker_config::AppConfig;
-use startup::SetupContext;
 use serde::Serialize;
+use setup::install_setup;
+use startup::SetupContext;
 use std::sync::OnceLock;
 
 pub use startup::{SetupStage, StartupMode};
@@ -85,11 +85,11 @@ pub fn app_router(mode: impl Into<AppMode>) -> std::io::Result<Router> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::startup::SetupContext;
     use axum::{
         body::{Body, to_bytes},
         http::{Request, StatusCode},
     };
-    use crate::startup::SetupContext;
     use grass_worker_config::AppConfig;
     use tower::ServiceExt;
 
