@@ -15,6 +15,3 @@ sea-orm-migration.workspace = true
 
 [dependencies.grass-worker-database]
 workspace = true
-
-[dependencies.tokio]
-workspace = true
