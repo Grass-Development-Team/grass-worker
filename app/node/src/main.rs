@@ -1,4 +1,4 @@
-use grass_worker_config::AppConfig;
+use grass_worker_config::NodeAppConfig;
 use grass_worker_node::app_router;
 use std::process::ExitCode;
 
@@ -14,7 +14,7 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let config = AppConfig::load()?;
+    let config = NodeAppConfig::load()?;
     let listener = tokio::net::TcpListener::bind(config.node.listen).await?;
 
     axum::serve(listener, app_router()).await?;
