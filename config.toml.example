@@ -1,15 +1,19 @@
 [server]
 listen = "127.0.0.1:3000"
+# Required boot config for `app/api`.
 
 [node]
 listen = "127.0.0.1:3001"
+# Required boot config for `app/node`.
 
-[database]
-host = "127.0.0.1"
-port = 5432
-db_name = "grass_worker"
-user = "postgres"
-password = "postgres"
+# Optional during `app/api` setup mode.
+# Add this section before enabling database-backed API features.
+# [database]
+# host = "127.0.0.1"
+# port = 5432
+# db_name = "grass_worker"
+# user = "postgres"
+# password = "postgres"
 # schema = "public"
 
 # Uncomment this section for development proxy mode.
