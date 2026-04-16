@@ -1,0 +1,17 @@
+[package]
+name = "grass-worker-migration"
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "grass_worker_migration"
+path = "src/lib.rs"
+
+[dependencies]
+async-trait.workspace = true
+sea-orm-migration.workspace = true
+
+[dependencies.grass-worker-database]
+workspace = true
