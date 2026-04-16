@@ -9,7 +9,10 @@ rust-version.workspace = true
 axum.workspace = true
 axum-reverse-proxy.workspace = true
 grass-worker-assets.workspace = true
+grass-worker-database.workspace = true
+grass-worker-migration.workspace = true
 mime_guess.workspace = true
+rustls.workspace = true
 serde.workspace = true
 tokio.workspace = true
 

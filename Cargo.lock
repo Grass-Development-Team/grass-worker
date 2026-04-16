@@ -950,7 +950,10 @@ dependencies = [
  "axum-reverse-proxy",
  "grass-worker-assets",
  "grass-worker-config",
+ "grass-worker-database",
+ "grass-worker-migration",
  "mime_guess",
+ "rustls",
  "serde",
  "serde_json",
  "tempfile",
@@ -978,6 +981,7 @@ dependencies = [
 name = "grass-worker-database"
 version = "0.1.0"
 dependencies = [
+ "grass-worker-config",
  "sea-orm",
  "uuid",
 ]

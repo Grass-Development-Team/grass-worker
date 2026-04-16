@@ -5,6 +5,7 @@ use axum::{Json, Router, routing::get};
 use frontend::{FrontendMode, install_frontend};
 use grass_worker_config::AppConfig;
 use serde::Serialize;
+use std::sync::OnceLock;
 
 #[derive(Debug, Serialize)]
 struct HealthResponse {
@@ -23,7 +24,17 @@ async fn api_not_found() -> axum::http::StatusCode {
     axum::http::StatusCode::NOT_FOUND
 }
 
+fn ensure_rustls_crypto_provider() {
+    static PROVIDER: OnceLock<()> = OnceLock::new();
+
+    PROVIDER.get_or_init(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 pub fn app_router(config: AppConfig) -> std::io::Result<Router> {
+    ensure_rustls_crypto_provider();
+
     let router = Router::new()
         .route("/health", get(health))
         .route("/api/{*path}", any(api_not_found));
