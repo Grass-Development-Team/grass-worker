@@ -64,6 +64,8 @@ dev_server = "http://127.0.0.1:5173"
 
 Rules:
 
+- `app/api` uses the configured PostgreSQL connection, creates the configured schema if needed, and runs pending migrations on startup.
+- `schema` is optional and defaults to `public`.
 - With `[development]`, `app/api` proxies frontend routes to `development.dev_server`.
 - Without `[development]`, `app/api` serves frontend assets by checking `./public/` first and then falling back to embedded assets.
 - `/health` and `/api/*` remain backend-owned in both modes.
