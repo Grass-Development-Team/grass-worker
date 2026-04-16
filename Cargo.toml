@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["app/api", "app/node", "crates/config"]
-default-members = ["app/api", "app/node"]
+members = ["app/api", "app/node", "crates/assets", "crates/config"]
+default-members = ["app/api", "app/node", "crates/assets"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,7 +11,17 @@ rust-version = "1.90"
 
 [workspace.dependencies]
 axum = "0.8"
+axum-reverse-proxy = "1.0"
+mime_guess = "2"
+rust-embed = { version = "8.11", features = ["interpolate-folder-path"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
+tempfile = "3"
+tokio = { version = "1", features = ["fs", "macros", "net", "rt-multi-thread"] }
+toml = "0.9"
 tower = { version = "0.5", features = ["util"] }
+
+grass-worker-api = { path = "app/api" }
+grass-worker-node = { path = "app/node" }
+grass-worker-assets = { path = "crates/assets" }
+grass-worker-config = { path = "crates/config" }

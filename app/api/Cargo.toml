@@ -1,5 +1,5 @@
 [package]
-name = "grass-api"
+name = "grass-worker-api"
 version.workspace = true
 license.workspace = true
 edition.workspace = true
@@ -7,10 +7,15 @@ rust-version.workspace = true
 
 [dependencies]
 axum.workspace = true
-grass-config = { path = "../../crates/config" }
+axum-reverse-proxy.workspace = true
+grass-worker-assets.workspace = true
+mime_guess.workspace = true
 serde.workspace = true
 tokio.workspace = true
 
+grass-worker-config.workspace = true
+
 [dev-dependencies]
 serde_json.workspace = true
+tempfile.workspace = true
 tower.workspace = true

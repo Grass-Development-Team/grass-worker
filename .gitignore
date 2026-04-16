@@ -7,5 +7,6 @@
 /docs/plans
 /app/frontend/dist
 /app/frontend/node_modules
+config.toml
 
 .DS_Store
