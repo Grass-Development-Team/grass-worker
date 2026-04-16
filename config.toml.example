@@ -1,0 +1,10 @@
+[server]
+listen = "127.0.0.1:3000"
+
+[node]
+listen = "127.0.0.1:3001"
+
+# Uncomment this section for development proxy mode.
+#
+# [development]
+# dev_server = "http://127.0.0.1:5173"

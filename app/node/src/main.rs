@@ -1,10 +1,22 @@
-use grass_config::AppConfig;
-use grass_node::app_router;
+use grass_worker_config::AppConfig;
+use grass_worker_node::app_router;
+use std::process::ExitCode;
 
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
-    let config = AppConfig::from_env();
-    let listener = tokio::net::TcpListener::bind(config.node.socket_addr()).await?;
+async fn main() -> ExitCode {
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
 
-    axum::serve(listener, app_router()).await
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let config = AppConfig::load()?;
+    let listener = tokio::net::TcpListener::bind(config.node.listen).await?;
+
+    axum::serve(listener, app_router()).await?;
+    Ok(())
 }
