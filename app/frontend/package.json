@@ -3,11 +3,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bunx vite --host 0.0.0.0 --port 5173 --strictPort",
-    "build": "bunx vite build",
+    "dev": "bunx vite --config vite.config.ts",
+    "build": "bunx vite build --config vite.config.ts",
     "test": "bun test"
   },
   "devDependencies": {
+    "@types/node": "latest",
+    "bun-types": "latest",
     "typescript": "latest",
     "vite": "latest"
   }
