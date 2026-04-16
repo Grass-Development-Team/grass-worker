@@ -8,6 +8,8 @@
     "test": "bun test"
   },
   "devDependencies": {
+    "@types/node": "latest",
+    "bun-types": "latest",
     "typescript": "latest",
     "vite": "latest"
   }
