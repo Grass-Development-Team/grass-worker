@@ -1,0 +1,37 @@
+use sea_orm::entity::prelude::*;
+
+#[derive(Clone, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
+pub enum ProjectStatus {
+    #[sea_orm(string_value = "active")]
+    Active,
+    #[sea_orm(string_value = "archived")]
+    Archived,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+#[sea_orm(table_name = "projects")]
+pub struct Model {
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub id: Uuid,
+    pub slug: String,
+    pub name: String,
+    pub status: ProjectStatus,
+    pub created_at: DateTimeUtc,
+    pub updated_at: DateTimeUtc,
+    pub archived_at: Option<DateTimeUtc>,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {
+    #[sea_orm(has_many = "super::deployment::Entity")]
+    Deployments,
+}
+
+impl Related<super::deployment::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Deployments.def()
+    }
+}
+
+impl ActiveModelBehavior for ActiveModel {}

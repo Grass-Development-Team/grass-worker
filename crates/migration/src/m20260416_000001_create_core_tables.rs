@@ -1,0 +1,192 @@
+use grass_worker_database::entities::{deployment, deployment_artifact, project};
+use sea_orm_migration::prelude::*;
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .create_table(
+                Table::create()
+                    .table(project::Entity)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(project::Column::Id)
+                            .uuid()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(project::Column::Slug)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(project::Column::Name)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(project::Column::Status)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(project::Column::CreatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .default(Expr::current_timestamp()),
+                    )
+                    .col(
+                        ColumnDef::new(project::Column::UpdatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .default(Expr::current_timestamp()),
+                    )
+                    .col(ColumnDef::new(project::Column::ArchivedAt).timestamp_with_time_zone())
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("uq-projects-slug")
+                    .table(project::Entity)
+                    .col(project::Column::Slug)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(deployment::Entity)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(deployment::Column::Id)
+                            .uuid()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(deployment::Column::ProjectId)
+                            .uuid()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(deployment::Column::Status)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(deployment::Column::SourceBranch).string())
+                    .col(ColumnDef::new(deployment::Column::SourceRevision).string())
+                    .col(
+                        ColumnDef::new(deployment::Column::CreatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .default(Expr::current_timestamp()),
+                    )
+                    .col(ColumnDef::new(deployment::Column::StartedAt).timestamp_with_time_zone())
+                    .col(ColumnDef::new(deployment::Column::FinishedAt).timestamp_with_time_zone())
+                    .foreign_key(
+                        ForeignKey::create()
+                            .name("fk-deployments-project-id")
+                            .from(deployment::Entity, deployment::Column::ProjectId)
+                            .to(project::Entity, project::Column::Id)
+                            .on_delete(ForeignKeyAction::Cascade)
+                            .on_update(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx-deployments-project-id")
+                    .table(deployment::Entity)
+                    .col(deployment::Column::ProjectId)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(deployment_artifact::Entity)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(deployment_artifact::Column::Id)
+                            .uuid()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(deployment_artifact::Column::DeploymentId)
+                            .uuid()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(deployment_artifact::Column::Kind)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(deployment_artifact::Column::StoragePath)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(deployment_artifact::Column::ChecksumSha256).string())
+                    .col(ColumnDef::new(deployment_artifact::Column::SizeBytes).big_integer())
+                    .col(
+                        ColumnDef::new(deployment_artifact::Column::CreatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .default(Expr::current_timestamp()),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .name("fk-deployment-artifacts-deployment-id")
+                            .from(
+                                deployment_artifact::Entity,
+                                deployment_artifact::Column::DeploymentId,
+                            )
+                            .to(deployment::Entity, deployment::Column::Id)
+                            .on_delete(ForeignKeyAction::Cascade)
+                            .on_update(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx-deployment-artifacts-deployment-id")
+                    .table(deployment_artifact::Entity)
+                    .col(deployment_artifact::Column::DeploymentId)
+                    .to_owned(),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .drop_table(Table::drop().table(deployment_artifact::Entity).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(deployment::Entity).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(project::Entity).to_owned())
+            .await?;
+
+        Ok(())
+    }
+}
