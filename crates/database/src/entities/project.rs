@@ -14,6 +14,7 @@ pub enum ProjectStatus {
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
+    pub owner_user_id: Uuid,
     pub slug: String,
     pub name: String,
     pub status: ProjectStatus,
@@ -24,8 +25,22 @@ pub struct Model {
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
+    #[sea_orm(
+        belongs_to = "super::user::Entity",
+        from = "Column::OwnerUserId",
+        to = "super::user::Column::Id",
+        on_update = "Cascade",
+        on_delete = "Restrict"
+    )]
+    Owner,
     #[sea_orm(has_many = "super::deployment::Entity")]
     Deployments,
+}
+
+impl Related<super::user::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Owner.def()
+    }
 }
 
 impl Related<super::deployment::Entity> for Entity {

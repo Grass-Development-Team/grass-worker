@@ -1,4 +1,6 @@
-use grass_worker_database::entities::{deployment, deployment_artifact, project};
+use grass_worker_database::entities::{
+    deployment, deployment_artifact, project, user, user_password_credential, user_session,
+};
 use sea_orm_migration::prelude::*;
 
 #[derive(DeriveMigrationName)]
@@ -10,6 +12,154 @@ impl MigrationTrait for Migration {
         manager
             .create_table(
                 Table::create()
+                    .table(user::Entity)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(user::Column::Id)
+                            .uuid()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(user::Column::Email).string().not_null())
+                    .col(
+                        ColumnDef::new(user::Column::IsAdmin)
+                            .boolean()
+                            .not_null()
+                            .default(false),
+                    )
+                    .col(
+                        ColumnDef::new(user::Column::CreatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .default(Expr::current_timestamp()),
+                    )
+                    .col(
+                        ColumnDef::new(user::Column::UpdatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .default(Expr::current_timestamp()),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("uq-users-email")
+                    .table(user::Entity)
+                    .col(user::Column::Email)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(user_password_credential::Entity)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(user_password_credential::Column::UserId)
+                            .uuid()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(user_password_credential::Column::PasswordHash)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(user_password_credential::Column::PasswordUpdatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .default(Expr::current_timestamp()),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .name("fk-user-password-credentials-user-id")
+                            .from(
+                                user_password_credential::Entity,
+                                user_password_credential::Column::UserId,
+                            )
+                            .to(user::Entity, user::Column::Id)
+                            .on_delete(ForeignKeyAction::Cascade)
+                            .on_update(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(user_session::Entity)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(user_session::Column::Id)
+                            .uuid()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(user_session::Column::UserId)
+                            .uuid()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(user_session::Column::TokenHash)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(user_session::Column::CreatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .default(Expr::current_timestamp()),
+                    )
+                    .col(
+                        ColumnDef::new(user_session::Column::ExpiresAt)
+                            .timestamp_with_time_zone()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(user_session::Column::RevokedAt).timestamp_with_time_zone())
+                    .foreign_key(
+                        ForeignKey::create()
+                            .name("fk-user-sessions-user-id")
+                            .from(user_session::Entity, user_session::Column::UserId)
+                            .to(user::Entity, user::Column::Id)
+                            .on_delete(ForeignKeyAction::Cascade)
+                            .on_update(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("uq-user-sessions-token-hash")
+                    .table(user_session::Entity)
+                    .col(user_session::Column::TokenHash)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx-user-sessions-user-id")
+                    .table(user_session::Entity)
+                    .col(user_session::Column::UserId)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
                     .table(project::Entity)
                     .if_not_exists()
                     .col(
@@ -17,6 +167,11 @@ impl MigrationTrait for Migration {
                             .uuid()
                             .not_null()
                             .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(project::Column::OwnerUserId)
+                            .uuid()
+                            .not_null(),
                     )
                     .col(
                         ColumnDef::new(project::Column::Slug)
@@ -46,6 +201,24 @@ impl MigrationTrait for Migration {
                             .default(Expr::current_timestamp()),
                     )
                     .col(ColumnDef::new(project::Column::ArchivedAt).timestamp_with_time_zone())
+                    .foreign_key(
+                        ForeignKey::create()
+                            .name("fk-projects-owner-user-id")
+                            .from(project::Entity, project::Column::OwnerUserId)
+                            .to(user::Entity, user::Column::Id)
+                            .on_delete(ForeignKeyAction::Restrict)
+                            .on_update(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx-projects-owner-user-id")
+                    .table(project::Entity)
+                    .col(project::Column::OwnerUserId)
                     .to_owned(),
             )
             .await?;
@@ -178,6 +351,12 @@ impl MigrationTrait for Migration {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
+            .drop_table(Table::drop().table(user_session::Entity).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(user_password_credential::Entity).to_owned())
+            .await?;
+        manager
             .drop_table(Table::drop().table(deployment_artifact::Entity).to_owned())
             .await?;
         manager
@@ -185,6 +364,9 @@ impl MigrationTrait for Migration {
             .await?;
         manager
             .drop_table(Table::drop().table(project::Entity).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(user::Entity).to_owned())
             .await?;
 
         Ok(())

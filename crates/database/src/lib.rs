@@ -5,15 +5,19 @@ pub mod repository;
 #[cfg(test)]
 mod tests {
     use super::connection::{create_schema_sql, postgres_connection_string, set_search_path_sql};
-    use super::entities::{deployment, deployment_artifact, project};
+    use super::entities::{
+        deployment, deployment_artifact, project, user, user_password_credential, user_session,
+    };
     use super::repository::{
         DeploymentArtifactRepository, DeploymentRepository, NewDeployment, NewDeploymentArtifact,
-        NewProject, ProjectRepository, SeaOrmDeploymentArtifactRepository,
-        SeaOrmDeploymentRepository, SeaOrmProjectRepository,
+        NewProject, NewUser, NewUserPasswordCredential, NewUserSession, ProjectRepository,
+        SeaOrmDeploymentArtifactRepository, SeaOrmDeploymentRepository, SeaOrmProjectRepository,
+        SeaOrmUserPasswordCredentialRepository, SeaOrmUserRepository, SeaOrmUserSessionRepository,
+        UserPasswordCredentialRepository, UserRepository, UserSessionRepository,
     };
-    use sea_orm::{DatabaseBackend, MockDatabase, MockExecResult};
-    use sea_orm::EntityName;
     use grass_worker_config::DatabaseConfig;
+    use sea_orm::EntityName;
+    use sea_orm::{DatabaseBackend, MockDatabase, MockExecResult};
     use uuid::Uuid;
 
     #[test]
@@ -29,6 +33,24 @@ mod tests {
     #[test]
     fn deployment_artifact_entity_uses_expected_table_name() {
         assert_eq!(deployment_artifact::Entity.table_name(), "deployment_artifacts");
+    }
+
+    #[test]
+    fn user_entity_uses_expected_table_name() {
+        assert_eq!(user::Entity.table_name(), "users");
+    }
+
+    #[test]
+    fn user_password_credential_entity_uses_expected_table_name() {
+        assert_eq!(
+            user_password_credential::Entity.table_name(),
+            "user_password_credentials"
+        );
+    }
+
+    #[test]
+    fn user_session_entity_uses_expected_table_name() {
+        assert_eq!(user_session::Entity.table_name(), "user_sessions");
     }
 
     #[test]
@@ -83,6 +105,7 @@ mod tests {
         let project = repository
             .create(NewProject {
                 id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
+                owner_user_id: Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap(),
                 slug: "docs-site".to_owned(),
                 name: "Docs Site".to_owned(),
                 created_at,
@@ -92,10 +115,39 @@ mod tests {
 
         assert_eq!(project.slug, "docs-site");
         assert_eq!(project.name, "Docs Site");
+        assert_eq!(
+            project.owner_user_id,
+            Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap()
+        );
         assert_eq!(project.status, project::ProjectStatus::Active);
         assert_eq!(project.created_at, created_at);
         assert_eq!(project.updated_at, created_at);
         assert_eq!(project.archived_at, None);
+    }
+
+    #[tokio::test]
+    async fn project_repository_lists_projects_by_owner() {
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-04-16T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let project = project::Model {
+            id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
+            owner_user_id: Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap(),
+            slug: "docs-site".to_owned(),
+            name: "Docs Site".to_owned(),
+            status: project::ProjectStatus::Active,
+            created_at,
+            updated_at: created_at,
+            archived_at: None,
+        };
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[project.clone()]])
+            .into_connection();
+        let repository = SeaOrmProjectRepository::new(database);
+
+        let projects = repository.list_by_owner(project.owner_user_id).await.unwrap();
+
+        assert_eq!(projects, vec![project]);
     }
 
     #[tokio::test]
@@ -185,5 +237,122 @@ mod tests {
         assert_eq!(artifact.kind, deployment_artifact::ArtifactKind::StaticSite);
         assert_eq!(artifact.size_bytes, Some(2048));
         assert_eq!(artifact.created_at, created_at);
+    }
+
+    #[tokio::test]
+    async fn user_repository_create_returns_non_admin_user() {
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .into_connection();
+        let repository = SeaOrmUserRepository::new(database);
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-04-16T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+
+        let user = repository
+            .create(NewUser {
+                id: Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap(),
+                email: "user@example.com".to_owned(),
+                created_at,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(user.email, "user@example.com");
+        assert!(!user.is_admin);
+        assert_eq!(user.created_at, created_at);
+        assert_eq!(user.updated_at, created_at);
+    }
+
+    #[tokio::test]
+    async fn user_repository_finds_user_by_email() {
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-04-16T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let user = user::Model {
+            id: Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap(),
+            email: "user@example.com".to_owned(),
+            is_admin: false,
+            created_at,
+            updated_at: created_at,
+        };
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[user.clone()]])
+            .into_connection();
+        let repository = SeaOrmUserRepository::new(database);
+
+        let found = repository.find_by_email("user@example.com").await.unwrap();
+
+        assert_eq!(found, Some(user));
+    }
+
+    #[tokio::test]
+    async fn password_credential_repository_sets_password_hash() {
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .into_connection();
+        let repository = SeaOrmUserPasswordCredentialRepository::new(database);
+        let password_updated_at = chrono::DateTime::parse_from_rfc3339("2026-04-16T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+
+        let credential = repository
+            .set_password(NewUserPasswordCredential {
+                user_id: Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap(),
+                password_hash: "argon2id$example".to_owned(),
+                password_updated_at,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(credential.password_hash, "argon2id$example");
+        assert_eq!(credential.password_updated_at, password_updated_at);
+    }
+
+    #[tokio::test]
+    async fn session_repository_creates_and_reads_session_by_token_hash() {
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-04-16T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let expires_at = chrono::DateTime::parse_from_rfc3339("2026-04-23T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .append_query_results([[user_session::Model {
+                id: Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap(),
+                user_id: Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap(),
+                token_hash: "sha256$session".to_owned(),
+                created_at,
+                expires_at,
+                revoked_at: None,
+            }]])
+            .into_connection();
+        let repository = SeaOrmUserSessionRepository::new(database);
+
+        let session = repository
+            .create(NewUserSession {
+                id: Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap(),
+                user_id: Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap(),
+                token_hash: "sha256$session".to_owned(),
+                created_at,
+                expires_at,
+            })
+            .await
+            .unwrap();
+        let found = repository.find_by_token_hash("sha256$session").await.unwrap();
+
+        assert_eq!(session.token_hash, "sha256$session");
+        assert_eq!(session.expires_at, expires_at);
+        assert_eq!(found.unwrap().id, session.id);
     }
 }
