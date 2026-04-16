@@ -173,21 +173,9 @@ impl MigrationTrait for Migration {
                             .uuid()
                             .not_null(),
                     )
-                    .col(
-                        ColumnDef::new(project::Column::Slug)
-                            .string()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(project::Column::Name)
-                            .string()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(project::Column::Status)
-                            .string()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(project::Column::Slug).string().not_null())
+                    .col(ColumnDef::new(project::Column::Name).string().not_null())
+                    .col(ColumnDef::new(project::Column::Status).string().not_null())
                     .col(
                         ColumnDef::new(project::Column::CreatedAt)
                             .timestamp_with_time_zone()
@@ -354,7 +342,11 @@ impl MigrationTrait for Migration {
             .drop_table(Table::drop().table(user_session::Entity).to_owned())
             .await?;
         manager
-            .drop_table(Table::drop().table(user_password_credential::Entity).to_owned())
+            .drop_table(
+                Table::drop()
+                    .table(user_password_credential::Entity)
+                    .to_owned(),
+            )
             .await?;
         manager
             .drop_table(Table::drop().table(deployment_artifact::Entity).to_owned())

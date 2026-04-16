@@ -62,8 +62,7 @@ fn validate_schema_name(schema: &str) -> Result<(), DbErr> {
         Ok(())
     } else {
         Err(DbErr::Custom(
-            "invalid postgres schema name; use letters, digits, and underscores only"
-                .to_owned(),
+            "invalid postgres schema name; use letters, digits, and underscores only".to_owned(),
         ))
     }
 }

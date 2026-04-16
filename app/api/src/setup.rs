@@ -1,9 +1,5 @@
 use crate::startup::{SetupContext, SetupStage};
-use axum::{
-    Extension, Json, Router,
-    response::Html,
-    routing::get,
-};
+use axum::{Extension, Json, Router, response::Html, routing::get};
 use serde::Serialize;
 
 const SETUP_PLACEHOLDER_PAGE: &str = r#"<!doctype html>

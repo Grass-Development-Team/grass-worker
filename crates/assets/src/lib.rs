@@ -1,5 +1,5 @@
-use std::borrow::Cow;
 use rust_embed::Embed;
+use std::borrow::Cow;
 
 #[derive(Embed)]
 #[folder = "assets/public"]
@@ -30,7 +30,10 @@ mod tests {
         let slash_prefixed_bundle = get_asset(&leading_slash_bundle_path)
             .expect("bundle lookup with leading slash should work");
 
-        assert!(!bundle.is_empty(), "referenced js bundle should not be empty");
+        assert!(
+            !bundle.is_empty(),
+            "referenced js bundle should not be empty"
+        );
         assert_eq!(bundle, slash_prefixed_bundle);
     }
 
