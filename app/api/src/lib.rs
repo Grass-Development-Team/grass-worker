@@ -1,14 +1,15 @@
+mod frontend;
+
+use axum::routing::any;
 use axum::{Json, Router, routing::get};
+use frontend::{FrontendMode, install_frontend};
+use grass_worker_config::AppConfig;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
 struct HealthResponse {
     service: &'static str,
     status: &'static str,
-}
-
-async fn root() -> &'static str {
-    "Hello, World from control-api"
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -18,10 +19,25 @@ async fn health() -> Json<HealthResponse> {
     })
 }
 
-pub fn app_router() -> Router {
-    Router::new()
-        .route("/", get(root))
+async fn api_not_found() -> axum::http::StatusCode {
+    axum::http::StatusCode::NOT_FOUND
+}
+
+pub fn app_router(config: AppConfig) -> std::io::Result<Router> {
+    let router = Router::new()
         .route("/health", get(health))
+        .route("/api/{*path}", any(api_not_found));
+
+    let frontend_mode = match config.development {
+        Some(development) => FrontendMode::Development {
+            dev_server: development.dev_server,
+        },
+        None => FrontendMode::Release {
+            public_dir: std::env::current_dir()?.join("public"),
+        },
+    };
+
+    Ok(install_frontend(router, frontend_mode))
 }
 
 #[cfg(test)]
@@ -31,27 +47,13 @@ mod tests {
         body::{Body, to_bytes},
         http::{Request, StatusCode},
     };
+    use grass_worker_config::AppConfig;
     use tower::ServiceExt;
 
     #[tokio::test]
-    async fn root_returns_hello_world() {
-        let response = app_router()
-            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-
-        assert_eq!(
-            std::str::from_utf8(&body).unwrap(),
-            "Hello, World from control-api"
-        );
-    }
-
-    #[tokio::test]
     async fn health_returns_service_status() {
-        let response = app_router()
+        let response = app_router(AppConfig::defaults())
+            .unwrap()
             .oneshot(
                 Request::builder()
                     .uri("/health")
