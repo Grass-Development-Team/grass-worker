@@ -1,0 +1,11 @@
+[package]
+name = "grass-worker-database"
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+sea-orm.workspace = true
+uuid.workspace = true
+
