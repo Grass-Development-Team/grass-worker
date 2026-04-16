@@ -50,6 +50,14 @@ listen = "127.0.0.1:3000"
 [node]
 listen = "127.0.0.1:3001"
 
+[database]
+host = "127.0.0.1"
+port = 5432
+db_name = "grass_worker"
+user = "postgres"
+password = "postgres"
+# schema = "public"
+
 [development]
 dev_server = "http://127.0.0.1:5173"
 ```

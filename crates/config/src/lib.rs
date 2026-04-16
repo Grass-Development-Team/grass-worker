@@ -98,6 +98,30 @@ impl Default for NodeConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DatabaseConfig {
+    pub host: String,
+    pub port: u16,
+    pub db_name: String,
+    pub user: String,
+    pub password: String,
+    #[serde(default = "default_database_schema")]
+    pub schema: String,
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            host: default_database_host(),
+            port: default_database_port(),
+            db_name: default_database_name(),
+            user: default_database_user(),
+            password: default_database_password(),
+            schema: default_database_schema(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DevelopmentConfig {
     pub dev_server: String,
 }
@@ -108,6 +132,7 @@ pub struct AppConfig {
     pub server: ServerConfig,
     #[serde(default)]
     pub node: NodeConfig,
+    pub database: DatabaseConfig,
     pub development: Option<DevelopmentConfig>,
 }
 
@@ -256,6 +281,30 @@ fn default_node_listen() -> SocketAddr {
     "127.0.0.1:3001".parse().unwrap()
 }
 
+fn default_database_host() -> String {
+    "127.0.0.1".to_owned()
+}
+
+fn default_database_port() -> u16 {
+    5432
+}
+
+fn default_database_name() -> String {
+    "grass_worker".to_owned()
+}
+
+fn default_database_user() -> String {
+    "postgres".to_owned()
+}
+
+fn default_database_password() -> String {
+    "postgres".to_owned()
+}
+
+fn default_database_schema() -> String {
+    "public".to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,11 +318,17 @@ mod tests {
 
         assert_eq!(config.server.listen.to_string(), "127.0.0.1:3000");
         assert_eq!(config.node.listen.to_string(), "127.0.0.1:3001");
+        assert_eq!(config.database.host, "127.0.0.1");
+        assert_eq!(config.database.port, 5432);
+        assert_eq!(config.database.db_name, "grass_worker");
+        assert_eq!(config.database.user, "postgres");
+        assert_eq!(config.database.password, "postgres");
+        assert_eq!(config.database.schema, "public");
         assert!(config.development.is_none());
     }
 
     #[test]
-    fn load_from_toml_supports_optional_development_section() {
+    fn load_from_toml_supports_database_and_optional_development_section() {
         let temp_dir = tempdir().unwrap();
         let config_path = temp_dir.path().join(DEFAULT_CONFIG_FILE);
         fs::write(
@@ -285,6 +340,14 @@ listen = "0.0.0.0:7000"
 [node]
 listen = "0.0.0.0:7001"
 
+[database]
+host = "db.internal"
+port = 15432
+db_name = "grass_worker"
+user = "grass"
+password = "secret"
+schema = "control_plane"
+
 [development]
 dev_server = "http://127.0.0.1:5173"
 "#,
@@ -295,10 +358,66 @@ dev_server = "http://127.0.0.1:5173"
 
         assert_eq!(config.server.listen.to_string(), "0.0.0.0:7000");
         assert_eq!(config.node.listen.to_string(), "0.0.0.0:7001");
+        assert_eq!(config.database.host, "db.internal");
+        assert_eq!(config.database.port, 15432);
+        assert_eq!(config.database.db_name, "grass_worker");
+        assert_eq!(config.database.user, "grass");
+        assert_eq!(config.database.password, "secret");
+        assert_eq!(config.database.schema, "control_plane");
         assert_eq!(
             config.development.as_ref().unwrap().dev_server,
             "http://127.0.0.1:5173"
         );
+    }
+
+    #[test]
+    fn load_from_toml_defaults_database_schema_to_public() {
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join(DEFAULT_CONFIG_FILE);
+        fs::write(
+            &config_path,
+            r#"
+[server]
+listen = "0.0.0.0:7000"
+
+[node]
+listen = "0.0.0.0:7001"
+
+[database]
+host = "db.internal"
+port = 5432
+db_name = "grass_worker"
+user = "grass"
+password = "secret"
+"#,
+        )
+        .unwrap();
+
+        let config = AppConfig::load_from_path(&config_path).unwrap();
+
+        assert_eq!(config.database.schema, "public");
+    }
+
+    #[test]
+    fn load_from_toml_requires_database_section() {
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join(DEFAULT_CONFIG_FILE);
+        fs::write(
+            &config_path,
+            r#"
+[server]
+listen = "0.0.0.0:7000"
+
+[node]
+listen = "0.0.0.0:7001"
+"#,
+        )
+        .unwrap();
+
+        let error = AppConfig::load_from_path(&config_path).unwrap_err();
+
+        assert!(matches!(error, ConfigError::Parse { .. }));
+        assert!(error.to_string().contains("database"));
     }
 
     #[test]
@@ -313,6 +432,13 @@ listen = "0.0.0.0:7000"
 
 [node]
 listen = "0.0.0.0:7001"
+
+[database]
+host = "db.internal"
+port = 5432
+db_name = "grass_worker"
+user = "grass"
+password = "secret"
 "#,
         )
         .unwrap();
@@ -341,6 +467,13 @@ listen = "127.0.0.1:4100"
 
 [node]
 listen = "127.0.0.1:4101"
+
+[database]
+host = "db.internal"
+port = 5432
+db_name = "grass_worker"
+user = "grass"
+password = "secret"
 "#,
         )
         .unwrap();
@@ -370,6 +503,13 @@ listen = "127.0.0.1:4100"
 
 [node]
 listen = "127.0.0.1:4101"
+
+[database]
+host = "db.internal"
+port = 5432
+db_name = "grass_worker"
+user = "grass"
+password = "secret"
 "#,
         )
         .unwrap();
@@ -484,6 +624,13 @@ listen = "127.0.0.1:4101"
         let real_config = r#"
 [server]
 listen = "127.0.0.1:4100"
+
+[database]
+host = "db.internal"
+port = 5432
+db_name = "grass_worker"
+user = "grass"
+password = "secret"
 "#;
 
         fs::write(&default_path, real_config).unwrap();
