@@ -1,5 +1,5 @@
 use grass_worker_api::{AppMode, StartupMode, app_router};
-use grass_worker_config::AppConfig;
+use grass_worker_config::ResolvedApiConfig;
 use grass_worker_database::connection::{connect, prepare_schema};
 use grass_worker_migration::{Migrator, MigratorTrait};
 use std::process::ExitCode;
@@ -16,7 +16,7 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    match StartupMode::from_api_config(AppConfig::load()?) {
+    match StartupMode::from_api_config(ResolvedApiConfig::load()?) {
         StartupMode::Ready(config) => {
             let database_config = config
                 .database
