@@ -2,11 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::io::Write;
 
 const DEFAULT_CONFIG_FILE: &str = "config.toml";
-const PLACEHOLDER_CONFIG: &str =
-    "# Fill in the required settings in this file before starting grass-worker.\n";
 
 #[derive(Debug)]
 pub enum ConfigError {
@@ -14,16 +11,17 @@ pub enum ConfigError {
         path: PathBuf,
         source: std::io::Error,
     },
+    Serialize {
+        path: PathBuf,
+        source: toml::ser::Error,
+    },
     Parse {
         path: PathBuf,
         source: toml::de::Error,
     },
     InvalidArguments(String),
-    MissingDefaultConfig { path: PathBuf },
-    PlaceholderConfig { path: PathBuf },
-    MissingDefaultConfigAndWriteFailed {
-        path: PathBuf,
-        source: std::io::Error,
+    MissingSection {
+        section: &'static str,
     },
 }
 
@@ -33,25 +31,24 @@ impl std::fmt::Display for ConfigError {
             Self::Io { path, source } => {
                 write!(f, "failed to read config file {}: {source}", path.display())
             }
+            Self::Serialize { path, source } => {
+                write!(
+                    f,
+                    "failed to serialize config file {}: {source}",
+                    path.display()
+                )
+            }
             Self::Parse { path, source } => {
-                write!(f, "failed to parse config file {}: {source}", path.display())
+                write!(
+                    f,
+                    "failed to parse config file {}: {source}",
+                    path.display()
+                )
             }
             Self::InvalidArguments(message) => write!(f, "{message}"),
-            Self::MissingDefaultConfig { path } => write!(
-                f,
-                "missing required config at {}. A placeholder file was created; fill it in and retry.",
-                path.display()
-            ),
-            Self::PlaceholderConfig { path } => write!(
-                f,
-                "config file at {} is still empty or contains only placeholder comments; fill it in and retry.",
-                path.display()
-            ),
-            Self::MissingDefaultConfigAndWriteFailed { path, source } => write!(
-                f,
-                "missing required config at {} and failed to create the placeholder file: {source}",
-                path.display()
-            ),
+            Self::MissingSection { section } => {
+                write!(f, "missing required [{section}] section in config file")
+            }
         }
     }
 }
@@ -60,11 +57,9 @@ impl std::error::Error for ConfigError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io { source, .. } => Some(source),
+            Self::Serialize { source, .. } => Some(source),
             Self::Parse { source, .. } => Some(source),
-            Self::MissingDefaultConfigAndWriteFailed { source, .. } => Some(source),
-            Self::InvalidArguments(_)
-            | Self::MissingDefaultConfig { .. }
-            | Self::PlaceholderConfig { .. } => None,
+            Self::InvalidArguments(_) | Self::MissingSection { .. } => None,
         }
     }
 }
@@ -127,13 +122,25 @@ pub struct DevelopmentConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+struct ConfigFile {
+    pub server: Option<ServerConfig>,
+    pub node: Option<NodeConfig>,
+    pub database: Option<DatabaseConfig>,
+    pub development: Option<DevelopmentConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     #[serde(default)]
     pub server: ServerConfig,
-    #[serde(default)]
-    pub node: NodeConfig,
-    pub database: DatabaseConfig,
+    pub database: Option<DatabaseConfig>,
     pub development: Option<DevelopmentConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedApiConfig {
+    pub path: PathBuf,
+    pub config: AppConfig,
 }
 
 impl AppConfig {
@@ -141,6 +148,42 @@ impl AppConfig {
         Self::default()
     }
 
+    pub fn load() -> Result<Self, ConfigError> {
+        Ok(ResolvedApiConfig::load()?.config)
+    }
+
+    pub fn load_from_args<I, S>(args: I) -> Result<Self, ConfigError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<OsString>,
+    {
+        Ok(ResolvedApiConfig::load_from_args(args)?.config)
+    }
+
+    pub fn load_for_api_in_dir<I, S>(args: I, current_dir: &Path) -> Result<Self, ConfigError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<OsString>,
+    {
+        Ok(ResolvedApiConfig::load_in_dir(args, current_dir)?.config)
+    }
+
+    pub fn load_from_path(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
+        Self::load_for_api_from_path(path)
+    }
+
+    fn load_for_api_from_path(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
+        let path = path.as_ref();
+        let config_file = load_config_file(path)?;
+        Ok(Self {
+            server: config_file.server.unwrap_or_default(),
+            database: config_file.database,
+            development: config_file.development,
+        })
+    }
+}
+
+impl ResolvedApiConfig {
     pub fn load() -> Result<Self, ConfigError> {
         Self::load_from_args(std::env::args_os())
     }
@@ -154,10 +197,73 @@ impl AppConfig {
             path: PathBuf::from("."),
             source,
         })?;
-        Self::load_from_args_in_dir(args, &current_dir)
+        Self::load_in_dir(args, &current_dir)
     }
 
-    fn load_from_args_in_dir<I, S>(args: I, current_dir: &Path) -> Result<Self, ConfigError>
+    pub fn load_in_dir<I, S>(args: I, current_dir: &Path) -> Result<Self, ConfigError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<OsString>,
+    {
+        let default_path = current_dir.join(DEFAULT_CONFIG_FILE);
+        let selection = resolve_config_path(args, current_dir)?;
+        let explicit_path = selection.explicit_path;
+
+        if let Some(path) = explicit_path.as_ref() {
+            match AppConfig::load_for_api_from_path(path) {
+                Ok(config) => {
+                    return Ok(Self {
+                        path: path.clone(),
+                        config,
+                    });
+                }
+                Err(ConfigError::Io { source, .. })
+                    if source.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+
+        match AppConfig::load_for_api_from_path(&default_path) {
+            Ok(config) => Ok(Self {
+                path: default_path,
+                config,
+            }),
+            Err(ConfigError::Io { source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                Ok(Self {
+                    path: explicit_path.unwrap_or(default_path),
+                    config: AppConfig::default(),
+                })
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeAppConfig {
+    pub node: NodeConfig,
+}
+
+impl NodeAppConfig {
+    pub fn load() -> Result<Self, ConfigError> {
+        Self::load_from_args(std::env::args_os())
+    }
+
+    pub fn load_from_args<I, S>(args: I) -> Result<Self, ConfigError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<OsString>,
+    {
+        let current_dir = std::env::current_dir().map_err(|source| ConfigError::Io {
+            path: PathBuf::from("."),
+            source,
+        })?;
+        Self::load_in_dir(args, &current_dir)
+    }
+
+    pub fn load_in_dir<I, S>(args: I, current_dir: &Path) -> Result<Self, ConfigError>
     where
         I: IntoIterator<Item = S>,
         S: Into<OsString>,
@@ -166,51 +272,39 @@ impl AppConfig {
         let selection = resolve_config_path(args, current_dir)?;
 
         if let Some(explicit_path) = selection.explicit_path {
-            match Self::load_from_path(&explicit_path) {
-                Ok(config) => return Ok(config),
-                Err(ConfigError::Io { source, .. })
-                    if source.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error),
-            }
+            return Self::load_from_path(&explicit_path);
         }
 
-        match Self::load_from_path(&default_path) {
-            Ok(config) => return Ok(config),
-            Err(ConfigError::Io { source, .. })
-                if source.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
-
-        match write_placeholder_config(&default_path) {
-            Ok(()) => Err(ConfigError::MissingDefaultConfig { path: default_path }),
-            Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {
-                Self::load_from_path(&default_path)
-            }
-            Err(source) => Err(ConfigError::MissingDefaultConfigAndWriteFailed {
-                path: default_path,
-                source,
-            }),
-        }
+        Self::load_from_path(default_path)
     }
 
-    pub fn load_from_path(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
-        let path = path.as_ref();
-        let contents = std::fs::read_to_string(path).map_err(|source| ConfigError::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
-
-        if is_effectively_empty_config(&contents) {
-            return Err(ConfigError::PlaceholderConfig {
-                path: path.to_path_buf(),
-            });
-        }
-
-        toml::from_str(&contents).map_err(|source| ConfigError::Parse {
-            path: path.to_path_buf(),
-            source,
-        })
+    fn load_from_path(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
+        let config_file = load_config_file(path)?;
+        let node = config_file
+            .node
+            .ok_or(ConfigError::MissingSection { section: "node" })?;
+        Ok(Self { node })
     }
+}
+
+pub fn write_api_database_config(
+    path: impl AsRef<Path>,
+    server: &ServerConfig,
+    database: &DatabaseConfig,
+) -> Result<(), ConfigError> {
+    let path = path.as_ref();
+    let mut config_file = match load_config_file(path) {
+        Ok(config_file) => config_file,
+        Err(ConfigError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            ConfigFile::default()
+        }
+        Err(error) => return Err(error),
+    };
+
+    config_file.server = Some(server.clone());
+    config_file.database = Some(database.clone());
+
+    write_config_file(path, &config_file)
 }
 
 struct ConfigSelection {
@@ -258,19 +352,28 @@ fn path_from_arg(arg: OsString, current_dir: &Path) -> PathBuf {
     }
 }
 
-fn write_placeholder_config(path: &Path) -> std::io::Result<()> {
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?;
-    file.write_all(PLACEHOLDER_CONFIG.as_bytes())
+fn load_config_file(path: impl AsRef<Path>) -> Result<ConfigFile, ConfigError> {
+    let path = path.as_ref();
+    let contents = std::fs::read_to_string(path).map_err(|source| ConfigError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    toml::from_str(&contents).map_err(|source| ConfigError::Parse {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
-fn is_effectively_empty_config(contents: &str) -> bool {
-    contents
-        .lines()
-        .map(|line| line.trim_start_matches('\u{FEFF}').trim())
-        .all(|line| line.is_empty() || line.starts_with('#'))
+fn write_config_file(path: &Path, config_file: &ConfigFile) -> Result<(), ConfigError> {
+    let contents =
+        toml::to_string_pretty(config_file).map_err(|source| ConfigError::Serialize {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    std::fs::write(path, contents).map_err(|source| ConfigError::Io {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 fn default_server_listen() -> SocketAddr {
@@ -308,22 +411,16 @@ fn default_database_schema() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use std::ffi::OsString;
+    use std::fs;
     use tempfile::tempdir;
 
     #[test]
-    fn defaults_use_expected_listen_addresses() {
+    fn defaults_use_expected_api_values() {
         let config = AppConfig::defaults();
 
         assert_eq!(config.server.listen.to_string(), "127.0.0.1:3000");
-        assert_eq!(config.node.listen.to_string(), "127.0.0.1:3001");
-        assert_eq!(config.database.host, "127.0.0.1");
-        assert_eq!(config.database.port, 5432);
-        assert_eq!(config.database.db_name, "grass_worker");
-        assert_eq!(config.database.user, "postgres");
-        assert_eq!(config.database.password, "postgres");
-        assert_eq!(config.database.schema, "public");
+        assert!(config.database.is_none());
         assert!(config.development.is_none());
     }
 
@@ -336,9 +433,6 @@ mod tests {
             r#"
 [server]
 listen = "0.0.0.0:7000"
-
-[node]
-listen = "0.0.0.0:7001"
 
 [database]
 host = "db.internal"
@@ -357,13 +451,12 @@ dev_server = "http://127.0.0.1:5173"
         let config = AppConfig::load_from_path(&config_path).unwrap();
 
         assert_eq!(config.server.listen.to_string(), "0.0.0.0:7000");
-        assert_eq!(config.node.listen.to_string(), "0.0.0.0:7001");
-        assert_eq!(config.database.host, "db.internal");
-        assert_eq!(config.database.port, 15432);
-        assert_eq!(config.database.db_name, "grass_worker");
-        assert_eq!(config.database.user, "grass");
-        assert_eq!(config.database.password, "secret");
-        assert_eq!(config.database.schema, "control_plane");
+        assert_eq!(config.database.as_ref().unwrap().host, "db.internal");
+        assert_eq!(config.database.as_ref().unwrap().port, 15432);
+        assert_eq!(config.database.as_ref().unwrap().db_name, "grass_worker");
+        assert_eq!(config.database.as_ref().unwrap().user, "grass");
+        assert_eq!(config.database.as_ref().unwrap().password, "secret");
+        assert_eq!(config.database.as_ref().unwrap().schema, "control_plane");
         assert_eq!(
             config.development.as_ref().unwrap().dev_server,
             "http://127.0.0.1:5173"
@@ -380,9 +473,6 @@ dev_server = "http://127.0.0.1:5173"
 [server]
 listen = "0.0.0.0:7000"
 
-[node]
-listen = "0.0.0.0:7001"
-
 [database]
 host = "db.internal"
 port = 5432
@@ -395,29 +485,68 @@ password = "secret"
 
         let config = AppConfig::load_from_path(&config_path).unwrap();
 
-        assert_eq!(config.database.schema, "public");
+        assert_eq!(config.database.as_ref().unwrap().schema, "public");
     }
 
     #[test]
-    fn load_from_toml_requires_database_section() {
+    fn api_load_uses_default_server_when_config_file_is_missing() {
         let temp_dir = tempdir().unwrap();
-        let config_path = temp_dir.path().join(DEFAULT_CONFIG_FILE);
+
+        let config = AppConfig::load_for_api_in_dir(["grass-worker-api"], temp_dir.path()).unwrap();
+
+        assert_eq!(config.server.listen.to_string(), "127.0.0.1:3000");
+        assert!(config.database.is_none());
+    }
+
+    #[test]
+    fn api_load_resolves_default_config_path_when_file_is_missing() {
+        let temp_dir = tempdir().unwrap();
+
+        let resolved =
+            ResolvedApiConfig::load_in_dir(["grass-worker-api"], temp_dir.path()).unwrap();
+
+        assert_eq!(resolved.path, temp_dir.path().join(DEFAULT_CONFIG_FILE));
+        assert!(resolved.config.database.is_none());
+    }
+
+    #[test]
+    fn api_load_allows_config_without_database_section() {
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
         fs::write(
             &config_path,
             r#"
 [server]
-listen = "0.0.0.0:7000"
-
-[node]
-listen = "0.0.0.0:7001"
+listen = "0.0.0.0:7100"
 "#,
         )
         .unwrap();
 
-        let error = AppConfig::load_from_path(&config_path).unwrap_err();
+        let config = AppConfig::load_for_api_in_dir(["grass-worker-api"], temp_dir.path()).unwrap();
 
-        assert!(matches!(error, ConfigError::Parse { .. }));
-        assert!(error.to_string().contains("database"));
+        assert_eq!(config.server.listen.to_string(), "0.0.0.0:7100");
+        assert!(config.database.is_none());
+    }
+
+    #[test]
+    fn node_load_requires_node_section() {
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+        fs::write(
+            &config_path,
+            r#"
+[server]
+listen = "127.0.0.1:3000"
+"#,
+        )
+        .unwrap();
+
+        let error = NodeAppConfig::load_in_dir(["grass-worker-node"], temp_dir.path()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConfigError::MissingSection { section: "node" }
+        ));
     }
 
     #[test]
@@ -429,9 +558,6 @@ listen = "0.0.0.0:7001"
             r#"
 [server]
 listen = "0.0.0.0:7000"
-
-[node]
-listen = "0.0.0.0:7001"
 
 [database]
 host = "db.internal"
@@ -449,10 +575,10 @@ password = "secret"
             explicit_path.clone().into_os_string(),
         ];
 
-        let config = AppConfig::load_from_args_in_dir(args, temp_dir.path()).unwrap();
+        let config = AppConfig::load_for_api_in_dir(args, temp_dir.path()).unwrap();
 
         assert_eq!(config.server.listen.to_string(), "0.0.0.0:7000");
-        assert_eq!(config.node.listen.to_string(), "0.0.0.0:7001");
+        assert_eq!(config.database.as_ref().unwrap().host, "db.internal");
     }
 
     #[test]
@@ -464,28 +590,44 @@ password = "secret"
             r#"
 [server]
 listen = "127.0.0.1:4100"
-
-[node]
-listen = "127.0.0.1:4101"
-
-[database]
-host = "db.internal"
-port = 5432
-db_name = "grass_worker"
-user = "grass"
-password = "secret"
 "#,
         )
         .unwrap();
 
-        let config = AppConfig::load_from_args_in_dir(
-            ["grass-worker-node", "--config", "missing.toml"],
+        let config = AppConfig::load_for_api_in_dir(
+            ["grass-worker-api", "--config", "missing.toml"],
             temp_dir.path(),
         )
         .unwrap();
 
         assert_eq!(config.server.listen.to_string(), "127.0.0.1:4100");
-        assert_eq!(config.node.listen.to_string(), "127.0.0.1:4101");
+        assert!(config.database.is_none());
+    }
+
+    #[test]
+    fn api_load_uses_existing_default_file_when_explicit_path_is_missing() {
+        let temp_dir = tempdir().unwrap();
+        let default_path = temp_dir.path().join(DEFAULT_CONFIG_FILE);
+        fs::write(
+            &default_path,
+            r#"
+[server]
+listen = "127.0.0.1:7100"
+
+[node]
+listen = "127.0.0.1:7101"
+"#,
+        )
+        .unwrap();
+
+        let resolved = ResolvedApiConfig::load_in_dir(
+            ["grass-worker-api", "--config", "missing.toml"],
+            temp_dir.path(),
+        )
+        .unwrap();
+
+        assert_eq!(resolved.path, default_path);
+        assert_eq!(resolved.config.server.listen.to_string(), "127.0.0.1:7100");
     }
 
     #[test]
@@ -520,132 +662,143 @@ password = "secret"
             explicit_dir.clone().into_os_string(),
         ];
 
-        let error = AppConfig::load_from_args_in_dir(args, temp_dir.path()).unwrap_err();
+        let error = AppConfig::load_for_api_in_dir(args, temp_dir.path()).unwrap_err();
 
         assert!(matches!(error, ConfigError::Io { .. }));
-        assert!(error.to_string().contains(&explicit_dir.display().to_string()));
-    }
-
-    #[test]
-    fn load_from_args_creates_placeholder_default_and_errors_when_default_is_missing() {
-        let temp_dir = tempdir().unwrap();
-
-        let error = AppConfig::load_from_args_in_dir(["grass-worker-api"], temp_dir.path())
-            .unwrap_err();
-
-        assert!(matches!(error, ConfigError::MissingDefaultConfig { .. }));
-        assert_eq!(
-            fs::read_to_string(temp_dir.path().join(DEFAULT_CONFIG_FILE)).unwrap(),
-            PLACEHOLDER_CONFIG,
+        assert!(
+            error
+                .to_string()
+                .contains(&explicit_dir.display().to_string())
         );
     }
 
     #[test]
-    fn load_from_args_rejects_unedited_placeholder_default_config() {
-        let temp_dir = tempdir().unwrap();
-        let default_path = temp_dir.path().join(DEFAULT_CONFIG_FILE);
-
-        fs::write(&default_path, PLACEHOLDER_CONFIG).unwrap();
-
-        let error =
-            AppConfig::load_from_args_in_dir(["grass-worker-api"], temp_dir.path()).unwrap_err();
-
-        assert!(matches!(error, ConfigError::PlaceholderConfig { .. }));
-    }
-
-    #[test]
-    fn load_from_args_rejects_empty_default_config() {
-        let temp_dir = tempdir().unwrap();
-        let default_path = temp_dir.path().join(DEFAULT_CONFIG_FILE);
-
-        fs::write(&default_path, "").unwrap();
-
-        let error =
-            AppConfig::load_from_args_in_dir(["grass-worker-api"], temp_dir.path()).unwrap_err();
-
-        assert!(matches!(error, ConfigError::PlaceholderConfig { .. }));
-    }
-
-    #[test]
-    fn load_from_args_rejects_comment_only_default_config() {
+    fn api_load_uses_defaults_when_server_section_is_missing() {
         let temp_dir = tempdir().unwrap();
         let default_path = temp_dir.path().join(DEFAULT_CONFIG_FILE);
 
         fs::write(
             &default_path,
-            "# generated placeholder\n\n# fill this in before starting\n",
+            r#"
+[development]
+dev_server = "http://127.0.0.1:5173"
+"#,
         )
         .unwrap();
 
-        let error =
-            AppConfig::load_from_args_in_dir(["grass-worker-api"], temp_dir.path()).unwrap_err();
+        let config = AppConfig::load_for_api_in_dir(["grass-worker-api"], temp_dir.path()).unwrap();
 
-        assert!(matches!(error, ConfigError::PlaceholderConfig { .. }));
+        assert_eq!(config.server.listen.to_string(), "127.0.0.1:3000");
+        assert!(config.database.is_none());
+        assert_eq!(
+            config.development.as_ref().unwrap().dev_server,
+            "http://127.0.0.1:5173"
+        );
     }
 
     #[test]
-    fn load_from_args_rejects_bom_prefixed_comment_only_default_config() {
+    fn write_api_database_config_preserves_existing_node_and_development_sections() {
         let temp_dir = tempdir().unwrap();
-        let default_path = temp_dir.path().join(DEFAULT_CONFIG_FILE);
-
+        let config_path = temp_dir.path().join(DEFAULT_CONFIG_FILE);
         fs::write(
-            &default_path,
-            "\u{FEFF}# generated placeholder\n# fill this in before starting\n",
-        )
-        .unwrap();
-
-        let error =
-            AppConfig::load_from_args_in_dir(["grass-worker-api"], temp_dir.path()).unwrap_err();
-
-        assert!(matches!(error, ConfigError::PlaceholderConfig { .. }));
-    }
-
-    #[test]
-    fn load_from_args_reports_missing_config_when_placeholder_write_fails() {
-        let temp_dir = tempdir().unwrap();
-        let missing_dir = temp_dir.path().join("missing");
-
-        let error =
-            AppConfig::load_from_args_in_dir(["grass-worker-api"], &missing_dir).unwrap_err();
-
-        assert!(matches!(
-            error,
-            ConfigError::MissingDefaultConfigAndWriteFailed { .. }
-        ));
-        let message = error.to_string();
-        assert!(message.contains("missing required config"));
-        assert!(message.contains("failed to create the placeholder file"));
-    }
-
-    #[test]
-    fn write_placeholder_config_does_not_overwrite_existing_file() {
-        let temp_dir = tempdir().unwrap();
-        let default_path = temp_dir.path().join(DEFAULT_CONFIG_FILE);
-        let real_config = r#"
+            &config_path,
+            r#"
 [server]
-listen = "127.0.0.1:4100"
+listen = "127.0.0.1:7000"
 
-[database]
-host = "db.internal"
-port = 5432
-db_name = "grass_worker"
-user = "grass"
-password = "secret"
-"#;
+[node]
+listen = "127.0.0.1:7001"
 
-        fs::write(&default_path, real_config).unwrap();
+[development]
+dev_server = "http://127.0.0.1:5173"
+"#,
+        )
+        .unwrap();
 
-        let error = write_placeholder_config(&default_path).unwrap_err();
+        write_api_database_config(
+            &config_path,
+            &ServerConfig {
+                listen: "127.0.0.1:7000".parse().unwrap(),
+            },
+            &DatabaseConfig {
+                host: "127.0.0.1".to_owned(),
+                port: 5432,
+                db_name: "grass_worker".to_owned(),
+                user: "postgres".to_owned(),
+                password: "secret".to_owned(),
+                schema: "public".to_owned(),
+            },
+        )
+        .unwrap();
 
-        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
-        assert_eq!(fs::read_to_string(&default_path).unwrap(), real_config);
+        let contents = fs::read_to_string(&config_path).unwrap();
+        assert!(contents.contains("[node]"));
+        assert!(contents.contains("[development]"));
+        assert!(contents.contains("[database]"));
+        assert!(contents.contains("db_name = \"grass_worker\""));
+    }
+
+    #[test]
+    fn node_load_from_args_uses_explicit_config_when_present() {
+        let temp_dir = tempdir().unwrap();
+        let explicit_path = temp_dir.path().join("node.toml");
+        fs::write(
+            &explicit_path,
+            r#"
+[node]
+listen = "0.0.0.0:7200"
+"#,
+        )
+        .unwrap();
+
+        let args = vec![
+            OsString::from("grass-worker-node"),
+            OsString::from("--config"),
+            explicit_path.into_os_string(),
+        ];
+
+        let config = NodeAppConfig::load_in_dir(args, temp_dir.path()).unwrap();
+
+        assert_eq!(config.node.listen.to_string(), "0.0.0.0:7200");
+    }
+
+    #[test]
+    fn node_load_reports_missing_explicit_config_without_fallback() {
+        let temp_dir = tempdir().unwrap();
+        let default_path = temp_dir.path().join(DEFAULT_CONFIG_FILE);
+        fs::write(
+            &default_path,
+            r#"
+[node]
+listen = "127.0.0.1:4101"
+"#,
+        )
+        .unwrap();
+
+        let error = NodeAppConfig::load_in_dir(
+            ["grass-worker-node", "--config", "missing.toml"],
+            temp_dir.path(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, ConfigError::Io { .. }));
+    }
+
+    #[test]
+    fn node_load_requires_config_file_to_exist() {
+        let temp_dir = tempdir().unwrap();
+
+        let error = NodeAppConfig::load_in_dir(["grass-worker-node"], temp_dir.path()).unwrap_err();
+
+        assert!(matches!(error, ConfigError::Io { .. }));
     }
 
     #[test]
     fn load_from_args_rejects_missing_config_value() {
         let temp_dir = tempdir().unwrap();
-        let error = AppConfig::load_from_args_in_dir(["grass-worker-api", "--config"], temp_dir.path())
-            .unwrap_err();
+        let error =
+            AppConfig::load_for_api_in_dir(["grass-worker-api", "--config"], temp_dir.path())
+                .unwrap_err();
 
         assert!(matches!(error, ConfigError::InvalidArguments(_)));
     }
@@ -653,8 +806,9 @@ password = "secret"
     #[test]
     fn load_from_args_rejects_unknown_flags() {
         let temp_dir = tempdir().unwrap();
-        let error = AppConfig::load_from_args_in_dir(["grass-worker-api", "--verbose"], temp_dir.path())
-            .unwrap_err();
+        let error =
+            AppConfig::load_for_api_in_dir(["grass-worker-api", "--verbose"], temp_dir.path())
+                .unwrap_err();
 
         assert!(matches!(error, ConfigError::InvalidArguments(_)));
     }
@@ -666,9 +820,13 @@ password = "secret"
         fs::write(&default_path, "server = [").unwrap();
 
         let error =
-            AppConfig::load_from_args_in_dir(["grass-worker-api"], temp_dir.path()).unwrap_err();
+            AppConfig::load_for_api_in_dir(["grass-worker-api"], temp_dir.path()).unwrap_err();
 
         assert!(matches!(error, ConfigError::Parse { .. }));
-        assert!(error.to_string().contains(&default_path.display().to_string()));
+        assert!(
+            error
+                .to_string()
+                .contains(&default_path.display().to_string())
+        );
     }
 }

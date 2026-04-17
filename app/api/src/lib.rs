@@ -1,11 +1,35 @@
 mod frontend;
+mod setup;
+mod startup;
 
 use axum::routing::any;
 use axum::{Json, Router, routing::get};
 use frontend::{FrontendMode, install_frontend};
 use grass_worker_config::AppConfig;
 use serde::Serialize;
+use setup::install_setup;
+use startup::SetupContext;
 use std::sync::OnceLock;
+
+pub use startup::{SetupStage, StartupMode};
+
+#[derive(Debug, Clone)]
+pub enum AppMode {
+    Normal(AppConfig),
+    Setup(SetupContext),
+}
+
+impl From<AppConfig> for AppMode {
+    fn from(config: AppConfig) -> Self {
+        Self::Normal(config)
+    }
+}
+
+impl From<SetupContext> for AppMode {
+    fn from(context: SetupContext) -> Self {
+        Self::Setup(context)
+    }
+}
 
 #[derive(Debug, Serialize)]
 struct HealthResponse {
@@ -17,6 +41,19 @@ async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         service: "control-api",
         status: "ok",
+    })
+}
+
+#[derive(Debug, Serialize)]
+struct ReadyInfoResponse {
+    service: &'static str,
+    mode: &'static str,
+}
+
+async fn ready_api_info() -> Json<ReadyInfoResponse> {
+    Json(ReadyInfoResponse {
+        service: "control-api",
+        mode: "ready",
     })
 }
 
@@ -32,33 +69,44 @@ fn ensure_rustls_crypto_provider() {
     });
 }
 
-pub fn app_router(config: AppConfig) -> std::io::Result<Router> {
+pub fn app_router(mode: impl Into<AppMode>) -> std::io::Result<Router> {
     ensure_rustls_crypto_provider();
 
-    let router = Router::new()
-        .route("/health", get(health))
-        .route("/api/{*path}", any(api_not_found));
+    let router = Router::new().route("/health", get(health));
 
-    let frontend_mode = match config.development {
-        Some(development) => FrontendMode::Development {
-            dev_server: development.dev_server,
-        },
-        None => FrontendMode::Release {
-            public_dir: std::env::current_dir()?.join("public"),
-        },
-    };
+    match mode.into() {
+        AppMode::Normal(config) => {
+            let router = router
+                .route("/api/info", get(ready_api_info))
+                .route("/api/{*path}", any(api_not_found));
+            let frontend_mode = match config.development {
+                Some(development) => FrontendMode::Development {
+                    dev_server: development.dev_server,
+                },
+                None => FrontendMode::Release {
+                    public_dir: std::env::current_dir()?.join("public"),
+                },
+            };
 
-    Ok(install_frontend(router, frontend_mode))
+            Ok(install_frontend(router, frontend_mode))
+        }
+        AppMode::Setup(context) => {
+            let router = install_setup(router, context).route("/api/{*path}", any(api_not_found));
+            Ok(router)
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::startup::SetupContext;
     use axum::{
         body::{Body, to_bytes},
         http::{Request, StatusCode},
     };
-    use grass_worker_config::AppConfig;
+    use grass_worker_config::{AppConfig, DatabaseConfig};
+    use std::path::PathBuf;
     use tower::ServiceExt;
 
     #[tokio::test]
@@ -80,5 +128,96 @@ mod tests {
 
         assert_eq!(json["service"], "control-api");
         assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn ready_mode_exposes_api_info() {
+        let response = app_router(AppMode::Normal(AppConfig {
+            server: grass_worker_config::ServerConfig::default(),
+            database: Some(DatabaseConfig::default()),
+            development: None,
+        }))
+        .unwrap()
+        .oneshot(
+            Request::builder()
+                .uri("/api/info")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["service"], "control-api");
+        assert_eq!(json["mode"], "ready");
+        assert!(json.get("stage").is_none());
+        assert!(json.get("status").is_none());
+    }
+
+    #[tokio::test]
+    async fn setup_mode_exposes_api_info() {
+        let response = app_router(AppMode::Setup(SetupContext::database(
+            "127.0.0.1:3000".parse().unwrap(),
+            PathBuf::from("config.toml"),
+        )))
+        .unwrap()
+        .oneshot(
+            Request::builder()
+                .uri("/api/info")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["service"], "control-api");
+        assert_eq!(json["mode"], "setup");
+        assert_eq!(json["stage"], "database");
+        assert_eq!(json["status"], "pending");
+    }
+
+    #[tokio::test]
+    async fn setup_mode_exposes_setup_state_endpoint() {
+        let response = app_router(AppMode::Setup(SetupContext::database(
+            "127.0.0.1:3000".parse().unwrap(),
+            PathBuf::from("config.toml"),
+        )))
+        .unwrap()
+        .oneshot(
+            Request::builder()
+                .uri("/api/setup/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["stage"], "database");
+        assert_eq!(json["status"], "pending");
+    }
+
+    #[tokio::test]
+    async fn setup_mode_root_no_longer_returns_html() {
+        let response = app_router(AppMode::Setup(SetupContext::database(
+            "127.0.0.1:3000".parse().unwrap(),
+            PathBuf::from("config.toml"),
+        )))
+        .unwrap()
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }
