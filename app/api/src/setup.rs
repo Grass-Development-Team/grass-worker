@@ -78,14 +78,14 @@ async fn setup_info(Extension(context): Extension<SetupContext>) -> Json<SetupIn
     Json(SetupInfoResponse {
         service: "control-api",
         mode: "setup",
-        stage: context.stage,
+        stage: context.stage(),
         status: "pending",
     })
 }
 
 async fn setup_state(Extension(context): Extension<SetupContext>) -> Json<SetupStateResponse> {
     Json(SetupStateResponse {
-        stage: context.stage,
+        stage: context.stage(),
         status: "pending",
     })
 }
@@ -98,24 +98,32 @@ async fn setup_database(
         Ok(payload) => payload,
         Err(error) => return error_response(StatusCode::BAD_REQUEST, error.to_string()),
     };
+    let stage = context.stage();
     let database = payload.into_database_config();
 
-    if let Err(error) = context.service.initialize_database(&database).await {
+    let SetupContext::Database {
+        listen,
+        config_path,
+        service,
+    } = context
+    else {
+        return error_response(StatusCode::CONFLICT, "current setup stage is not database");
+    };
+
+    if let Err(error) = service.initialize_database(&database).await {
         return error_response(StatusCode::BAD_REQUEST, error.to_string());
     }
 
-    let server = ServerConfig {
-        listen: context.listen,
-    };
+    let server = ServerConfig { listen };
 
-    if let Err(error) = write_api_database_config(&context.config_path, &server, &database) {
+    if let Err(error) = write_api_database_config(&config_path, &server, &database) {
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
     }
 
     (
         StatusCode::OK,
         Json(SetupActionResponse {
-            stage: context.stage,
+            stage,
             status: "completed",
         }),
     )
