@@ -7,6 +7,7 @@ pub struct Model {
     pub id: Uuid,
     pub email: String,
     pub is_admin: bool,
+    pub is_initial_admin: bool,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }
