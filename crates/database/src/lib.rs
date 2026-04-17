@@ -269,8 +269,60 @@ mod tests {
 
         assert_eq!(user.email, "user@example.com");
         assert!(!user.is_admin);
+        assert!(!user.is_initial_admin);
         assert_eq!(user.created_at, created_at);
         assert_eq!(user.updated_at, created_at);
+    }
+
+    #[tokio::test]
+    async fn user_repository_create_admin_returns_initial_admin() {
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .into_connection();
+        let repository = SeaOrmUserRepository::new(database);
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-04-17T10:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+
+        let user = repository
+            .create_admin(
+                NewUser {
+                    id: Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap(),
+                    email: "admin@example.com".to_owned(),
+                    created_at,
+                },
+                true,
+            )
+            .await
+            .unwrap();
+
+        assert!(user.is_admin);
+        assert!(user.is_initial_admin);
+        assert_eq!(user.email, "admin@example.com");
+    }
+
+    #[tokio::test]
+    async fn user_repository_reports_admin_presence() {
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-04-17T10:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let admin = user::Model {
+            id: Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap(),
+            email: "admin@example.com".to_owned(),
+            is_admin: true,
+            is_initial_admin: true,
+            created_at,
+            updated_at: created_at,
+        };
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[admin]])
+            .into_connection();
+        let repository = SeaOrmUserRepository::new(database);
+
+        assert!(repository.has_admin().await.unwrap());
     }
 
     #[tokio::test]
@@ -282,6 +334,7 @@ mod tests {
             id: Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap(),
             email: "user@example.com".to_owned(),
             is_admin: false,
+            is_initial_admin: false,
             created_at,
             updated_at: created_at,
         };
