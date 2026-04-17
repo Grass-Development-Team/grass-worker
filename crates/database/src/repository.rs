@@ -318,7 +318,10 @@ fn build_user_model(new_user: NewUser, is_admin: bool, is_initial_admin: bool) -
     }
 }
 
-async fn insert_user<C: ConnectionTrait>(connection: &C, model: &user::Model) -> Result<(), DbErr> {
+pub async fn insert_user<C: ConnectionTrait>(
+    connection: &C,
+    model: &user::Model,
+) -> Result<(), DbErr> {
     user::Entity::insert(user::ActiveModel {
         id: Set(model.id),
         email: Set(model.email.clone()),
@@ -333,7 +336,7 @@ async fn insert_user<C: ConnectionTrait>(connection: &C, model: &user::Model) ->
     Ok(())
 }
 
-async fn upsert_password_credential<C: ConnectionTrait>(
+pub async fn upsert_password_credential<C: ConnectionTrait>(
     connection: &C,
     model: &user_password_credential::Model,
 ) -> Result<(), DbErr> {

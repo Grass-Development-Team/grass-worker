@@ -1,4 +1,4 @@
-use crate::admin_setup::{RejectingAdminSetupService, SharedAdminSetupService};
+use crate::admin_setup::{LiveAdminSetupService, SharedAdminSetupService};
 use grass_worker_config::{AppConfig, DatabaseConfig, ResolvedApiConfig};
 use grass_worker_database::{
     connection::{connect, prepare_schema},
@@ -227,8 +227,8 @@ impl SetupContext {
     pub fn admin(listen: SocketAddr, database: DatabaseConfig) -> Self {
         Self::admin_with_service(
             listen,
-            database,
-            Arc::new(RejectingAdminSetupService),
+            database.clone(),
+            Arc::new(LiveAdminSetupService::new(database)),
         )
     }
 

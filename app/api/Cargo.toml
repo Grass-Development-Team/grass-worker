@@ -6,18 +6,22 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+argon2.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 axum-reverse-proxy.workspace = true
+chrono.workspace = true
 grass-worker-assets.workspace = true
+grass-worker-config.workspace = true
 grass-worker-database.workspace = true
 grass-worker-migration.workspace = true
 mime_guess.workspace = true
+rand_core.workspace = true
 rustls.workspace = true
+sea-orm.workspace = true
 serde.workspace = true
 tokio.workspace = true
-
-grass-worker-config.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
