@@ -11,6 +11,10 @@ pub enum ConfigError {
         path: PathBuf,
         source: std::io::Error,
     },
+    Serialize {
+        path: PathBuf,
+        source: toml::ser::Error,
+    },
     Parse {
         path: PathBuf,
         source: toml::de::Error,
@@ -26,6 +30,13 @@ impl std::fmt::Display for ConfigError {
         match self {
             Self::Io { path, source } => {
                 write!(f, "failed to read config file {}: {source}", path.display())
+            }
+            Self::Serialize { path, source } => {
+                write!(
+                    f,
+                    "failed to serialize config file {}: {source}",
+                    path.display()
+                )
             }
             Self::Parse { path, source } => {
                 write!(
@@ -46,6 +57,7 @@ impl std::error::Error for ConfigError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io { source, .. } => Some(source),
+            Self::Serialize { source, .. } => Some(source),
             Self::Parse { source, .. } => Some(source),
             Self::InvalidArguments(_) | Self::MissingSection { .. } => None,
         }
@@ -125,13 +137,19 @@ pub struct AppConfig {
     pub development: Option<DevelopmentConfig>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedApiConfig {
+    pub path: PathBuf,
+    pub config: AppConfig,
+}
+
 impl AppConfig {
     pub fn defaults() -> Self {
         Self::default()
     }
 
     pub fn load() -> Result<Self, ConfigError> {
-        Self::load_from_args(std::env::args_os())
+        Ok(ResolvedApiConfig::load()?.config)
     }
 
     pub fn load_from_args<I, S>(args: I) -> Result<Self, ConfigError>
@@ -139,11 +157,7 @@ impl AppConfig {
         I: IntoIterator<Item = S>,
         S: Into<OsString>,
     {
-        let current_dir = std::env::current_dir().map_err(|source| ConfigError::Io {
-            path: PathBuf::from("."),
-            source,
-        })?;
-        Self::load_for_api_in_dir(args, &current_dir)
+        Ok(ResolvedApiConfig::load_from_args(args)?.config)
     }
 
     pub fn load_for_api_in_dir<I, S>(args: I, current_dir: &Path) -> Result<Self, ConfigError>
@@ -151,27 +165,7 @@ impl AppConfig {
         I: IntoIterator<Item = S>,
         S: Into<OsString>,
     {
-        let default_path = current_dir.join(DEFAULT_CONFIG_FILE);
-        let selection = resolve_config_path(args, current_dir)?;
-
-        if let Some(explicit_path) = selection.explicit_path {
-            match Self::load_for_api_from_path(&explicit_path) {
-                Ok(config) => return Ok(config),
-                Err(ConfigError::Io { source, .. })
-                    if source.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error),
-            }
-        }
-
-        match Self::load_for_api_from_path(&default_path) {
-            Ok(config) => Ok(config),
-            Err(ConfigError::Io { source, .. })
-                if source.kind() == std::io::ErrorKind::NotFound =>
-            {
-                Ok(Self::default())
-            }
-            Err(error) => Err(error),
-        }
+        Ok(ResolvedApiConfig::load_in_dir(args, current_dir)?.config)
     }
 
     pub fn load_from_path(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
@@ -186,6 +180,64 @@ impl AppConfig {
             database: config_file.database,
             development: config_file.development,
         })
+    }
+}
+
+impl ResolvedApiConfig {
+    pub fn load() -> Result<Self, ConfigError> {
+        Self::load_from_args(std::env::args_os())
+    }
+
+    pub fn load_from_args<I, S>(args: I) -> Result<Self, ConfigError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<OsString>,
+    {
+        let current_dir = std::env::current_dir().map_err(|source| ConfigError::Io {
+            path: PathBuf::from("."),
+            source,
+        })?;
+        Self::load_in_dir(args, &current_dir)
+    }
+
+    pub fn load_in_dir<I, S>(args: I, current_dir: &Path) -> Result<Self, ConfigError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<OsString>,
+    {
+        let default_path = current_dir.join(DEFAULT_CONFIG_FILE);
+        let selection = resolve_config_path(args, current_dir)?;
+        let explicit_path = selection.explicit_path;
+
+        if let Some(path) = explicit_path.as_ref() {
+            match AppConfig::load_for_api_from_path(path) {
+                Ok(config) => {
+                    return Ok(Self {
+                        path: path.clone(),
+                        config,
+                    });
+                }
+                Err(ConfigError::Io { source, .. })
+                    if source.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+
+        match AppConfig::load_for_api_from_path(&default_path) {
+            Ok(config) => Ok(Self {
+                path: default_path,
+                config,
+            }),
+            Err(ConfigError::Io { source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                Ok(Self {
+                    path: explicit_path.unwrap_or(default_path),
+                    config: AppConfig::default(),
+                })
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -233,6 +285,26 @@ impl NodeAppConfig {
             .ok_or(ConfigError::MissingSection { section: "node" })?;
         Ok(Self { node })
     }
+}
+
+pub fn write_api_database_config(
+    path: impl AsRef<Path>,
+    server: &ServerConfig,
+    database: &DatabaseConfig,
+) -> Result<(), ConfigError> {
+    let path = path.as_ref();
+    let mut config_file = match load_config_file(path) {
+        Ok(config_file) => config_file,
+        Err(ConfigError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            ConfigFile::default()
+        }
+        Err(error) => return Err(error),
+    };
+
+    config_file.server = Some(server.clone());
+    config_file.database = Some(database.clone());
+
+    write_config_file(path, &config_file)
 }
 
 struct ConfigSelection {
@@ -287,6 +359,18 @@ fn load_config_file(path: impl AsRef<Path>) -> Result<ConfigFile, ConfigError> {
         source,
     })?;
     toml::from_str(&contents).map_err(|source| ConfigError::Parse {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+fn write_config_file(path: &Path, config_file: &ConfigFile) -> Result<(), ConfigError> {
+    let contents =
+        toml::to_string_pretty(config_file).map_err(|source| ConfigError::Serialize {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    std::fs::write(path, contents).map_err(|source| ConfigError::Io {
         path: path.to_path_buf(),
         source,
     })
@@ -415,6 +499,17 @@ password = "secret"
     }
 
     #[test]
+    fn api_load_resolves_default_config_path_when_file_is_missing() {
+        let temp_dir = tempdir().unwrap();
+
+        let resolved =
+            ResolvedApiConfig::load_in_dir(["grass-worker-api"], temp_dir.path()).unwrap();
+
+        assert_eq!(resolved.path, temp_dir.path().join(DEFAULT_CONFIG_FILE));
+        assert!(resolved.config.database.is_none());
+    }
+
+    #[test]
     fn api_load_allows_config_without_database_section() {
         let temp_dir = tempdir().unwrap();
         let config_path = temp_dir.path().join("config.toml");
@@ -510,6 +605,32 @@ listen = "127.0.0.1:4100"
     }
 
     #[test]
+    fn api_load_uses_existing_default_file_when_explicit_path_is_missing() {
+        let temp_dir = tempdir().unwrap();
+        let default_path = temp_dir.path().join(DEFAULT_CONFIG_FILE);
+        fs::write(
+            &default_path,
+            r#"
+[server]
+listen = "127.0.0.1:7100"
+
+[node]
+listen = "127.0.0.1:7101"
+"#,
+        )
+        .unwrap();
+
+        let resolved = ResolvedApiConfig::load_in_dir(
+            ["grass-worker-api", "--config", "missing.toml"],
+            temp_dir.path(),
+        )
+        .unwrap();
+
+        assert_eq!(resolved.path, default_path);
+        assert_eq!(resolved.config.server.listen.to_string(), "127.0.0.1:7100");
+    }
+
+    #[test]
     fn load_from_args_reports_io_error_for_selected_explicit_config() {
         let temp_dir = tempdir().unwrap();
         let explicit_dir = temp_dir.path().join("explicit-dir");
@@ -573,6 +694,48 @@ dev_server = "http://127.0.0.1:5173"
             config.development.as_ref().unwrap().dev_server,
             "http://127.0.0.1:5173"
         );
+    }
+
+    #[test]
+    fn write_api_database_config_preserves_existing_node_and_development_sections() {
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join(DEFAULT_CONFIG_FILE);
+        fs::write(
+            &config_path,
+            r#"
+[server]
+listen = "127.0.0.1:7000"
+
+[node]
+listen = "127.0.0.1:7001"
+
+[development]
+dev_server = "http://127.0.0.1:5173"
+"#,
+        )
+        .unwrap();
+
+        write_api_database_config(
+            &config_path,
+            &ServerConfig {
+                listen: "127.0.0.1:7000".parse().unwrap(),
+            },
+            &DatabaseConfig {
+                host: "127.0.0.1".to_owned(),
+                port: 5432,
+                db_name: "grass_worker".to_owned(),
+                user: "postgres".to_owned(),
+                password: "secret".to_owned(),
+                schema: "public".to_owned(),
+            },
+        )
+        .unwrap();
+
+        let contents = fs::read_to_string(&config_path).unwrap();
+        assert!(contents.contains("[node]"));
+        assert!(contents.contains("[development]"));
+        assert!(contents.contains("[database]"));
+        assert!(contents.contains("db_name = \"grass_worker\""));
     }
 
     #[test]
