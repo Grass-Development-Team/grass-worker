@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 axum.workspace = true
 axum-reverse-proxy.workspace = true
 grass-worker-assets.workspace = true
