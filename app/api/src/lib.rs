@@ -1,3 +1,4 @@
+mod admin_setup;
 mod frontend;
 mod setup;
 mod startup;
@@ -204,6 +205,31 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(json["stage"], "database");
+        assert_eq!(json["status"], "pending");
+    }
+
+    #[tokio::test]
+    async fn admin_setup_mode_exposes_api_info() {
+        let response = app_router(AppMode::Setup(SetupContext::admin(
+            "127.0.0.1:3000".parse().unwrap(),
+            DatabaseConfig::default(),
+        )))
+        .unwrap()
+        .oneshot(
+            Request::builder()
+                .uri("/api/info")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["mode"], "setup");
+        assert_eq!(json["stage"], "admin");
         assert_eq!(json["status"], "pending");
     }
 

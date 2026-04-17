@@ -1,3 +1,4 @@
+use crate::admin_setup::{RejectingAdminSetupService, SharedAdminSetupService};
 use grass_worker_config::{AppConfig, DatabaseConfig, ResolvedApiConfig};
 use grass_worker_database::{
     connection::{connect, prepare_schema},
@@ -145,6 +146,7 @@ pub enum SetupContext {
     Admin {
         listen: SocketAddr,
         database: DatabaseConfig,
+        service: SharedAdminSetupService,
     },
 }
 
@@ -160,7 +162,9 @@ impl std::fmt::Debug for SetupContext {
                 .field("listen", listen)
                 .field("config_path", config_path)
                 .finish_non_exhaustive(),
-            Self::Admin { listen, database } => f
+            Self::Admin {
+                listen, database, ..
+            } => f
                 .debug_struct("SetupContext::Admin")
                 .field("listen", listen)
                 .field("database", database)
@@ -188,10 +192,12 @@ impl PartialEq for SetupContext {
                 Self::Admin {
                     listen: left_listen,
                     database: left_database,
+                    ..
                 },
                 Self::Admin {
                     listen: right_listen,
                     database: right_database,
+                    ..
                 },
             ) => left_listen == right_listen && left_database == right_database,
             _ => false,
@@ -219,7 +225,23 @@ impl SetupContext {
     }
 
     pub fn admin(listen: SocketAddr, database: DatabaseConfig) -> Self {
-        Self::Admin { listen, database }
+        Self::admin_with_service(
+            listen,
+            database,
+            Arc::new(RejectingAdminSetupService),
+        )
+    }
+
+    pub fn admin_with_service(
+        listen: SocketAddr,
+        database: DatabaseConfig,
+        service: SharedAdminSetupService,
+    ) -> Self {
+        Self::Admin {
+            listen,
+            database,
+            service,
+        }
     }
 
     pub fn stage(&self) -> SetupStage {
