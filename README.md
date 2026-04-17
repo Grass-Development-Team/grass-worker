@@ -66,7 +66,24 @@ dev_server = "http://127.0.0.1:5173"
 Rules:
 
 - `app/api` enters setup mode on `server.listen` when `config.toml` or `[database]` is missing.
-- Setup mode currently serves a placeholder page and `GET /api/setup/state`.
+- `GET /api/info` is available in both modes and reports whether the API is in `ready` or `setup`.
+- Setup mode is API-only; the backend no longer serves placeholder HTML on `/`.
+- In setup mode, `GET /api/setup/state` reports the current setup stage.
+- In setup mode, `POST /api/setup/database` accepts:
+
+```json
+{
+  "host": "127.0.0.1",
+  "port": 5432,
+  "db_name": "grass_worker",
+  "user": "postgres",
+  "password": "postgres",
+  "schema": "public"
+}
+```
+
+- `schema` is optional; missing or blank values default to `public`.
+- A successful `POST /api/setup/database` validates the PostgreSQL connection, prepares the target schema, runs pending migrations, and writes `[server]` plus `[database]` back to the active config file while preserving existing `[node]` and `[development]` sections.
 - Once `[database]` exists, `app/api` uses the configured PostgreSQL connection, creates the configured schema if needed, and runs pending migrations on startup.
 - `app/node` requires `[node]` boot config and does not have a setup mode fallback.
 - `schema` is optional and defaults to `public`.
