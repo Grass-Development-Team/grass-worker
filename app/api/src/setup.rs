@@ -284,6 +284,19 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct ConflictAdminSetupService;
+
+    #[async_trait::async_trait]
+    impl AdminSetupService for ConflictAdminSetupService {
+        async fn create_initial_admin(
+            &self,
+            _input: InitialAdminInput,
+        ) -> Result<(), AdminSetupError> {
+            Err(AdminSetupError::conflict("initial admin already exists"))
+        }
+    }
+
     #[tokio::test]
     async fn setup_database_returns_bad_request_when_initializer_fails() {
         let app = app_router(AppMode::Setup(SetupContext::database_with_service(
@@ -469,5 +482,31 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn setup_admin_returns_conflict_when_admin_exists() {
+        let app = app_router(AppMode::Setup(SetupContext::admin_with_service(
+            "127.0.0.1:3000".parse().unwrap(),
+            DatabaseConfig::default(),
+            Arc::new(ConflictAdminSetupService),
+        )))
+        .unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/setup/admin")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"email":"admin@example.com","password":"secret-pass"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
     }
 }
