@@ -1,7 +1,7 @@
-use crate::admin_setup::{
-    AdminSetupError, AdminSetupErrorKind, InitialAdminInput,
+use crate::{
+    SetupContext, SetupStage,
+    domain::setup::{AdminSetupError, AdminSetupErrorKind, InitialAdminInput},
 };
-use crate::startup::{SetupContext, SetupStage};
 use axum::{
     Extension, Json, Router,
     extract::rejection::JsonRejection,
@@ -14,14 +14,6 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
 struct SetupStateResponse {
-    stage: SetupStage,
-    status: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-struct SetupInfoResponse {
-    service: &'static str,
-    mode: &'static str,
     stage: SetupStage,
     status: &'static str,
 }
@@ -92,22 +84,12 @@ impl AdminSetupRequest {
     }
 }
 
-pub fn install_setup(router: Router, context: SetupContext) -> Router {
+pub fn install_setup_routes(router: Router, context: SetupContext) -> Router {
     router
-        .route("/api/info", get(setup_info))
-        .route("/api/setup/state", get(setup_state))
-        .route("/api/setup/database", post(setup_database))
-        .route("/api/setup/admin", post(setup_admin))
+        .route("/api/v1/setup/state", get(setup_state))
+        .route("/api/v1/setup/database", post(setup_database))
+        .route("/api/v1/setup/admin", post(setup_admin))
         .layer(Extension(context))
-}
-
-async fn setup_info(Extension(context): Extension<SetupContext>) -> Json<SetupInfoResponse> {
-    Json(SetupInfoResponse {
-        service: "control-api",
-        mode: "setup",
-        stage: context.stage(),
-        status: "pending",
-    })
 }
 
 async fn setup_state(Extension(context): Extension<SetupContext>) -> Json<SetupStateResponse> {
@@ -131,13 +113,13 @@ async fn setup_database(
     let SetupContext::Database {
         listen,
         config_path,
-        service,
+        initializer,
     } = context
     else {
         return error_response(StatusCode::CONFLICT, "current setup stage is not database");
     };
 
-    if let Err(error) = service.initialize_database(&database).await {
+    if let Err(error) = initializer.initialize_database(&database).await {
         return error_response(StatusCode::BAD_REQUEST, error.to_string());
     }
 
@@ -161,7 +143,7 @@ async fn setup_admin(
     Extension(context): Extension<SetupContext>,
     payload: Result<Json<AdminSetupRequest>, JsonRejection>,
 ) -> impl IntoResponse {
-    let SetupContext::Admin { service, .. } = context else {
+    let SetupContext::Admin { creator, .. } = context else {
         return error_response(StatusCode::CONFLICT, "current setup stage is not admin");
     };
 
@@ -175,7 +157,7 @@ async fn setup_admin(
         Err(error) => return admin_error_response(error),
     };
 
-    match service.create_initial_admin(input).await {
+    match creator.create_initial_admin(input).await {
         Ok(()) => (
             StatusCode::OK,
             Json(SetupActionResponse {
@@ -211,9 +193,10 @@ fn admin_error_response(error: AdminSetupError) -> axum::response::Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::admin_setup::{AdminSetupError, AdminSetupService, InitialAdminInput};
-    use crate::startup::{DatabaseSetupError, DatabaseSetupService};
-    use crate::{AppMode, app_router};
+    use crate::{
+        AppMode, SetupContext, app_router,
+        domain::setup::{DatabaseInitializer, DatabaseSetupError, InitialAdminCreator},
+    };
     use axum::{
         body::{Body, to_bytes},
         http::{Request, StatusCode},
@@ -224,10 +207,10 @@ mod tests {
     use tower::ServiceExt;
 
     #[derive(Debug)]
-    struct FailingSetupService;
+    struct FailingDatabaseInitializer;
 
     #[async_trait::async_trait]
-    impl DatabaseSetupService for FailingSetupService {
+    impl DatabaseInitializer for FailingDatabaseInitializer {
         async fn initialize_database(
             &self,
             _database: &DatabaseConfig,
@@ -237,11 +220,11 @@ mod tests {
     }
 
     #[derive(Debug, Default)]
-    struct RecordingSetupService {
+    struct RecordingDatabaseInitializer {
         last_config: Mutex<Option<DatabaseConfig>>,
     }
 
-    impl RecordingSetupService {
+    impl RecordingDatabaseInitializer {
         fn success() -> Self {
             Self::default()
         }
@@ -252,7 +235,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl DatabaseSetupService for RecordingSetupService {
+    impl DatabaseInitializer for RecordingDatabaseInitializer {
         async fn initialize_database(
             &self,
             database: &DatabaseConfig,
@@ -263,18 +246,18 @@ mod tests {
     }
 
     #[derive(Debug, Default)]
-    struct RecordingAdminSetupService {
+    struct RecordingInitialAdminCreator {
         last_input: Mutex<Option<InitialAdminInput>>,
     }
 
-    impl RecordingAdminSetupService {
+    impl RecordingInitialAdminCreator {
         fn last_input(&self) -> Option<InitialAdminInput> {
             self.last_input.lock().unwrap().clone()
         }
     }
 
     #[async_trait::async_trait]
-    impl AdminSetupService for RecordingAdminSetupService {
+    impl InitialAdminCreator for RecordingInitialAdminCreator {
         async fn create_initial_admin(
             &self,
             input: InitialAdminInput,
@@ -285,10 +268,10 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct ConflictAdminSetupService;
+    struct ConflictInitialAdminCreator;
 
     #[async_trait::async_trait]
-    impl AdminSetupService for ConflictAdminSetupService {
+    impl InitialAdminCreator for ConflictInitialAdminCreator {
         async fn create_initial_admin(
             &self,
             _input: InitialAdminInput,
@@ -299,10 +282,10 @@ mod tests {
 
     #[tokio::test]
     async fn setup_database_returns_bad_request_when_initializer_fails() {
-        let app = app_router(AppMode::Setup(SetupContext::database_with_service(
+        let app = app_router(AppMode::Setup(SetupContext::database_with_initializer(
             "127.0.0.1:3000".parse().unwrap(),
             PathBuf::from("config.toml"),
-            Arc::new(FailingSetupService),
+            Arc::new(FailingDatabaseInitializer),
         )))
         .unwrap();
 
@@ -310,7 +293,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/setup/database")
+                    .uri("/api/v1/setup/database")
                     .header("content-type", "application/json")
                     .body(Body::from(
                         r#"{"host":"127.0.0.1","port":5432,"db_name":"grass_worker","user":"postgres","password":"secret"}"#,
@@ -328,13 +311,13 @@ mod tests {
 
     #[tokio::test]
     async fn setup_database_persists_config_and_returns_completed_status() {
-        let service = Arc::new(RecordingSetupService::success());
+        let initializer = Arc::new(RecordingDatabaseInitializer::success());
         let temp_dir = tempfile::tempdir().unwrap();
         let config_path = temp_dir.path().join("config.toml");
-        let app = app_router(AppMode::Setup(SetupContext::database_with_service(
+        let app = app_router(AppMode::Setup(SetupContext::database_with_initializer(
             "127.0.0.1:3000".parse().unwrap(),
             config_path.clone(),
-            service.clone(),
+            initializer.clone(),
         )))
         .unwrap();
 
@@ -342,7 +325,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/setup/database")
+                    .uri("/api/v1/setup/database")
                     .header("content-type", "application/json")
                     .body(Body::from(
                         r#"{"host":"127.0.0.1","port":5432,"db_name":"grass_worker","user":"postgres","password":"secret","schema":"control_plane"}"#,
@@ -357,7 +340,7 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "completed");
         assert_eq!(json["stage"], "database");
-        assert_eq!(service.last_config().unwrap().schema, "control_plane");
+        assert_eq!(initializer.last_config().unwrap().schema, "control_plane");
 
         let written_config = std::fs::read_to_string(config_path).unwrap();
         assert!(written_config.contains("[database]"));
@@ -366,13 +349,13 @@ mod tests {
 
     #[tokio::test]
     async fn setup_database_defaults_blank_schema_to_public() {
-        let service = Arc::new(RecordingSetupService::success());
+        let initializer = Arc::new(RecordingDatabaseInitializer::success());
         let temp_dir = tempfile::tempdir().unwrap();
         let config_path = temp_dir.path().join("config.toml");
-        let app = app_router(AppMode::Setup(SetupContext::database_with_service(
+        let app = app_router(AppMode::Setup(SetupContext::database_with_initializer(
             "127.0.0.1:3000".parse().unwrap(),
             config_path,
-            service.clone(),
+            initializer.clone(),
         )))
         .unwrap();
 
@@ -380,7 +363,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/setup/database")
+                    .uri("/api/v1/setup/database")
                     .header("content-type", "application/json")
                     .body(Body::from(
                         r#"{"host":"127.0.0.1","port":5432,"db_name":"grass_worker","user":"postgres","password":"secret","schema":"   "}"#,
@@ -391,19 +374,19 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(service.last_config().unwrap().schema, "public");
+        assert_eq!(initializer.last_config().unwrap().schema, "public");
     }
 
     #[tokio::test]
     async fn setup_database_returns_internal_server_error_when_config_persistence_fails() {
-        let service = Arc::new(RecordingSetupService::success());
+        let initializer = Arc::new(RecordingDatabaseInitializer::success());
         let temp_dir = tempfile::tempdir().unwrap();
         let config_path = temp_dir.path().join("config-dir");
         std::fs::create_dir(&config_path).unwrap();
-        let app = app_router(AppMode::Setup(SetupContext::database_with_service(
+        let app = app_router(AppMode::Setup(SetupContext::database_with_initializer(
             "127.0.0.1:3000".parse().unwrap(),
             config_path,
-            service,
+            initializer,
         )))
         .unwrap();
 
@@ -411,7 +394,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/setup/database")
+                    .uri("/api/v1/setup/database")
                     .header("content-type", "application/json")
                     .body(Body::from(
                         r#"{"host":"127.0.0.1","port":5432,"db_name":"grass_worker","user":"postgres","password":"secret"}"#,
@@ -429,11 +412,11 @@ mod tests {
 
     #[tokio::test]
     async fn setup_admin_normalizes_email_and_returns_completed_status() {
-        let service = Arc::new(RecordingAdminSetupService::default());
-        let app = app_router(AppMode::Setup(SetupContext::admin_with_service(
+        let creator = Arc::new(RecordingInitialAdminCreator::default());
+        let app = app_router(AppMode::Setup(SetupContext::admin_with_creator(
             "127.0.0.1:3000".parse().unwrap(),
             DatabaseConfig::default(),
-            service.clone(),
+            creator.clone(),
         )))
         .unwrap();
 
@@ -441,7 +424,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/setup/admin")
+                    .uri("/api/v1/setup/admin")
                     .header("content-type", "application/json")
                     .body(Body::from(
                         r#"{"email":"  ADMIN@Example.com  ","password":"secret-pass"}"#,
@@ -453,7 +436,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
-            service.last_input().unwrap(),
+            creator.last_input().unwrap(),
             InitialAdminInput {
                 email: "admin@example.com".to_owned(),
                 password: "secret-pass".to_owned(),
@@ -473,7 +456,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/setup/admin")
+                    .uri("/api/v1/setup/admin")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"email":"   ","password":"secret-pass"}"#))
                     .unwrap(),
@@ -486,10 +469,10 @@ mod tests {
 
     #[tokio::test]
     async fn setup_admin_returns_conflict_when_admin_exists() {
-        let app = app_router(AppMode::Setup(SetupContext::admin_with_service(
+        let app = app_router(AppMode::Setup(SetupContext::admin_with_creator(
             "127.0.0.1:3000".parse().unwrap(),
             DatabaseConfig::default(),
-            Arc::new(ConflictAdminSetupService),
+            Arc::new(ConflictInitialAdminCreator),
         )))
         .unwrap();
 
@@ -497,7 +480,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/setup/admin")
+                    .uri("/api/v1/setup/admin")
                     .header("content-type", "application/json")
                     .body(Body::from(
                         r#"{"email":"admin@example.com","password":"secret-pass"}"#,

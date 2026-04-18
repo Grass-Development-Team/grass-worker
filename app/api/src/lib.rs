@@ -1,18 +1,22 @@
-mod admin_setup;
+pub mod adapters;
+pub mod domain;
+mod features;
 mod frontend;
-mod setup;
-mod startup;
 
+use crate::adapters::setup::{PostgresInitialAdminCreator, default_database_initializer};
+use crate::domain::{
+    setup::{SharedDatabaseInitializer, SharedInitialAdminCreator},
+    system::ApiInfo,
+};
 use axum::routing::any;
 use axum::{Json, Router, routing::get};
+use features::{setup::install_setup_routes, system::install_system_routes};
 use frontend::{FrontendMode, install_frontend};
 use grass_worker_config::AppConfig;
 use serde::Serialize;
-use setup::install_setup;
-use startup::SetupContext;
+use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::OnceLock;
-
-pub use startup::{SetupStage, StartupMode};
 
 #[derive(Debug, Clone)]
 pub enum AppMode {
@@ -32,6 +36,135 @@ impl From<SetupContext> for AppMode {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SetupStage {
+    Database,
+    Admin,
+}
+
+#[derive(Clone)]
+pub enum SetupContext {
+    Database {
+        listen: SocketAddr,
+        config_path: PathBuf,
+        initializer: SharedDatabaseInitializer,
+    },
+    Admin {
+        listen: SocketAddr,
+        database: grass_worker_config::DatabaseConfig,
+        creator: SharedInitialAdminCreator,
+    },
+}
+
+impl std::fmt::Debug for SetupContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Database {
+                listen,
+                config_path,
+                ..
+            } => f
+                .debug_struct("SetupContext::Database")
+                .field("listen", listen)
+                .field("config_path", config_path)
+                .finish_non_exhaustive(),
+            Self::Admin {
+                listen, database, ..
+            } => f
+                .debug_struct("SetupContext::Admin")
+                .field("listen", listen)
+                .field("database", database)
+                .finish_non_exhaustive(),
+        }
+    }
+}
+
+impl PartialEq for SetupContext {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Database {
+                    listen: left_listen,
+                    config_path: left_config_path,
+                    ..
+                },
+                Self::Database {
+                    listen: right_listen,
+                    config_path: right_config_path,
+                    ..
+                },
+            ) => left_listen == right_listen && left_config_path == right_config_path,
+            (
+                Self::Admin {
+                    listen: left_listen,
+                    database: left_database,
+                    ..
+                },
+                Self::Admin {
+                    listen: right_listen,
+                    database: right_database,
+                    ..
+                },
+            ) => left_listen == right_listen && left_database == right_database,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for SetupContext {}
+
+impl SetupContext {
+    pub fn database(listen: SocketAddr, config_path: PathBuf) -> Self {
+        Self::database_with_initializer(listen, config_path, default_database_initializer())
+    }
+
+    pub fn database_with_initializer(
+        listen: SocketAddr,
+        config_path: PathBuf,
+        initializer: SharedDatabaseInitializer,
+    ) -> Self {
+        Self::Database {
+            listen,
+            config_path,
+            initializer,
+        }
+    }
+
+    pub fn admin(listen: SocketAddr, database: grass_worker_config::DatabaseConfig) -> Self {
+        Self::admin_with_creator(
+            listen,
+            database.clone(),
+            std::sync::Arc::new(PostgresInitialAdminCreator::new(database)),
+        )
+    }
+
+    pub fn admin_with_creator(
+        listen: SocketAddr,
+        database: grass_worker_config::DatabaseConfig,
+        creator: SharedInitialAdminCreator,
+    ) -> Self {
+        Self::Admin {
+            listen,
+            database,
+            creator,
+        }
+    }
+
+    pub fn stage(&self) -> SetupStage {
+        match self {
+            Self::Database { .. } => SetupStage::Database,
+            Self::Admin { .. } => SetupStage::Admin,
+        }
+    }
+
+    pub fn listen(&self) -> SocketAddr {
+        match self {
+            Self::Database { listen, .. } | Self::Admin { listen, .. } => *listen,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct HealthResponse {
     service: &'static str,
@@ -42,19 +175,6 @@ async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         service: "control-api",
         status: "ok",
-    })
-}
-
-#[derive(Debug, Serialize)]
-struct ReadyInfoResponse {
-    service: &'static str,
-    mode: &'static str,
-}
-
-async fn ready_api_info() -> Json<ReadyInfoResponse> {
-    Json(ReadyInfoResponse {
-        service: "control-api",
-        mode: "ready",
     })
 }
 
@@ -77,8 +197,7 @@ pub fn app_router(mode: impl Into<AppMode>) -> std::io::Result<Router> {
 
     match mode.into() {
         AppMode::Normal(config) => {
-            let router = router
-                .route("/api/info", get(ready_api_info))
+            let router = install_system_routes(router, ApiInfo::ready())
                 .route("/api/{*path}", any(api_not_found));
             let frontend_mode = match config.development {
                 Some(development) => FrontendMode::Development {
@@ -92,7 +211,10 @@ pub fn app_router(mode: impl Into<AppMode>) -> std::io::Result<Router> {
             Ok(install_frontend(router, frontend_mode))
         }
         AppMode::Setup(context) => {
-            let router = install_setup(router, context).route("/api/{*path}", any(api_not_found));
+            let stage = context.stage();
+            let router = install_system_routes(router, ApiInfo::setup(stage));
+            let router =
+                install_setup_routes(router, context).route("/api/{*path}", any(api_not_found));
             Ok(router)
         }
     }
@@ -101,7 +223,6 @@ pub fn app_router(mode: impl Into<AppMode>) -> std::io::Result<Router> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::startup::SetupContext;
     use axum::{
         body::{Body, to_bytes},
         http::{Request, StatusCode},
@@ -141,7 +262,7 @@ mod tests {
         .unwrap()
         .oneshot(
             Request::builder()
-                .uri("/api/info")
+                .uri("/api/v1/info")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -167,7 +288,7 @@ mod tests {
         .unwrap()
         .oneshot(
             Request::builder()
-                .uri("/api/info")
+                .uri("/api/v1/info")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -193,7 +314,7 @@ mod tests {
         .unwrap()
         .oneshot(
             Request::builder()
-                .uri("/api/setup/state")
+                .uri("/api/v1/setup/state")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -217,7 +338,7 @@ mod tests {
         .unwrap()
         .oneshot(
             Request::builder()
-                .uri("/api/info")
+                .uri("/api/v1/info")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -241,6 +362,45 @@ mod tests {
         )))
         .unwrap()
         .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn ready_mode_old_info_path_returns_not_found() {
+        let response = app_router(AppMode::Normal(AppConfig {
+            server: grass_worker_config::ServerConfig::default(),
+            database: Some(DatabaseConfig::default()),
+            development: None,
+        }))
+        .unwrap()
+        .oneshot(
+            Request::builder()
+                .uri("/api/info")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn setup_mode_old_setup_path_returns_not_found() {
+        let response = app_router(AppMode::Setup(SetupContext::database(
+            "127.0.0.1:3000".parse().unwrap(),
+            PathBuf::from("config.toml"),
+        )))
+        .unwrap()
+        .oneshot(
+            Request::builder()
+                .uri("/api/setup/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
 
