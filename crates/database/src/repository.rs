@@ -4,8 +4,8 @@ use crate::entities::{
 use async_trait::async_trait;
 use sea_orm::entity::prelude::DateTimeUtc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set,
-    sea_query::OnConflict,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait,
+    QueryFilter, Set, sea_query::OnConflict,
 };
 use uuid::Uuid;
 
@@ -94,7 +94,13 @@ pub trait DeploymentArtifactRepository {
 #[async_trait]
 pub trait UserRepository {
     async fn create(&self, new_user: NewUser) -> Result<user::Model, DbErr>;
+    async fn create_admin(
+        &self,
+        new_user: NewUser,
+        is_initial_admin: bool,
+    ) -> Result<user::Model, DbErr>;
     async fn find_by_email(&self, email: &str) -> Result<Option<user::Model>, DbErr>;
+    async fn has_admin(&self) -> Result<bool, DbErr>;
 }
 
 #[async_trait]
@@ -301,6 +307,58 @@ pub struct SeaOrmUserRepository {
     database: DatabaseConnection,
 }
 
+fn build_user_model(new_user: NewUser, is_admin: bool, is_initial_admin: bool) -> user::Model {
+    user::Model {
+        id: new_user.id,
+        email: new_user.email,
+        is_admin,
+        is_initial_admin,
+        created_at: new_user.created_at,
+        updated_at: new_user.created_at,
+    }
+}
+
+pub async fn insert_user<C: ConnectionTrait>(
+    connection: &C,
+    model: &user::Model,
+) -> Result<(), DbErr> {
+    user::Entity::insert(user::ActiveModel {
+        id: Set(model.id),
+        email: Set(model.email.clone()),
+        is_admin: Set(model.is_admin),
+        is_initial_admin: Set(model.is_initial_admin),
+        created_at: Set(model.created_at),
+        updated_at: Set(model.updated_at),
+    })
+    .exec_without_returning(connection)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn upsert_password_credential<C: ConnectionTrait>(
+    connection: &C,
+    model: &user_password_credential::Model,
+) -> Result<(), DbErr> {
+    user_password_credential::Entity::insert(user_password_credential::ActiveModel {
+        user_id: Set(model.user_id),
+        password_hash: Set(model.password_hash.clone()),
+        password_updated_at: Set(model.password_updated_at),
+    })
+    .on_conflict(
+        OnConflict::column(user_password_credential::Column::UserId)
+            .update_columns([
+                user_password_credential::Column::PasswordHash,
+                user_password_credential::Column::PasswordUpdatedAt,
+            ])
+            .to_owned(),
+    )
+    .exec_without_returning(connection)
+    .await?;
+
+    Ok(())
+}
+
 impl SeaOrmUserRepository {
     pub fn new(database: DatabaseConnection) -> Self {
         Self { database }
@@ -310,23 +368,19 @@ impl SeaOrmUserRepository {
 #[async_trait]
 impl UserRepository for SeaOrmUserRepository {
     async fn create(&self, new_user: NewUser) -> Result<user::Model, DbErr> {
-        let model = user::Model {
-            id: new_user.id,
-            email: new_user.email,
-            is_admin: false,
-            created_at: new_user.created_at,
-            updated_at: new_user.created_at,
-        };
+        let model = build_user_model(new_user, false, false);
+        insert_user(&self.database, &model).await?;
 
-        user::Entity::insert(user::ActiveModel {
-            id: Set(model.id),
-            email: Set(model.email.clone()),
-            is_admin: Set(model.is_admin),
-            created_at: Set(model.created_at),
-            updated_at: Set(model.updated_at),
-        })
-        .exec_without_returning(&self.database)
-        .await?;
+        Ok(model)
+    }
+
+    async fn create_admin(
+        &self,
+        new_user: NewUser,
+        is_initial_admin: bool,
+    ) -> Result<user::Model, DbErr> {
+        let model = build_user_model(new_user, true, is_initial_admin);
+        insert_user(&self.database, &model).await?;
 
         Ok(model)
     }
@@ -336,6 +390,15 @@ impl UserRepository for SeaOrmUserRepository {
             .filter(user::Column::Email.eq(email))
             .one(&self.database)
             .await
+    }
+
+    async fn has_admin(&self) -> Result<bool, DbErr> {
+        let admin = user::Entity::find()
+            .filter(user::Column::IsAdmin.eq(true))
+            .one(&self.database)
+            .await?;
+
+        Ok(admin.is_some())
     }
 }
 
@@ -362,21 +425,7 @@ impl UserPasswordCredentialRepository for SeaOrmUserPasswordCredentialRepository
             password_updated_at: new_credential.password_updated_at,
         };
 
-        user_password_credential::Entity::insert(user_password_credential::ActiveModel {
-            user_id: Set(model.user_id),
-            password_hash: Set(model.password_hash.clone()),
-            password_updated_at: Set(model.password_updated_at),
-        })
-        .on_conflict(
-            OnConflict::column(user_password_credential::Column::UserId)
-                .update_columns([
-                    user_password_credential::Column::PasswordHash,
-                    user_password_credential::Column::PasswordUpdatedAt,
-                ])
-                .to_owned(),
-        )
-        .exec_without_returning(&self.database)
-        .await?;
+        upsert_password_credential(&self.database, &model).await?;
 
         Ok(model)
     }
