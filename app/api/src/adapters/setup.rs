@@ -1,3 +1,8 @@
+use crate::domain::setup::{
+    AdminSetupError, DatabaseInitializer, DatabaseSetupError, InitialAdminCreator,
+    InitialAdminInput, SetupBootstrapError, SetupBootstrapper, SharedDatabaseInitializer,
+    SharedSetupBootstrapper,
+};
 use argon2::{
     Argon2,
     password_hash::{PasswordHasher, SaltString},
@@ -6,84 +11,81 @@ use async_trait::async_trait;
 use chrono::Utc;
 use grass_worker_config::DatabaseConfig;
 use grass_worker_database::{
-    connection::connect,
+    connection::{connect, prepare_schema},
     entities::{user, user_password_credential},
-    repository::{insert_user, upsert_password_credential},
+    repository::{SeaOrmUserRepository, UserRepository, insert_user, upsert_password_credential},
 };
+use grass_worker_migration::{Migrator, MigratorTrait};
 use rand_core::OsRng;
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, QueryFilter, Statement,
-    TransactionTrait,
+    ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, QueryFilter,
+    Statement, TransactionTrait,
 };
 use std::sync::Arc;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InitialAdminInput {
-    pub email: String,
-    pub password: String,
+async fn connect_and_prepare(database: &DatabaseConfig) -> Result<DatabaseConnection, String> {
+    let connection = connect(database).await.map_err(|error| error.to_string())?;
+    prepare_schema(&connection, &database.schema)
+        .await
+        .map_err(|error| error.to_string())?;
+    Migrator::up(&connection, None)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    Ok(connection)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AdminSetupErrorKind {
-    Validation,
-    Conflict,
-    Internal,
+pub fn default_database_initializer() -> SharedDatabaseInitializer {
+    Arc::new(PostgresDatabaseInitializer)
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AdminSetupError {
-    kind: AdminSetupErrorKind,
-    message: String,
-}
-
-impl AdminSetupError {
-    pub fn validation(message: impl Into<String>) -> Self {
-        Self {
-            kind: AdminSetupErrorKind::Validation,
-            message: message.into(),
-        }
-    }
-
-    pub fn conflict(message: impl Into<String>) -> Self {
-        Self {
-            kind: AdminSetupErrorKind::Conflict,
-            message: message.into(),
-        }
-    }
-
-    pub fn internal(message: impl Into<String>) -> Self {
-        Self {
-            kind: AdminSetupErrorKind::Internal,
-            message: message.into(),
-        }
-    }
-
-    pub fn kind(&self) -> &AdminSetupErrorKind {
-        &self.kind
-    }
-
-    pub fn message(&self) -> &str {
-        &self.message
-    }
-}
-
-#[async_trait]
-pub trait AdminSetupService: Send + Sync {
-    async fn create_initial_admin(
-        &self,
-        input: InitialAdminInput,
-    ) -> Result<(), AdminSetupError>;
-}
-
-pub type SharedAdminSetupService = Arc<dyn AdminSetupService>;
 
 #[derive(Debug)]
-pub struct LiveAdminSetupService {
+struct PostgresDatabaseInitializer;
+
+#[async_trait]
+impl DatabaseInitializer for PostgresDatabaseInitializer {
+    async fn initialize_database(
+        &self,
+        database: &DatabaseConfig,
+    ) -> Result<(), DatabaseSetupError> {
+        connect_and_prepare(database)
+            .await
+            .map(|_| ())
+            .map_err(DatabaseSetupError::new)
+    }
+}
+
+pub fn default_setup_bootstrapper() -> SharedSetupBootstrapper {
+    Arc::new(PostgresSetupBootstrapper)
+}
+
+#[derive(Debug)]
+struct PostgresSetupBootstrapper;
+
+#[async_trait]
+impl SetupBootstrapper for PostgresSetupBootstrapper {
+    async fn initialize_and_has_admin(
+        &self,
+        database: &DatabaseConfig,
+    ) -> Result<bool, SetupBootstrapError> {
+        let connection = connect_and_prepare(database)
+            .await
+            .map_err(SetupBootstrapError::new)?;
+
+        SeaOrmUserRepository::new(connection)
+            .has_admin()
+            .await
+            .map_err(|error| SetupBootstrapError::new(error.to_string()))
+    }
+}
+
+#[derive(Debug)]
+pub struct PostgresInitialAdminCreator {
     database: DatabaseConfig,
 }
 
-impl LiveAdminSetupService {
+impl PostgresInitialAdminCreator {
     pub fn new(database: DatabaseConfig) -> Self {
         Self { database }
     }
@@ -98,11 +100,8 @@ fn hash_password(password: &str) -> Result<String, AdminSetupError> {
 }
 
 #[async_trait]
-impl AdminSetupService for LiveAdminSetupService {
-    async fn create_initial_admin(
-        &self,
-        input: InitialAdminInput,
-    ) -> Result<(), AdminSetupError> {
+impl InitialAdminCreator for PostgresInitialAdminCreator {
+    async fn create_initial_admin(&self, input: InitialAdminInput) -> Result<(), AdminSetupError> {
         let connection = connect(&self.database)
             .await
             .map_err(|error| AdminSetupError::internal(error.to_string()))?;
