@@ -39,8 +39,9 @@ Runtime config is TOML-first. The apps resolve config in this order:
 
 1. If `--config <path>` is provided and the file exists, load that file.
 2. Otherwise load `./config.toml`.
-3. `app/api` enters setup mode if the file is missing or if `[database]` is absent.
-4. `app/node` still requires a config file with a `[node]` section before it can start.
+3. `app/api` enters the `database` setup stage if the file is missing or if `[database]` is absent.
+4. If `[database]` exists but no admin user exists yet, `app/api` enters the `admin` setup stage.
+5. `app/node` still requires a config file with a `[node]` section before it can start.
 
 Example:
 
@@ -66,6 +67,7 @@ dev_server = "http://127.0.0.1:5173"
 Rules:
 
 - `app/api` enters setup mode on `server.listen` when `config.toml` or `[database]` is missing.
+- If `[database]` exists but no admin user exists yet, `app/api` enters the `admin` setup stage.
 - `GET /api/info` is available in both modes and reports whether the API is in `ready` or `setup`.
 - Setup mode is API-only; the backend no longer serves placeholder HTML on `/`.
 - In setup mode, `GET /api/setup/state` reports the current setup stage.
@@ -84,6 +86,17 @@ Rules:
 
 - `schema` is optional; missing or blank values default to `public`.
 - A successful `POST /api/setup/database` validates the PostgreSQL connection, prepares the target schema, runs pending migrations, and writes `[server]` plus `[database]` back to the active config file while preserving existing `[node]` and `[development]` sections.
+- In `admin` setup stage, `POST /api/setup/admin` accepts:
+
+```json
+{
+  "email": "admin@example.com",
+  "password": "secret-pass"
+}
+```
+
+- A successful `POST /api/setup/admin` creates the first admin user and its password credential.
+- After `database` or `admin` setup completes, restart `app/api` so startup mode is re-evaluated.
 - Once `[database]` exists, `app/api` uses the configured PostgreSQL connection, creates the configured schema if needed, and runs pending migrations on startup.
 - `app/node` requires `[node]` boot config and does not have a setup mode fallback.
 - `schema` is optional and defaults to `public`.
