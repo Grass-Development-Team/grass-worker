@@ -1,8 +1,8 @@
-import { Navigate, type RouteObject } from "react-router-dom";
+import type { RouteObject } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { HomePage } from "./routes/home-page";
 import { LoginPage } from "./routes/login-page";
 import { ProtectedRoute } from "./routes/protected-route";
-import { ProjectsPage } from "./routes/projects-page";
 import { SetupPage } from "./routes/setup-page";
 import { SystemModeGate } from "./routes/system-mode-gate";
 
@@ -42,11 +42,7 @@ export const routes: RouteObject[] = [
         children: [
           {
             index: true,
-            element: <Navigate replace to="/projects" />,
-          },
-          {
-            path: "/projects",
-            element: <ProjectsPage />,
+            element: <HomePage />,
           },
           {
             path: "*",

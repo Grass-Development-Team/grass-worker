@@ -71,7 +71,7 @@ function ProgressCard({ stage }: { stage: SetupStage }) {
     },
     {
       title: "Ready",
-      description: "Return to the projects console and continue through normal sign-in.",
+      description: "Return to the console root and continue through normal sign-in.",
       state: "upcoming",
     },
   ] as const;
@@ -181,7 +181,7 @@ export function SetupPage() {
 
       if (systemInfo.mode === "ready") {
         const email = encodeURIComponent(adminForm.email.trim());
-        await navigate(`/login?redirect=%2Fprojects&email=${email}`, { replace: true });
+        await navigate(`/login?redirect=%2F&email=${email}`, { replace: true });
       }
     },
   });
@@ -217,7 +217,7 @@ export function SetupPage() {
   }
 
   if (query.data.mode === "ready") {
-    return <Navigate replace to="/projects" />;
+    return <Navigate replace to="/" />;
   }
 
   const stage = query.data.stage;

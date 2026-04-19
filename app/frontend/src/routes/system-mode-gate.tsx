@@ -77,7 +77,7 @@ export function SystemModeGate() {
   }
 
   if (query.data.mode === "ready" && location.pathname === "/setup") {
-    return <Navigate replace to="/projects" />;
+    return <Navigate replace to="/" />;
   }
 
   return <Outlet />;

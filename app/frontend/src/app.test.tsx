@@ -36,25 +36,6 @@ function currentUserResponse() {
   );
 }
 
-function projectsResponse(
-  projects: Array<{
-    id: string;
-    slug: string;
-    name: string;
-    status: "active" | "archived";
-    created_at: string;
-    updated_at: string;
-    archived_at: string | null;
-  }>,
-) {
-  return jsonResponse(
-    {
-      projects,
-    },
-    { status: 200 },
-  );
-}
-
 function requestPath(input: string | URL | Request): string {
   if (typeof input === "string") {
     return new URL(input, "http://localhost").pathname;
@@ -182,7 +163,7 @@ describe("auth routing", () => {
     });
   });
 
-  test("logout returns to login with the current route as redirect", async () => {
+  test("logout returns to login with redirect root", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const path = requestPath(input);
 
@@ -192,10 +173,6 @@ describe("auth routing", () => {
 
       if (path === "/api/v1/me") {
         return currentUserResponse();
-      }
-
-      if (path === "/api/v1/projects") {
-        return projectsResponse([]);
       }
 
       if (path === "/api/v1/auth/logout") {
@@ -207,7 +184,7 @@ describe("auth routing", () => {
 
     vi.stubGlobal("fetch", fetchMock);
 
-    const { router } = renderRouter("/projects");
+    const { router } = renderRouter("/");
 
     await userEvent.click(
       await screen.findByRole("button", { name: /sign out/i }),
@@ -215,87 +192,8 @@ describe("auth routing", () => {
 
     await waitFor(() => {
       expect(router.state.location.pathname).toBe("/login");
-      expect(router.state.location.search).toBe("?redirect=%2Fprojects");
+      expect(router.state.location.search).toBe("?redirect=%2F");
     });
-  });
-
-  test("authenticated root redirects to projects and shows the empty state", async () => {
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
-      const path = requestPath(input);
-
-      if (path === "/api/v1/info") {
-        return readyInfoResponse();
-      }
-
-      if (path === "/api/v1/me") {
-        return currentUserResponse();
-      }
-
-      if (path === "/api/v1/projects") {
-        return projectsResponse([]);
-      }
-
-      throw new Error(`Unexpected request for ${path}`);
-    });
-
-    vi.stubGlobal("fetch", fetchMock);
-
-    const { router } = renderRouter("/");
-
-    await waitFor(() => {
-      expect(router.state.location.pathname).toBe("/projects");
-    });
-
-    expect(await screen.findByText(/no projects yet/i)).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /projects/i })).toBeInTheDocument();
-  });
-
-  test("projects page renders the authenticated user's project list", async () => {
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
-      const path = requestPath(input);
-
-      if (path === "/api/v1/info") {
-        return readyInfoResponse();
-      }
-
-      if (path === "/api/v1/me") {
-        return currentUserResponse();
-      }
-
-      if (path === "/api/v1/projects") {
-        return projectsResponse([
-          {
-            id: "11111111-1111-1111-1111-111111111111",
-            slug: "docs-site",
-            name: "Docs Site",
-            status: "active",
-            created_at: "2026-04-19T10:00:00Z",
-            updated_at: "2026-04-19T10:00:00Z",
-            archived_at: null,
-          },
-          {
-            id: "22222222-2222-2222-2222-222222222222",
-            slug: "legacy-console",
-            name: "Legacy Console",
-            status: "archived",
-            created_at: "2026-04-18T10:00:00Z",
-            updated_at: "2026-04-19T08:00:00Z",
-            archived_at: "2026-04-19T08:00:00Z",
-          },
-        ]);
-      }
-
-      throw new Error(`Unexpected request for ${path}`);
-    });
-
-    vi.stubGlobal("fetch", fetchMock);
-
-    renderRouter("/projects");
-
-    expect(await screen.findByText(/docs site/i)).toBeInTheDocument();
-    expect(screen.getByText(/legacy console/i)).toBeInTheDocument();
-    expect(screen.getByText(/docs-site/i)).toBeInTheDocument();
-    expect(screen.getByText(/archived project/i)).toBeInTheDocument();
   });
 });
 
@@ -388,10 +286,6 @@ describe("setup routing", () => {
         );
       }
 
-      if (path === "/api/v1/projects") {
-        return projectsResponse([]);
-      }
-
       throw new Error(`Unexpected request for ${path}`);
     });
 
@@ -400,10 +294,10 @@ describe("setup routing", () => {
     const { router } = renderRouter("/setup");
 
     await waitFor(() => {
-      expect(router.state.location.pathname).toBe("/projects");
+      expect(router.state.location.pathname).toBe("/");
     });
 
-    expect(await screen.findByText(/no projects yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/ready mode is active/i)).toBeInTheDocument();
   });
 
   test("successful database setup advances to the admin stage", async () => {
@@ -535,7 +429,7 @@ describe("setup routing", () => {
     await waitFor(() => {
       expect(router.state.location.pathname).toBe("/login");
       expect(router.state.location.search).toBe(
-        "?redirect=%2Fprojects&email=admin%40example.com",
+        "?redirect=%2F&email=admin%40example.com",
       );
     });
 

@@ -10,11 +10,11 @@ import { Label } from "@/components/ui/label";
 
 function safeRedirect(value: string | null) {
   if (!value) {
-    return "/projects";
+    return "/";
   }
 
   if (!value.startsWith("/") || value.startsWith("//")) {
-    return "/projects";
+    return "/";
   }
 
   return value;
