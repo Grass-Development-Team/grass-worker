@@ -22,7 +22,8 @@ run-node:
 
 run-frontend: frontend-dev
 
-run: run-frontend run-api
+run:
+    bash -lc 'trap "kill 0" EXIT INT TERM; (cd app/frontend && bun run dev) & cargo run -p grass-worker-api & wait'
 
 build-release: frontend-build
     cargo build --release -p grass-worker-api
