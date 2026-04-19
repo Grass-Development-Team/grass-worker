@@ -69,6 +69,10 @@ Rules:
 - `app/api` enters setup mode on `server.listen` when `config.toml` or `[database]` is missing.
 - If `[database]` exists but no admin user exists yet, `app/api` enters the `admin` setup stage.
 - `GET /api/v1/info` is available in both modes and reports whether the API is in `ready` or `setup`.
+- In ready mode, auth endpoints are available:
+  - `POST /api/v1/auth/login`
+  - `GET /api/v1/me`
+  - `POST /api/v1/auth/logout`
 - Setup mode is API-only; the backend no longer serves placeholder HTML on `/`.
 - In setup mode, `GET /api/v1/setup/state` reports the current setup stage.
 - In setup mode, `POST /api/v1/setup/database` accepts:
@@ -102,6 +106,7 @@ Rules:
 - `schema` is optional and defaults to `public`.
 - With `[development]`, `app/api` proxies frontend routes to `development.dev_server`.
 - Without `[development]`, `app/api` serves frontend assets by checking `./public/` first and then falling back to embedded assets.
+- The frontend now exposes `/login` and a protected `/` console shell in ready mode.
 - `/health` remains backend-owned, and API routes now live under `/api/v1/*`.
 
 ## Frontend Chain
