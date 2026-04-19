@@ -37,6 +37,9 @@ tempfile = "3"
 tokio = { version = "1", features = ["fs", "macros", "net", "rt-multi-thread"] }
 toml = "0.9"
 tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1", features = ["v4"] }
 
 grass-worker-api = { path = "app/api" }

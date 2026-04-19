@@ -42,7 +42,10 @@ async fn login(
 ) -> axum::response::Response {
     let Json(payload) = match payload {
         Ok(payload) => payload,
-        Err(error) => return error_response(StatusCode::BAD_REQUEST, error.to_string()),
+        Err(error) => {
+            tracing::warn!(error = %error, "login request rejected: invalid payload");
+            return error_response(StatusCode::BAD_REQUEST, error.to_string());
+        }
     };
 
     let input = crate::domain::auth::LoginInput {
@@ -84,10 +87,16 @@ async fn logout(Extension(state): Extension<AppState>, jar: CookieJar) -> axum::
     let session_token = jar
         .get(crate::domain::auth::SESSION_COOKIE_NAME)
         .map(|cookie| cookie.value().to_owned());
-    let _ = state
+    if let Err(error) = state
         .auth
         .logout(state.database.as_ref(), session_token.as_deref())
-        .await;
+        .await
+    {
+        tracing::warn!(
+            error = error.message(),
+            "logout completed with revoke failure"
+        );
+    }
 
     (
         crate::adapters::auth::clear_session_cookie(jar),
@@ -139,9 +148,56 @@ mod tests {
         DatabaseBackend, DatabaseConnection, DbErr, MockDatabase, MockDatabaseConnection,
         MockExecResult,
     };
-    use std::sync::Arc;
+    use std::io::{self, Write};
+    use std::sync::{Arc, Mutex};
     use tower::ServiceExt;
+    use tracing::subscriber::set_default;
+    use tracing_subscriber::{fmt, fmt::MakeWriter};
     use uuid::Uuid;
+
+    #[derive(Clone, Default)]
+    struct SharedLogBuffer(Arc<Mutex<Vec<u8>>>);
+
+    struct SharedLogWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl SharedLogBuffer {
+        fn contents(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for SharedLogBuffer {
+        type Writer = SharedLogWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedLogWriter(self.0.clone())
+        }
+    }
+
+    impl Write for SharedLogWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn wait_for_logs(logs: &SharedLogBuffer, needle: &str) -> String {
+        for _ in 0..50 {
+            let output = logs.contents();
+            if output.contains(needle) {
+                return output;
+            }
+
+            std::thread::yield_now();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        logs.contents()
+    }
 
     fn hash_password_for_test(password: &str) -> String {
         let salt = SaltString::generate(&mut OsRng);
@@ -407,8 +463,15 @@ mod tests {
         assert_eq!(payload["error"], "not authenticated");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn login_internal_failures_return_generic_error_message() {
+        let logs = SharedLogBuffer::default();
+        let subscriber = fmt()
+            .with_writer(logs.clone())
+            .with_ansi(false)
+            .without_time()
+            .finish();
+        let _guard = set_default(subscriber);
         let created_at = chrono::DateTime::parse_from_rfc3339("2026-04-17T10:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
@@ -455,6 +518,10 @@ mod tests {
         assert_eq!(payload["error"], "internal auth error");
         assert!(!payload["error"].as_str().unwrap().contains("password"));
         assert!(!payload["error"].as_str().unwrap().contains("hash"));
+
+        let output = wait_for_logs(&logs, "stored password hash is invalid");
+        assert!(output.contains("stored password hash is invalid"));
+        assert!(output.contains("error=password hash string missing field"));
     }
 
     #[tokio::test]
@@ -572,11 +639,22 @@ mod tests {
         assert!(set_cookie.contains("SameSite=Lax"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn logout_always_returns_204_even_when_revoke_fails() {
+        let logs = SharedLogBuffer::default();
+        let subscriber = fmt()
+            .with_writer(logs.clone())
+            .with_ansi(false)
+            .without_time()
+            .finish();
+        let _guard = set_default(subscriber);
         let app = install_auth_routes(
             Router::new(),
-            AppState::new(MockDatabase::new(DatabaseBackend::Postgres).into_connection()),
+            AppState::new(
+                MockDatabase::new(DatabaseBackend::Postgres)
+                    .append_exec_errors([DbErr::Custom("mock-revoke-error".to_owned())])
+                    .into_connection(),
+            ),
         );
 
         let response = app
@@ -601,6 +679,10 @@ mod tests {
             .to_owned();
         assert!(set_cookie.contains("gw_session="));
         assert!(set_cookie.contains("Max-Age=0"));
+
+        let output = wait_for_logs(&logs, "logout completed with revoke failure");
+        assert!(output.contains("logout completed with revoke failure"));
+        assert!(output.contains("mock-revoke-error"));
     }
 
     #[tokio::test]

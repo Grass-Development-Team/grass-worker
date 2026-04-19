@@ -9,7 +9,7 @@ use crate::domain::{
     system::ApiInfo,
 };
 use axum::routing::any;
-use axum::{Json, Router, routing::get};
+use axum::{Json, Router, http::Request, response::Response, routing::get};
 use features::{
     auth::install_auth_routes, setup::install_setup_routes, system::install_system_routes,
 };
@@ -19,6 +19,9 @@ use serde::Serialize;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
+use tower_http::trace::TraceLayer;
+use tracing::Span;
 
 #[derive(Debug, Clone)]
 pub struct AppState {
@@ -213,6 +216,30 @@ fn ensure_rustls_crypto_provider() {
     });
 }
 
+fn with_request_logger(router: Router) -> Router {
+    router.layer(
+        TraceLayer::new_for_http()
+            .make_span_with(|request: &Request<_>| {
+                tracing::info_span!(
+                    "http_request",
+                    method = %request.method(),
+                    path = %request.uri().path()
+                )
+            })
+            .on_request(|_request: &Request<_>, span: &Span| {
+                tracing::info!(parent: span, "request started");
+            })
+            .on_response(|response: &Response<_>, latency: Duration, span: &Span| {
+                tracing::info!(
+                    parent: span,
+                    status = response.status().as_u16(),
+                    latency_ms = latency.as_millis(),
+                    "request completed"
+                );
+            }),
+    )
+}
+
 pub fn app_router(mode: impl Into<AppMode>) -> std::io::Result<Router> {
     ensure_rustls_crypto_provider();
 
@@ -232,14 +259,14 @@ pub fn app_router(mode: impl Into<AppMode>) -> std::io::Result<Router> {
                 },
             };
 
-            Ok(install_frontend(router, frontend_mode))
+            Ok(with_request_logger(install_frontend(router, frontend_mode)))
         }
         AppMode::Setup(context) => {
             let stage = context.stage();
             let router = install_system_routes(router, ApiInfo::setup(stage));
             let router =
                 install_setup_routes(router, context).route("/api/{*path}", any(api_not_found));
-            Ok(router)
+            Ok(with_request_logger(router))
         }
     }
 }
@@ -253,8 +280,12 @@ mod tests {
     };
     use grass_worker_config::{AppConfig, DatabaseConfig};
     use sea_orm::{DatabaseBackend, MockDatabase};
+    use std::io::{self, Write};
     use std::path::PathBuf;
+    use std::sync::Mutex;
     use tower::ServiceExt;
+    use tracing::subscriber::set_default;
+    use tracing_subscriber::{fmt, fmt::MakeWriter};
 
     fn ready_mode() -> AppMode {
         AppMode::Normal(NormalContext::new(
@@ -265,6 +296,50 @@ mod tests {
             },
             AppState::new(MockDatabase::new(DatabaseBackend::Postgres).into_connection()),
         ))
+    }
+
+    #[derive(Clone, Default)]
+    struct SharedLogBuffer(Arc<Mutex<Vec<u8>>>);
+
+    struct SharedLogWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl SharedLogBuffer {
+        fn contents(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for SharedLogBuffer {
+        type Writer = SharedLogWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedLogWriter(self.0.clone())
+        }
+    }
+
+    impl Write for SharedLogWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn wait_for_logs(logs: &SharedLogBuffer, needle: &str) -> String {
+        for _ in 0..50 {
+            let output = logs.contents();
+            if output.contains(needle) {
+                return output;
+            }
+
+            std::thread::yield_now();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        logs.contents()
     }
 
     #[test]
@@ -293,6 +368,38 @@ mod tests {
 
         assert_eq!(json["service"], "control-api");
         assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn request_logger_emits_method_path_and_status() {
+        let logs = SharedLogBuffer::default();
+        let subscriber = fmt()
+            .with_writer(logs.clone())
+            .with_ansi(false)
+            .without_time()
+            .finish();
+        let _guard = set_default(subscriber);
+
+        let response = app_router(ready_mode())
+            .unwrap()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let output = wait_for_logs(&logs, "request completed");
+        assert!(output.contains("http_request"));
+        assert!(output.contains("method=GET"));
+        assert!(output.contains("path=/health"));
+        assert!(output.contains("request started"));
+        assert!(output.contains("request completed"));
+        assert!(output.contains("status=200"));
     }
 
     #[tokio::test]
