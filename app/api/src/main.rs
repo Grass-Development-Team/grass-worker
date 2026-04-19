@@ -4,7 +4,7 @@ use grass_worker_api::{
         database::connect_runtime_database,
         setup::{PostgresInitialAdminCreator, default_setup_bootstrapper},
     },
-    app_router,
+    app_router, runtime_app_router,
     domain::setup::SharedSetupBootstrapper,
 };
 use grass_worker_config::{DatabaseConfig, ResolvedApiConfig};
@@ -98,7 +98,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         AppMode::Setup(context) => {
             let listener = tokio::net::TcpListener::bind(context.listen()).await?;
-            let app = app_router(AppMode::Setup(context))?;
+            let app = runtime_app_router(AppMode::Setup(context))?;
 
             axum::serve(listener, app).await?;
         }
@@ -116,7 +116,8 @@ async fn resolve_app_mode(
         return Ok(AppMode::Setup(SetupContext::database(
             resolved.config.server.listen,
             resolved.path,
-        )));
+        )
+        .with_development(resolved.config.development.clone())));
     };
 
     if bootstrapper
@@ -135,7 +136,8 @@ async fn resolve_app_mode(
         resolved.config.server.listen,
         database.clone(),
         Arc::new(PostgresInitialAdminCreator::new(database)),
-    )))
+    )
+    .with_development(resolved.config.development.clone())))
 }
 
 #[cfg(test)]
