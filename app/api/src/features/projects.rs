@@ -1,6 +1,6 @@
 use crate::AppState;
 use axum::{
-    Extension, Json, Router, extract::rejection::JsonRejection, http::StatusCode,
+    Extension, Json, Router, extract::Path, extract::rejection::JsonRejection, http::StatusCode,
     response::IntoResponse, routing::get,
 };
 use axum_extra::extract::CookieJar;
@@ -44,6 +44,7 @@ pub fn install_project_routes(router: Router, state: AppState) -> Router {
     router.merge(
         Router::new()
             .route("/api/v1/projects", get(list_projects).post(create_project))
+            .route("/api/v1/projects/{project_id}", get(get_project))
             .layer(Extension(state)),
     )
 }
@@ -143,6 +144,33 @@ async fn create_project(
             .into_response(),
         Err(error) => {
             tracing::error!(error = %error, user_id = %current_user.id, "project creation failed");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "internal project error")
+        }
+    }
+}
+
+async fn get_project(
+    Extension(state): Extension<AppState>,
+    jar: CookieJar,
+    Path(project_id): Path<uuid::Uuid>,
+) -> axum::response::Response {
+    let current_user = match authenticate(&state, &jar).await {
+        Ok(current_user) => current_user,
+        Err(error) => return auth_error_response(error),
+    };
+
+    match project::Entity::find_by_id(project_id)
+        .filter(project::Column::OwnerUserId.eq(current_user.id))
+        .one(state.database.as_ref())
+        .await
+    {
+        Ok(Some(project)) => Json(ProjectRecordEnvelope {
+            project: map_project(project),
+        })
+        .into_response(),
+        Ok(None) => error_response(StatusCode::NOT_FOUND, "project not found"),
+        Err(error) => {
+            tracing::error!(error = %error, project_id = %project_id, "project lookup failed");
             error_response(StatusCode::INTERNAL_SERVER_ERROR, "internal project error")
         }
     }

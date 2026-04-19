@@ -1,6 +1,7 @@
 import { request } from "./client";
 
 export const projectsQueryKey = ["projects"] as const;
+export const projectQueryKey = (projectId: string) => ["projects", projectId] as const;
 
 export type Project = {
   id: string;
@@ -34,5 +35,10 @@ export async function createProject(input: {
     body: JSON.stringify(input),
   });
 
+  return response.project;
+}
+
+export async function getProject(projectId: string): Promise<Project> {
+  const response = await request<ProjectRecordEnvelope>(`/api/v1/projects/${projectId}`);
   return response.project;
 }
