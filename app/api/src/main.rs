@@ -10,6 +10,7 @@ use grass_worker_api::{
 use grass_worker_config::{DatabaseConfig, ResolvedApiConfig};
 use std::process::ExitCode;
 use std::sync::Arc;
+use tracing_subscriber::{EnvFilter, fmt};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResolveAppModeError {
@@ -59,6 +60,8 @@ impl RuntimeDatabaseConnector for PreparedRuntimeDatabaseConnector {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    init_tracing();
+
     match run().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -66,6 +69,17 @@ async fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn init_tracing() {
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("grass_worker_api=info,tower_http=info"));
+
+    let _ = fmt()
+        .with_env_filter(env_filter)
+        .with_target(false)
+        .compact()
+        .try_init();
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {

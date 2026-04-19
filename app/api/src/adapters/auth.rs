@@ -33,26 +33,30 @@ impl AuthService {
     ) -> Result<AuthenticatedSession, AuthError> {
         let email = input.email.trim().to_ascii_lowercase();
         if email.is_empty() {
+            tracing::debug!("login validation failed: missing email");
             return Err(AuthError::validation("email is required"));
         }
         if input.password.is_empty() {
+            tracing::debug!("login validation failed: missing password");
             return Err(AuthError::validation("password is required"));
         }
 
         let user = find_user_by_email(database, &email)
             .await
-            .map_err(database_error)?
-            .ok_or_else(|| AuthError::unauthorized("invalid credentials"))?;
+            .map_err(|error| database_error("find_user_by_email", error))?
+            .ok_or_else(invalid_credentials)?;
         let credential = find_password_credential_by_user_id(database, user.id)
             .await
-            .map_err(database_error)?
-            .ok_or_else(|| AuthError::unauthorized("invalid credentials"))?;
-        let password_hash = PasswordHash::new(&credential.password_hash)
-            .map_err(|error| AuthError::internal(error.to_string()))?;
+            .map_err(|error| database_error("find_password_credential_by_user_id", error))?
+            .ok_or_else(invalid_credentials)?;
+        let password_hash = PasswordHash::new(&credential.password_hash).map_err(|error| {
+            tracing::error!(error = %error, "stored password hash is invalid");
+            AuthError::internal(error.to_string())
+        })?;
 
         Argon2::default()
             .verify_password(input.password.as_bytes(), &password_hash)
-            .map_err(|_| AuthError::unauthorized("invalid credentials"))?;
+            .map_err(|_| invalid_credentials())?;
 
         let token = Uuid::new_v4().to_string();
         let token_hash = hash_session_token(&token);
@@ -70,7 +74,9 @@ impl AuthService {
             },
         )
         .await
-        .map_err(database_error)?;
+        .map_err(|error| database_error("insert_session", error))?;
+
+        tracing::info!(user_id = %user.id, is_admin = user.is_admin, "login created session");
 
         Ok(AuthenticatedSession {
             user: map_authenticated_user(user),
@@ -86,18 +92,19 @@ impl AuthService {
         let token_hash = hash_session_token(session_token);
         let session = find_session_by_token_hash(database, &token_hash)
             .await
-            .map_err(database_error)?
-            .ok_or_else(|| AuthError::unauthorized("not authenticated"))?;
+            .map_err(|error| database_error("find_session_by_token_hash", error))?
+            .ok_or_else(not_authenticated)?;
         let now = Utc::now();
 
         if session.revoked_at.is_some() || session.expires_at <= now {
-            return Err(AuthError::unauthorized("not authenticated"));
+            tracing::debug!("session rejected: expired or revoked");
+            return Err(not_authenticated());
         }
 
         let user = find_user_by_id(database, session.user_id)
             .await
-            .map_err(database_error)?
-            .ok_or_else(|| AuthError::unauthorized("not authenticated"))?;
+            .map_err(|error| database_error("find_user_by_id", error))?
+            .ok_or_else(not_authenticated)?;
 
         Ok(map_authenticated_user(user))
     }
@@ -108,15 +115,21 @@ impl AuthService {
         session_token: Option<&str>,
     ) -> Result<(), AuthError> {
         let Some(session_token) = session_token else {
+            tracing::debug!("logout completed without session token");
             return Ok(());
         };
         if session_token.is_empty() {
+            tracing::debug!("logout completed with empty session token");
             return Ok(());
         }
 
         revoke_session_by_token_hash(database, &hash_session_token(session_token), Utc::now())
             .await
-            .map_err(database_error)
+            .map_err(|error| database_error("revoke_session_by_token_hash", error))?;
+
+        tracing::info!("logout revoked session");
+
+        Ok(())
     }
 
     pub fn build_session_cookie(token: impl Into<String>) -> Cookie<'static> {
@@ -149,6 +162,16 @@ fn map_authenticated_user(user: user::Model) -> AuthenticatedUser {
     }
 }
 
-fn database_error(error: sea_orm::DbErr) -> AuthError {
+fn invalid_credentials() -> AuthError {
+    tracing::warn!("login rejected: invalid credentials");
+    AuthError::unauthorized("invalid credentials")
+}
+
+fn not_authenticated() -> AuthError {
+    AuthError::unauthorized("not authenticated")
+}
+
+fn database_error(operation: &'static str, error: sea_orm::DbErr) -> AuthError {
+    tracing::error!(operation, error = %error, "auth database operation failed");
     AuthError::internal(error.to_string())
 }
