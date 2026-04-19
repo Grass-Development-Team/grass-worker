@@ -10,24 +10,47 @@ use crate::domain::{
 };
 use axum::routing::any;
 use axum::{Json, Router, routing::get};
-use features::{setup::install_setup_routes, system::install_system_routes};
+use features::{
+    auth::install_auth_routes, setup::install_setup_routes, system::install_system_routes,
+};
 use frontend::{FrontendMode, install_frontend};
 use grass_worker_config::AppConfig;
 use serde::Serialize;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+
+#[derive(Debug, Clone)]
+pub struct AppState {
+    pub database: Arc<sea_orm::DatabaseConnection>,
+    pub auth: crate::adapters::auth::AuthService,
+}
+
+impl AppState {
+    pub fn new(database: sea_orm::DatabaseConnection) -> Self {
+        Self {
+            database: Arc::new(database),
+            auth: crate::adapters::auth::AuthService::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct NormalContext {
+    pub config: AppConfig,
+    pub state: AppState,
+}
+
+impl NormalContext {
+    pub fn new(config: AppConfig, state: AppState) -> Self {
+        Self { config, state }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum AppMode {
-    Normal(AppConfig),
+    Normal(NormalContext),
     Setup(SetupContext),
-}
-
-impl From<AppConfig> for AppMode {
-    fn from(config: AppConfig) -> Self {
-        Self::Normal(config)
-    }
 }
 
 impl From<SetupContext> for AppMode {
@@ -196,10 +219,11 @@ pub fn app_router(mode: impl Into<AppMode>) -> std::io::Result<Router> {
     let router = Router::new().route("/health", get(health));
 
     match mode.into() {
-        AppMode::Normal(config) => {
-            let router = install_system_routes(router, ApiInfo::ready())
+        AppMode::Normal(context) => {
+            let router = install_system_routes(router, ApiInfo::ready());
+            let router = install_auth_routes(router, context.state.clone())
                 .route("/api/{*path}", any(api_not_found));
-            let frontend_mode = match config.development {
+            let frontend_mode = match context.config.development {
                 Some(development) => FrontendMode::Development {
                     dev_server: development.dev_server,
                 },
@@ -228,12 +252,31 @@ mod tests {
         http::{Request, StatusCode},
     };
     use grass_worker_config::{AppConfig, DatabaseConfig};
+    use sea_orm::{DatabaseBackend, MockDatabase};
     use std::path::PathBuf;
     use tower::ServiceExt;
 
+    fn ready_mode() -> AppMode {
+        AppMode::Normal(NormalContext::new(
+            AppConfig {
+                server: grass_worker_config::ServerConfig::default(),
+                database: Some(DatabaseConfig::default()),
+                development: None,
+            },
+            AppState::new(MockDatabase::new(DatabaseBackend::Postgres).into_connection()),
+        ))
+    }
+
+    #[test]
+    fn app_state_new_initializes_auth_service() {
+        let state = AppState::new(MockDatabase::new(DatabaseBackend::Postgres).into_connection());
+
+        assert_eq!(state.auth, crate::adapters::auth::AuthService::default());
+    }
+
     #[tokio::test]
     async fn health_returns_service_status() {
-        let response = app_router(AppConfig::defaults())
+        let response = app_router(ready_mode())
             .unwrap()
             .oneshot(
                 Request::builder()
@@ -254,12 +297,8 @@ mod tests {
 
     #[tokio::test]
     async fn ready_mode_exposes_api_info() {
-        let response = app_router(AppMode::Normal(AppConfig {
-            server: grass_worker_config::ServerConfig::default(),
-            database: Some(DatabaseConfig::default()),
-            development: None,
-        }))
-        .unwrap()
+        let response = app_router(ready_mode())
+            .unwrap()
         .oneshot(
             Request::builder()
                 .uri("/api/v1/info")
@@ -277,6 +316,22 @@ mod tests {
         assert_eq!(json["mode"], "ready");
         assert!(json.get("stage").is_none());
         assert!(json.get("status").is_none());
+    }
+
+    #[tokio::test]
+    async fn ready_mode_me_without_cookie_returns_unauthorized() {
+        let response = app_router(ready_mode())
+            .unwrap()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/me")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
@@ -370,12 +425,8 @@ mod tests {
 
     #[tokio::test]
     async fn ready_mode_old_info_path_returns_not_found() {
-        let response = app_router(AppMode::Normal(AppConfig {
-            server: grass_worker_config::ServerConfig::default(),
-            database: Some(DatabaseConfig::default()),
-            development: None,
-        }))
-        .unwrap()
+        let response = app_router(ready_mode())
+            .unwrap()
         .oneshot(
             Request::builder()
                 .uri("/api/info")
