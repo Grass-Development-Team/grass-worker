@@ -12,7 +12,7 @@ check: frontend-build
 
 test: frontend-build
     cargo test --workspace
-    cd app/frontend && bun test
+    cd app/frontend && bun run test
 
 run-api:
     cargo run -p grass-worker-api
