@@ -243,7 +243,8 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let html = std::str::from_utf8(&body).unwrap();
 
-        assert!(html.contains("grass-worker"));
+        assert!(html.contains("Grass Worker Console"));
+        assert!(html.contains(r#"<div id="app"></div>"#));
     }
 
     #[tokio::test]
@@ -270,7 +271,8 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let html = std::str::from_utf8(&body).unwrap();
 
-        assert!(html.contains("grass-worker"));
+        assert!(html.contains("Grass Worker Console"));
+        assert!(html.contains(r#"<div id="app"></div>"#));
     }
 
     #[tokio::test]

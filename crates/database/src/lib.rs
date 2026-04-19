@@ -14,6 +14,8 @@ mod tests {
         SeaOrmDeploymentArtifactRepository, SeaOrmDeploymentRepository, SeaOrmProjectRepository,
         SeaOrmUserPasswordCredentialRepository, SeaOrmUserRepository, SeaOrmUserSessionRepository,
         UserPasswordCredentialRepository, UserRepository, UserSessionRepository,
+        find_password_credential_by_user_id, find_session_by_token_hash, find_user_by_email,
+        find_user_by_id, insert_session, revoke_session_by_token_hash,
     };
     use grass_worker_config::DatabaseConfig;
     use sea_orm::EntityName;
@@ -372,6 +374,123 @@ mod tests {
 
         assert_eq!(credential.password_hash, "argon2id$example");
         assert_eq!(credential.password_updated_at, password_updated_at);
+    }
+
+    #[tokio::test]
+    async fn auth_repository_helpers_find_records_for_login_and_session_lookup() {
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-04-16T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let expires_at = chrono::DateTime::parse_from_rfc3339("2026-04-23T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let user = user::Model {
+            id: Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap(),
+            email: "admin@example.com".to_owned(),
+            is_admin: true,
+            is_initial_admin: true,
+            created_at,
+            updated_at: created_at,
+        };
+        let credential = user_password_credential::Model {
+            user_id: user.id,
+            password_hash: "$argon2id$example".to_owned(),
+            password_updated_at: created_at,
+        };
+        let session = user_session::Model {
+            id: Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap(),
+            user_id: user.id,
+            token_hash: "sha256$session".to_owned(),
+            created_at,
+            expires_at,
+            revoked_at: None,
+        };
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[user.clone()]])
+            .append_query_results([[user.clone()]])
+            .append_query_results([[credential.clone()]])
+            .append_query_results([[session.clone()]])
+            .into_connection();
+
+        assert_eq!(
+            find_user_by_email(&database, "admin@example.com")
+                .await
+                .unwrap(),
+            Some(user.clone())
+        );
+        assert_eq!(
+            find_user_by_id(&database, user.id).await.unwrap(),
+            Some(user)
+        );
+        assert_eq!(
+            find_password_credential_by_user_id(&database, credential.user_id)
+                .await
+                .unwrap(),
+            Some(credential)
+        );
+        assert_eq!(
+            find_session_by_token_hash(&database, "sha256$session")
+                .await
+                .unwrap(),
+            Some(session)
+        );
+    }
+
+    #[tokio::test]
+    async fn auth_repository_helpers_insert_and_revoke_session() {
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-04-16T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let expires_at = chrono::DateTime::parse_from_rfc3339("2026-04-23T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_exec_results([
+                MockExecResult {
+                    last_insert_id: 0,
+                    rows_affected: 1,
+                },
+                MockExecResult {
+                    last_insert_id: 0,
+                    rows_affected: 1,
+                },
+            ])
+            .into_connection();
+        let session = user_session::Model {
+            id: Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap(),
+            user_id: Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap(),
+            token_hash: "sha256$session".to_owned(),
+            created_at,
+            expires_at,
+            revoked_at: None,
+        };
+
+        insert_session(&database, &session).await.unwrap();
+        revoke_session_by_token_hash(&database, &session.token_hash, created_at)
+            .await
+            .unwrap();
+
+        let transaction_log = database.into_transaction_log();
+        let statements = transaction_log
+            .iter()
+            .flat_map(|entry| entry.statements().iter())
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>();
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("INSERT INTO \"user_sessions\""))
+        );
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("UPDATE \"user_sessions\""))
+        );
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("'sha256$session'"))
+        );
     }
 
     #[tokio::test]

@@ -24,7 +24,8 @@ mod tests {
         let leading_slash_bundle_path = format!("/{}", bundle_path.trim_start_matches('/'));
         let normalized_bundle_path = bundle_path.trim_start_matches('/');
 
-        assert!(index.contains("grass-worker"));
+        assert!(index.contains("Grass Worker Console"));
+        assert!(index.contains(r#"<div id="app"></div>"#));
 
         let bundle = get_asset(normalized_bundle_path).expect("referenced js bundle should exist");
         let slash_prefixed_bundle = get_asset(&leading_slash_bundle_path)
