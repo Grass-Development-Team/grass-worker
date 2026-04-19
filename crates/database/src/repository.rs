@@ -359,6 +359,78 @@ pub async fn upsert_password_credential<C: ConnectionTrait>(
     Ok(())
 }
 
+pub async fn find_user_by_email<C: ConnectionTrait>(
+    connection: &C,
+    email: &str,
+) -> Result<Option<user::Model>, DbErr> {
+    user::Entity::find()
+        .filter(user::Column::Email.eq(email))
+        .one(connection)
+        .await
+}
+
+pub async fn find_user_by_id<C: ConnectionTrait>(
+    connection: &C,
+    id: Uuid,
+) -> Result<Option<user::Model>, DbErr> {
+    user::Entity::find_by_id(id).one(connection).await
+}
+
+pub async fn find_password_credential_by_user_id<C: ConnectionTrait>(
+    connection: &C,
+    user_id: Uuid,
+) -> Result<Option<user_password_credential::Model>, DbErr> {
+    user_password_credential::Entity::find_by_id(user_id)
+        .one(connection)
+        .await
+}
+
+pub async fn find_session_by_token_hash<C: ConnectionTrait>(
+    connection: &C,
+    token_hash: &str,
+) -> Result<Option<user_session::Model>, DbErr> {
+    user_session::Entity::find()
+        .filter(user_session::Column::TokenHash.eq(token_hash))
+        .one(connection)
+        .await
+}
+
+pub async fn insert_session<C: ConnectionTrait>(
+    connection: &C,
+    model: &user_session::Model,
+) -> Result<(), DbErr> {
+    user_session::Entity::insert(user_session::ActiveModel {
+        id: Set(model.id),
+        user_id: Set(model.user_id),
+        token_hash: Set(model.token_hash.clone()),
+        created_at: Set(model.created_at),
+        expires_at: Set(model.expires_at),
+        revoked_at: Set(model.revoked_at),
+    })
+    .exec_without_returning(connection)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn revoke_session_by_token_hash<C: ConnectionTrait>(
+    connection: &C,
+    token_hash: &str,
+    revoked_at: DateTimeUtc,
+) -> Result<(), DbErr> {
+    user_session::Entity::update_many()
+        .set(user_session::ActiveModel {
+            revoked_at: Set(Some(revoked_at)),
+            ..Default::default()
+        })
+        .filter(user_session::Column::TokenHash.eq(token_hash))
+        .filter(user_session::Column::RevokedAt.is_null())
+        .exec(connection)
+        .await?;
+
+    Ok(())
+}
+
 impl SeaOrmUserRepository {
     pub fn new(database: DatabaseConnection) -> Self {
         Self { database }
@@ -386,10 +458,7 @@ impl UserRepository for SeaOrmUserRepository {
     }
 
     async fn find_by_email(&self, email: &str) -> Result<Option<user::Model>, DbErr> {
-        user::Entity::find()
-            .filter(user::Column::Email.eq(email))
-            .one(&self.database)
-            .await
+        find_user_by_email(&self.database, email).await
     }
 
     async fn has_admin(&self) -> Result<bool, DbErr> {
@@ -454,16 +523,7 @@ impl UserSessionRepository for SeaOrmUserSessionRepository {
             revoked_at: None,
         };
 
-        user_session::Entity::insert(user_session::ActiveModel {
-            id: Set(model.id),
-            user_id: Set(model.user_id),
-            token_hash: Set(model.token_hash.clone()),
-            created_at: Set(model.created_at),
-            expires_at: Set(model.expires_at),
-            revoked_at: Set(model.revoked_at),
-        })
-        .exec_without_returning(&self.database)
-        .await?;
+        insert_session(&self.database, &model).await?;
 
         Ok(model)
     }
@@ -472,9 +532,6 @@ impl UserSessionRepository for SeaOrmUserSessionRepository {
         &self,
         token_hash: &str,
     ) -> Result<Option<user_session::Model>, DbErr> {
-        user_session::Entity::find()
-            .filter(user_session::Column::TokenHash.eq(token_hash))
-            .one(&self.database)
-            .await
+        find_session_by_token_hash(&self.database, token_hash).await
     }
 }

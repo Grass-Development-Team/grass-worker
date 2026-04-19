@@ -68,10 +68,14 @@ Rules:
 
 - `app/api` enters setup mode on `server.listen` when `config.toml` or `[database]` is missing.
 - If `[database]` exists but no admin user exists yet, `app/api` enters the `admin` setup stage.
-- `GET /api/info` is available in both modes and reports whether the API is in `ready` or `setup`.
+- `GET /api/v1/info` is available in both modes and reports whether the API is in `ready` or `setup`.
+- In ready mode, auth endpoints are available:
+  - `POST /api/v1/auth/login`
+  - `GET /api/v1/me`
+  - `POST /api/v1/auth/logout`
 - Setup mode is API-only; the backend no longer serves placeholder HTML on `/`.
-- In setup mode, `GET /api/setup/state` reports the current setup stage.
-- In setup mode, `POST /api/setup/database` accepts:
+- In setup mode, `GET /api/v1/setup/state` reports the current setup stage.
+- In setup mode, `POST /api/v1/setup/database` accepts:
 
 ```json
 {
@@ -85,8 +89,8 @@ Rules:
 ```
 
 - `schema` is optional; missing or blank values default to `public`.
-- A successful `POST /api/setup/database` validates the PostgreSQL connection, prepares the target schema, runs pending migrations, and writes `[server]` plus `[database]` back to the active config file while preserving existing `[node]` and `[development]` sections.
-- In `admin` setup stage, `POST /api/setup/admin` accepts:
+- A successful `POST /api/v1/setup/database` validates the PostgreSQL connection, prepares the target schema, runs pending migrations, and writes `[server]` plus `[database]` back to the active config file while preserving existing `[node]` and `[development]` sections.
+- In `admin` setup stage, `POST /api/v1/setup/admin` accepts:
 
 ```json
 {
@@ -95,14 +99,15 @@ Rules:
 }
 ```
 
-- A successful `POST /api/setup/admin` creates the first admin user and its password credential.
+- A successful `POST /api/v1/setup/admin` creates the first admin user and its password credential.
 - After `database` or `admin` setup completes, restart `app/api` so startup mode is re-evaluated.
 - Once `[database]` exists, `app/api` uses the configured PostgreSQL connection, creates the configured schema if needed, and runs pending migrations on startup.
 - `app/node` requires `[node]` boot config and does not have a setup mode fallback.
 - `schema` is optional and defaults to `public`.
 - With `[development]`, `app/api` proxies frontend routes to `development.dev_server`.
 - Without `[development]`, `app/api` serves frontend assets by checking `./public/` first and then falling back to embedded assets.
-- `/health` and `/api/*` remain backend-owned in both modes.
+- The frontend now exposes `/login` and a protected `/` console shell in ready mode.
+- `/health` remains backend-owned, and API routes now live under `/api/v1/*`.
 
 ## Frontend Chain
 
