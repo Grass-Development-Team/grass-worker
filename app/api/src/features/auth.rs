@@ -135,7 +135,10 @@ mod tests {
     use chrono::Utc;
     use grass_worker_database::entities::{user, user_password_credential, user_session};
     use rand_core::OsRng;
-    use sea_orm::{DatabaseBackend, DatabaseConnection, DbErr, MockDatabase, MockDatabaseConnection, MockExecResult};
+    use sea_orm::{
+        DatabaseBackend, DatabaseConnection, DbErr, MockDatabase, MockDatabaseConnection,
+        MockExecResult,
+    };
     use std::sync::Arc;
     use tower::ServiceExt;
     use uuid::Uuid;
@@ -481,10 +484,12 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(payload["error"], "internal auth error");
-        assert!(!payload["error"]
-            .as_str()
-            .unwrap()
-            .contains("mock-db-error-details"));
+        assert!(
+            !payload["error"]
+                .as_str()
+                .unwrap()
+                .contains("mock-db-error-details")
+        );
     }
 
     #[tokio::test]
