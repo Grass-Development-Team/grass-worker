@@ -9,14 +9,7 @@ use crate::domain::{
     system::ApiInfo,
 };
 use axum::routing::any;
-use axum::{
-    Json, Router,
-    body::Body,
-    extract::State,
-    http::Request,
-    response::{IntoResponse, Response},
-    routing::get,
-};
+use axum::{Json, Router, http::Request, response::Response, routing::get};
 use features::{
     auth::install_auth_routes, projects::install_project_routes, setup::install_setup_routes,
     system::install_system_routes,
@@ -28,7 +21,6 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use tower::util::ServiceExt;
 use tower_http::trace::TraceLayer;
 use tracing::Span;
 
@@ -86,13 +78,11 @@ pub enum SetupContext {
         listen: SocketAddr,
         config_path: PathBuf,
         initializer: SharedDatabaseInitializer,
-        development: Option<grass_worker_config::DevelopmentConfig>,
     },
     Admin {
         listen: SocketAddr,
         database: grass_worker_config::DatabaseConfig,
         creator: SharedInitialAdminCreator,
-        development: Option<grass_worker_config::DevelopmentConfig>,
     },
 }
 
@@ -102,24 +92,18 @@ impl std::fmt::Debug for SetupContext {
             Self::Database {
                 listen,
                 config_path,
-                development,
                 ..
             } => f
                 .debug_struct("SetupContext::Database")
                 .field("listen", listen)
                 .field("config_path", config_path)
-                .field("development", development)
                 .finish_non_exhaustive(),
             Self::Admin {
-                listen,
-                database,
-                development,
-                ..
+                listen, database, ..
             } => f
                 .debug_struct("SetupContext::Admin")
                 .field("listen", listen)
                 .field("database", database)
-                .field("development", development)
                 .finish_non_exhaustive(),
         }
     }
@@ -132,72 +116,32 @@ impl PartialEq for SetupContext {
                 Self::Database {
                     listen: left_listen,
                     config_path: left_config_path,
-                    development: left_development,
                     ..
                 },
                 Self::Database {
                     listen: right_listen,
                     config_path: right_config_path,
-                    development: right_development,
                     ..
                 },
-            ) => {
-                left_listen == right_listen
-                    && left_config_path == right_config_path
-                    && left_development == right_development
-            }
+            ) => left_listen == right_listen && left_config_path == right_config_path,
             (
                 Self::Admin {
                     listen: left_listen,
                     database: left_database,
-                    development: left_development,
                     ..
                 },
                 Self::Admin {
                     listen: right_listen,
                     database: right_database,
-                    development: right_development,
                     ..
                 },
-            ) => {
-                left_listen == right_listen
-                    && left_database == right_database
-                    && left_development == right_development
-            }
+            ) => left_listen == right_listen && left_database == right_database,
             _ => false,
         }
     }
 }
 
 impl Eq for SetupContext {}
-
-#[async_trait::async_trait]
-pub trait SetupRuntimeDatabaseConnector: Send + Sync {
-    async fn connect(
-        &self,
-        database: &grass_worker_config::DatabaseConfig,
-    ) -> Result<sea_orm::DatabaseConnection, String>;
-}
-
-pub type SharedSetupRuntimeDatabaseConnector = Arc<dyn SetupRuntimeDatabaseConnector>;
-pub type SharedRuntimeMode = Arc<tokio::sync::RwLock<AppMode>>;
-
-#[derive(Debug)]
-struct PreparedSetupRuntimeDatabaseConnector;
-
-#[async_trait::async_trait]
-impl SetupRuntimeDatabaseConnector for PreparedSetupRuntimeDatabaseConnector {
-    async fn connect(
-        &self,
-        database: &grass_worker_config::DatabaseConfig,
-    ) -> Result<sea_orm::DatabaseConnection, String> {
-        crate::adapters::database::connect_runtime_database(database).await
-    }
-}
-
-fn default_setup_runtime_database_connector() -> SharedSetupRuntimeDatabaseConnector {
-    Arc::new(PreparedSetupRuntimeDatabaseConnector)
-}
 
 impl SetupContext {
     pub fn database(listen: SocketAddr, config_path: PathBuf) -> Self {
@@ -213,7 +157,6 @@ impl SetupContext {
             listen,
             config_path,
             initializer,
-            development: None,
         }
     }
 
@@ -234,37 +177,6 @@ impl SetupContext {
             listen,
             database,
             creator,
-            development: None,
-        }
-    }
-
-    pub fn with_development(
-        self,
-        development: Option<grass_worker_config::DevelopmentConfig>,
-    ) -> Self {
-        match self {
-            Self::Database {
-                listen,
-                config_path,
-                initializer,
-                ..
-            } => Self::Database {
-                listen,
-                config_path,
-                initializer,
-                development,
-            },
-            Self::Admin {
-                listen,
-                database,
-                creator,
-                ..
-            } => Self::Admin {
-                listen,
-                database,
-                creator,
-                development,
-            },
         }
     }
 
@@ -278,14 +190,6 @@ impl SetupContext {
     pub fn listen(&self) -> SocketAddr {
         match self {
             Self::Database { listen, .. } | Self::Admin { listen, .. } => *listen,
-        }
-    }
-
-    pub fn development(&self) -> Option<&grass_worker_config::DevelopmentConfig> {
-        match self {
-            Self::Database { development, .. } | Self::Admin { development, .. } => {
-                development.as_ref()
-            }
         }
     }
 }
@@ -339,113 +243,36 @@ fn with_request_logger(router: Router) -> Router {
     )
 }
 
-fn resolve_frontend_mode(
-    development: Option<&grass_worker_config::DevelopmentConfig>,
-) -> std::io::Result<FrontendMode> {
-    Ok(match development {
-        Some(development) => FrontendMode::Development {
-            dev_server: development.dev_server.clone(),
-        },
-        None => FrontendMode::Release {
-            public_dir: std::env::current_dir()?.join("public"),
-        },
-    })
-}
+pub fn app_router(mode: impl Into<AppMode>) -> std::io::Result<Router> {
+    ensure_rustls_crypto_provider();
 
-fn build_app_router(
-    mode: AppMode,
-    runtime_mode: Option<SharedRuntimeMode>,
-    runtime_database_connector: SharedSetupRuntimeDatabaseConnector,
-) -> std::io::Result<Router> {
     let router = Router::new().route("/health", get(health));
 
-    match mode {
+    match mode.into() {
         AppMode::Normal(context) => {
             let router = install_system_routes(router, ApiInfo::ready());
             let router = install_auth_routes(router, context.state.clone());
             let router = install_project_routes(router, context.state.clone())
                 .route("/api/{*path}", any(api_not_found));
-            let frontend_mode = resolve_frontend_mode(context.config.development.as_ref())?;
+            let frontend_mode = match context.config.development {
+                Some(development) => FrontendMode::Development {
+                    dev_server: development.dev_server,
+                },
+                None => FrontendMode::Release {
+                    public_dir: std::env::current_dir()?.join("public"),
+                },
+            };
 
             Ok(with_request_logger(install_frontend(router, frontend_mode)))
         }
         AppMode::Setup(context) => {
             let stage = context.stage();
-            let frontend_mode = resolve_frontend_mode(context.development())?;
             let router = install_system_routes(router, ApiInfo::setup(stage));
-            let router = install_setup_routes(
-                router,
-                context,
-                runtime_mode,
-                runtime_database_connector,
-            )
-            .route("/api/{*path}", any(api_not_found));
-
-            Ok(install_frontend(router, frontend_mode))
+            let router =
+                install_setup_routes(router, context).route("/api/{*path}", any(api_not_found));
+            Ok(with_request_logger(router))
         }
     }
-}
-
-#[derive(Clone)]
-struct RuntimeRouterState {
-    mode: SharedRuntimeMode,
-    runtime_database_connector: SharedSetupRuntimeDatabaseConnector,
-}
-
-async fn dispatch_runtime_request(
-    State(state): State<RuntimeRouterState>,
-    request: Request<Body>,
-) -> Response {
-    let mode = state.mode.read().await.clone();
-    let router = match build_app_router(
-        mode,
-        Some(state.mode.clone()),
-        state.runtime_database_connector.clone(),
-    ) {
-        Ok(router) => router,
-        Err(error) => {
-            return (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                error.to_string(),
-            )
-                .into_response();
-        }
-    };
-
-    match router.oneshot(request).await {
-        Ok(response) => response,
-        Err(never) => match never {},
-    }
-}
-
-pub fn app_router(mode: impl Into<AppMode>) -> std::io::Result<Router> {
-    ensure_rustls_crypto_provider();
-
-    Ok(with_request_logger(build_app_router(
-        mode.into(),
-        None,
-        default_setup_runtime_database_connector(),
-    )?))
-}
-
-pub fn runtime_app_router(mode: impl Into<AppMode>) -> std::io::Result<Router> {
-    runtime_app_router_with_connector(mode.into(), default_setup_runtime_database_connector())
-}
-
-pub(crate) fn runtime_app_router_with_connector(
-    mode: AppMode,
-    runtime_database_connector: SharedSetupRuntimeDatabaseConnector,
-) -> std::io::Result<Router> {
-    ensure_rustls_crypto_provider();
-
-    let state = RuntimeRouterState {
-        mode: Arc::new(tokio::sync::RwLock::new(mode)),
-        runtime_database_connector,
-    };
-
-    Ok(with_request_logger(
-        Router::new().fallback(dispatch_runtime_request).with_state(state),
-    ))
 }
 
 #[cfg(test)]
@@ -454,10 +281,8 @@ mod tests {
     use axum::{
         body::{Body, to_bytes},
         http::{Request, StatusCode},
-        routing::get,
-        Router,
     };
-    use grass_worker_config::{AppConfig, DatabaseConfig, DevelopmentConfig};
+    use grass_worker_config::{AppConfig, DatabaseConfig};
     use sea_orm::{DatabaseBackend, MockDatabase};
     use std::io::{self, Write};
     use std::path::PathBuf;
@@ -525,7 +350,7 @@ mod tests {
     fn app_state_new_initializes_auth_service() {
         let state = AppState::new(MockDatabase::new(DatabaseBackend::Postgres).into_connection());
 
-        assert_eq!(state.auth, crate::adapters::auth::AuthService);
+        assert_eq!(state.auth, crate::adapters::auth::AuthService::default());
     }
 
     #[test]
@@ -725,7 +550,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn setup_mode_root_serves_frontend_html() {
+    async fn setup_mode_root_no_longer_returns_html() {
         let response = app_router(AppMode::Setup(SetupContext::database(
             "127.0.0.1:3000".parse().unwrap(),
             PathBuf::from("config.toml"),
@@ -735,43 +560,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let html = std::str::from_utf8(&body).unwrap();
-
-        assert!(html.contains("Grass Worker Console"));
-        assert!(html.contains(r#"<div id="app"></div>"#));
-    }
-
-    #[tokio::test]
-    async fn setup_mode_with_development_config_proxies_frontend_requests() {
-        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = upstream.local_addr().unwrap();
-        let upstream_app = Router::new().route("/", get(|| async { "frontend dev server" }));
-        let upstream_task = tokio::spawn(async move {
-            axum::serve(upstream, upstream_app).await.unwrap();
-        });
-
-        let response = app_router(AppMode::Setup(
-            SetupContext::database(
-                "127.0.0.1:3000".parse().unwrap(),
-                PathBuf::from("config.toml"),
-            )
-            .with_development(Some(DevelopmentConfig {
-                dev_server: format!("http://{address}"),
-            })),
-        ))
-        .unwrap()
-        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-
-        upstream_task.abort();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-
-        assert_eq!(std::str::from_utf8(&body).unwrap(), "frontend dev server");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
