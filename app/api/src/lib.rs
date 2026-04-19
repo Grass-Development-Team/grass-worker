@@ -299,14 +299,14 @@ mod tests {
     async fn ready_mode_exposes_api_info() {
         let response = app_router(ready_mode())
             .unwrap()
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/info")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/info")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -427,14 +427,14 @@ mod tests {
     async fn ready_mode_old_info_path_returns_not_found() {
         let response = app_router(ready_mode())
             .unwrap()
-        .oneshot(
-            Request::builder()
-                .uri("/api/info")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+            .oneshot(
+                Request::builder()
+                    .uri("/api/info")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
