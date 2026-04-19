@@ -1,6 +1,7 @@
 import { Navigate, type RouteObject } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { LoginPage } from "./routes/login-page";
+import { ProjectDetailsPage } from "./routes/project-details-page";
 import { ProtectedRoute } from "./routes/protected-route";
 import { ProjectsPage } from "./routes/projects-page";
 import { SetupPage } from "./routes/setup-page";
@@ -47,6 +48,10 @@ export const routes: RouteObject[] = [
           {
             path: "/projects",
             element: <ProjectsPage />,
+          },
+          {
+            path: "/projects/:projectId",
+            element: <ProjectDetailsPage />,
           },
           {
             path: "*",

@@ -55,6 +55,23 @@ function projectsResponse(
   );
 }
 
+function projectResponse(project: {
+  id: string;
+  slug: string;
+  name: string;
+  status: "active" | "archived";
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}) {
+  return jsonResponse(
+    {
+      project,
+    },
+    { status: 200 },
+  );
+}
+
 function requestPath(input: string | URL | Request): string {
   if (typeof input === "string") {
     return new URL(input, "http://localhost").pathname;
@@ -385,6 +402,55 @@ describe("auth routing", () => {
 
     expect(await screen.findByText(/docs site/i)).toBeInTheDocument();
     expect(screen.getByText(/docs-site/i)).toBeInTheDocument();
+  });
+
+  test("projects list navigates to the project details page", async () => {
+    const project = {
+      id: "11111111-1111-1111-1111-111111111111",
+      slug: "docs-site",
+      name: "Docs Site",
+      status: "active" as const,
+      created_at: "2026-04-19T10:00:00Z",
+      updated_at: "2026-04-19T10:00:00Z",
+      archived_at: null,
+    };
+
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = requestPath(input);
+      const method =
+        input instanceof Request ? input.method : (init?.method ?? "GET");
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse();
+      }
+
+      if (path === "/api/v1/projects" && method === "GET") {
+        return projectsResponse([project]);
+      }
+
+      if (path === `/api/v1/projects/${project.id}` && method === "GET") {
+        return projectResponse(project);
+      }
+
+      throw new Error(`Unexpected request for ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { router } = renderRouter("/projects");
+
+    await userEvent.click(await screen.findByRole("button", { name: /view details/i }));
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe(`/projects/${project.id}`);
+    });
+
+    expect(await screen.findByRole("heading", { name: /docs site/i })).toBeInTheDocument();
+    expect(screen.getByText(/deployment history/i)).toBeInTheDocument();
   });
 });
 
