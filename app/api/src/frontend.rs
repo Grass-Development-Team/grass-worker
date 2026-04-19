@@ -277,6 +277,8 @@ mod tests {
 
     #[tokio::test]
     async fn development_mode_proxies_frontend_requests() {
+        crate::ensure_rustls_crypto_provider();
+
         let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = upstream.local_addr().unwrap();
         let upstream_app = Router::new().route("/", get(|| async { "frontend dev server" }));
