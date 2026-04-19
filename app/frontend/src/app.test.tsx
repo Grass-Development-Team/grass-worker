@@ -376,4 +376,63 @@ describe("setup routing", () => {
     expect(await screen.findByText(/passwords do not match/i)).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  test("admin setup redirects to login with the created email when setup reaches ready mode", async () => {
+    let systemInfo: { service: string; mode: "setup"; stage: "admin"; status: "pending" } | {
+      service: string;
+      mode: "ready";
+    } = {
+      service: "control-api",
+      mode: "setup",
+      stage: "admin",
+      status: "pending",
+    };
+
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const path = requestPath(input);
+
+      if (path === "/api/v1/info") {
+        return jsonResponse(systemInfo, { status: 200 });
+      }
+
+      if (path === "/api/v1/setup/admin") {
+        systemInfo = {
+          service: "control-api",
+          mode: "ready",
+        };
+
+        return jsonResponse(
+          {
+            stage: "admin",
+            status: "completed",
+          },
+          { status: 200 },
+        );
+      }
+
+      if (path === "/api/v1/me") {
+        return jsonResponse({ error: "not authenticated" }, { status: 401 });
+      }
+
+      throw new Error(`Unexpected request for ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { router } = renderRouter("/setup");
+
+    await userEvent.type(await screen.findByLabelText(/email/i), "admin@example.com");
+    await userEvent.type(screen.getByLabelText(/^password$/i), "secret-pass");
+    await userEvent.type(screen.getByLabelText(/confirm password/i), "secret-pass");
+    await userEvent.click(screen.getByRole("button", { name: /finish setup/i }));
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/login");
+      expect(router.state.location.search).toBe(
+        "?redirect=%2F&email=admin%40example.com",
+      );
+    });
+
+    expect(await screen.findByLabelText(/email/i)).toHaveValue("admin@example.com");
+  });
 });
