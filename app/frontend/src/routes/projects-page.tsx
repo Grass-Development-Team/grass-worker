@@ -252,15 +252,6 @@ export function ProjectsPage() {
                           {formatTimestamp(project.archived_at ?? project.updated_at)}
                         </p>
                       </div>
-                      <div className="sm:col-span-3">
-                        <Button
-                          onClick={() => void navigate(`/projects/${project.id}`)}
-                          type="button"
-                          variant="outline"
-                        >
-                          View details
-                        </Button>
-                      </div>
                     </CardContent>
                   </Card>
                 ))
