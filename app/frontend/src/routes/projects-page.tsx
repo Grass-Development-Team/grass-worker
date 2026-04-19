@@ -1,14 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import * as React from "react";
 import { useLocation, useNavigate, useOutletContext } from "react-router-dom";
-import { ApiError } from "@/api/client";
 import { currentUserQueryKey, logout } from "@/api/auth";
-import { createProject, getProjects, projectsQueryKey, type Project } from "@/api/projects";
+import { getProjects, projectsQueryKey } from "@/api/projects";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import type { ProtectedOutletContext } from "./protected-route";
 
 function formatTimestamp(value: string) {
@@ -20,41 +16,6 @@ function formatTimestamp(value: string) {
 
 function metricValue(value: number) {
   return value.toString().padStart(2, "0");
-}
-
-function deriveSlug(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .replace(/-{2,}/g, "-");
-}
-
-function sortProjects(projects: Project[]) {
-  return [...projects].sort((left, right) => {
-    const statusRank = (status: Project["status"]) => (status === "active" ? 0 : 1);
-
-    return (
-      statusRank(left.status) - statusRank(right.status) ||
-      new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime() ||
-      left.name.localeCompare(right.name)
-    );
-  });
-}
-
-function mergeProjects(projects: Project[], createdProjects: Project[] = []) {
-  const byId = new Map<string, Project>();
-
-  for (const project of projects) {
-    byId.set(project.id, project);
-  }
-
-  for (const project of createdProjects) {
-    byId.set(project.id, project);
-  }
-
-  return sortProjects([...byId.values()]);
 }
 
 function ProjectMetricCard({
@@ -84,26 +45,9 @@ export function ProjectsPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [projectName, setProjectName] = React.useState("");
-  const [projectSlug, setProjectSlug] = React.useState("");
-  const [slugTouched, setSlugTouched] = React.useState(false);
-  const [createValidationError, setCreateValidationError] = React.useState<string | null>(null);
-  const [createdProjects, setCreatedProjects] = React.useState<Project[]>([]);
   const projectsQuery = useQuery({
     queryKey: projectsQueryKey,
     queryFn: getProjects,
-  });
-  const createProjectMutation = useMutation({
-    mutationFn: ({ name, slug }: { name: string; slug: string }) =>
-      createProject({ name, slug }),
-    onSuccess: async (project) => {
-      setProjectName("");
-      setProjectSlug("");
-      setSlugTouched(false);
-      setCreateValidationError(null);
-      setCreatedProjects((current) => mergeProjects(current, [project]));
-      void projectsQuery.refetch();
-    },
   });
   const signOutMutation = useMutation({
     mutationFn: logout,
@@ -118,17 +62,9 @@ export function ProjectsPage() {
     },
   });
 
-  const projects = mergeProjects(projectsQuery.data ?? [], createdProjects);
+  const projects = projectsQuery.data ?? [];
   const activeProjects = projects.filter((project) => project.status === "active");
   const archivedProjects = projects.filter((project) => project.status === "archived");
-  const createError =
-    createValidationError ??
-    (createProjectMutation.isError
-      ? createProjectMutation.error instanceof ApiError ||
-        createProjectMutation.error instanceof Error
-        ? createProjectMutation.error.message
-        : "Unable to create project"
-      : null);
 
   return (
     <main className="min-h-screen bg-muted/30 px-6 py-10">
@@ -218,7 +154,8 @@ export function ProjectsPage() {
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="text-sm text-muted-foreground">
-                    Use the create form to provision the first project for this workspace.
+                    Project creation can land next without replacing this page. The inventory,
+                    session handling, and ready-mode routing are already in place.
                   </CardContent>
                 </Card>
               ) : (
@@ -261,80 +198,6 @@ export function ProjectsPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Create project</CardTitle>
-              <CardDescription>
-                Provision a deployment workspace and it will appear in the inventory immediately.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <form
-                className="space-y-4"
-                onSubmit={(event) => {
-                  event.preventDefault();
-
-                  const name = projectName.trim();
-                  const slug = projectSlug.trim();
-
-                  if (!name) {
-                    setCreateValidationError("Project name is required");
-                    return;
-                  }
-
-                  if (!slug) {
-                    setCreateValidationError("Project slug is required");
-                    return;
-                  }
-
-                  setCreateValidationError(null);
-                  createProjectMutation.mutate({ name, slug });
-                }}
-              >
-                <div className="space-y-2">
-                  <Label htmlFor="project-name">Project name</Label>
-                  <Input
-                    id="project-name"
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      setProjectName(value);
-                      setCreateValidationError(null);
-                      createProjectMutation.reset();
-                      if (!slugTouched) {
-                        setProjectSlug(deriveSlug(value));
-                      }
-                    }}
-                    placeholder="Docs Site"
-                    value={projectName}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="project-slug">Project slug</Label>
-                  <Input
-                    id="project-slug"
-                    onChange={(event) => {
-                      setSlugTouched(true);
-                      setProjectSlug(deriveSlug(event.target.value));
-                      setCreateValidationError(null);
-                      createProjectMutation.reset();
-                    }}
-                    placeholder="docs-site"
-                    value={projectSlug}
-                  />
-                </div>
-                {createError ? (
-                  <Alert variant="destructive">
-                    <AlertTitle>Project creation failed</AlertTitle>
-                    <AlertDescription>{createError}</AlertDescription>
-                  </Alert>
-                ) : null}
-                <Button className="w-full" disabled={createProjectMutation.isPending} type="submit">
-                  {createProjectMutation.isPending ? "Creating project..." : "Create project"}
-                </Button>
-              </form>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
               <CardTitle>Session</CardTitle>
               <CardDescription>
                 The ready-mode console is authenticated with the current `HttpOnly` session cookie.
@@ -360,6 +223,15 @@ export function ProjectsPage() {
                     </span>
                   </div>
                 </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Next step</CardTitle>
+                  <CardDescription>
+                    The dashboard is ready for project creation and detail views to plug in next.
+                  </CardDescription>
+                </CardHeader>
               </Card>
             </CardContent>
           </Card>

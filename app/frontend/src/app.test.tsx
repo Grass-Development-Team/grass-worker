@@ -123,10 +123,8 @@ describe("auth routing", () => {
   });
 
   test("login success redirects to redirect query when present", async () => {
-    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const path = requestPath(input);
-      const method =
-        input instanceof Request ? input.method : (init?.method ?? "GET");
 
       if (path === "/api/v1/info") {
         return readyInfoResponse();
@@ -160,10 +158,8 @@ describe("auth routing", () => {
   });
 
   test("authenticated users visiting login are redirected away", async () => {
-    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const path = requestPath(input);
-      const method =
-        input instanceof Request ? input.method : (init?.method ?? "GET");
 
       if (path === "/api/v1/info") {
         return readyInfoResponse();
@@ -187,10 +183,8 @@ describe("auth routing", () => {
   });
 
   test("logout returns to login with the current route as redirect", async () => {
-    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const path = requestPath(input);
-      const method =
-        input instanceof Request ? input.method : (init?.method ?? "GET");
 
       if (path === "/api/v1/info") {
         return readyInfoResponse();
@@ -226,10 +220,8 @@ describe("auth routing", () => {
   });
 
   test("authenticated root redirects to projects and shows the empty state", async () => {
-    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const path = requestPath(input);
-      const method =
-        input instanceof Request ? input.method : (init?.method ?? "GET");
 
       if (path === "/api/v1/info") {
         return readyInfoResponse();
@@ -304,87 +296,6 @@ describe("auth routing", () => {
     expect(screen.getByText(/legacy console/i)).toBeInTheDocument();
     expect(screen.getByText(/docs-site/i)).toBeInTheDocument();
     expect(screen.getByText(/archived project/i)).toBeInTheDocument();
-  });
-
-  test("projects page creates a project and refreshes the inventory", async () => {
-    let projects: Array<{
-      id: string;
-      slug: string;
-      name: string;
-      status: "active" | "archived";
-      created_at: string;
-      updated_at: string;
-      archived_at: string | null;
-    }> = [];
-
-    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const path = requestPath(input);
-      const method =
-        input instanceof Request ? input.method : (init?.method ?? "GET");
-
-      if (path === "/api/v1/info") {
-        return readyInfoResponse();
-      }
-
-      if (path === "/api/v1/me") {
-        return currentUserResponse();
-      }
-
-      if (path === "/api/v1/projects" && method === "GET") {
-        return projectsResponse(projects);
-      }
-
-      if (path === "/api/v1/projects" && method === "POST") {
-        projects = [
-          {
-            id: "11111111-1111-1111-1111-111111111111",
-            slug: "docs-site",
-            name: "Docs Site",
-            status: "active",
-            created_at: "2026-04-19T10:00:00Z",
-            updated_at: "2026-04-19T10:00:00Z",
-            archived_at: null,
-          },
-        ];
-
-        return jsonResponse(
-          {
-            project: projects[0],
-          },
-          { status: 201 },
-        );
-      }
-
-      throw new Error(`Unexpected request for ${path}`);
-    });
-
-    vi.stubGlobal("fetch", fetchMock);
-
-    renderRouter("/projects");
-
-    await userEvent.type(await screen.findByLabelText(/project name/i), "Docs Site");
-    await waitFor(() => {
-      expect(screen.getByLabelText(/project slug/i)).toHaveValue("docs-site");
-    });
-    await userEvent.click(screen.getByRole("button", { name: /create project/i }));
-    await waitFor(() => {
-      expect(
-        fetchMock.mock.calls.some(([calledInput, calledInit]) => {
-          const method =
-            calledInput instanceof Request
-              ? calledInput.method
-              : ((calledInit as RequestInit | undefined)?.method ?? "GET");
-
-          return requestPath(calledInput) === "/api/v1/projects" && method === "POST";
-        }),
-      ).toBe(true);
-    });
-    await waitFor(() => {
-      expect(screen.getByLabelText(/project name/i)).toHaveValue("");
-    });
-
-    expect(await screen.findByText(/docs site/i)).toBeInTheDocument();
-    expect(screen.getByText(/docs-site/i)).toBeInTheDocument();
   });
 });
 
