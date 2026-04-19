@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
-import { Navigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 import { ApiError } from "@/api/client";
 import {
   getSystemInfo,
@@ -8,6 +8,7 @@ import {
   submitDatabaseSetup,
   systemInfoQueryKey,
   type SetupStage,
+  type SystemInfo,
 } from "@/api/system";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -125,6 +126,7 @@ function SetupStateError({
 }
 
 export function SetupPage() {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: systemInfoQueryKey,
@@ -170,7 +172,18 @@ export function SetupPage() {
         email: adminForm.email.trim(),
         password: adminForm.password,
       }),
-    onSuccess: refreshSystemInfo,
+    onSuccess: async () => {
+      await refreshSystemInfo();
+      const systemInfo = await queryClient.fetchQuery<SystemInfo>({
+        queryKey: systemInfoQueryKey,
+        queryFn: getSystemInfo,
+      });
+
+      if (systemInfo.mode === "ready") {
+        const email = encodeURIComponent(adminForm.email.trim());
+        await navigate(`/login?redirect=%2F&email=${email}`, { replace: true });
+      }
+    },
   });
 
   React.useEffect(() => {
