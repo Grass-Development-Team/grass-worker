@@ -36,6 +36,31 @@ async fn connect_and_prepare(database: &DatabaseConfig) -> Result<DatabaseConnec
     Ok(connection)
 }
 
+#[async_trait]
+trait AdminDatabaseConnector: Send + Sync {
+    async fn connect(
+        &self,
+        database: &DatabaseConfig,
+    ) -> Result<DatabaseConnection, AdminSetupError>;
+}
+
+type SharedAdminDatabaseConnector = Arc<dyn AdminDatabaseConnector>;
+
+#[derive(Debug)]
+struct PreparedPostgresAdminDatabaseConnector;
+
+#[async_trait]
+impl AdminDatabaseConnector for PreparedPostgresAdminDatabaseConnector {
+    async fn connect(
+        &self,
+        database: &DatabaseConfig,
+    ) -> Result<DatabaseConnection, AdminSetupError> {
+        connect_and_prepare(database)
+            .await
+            .map_err(AdminSetupError::internal)
+    }
+}
+
 pub fn default_database_initializer() -> SharedDatabaseInitializer {
     Arc::new(PostgresDatabaseInitializer)
 }
@@ -80,14 +105,29 @@ impl SetupBootstrapper for PostgresSetupBootstrapper {
     }
 }
 
-#[derive(Debug)]
 pub struct PostgresInitialAdminCreator {
     database: DatabaseConfig,
+    connector: SharedAdminDatabaseConnector,
 }
 
 impl PostgresInitialAdminCreator {
     pub fn new(database: DatabaseConfig) -> Self {
-        Self { database }
+        Self::with_connector(database, Arc::new(PreparedPostgresAdminDatabaseConnector))
+    }
+
+    fn with_connector(database: DatabaseConfig, connector: SharedAdminDatabaseConnector) -> Self {
+        Self {
+            database,
+            connector,
+        }
+    }
+}
+
+impl std::fmt::Debug for PostgresInitialAdminCreator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PostgresInitialAdminCreator")
+            .field("database", &self.database)
+            .finish_non_exhaustive()
     }
 }
 
@@ -102,9 +142,7 @@ fn hash_password(password: &str) -> Result<String, AdminSetupError> {
 #[async_trait]
 impl InitialAdminCreator for PostgresInitialAdminCreator {
     async fn create_initial_admin(&self, input: InitialAdminInput) -> Result<(), AdminSetupError> {
-        let connection = connect(&self.database)
-            .await
-            .map_err(|error| AdminSetupError::internal(error.to_string()))?;
+        let connection = self.connector.connect(&self.database).await?;
         let transaction = connection
             .begin()
             .await
@@ -178,11 +216,97 @@ impl InitialAdminCreator for PostgresInitialAdminCreator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use grass_worker_database::entities::user;
+    use sea_orm::{
+        DatabaseBackend, DatabaseConnection, MockDatabase, MockDatabaseConnection, MockExecResult,
+    };
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Debug)]
+    struct RecordingAdminDatabaseConnector {
+        connection: Arc<MockDatabaseConnection>,
+        last_database: Mutex<Option<DatabaseConfig>>,
+    }
+
+    impl RecordingAdminDatabaseConnector {
+        fn new(connection: Arc<MockDatabaseConnection>) -> Self {
+            Self {
+                connection,
+                last_database: Mutex::new(None),
+            }
+        }
+
+        fn last_database(&self) -> Option<DatabaseConfig> {
+            self.last_database.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl AdminDatabaseConnector for RecordingAdminDatabaseConnector {
+        async fn connect(
+            &self,
+            database: &DatabaseConfig,
+        ) -> Result<DatabaseConnection, AdminSetupError> {
+            *self.last_database.lock().unwrap() = Some(database.clone());
+            Ok(DatabaseConnection::MockDatabaseConnection(
+                self.connection.clone(),
+            ))
+        }
+    }
 
     #[test]
     fn hash_password_uses_argon2id_encoding() {
         let hash = hash_password("correct horse battery staple").unwrap();
 
         assert!(hash.starts_with("$argon2id$"));
+    }
+
+    #[tokio::test]
+    async fn create_initial_admin_uses_schema_prepared_connection() {
+        let connection = Arc::new(MockDatabaseConnection::new(
+            MockDatabase::new(DatabaseBackend::Postgres)
+                .append_exec_results([
+                    MockExecResult {
+                        last_insert_id: 0,
+                        rows_affected: 1,
+                    },
+                    MockExecResult {
+                        last_insert_id: 0,
+                        rows_affected: 1,
+                    },
+                    MockExecResult {
+                        last_insert_id: 0,
+                        rows_affected: 1,
+                    },
+                ])
+                .append_query_results([Vec::<user::Model>::new(), Vec::<user::Model>::new()]),
+        ));
+        let connector = Arc::new(RecordingAdminDatabaseConnector::new(connection.clone()));
+        let database = DatabaseConfig {
+            schema: "control_plane".to_owned(),
+            ..DatabaseConfig::default()
+        };
+        let creator =
+            PostgresInitialAdminCreator::with_connector(database.clone(), connector.clone());
+
+        creator
+            .create_initial_admin(InitialAdminInput {
+                email: "admin@example.com".to_owned(),
+                password: "secret-pass".to_owned(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(connector.last_database(), Some(database));
+
+        let transaction_log =
+            DatabaseConnection::MockDatabaseConnection(connection).into_transaction_log();
+        assert_eq!(transaction_log.len(), 1);
+        assert!(
+            transaction_log[0]
+                .statements()
+                .iter()
+                .any(|statement| statement.sql.contains("pg_advisory_xact_lock"))
+        );
     }
 }
