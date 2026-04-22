@@ -3,6 +3,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { HomePage } from "./routes/home-page";
 import { LoginPage } from "./routes/login-page";
 import { ProtectedRoute } from "./routes/protected-route";
+import { SetupPage } from "./routes/setup-page";
+import { SystemModeGate } from "./routes/system-mode-gate";
 
 function ProtectedNotFound() {
   return (
@@ -25,19 +27,28 @@ function ProtectedNotFound() {
 
 export const routes: RouteObject[] = [
   {
-    path: "/login",
-    element: <LoginPage />,
-  },
-  {
-    element: <ProtectedRoute />,
+    element: <SystemModeGate />,
     children: [
       {
-        index: true,
-        element: <HomePage />,
+        path: "/setup",
+        element: <SetupPage />,
       },
       {
-        path: "*",
-        element: <ProtectedNotFound />,
+        path: "/login",
+        element: <LoginPage />,
+      },
+      {
+        element: <ProtectedRoute />,
+        children: [
+          {
+            index: true,
+            element: <HomePage />,
+          },
+          {
+            path: "*",
+            element: <ProtectedNotFound />,
+          },
+        ],
       },
     ],
   },
