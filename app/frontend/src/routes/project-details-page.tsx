@@ -1,125 +1,263 @@
-import { useQuery } from "@tanstack/react-query";
-import { useNavigate, useParams } from "react-router-dom";
-import { getProject, projectQueryKey } from "@/api/projects";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate, useOutletContext, useParams } from "react-router-dom";
+import { ApiError } from "@/api/client";
+import {
+  archiveProject,
+  getProject,
+  hardDeleteProject,
+  projectQueryKey,
+  projectsQueryKey,
+  restoreProject,
+  softDeleteProject,
+  transferProjectOwner,
+  unarchiveProject,
+  updateProject,
+  type Project,
+} from "@/api/projects";
+import { ConsolePageHeader } from "@/components/console/console-page-header";
+import { DangerZoneCard } from "@/components/projects/danger-zone-card";
+import { EditProjectForm } from "@/components/projects/edit-project-form";
+import { LifecycleActionsCard } from "@/components/projects/lifecycle-actions-card";
+import { ProjectOverviewCard } from "@/components/projects/project-overview-card";
+import { projectStatusLabel } from "@/components/projects/project-status-badge";
+import { TransferOwnerCard } from "@/components/projects/transfer-owner-card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import type { ProtectedOutletContext } from "./protected-route";
 
-function formatTimestamp(value: string) {
-  return new Intl.DateTimeFormat("en", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value));
+function errorMessage(error: unknown, fallback: string) {
+  if (error instanceof ApiError || error instanceof Error) {
+    return error.message;
+  }
+
+  return fallback;
+}
+
+function projectDescription(project: Project) {
+  return `${projectStatusLabel(project.status)} project`;
 }
 
 export function ProjectDetailsPage() {
+  const { currentUser } = useOutletContext<ProtectedOutletContext>();
   const navigate = useNavigate();
   const { projectId } = useParams<{ projectId: string }>();
+  const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: projectQueryKey(projectId ?? ""),
     queryFn: () => getProject(projectId ?? ""),
     enabled: Boolean(projectId),
   });
 
+  const setProjectData = (project: Project) => {
+    if (!projectId) return;
+    queryClient.setQueryData(projectQueryKey(projectId), project);
+    queryClient.setQueryData<Project[]>(projectsQueryKey, (current) =>
+      current?.map((item) => (item.id === project.id ? project : item)),
+    );
+  };
+
+  const updateMutation = useMutation({
+    mutationFn: (input: { name: string; slug: string }) =>
+      updateProject(projectId ?? "", input),
+    onSuccess: async (project) => {
+      setProjectData(project);
+      await queryClient.invalidateQueries({ queryKey: projectsQueryKey });
+    },
+  });
+  const lifecycleMutation = useMutation({
+    mutationFn: (
+      action:
+        | { type: "archive" }
+        | { type: "unarchive" }
+        | { type: "restore"; status: "active" | "archived" },
+    ) => {
+      if (!projectId) throw new Error("Project id is required");
+      if (action.type === "archive") return archiveProject(projectId);
+      if (action.type === "unarchive") return unarchiveProject(projectId);
+      return restoreProject(projectId, action.status);
+    },
+    onSuccess: async (project) => {
+      setProjectData(project);
+      await queryClient.invalidateQueries({ queryKey: projectsQueryKey });
+    },
+  });
+  const transferMutation = useMutation({
+    mutationFn: (ownerEmail: string) => transferProjectOwner(projectId ?? "", ownerEmail),
+    onSuccess: async (project) => {
+      setProjectData(project);
+      await queryClient.invalidateQueries({ queryKey: projectsQueryKey });
+    },
+  });
+  const dangerMutation = useMutation({
+    mutationFn: (action: "soft-delete" | "hard-delete") => {
+      if (!projectId) throw new Error("Project id is required");
+      if (action === "soft-delete") return softDeleteProject(projectId);
+      return hardDeleteProject(projectId);
+    },
+    onSuccess: async (result, action) => {
+      if (action === "hard-delete") {
+        await queryClient.invalidateQueries({ queryKey: projectsQueryKey });
+        queryClient.removeQueries({ queryKey: projectQueryKey(projectId ?? "") });
+        await navigate("/projects", { replace: true });
+        return;
+      }
+
+      setProjectData(result as Project);
+      await queryClient.invalidateQueries({ queryKey: projectsQueryKey });
+    },
+  });
+
   if (!projectId) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-muted/30 p-6">
-        <Card className="w-full max-w-lg">
-          <CardHeader>
-            <CardTitle>Project not found</CardTitle>
-            <CardDescription>The requested project identifier is missing.</CardDescription>
-          </CardHeader>
-        </Card>
-      </main>
+      <Card className="w-full max-w-lg">
+        <CardHeader>
+          <CardTitle>
+            <h1>Project not found</h1>
+          </CardTitle>
+          <CardDescription>The requested project identifier is missing.</CardDescription>
+        </CardHeader>
+      </Card>
     );
   }
 
-  return (
-    <main className="min-h-screen bg-muted/30 px-6 py-10">
-      <div className="mx-auto max-w-5xl space-y-6">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <Button onClick={() => void navigate("/projects")} type="button" variant="outline">
-            Back to projects
-          </Button>
-          <Button
-            disabled={query.isPending}
-            onClick={() => void query.refetch()}
-            type="button"
-            variant="outline"
-          >
-            {query.isPending ? "Refreshing..." : "Refresh details"}
-          </Button>
-        </div>
-
-        {query.isPending ? (
-          <Card>
-            <CardHeader>
-              <CardTitle>Loading project</CardTitle>
-              <CardDescription>Fetching project metadata from the control API.</CardDescription>
-            </CardHeader>
-          </Card>
-        ) : query.isError ? (
-          <Alert variant="destructive">
-            <AlertTitle>Unable to load project</AlertTitle>
-            <AlertDescription>
-              {query.error instanceof Error ? query.error.message : "Project lookup failed."}
-            </AlertDescription>
-          </Alert>
-        ) : (
-          <>
-            <div className="space-y-1">
-              <p className="text-sm text-muted-foreground">{query.data.slug}</p>
-              <h1 className="text-3xl font-semibold tracking-tight">{query.data.name}</h1>
-              <p className="text-sm text-muted-foreground">
-                {query.data.status === "active" ? "Active project" : "Archived project"}
-              </p>
-            </div>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Overview</CardTitle>
-                <CardDescription>Core metadata for the selected project.</CardDescription>
-              </CardHeader>
-              <CardContent className="grid gap-4 text-sm text-muted-foreground sm:grid-cols-3">
-                <div className="space-y-1">
-                  <p>Slug</p>
-                  <p className="font-medium text-foreground">{query.data.slug}</p>
-                </div>
-                <div className="space-y-1">
-                  <p>Status</p>
-                  <p className="font-medium text-foreground">
-                    {query.data.status === "active" ? "Active" : "Archived"}
-                  </p>
-                </div>
-                <div className="space-y-1">
-                  <p>Created</p>
-                  <p className="font-medium text-foreground">
-                    {formatTimestamp(query.data.created_at)}
-                  </p>
-                </div>
-                <div className="space-y-1 sm:col-span-3">
-                  <p>{query.data.archived_at ? "Archived" : "Updated"}</p>
-                  <p className="font-medium text-foreground">
-                    {formatTimestamp(query.data.archived_at ?? query.data.updated_at)}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Deployment history</CardTitle>
-                <CardDescription>
-                  This route is ready for deployment records to plug in next.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="text-sm text-muted-foreground">
-                No deployments have been loaded for this project yet.
-              </CardContent>
-            </Card>
-          </>
-        )}
+  if (query.isPending) {
+    return (
+      <div className="space-y-6">
+        <ConsolePageHeader eyebrow="Project" title="Loading project" />
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              <h2>Loading project</h2>
+            </CardTitle>
+            <CardDescription>Fetching project metadata from the control API.</CardDescription>
+          </CardHeader>
+        </Card>
       </div>
-    </main>
+    );
+  }
+
+  if (query.isError) {
+    return (
+      <div className="space-y-6">
+        <ConsolePageHeader
+          actions={
+            <Button onClick={() => void navigate("/projects")} type="button" variant="outline">
+              Back to projects
+            </Button>
+          }
+          eyebrow="Project"
+          title="Project unavailable"
+        />
+        <Alert variant="destructive">
+          <AlertTitle>Unable to load project</AlertTitle>
+          <AlertDescription>
+            {errorMessage(query.error, "Project lookup failed.")}
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
+  const project = query.data;
+  const canHardDelete = currentUser.is_admin && project.status === "soft_deleted";
+
+  return (
+    <div className="space-y-6">
+      <ConsolePageHeader
+        actions={
+          <>
+            <Button onClick={() => void navigate("/projects")} type="button" variant="outline">
+              Back to projects
+            </Button>
+            <Button
+              disabled={query.isPending}
+              onClick={() => void query.refetch()}
+              type="button"
+              variant="outline"
+            >
+              {query.isPending ? "Refreshing..." : "Refresh details"}
+            </Button>
+          </>
+        }
+        description={projectDescription(project)}
+        eyebrow={project.slug}
+        title={project.name}
+      />
+
+      <ProjectOverviewCard project={project} />
+
+      <EditProjectForm
+        error={
+          updateMutation.isError
+            ? errorMessage(updateMutation.error, "Project update failed")
+            : null
+        }
+        isSaving={updateMutation.isPending}
+        onResetError={() => updateMutation.reset()}
+        onSave={(input) => updateMutation.mutate(input)}
+        project={project}
+      />
+
+      <LifecycleActionsCard
+        canRestore={currentUser.is_admin}
+        error={
+          lifecycleMutation.isError
+            ? errorMessage(lifecycleMutation.error, "Lifecycle action failed")
+            : null
+        }
+        isPending={lifecycleMutation.isPending}
+        onArchive={() => lifecycleMutation.mutate({ type: "archive" })}
+        onRestoreToActive={() =>
+          lifecycleMutation.mutate({ type: "restore", status: "active" })
+        }
+        onRestoreToArchived={() =>
+          lifecycleMutation.mutate({ type: "restore", status: "archived" })
+        }
+        onUnarchive={() => lifecycleMutation.mutate({ type: "unarchive" })}
+        project={project}
+      />
+
+      <TransferOwnerCard
+        error={
+          transferMutation.isError
+            ? errorMessage(transferMutation.error, "Transfer owner failed")
+            : null
+        }
+        isTransferring={transferMutation.isPending}
+        onResetError={() => transferMutation.reset()}
+        onTransfer={(ownerEmail) => transferMutation.mutate(ownerEmail)}
+        project={project}
+      />
+
+      <DangerZoneCard
+        canHardDelete={canHardDelete}
+        error={
+          dangerMutation.isError
+            ? errorMessage(dangerMutation.error, "Danger zone action failed")
+            : null
+        }
+        isPending={dangerMutation.isPending}
+        onHardDelete={() => dangerMutation.mutate("hard-delete")}
+        onSoftDelete={() => dangerMutation.mutate("soft-delete")}
+        project={project}
+      />
+
+      <Card>
+        <CardHeader>
+          <CardTitle>
+            <h2>Deployment history</h2>
+          </CardTitle>
+          <CardDescription>
+            This route is ready for deployment records to plug in next.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    </div>
   );
 }

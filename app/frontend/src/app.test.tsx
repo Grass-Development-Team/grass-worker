@@ -22,51 +22,64 @@ function readyInfoResponse() {
   );
 }
 
-function currentUserResponse() {
+function currentUserResponse(
+  user: {
+    id?: string;
+    email?: string;
+    is_admin?: boolean;
+    is_initial_admin?: boolean;
+  } = {},
+) {
   return jsonResponse(
     {
       user: {
-        id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-        email: "admin@example.com",
-        is_admin: true,
-        is_initial_admin: true,
+        id: user.id ?? "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        email: user.email ?? "admin@example.com",
+        is_admin: user.is_admin ?? true,
+        is_initial_admin: user.is_initial_admin ?? true,
       },
     },
     { status: 200 },
   );
 }
 
+type TestProjectStatus = "active" | "archived" | "soft_deleted";
+
+type TestProject = {
+  id: string;
+  owner_user_id?: string;
+  slug: string;
+  name: string;
+  status: TestProjectStatus;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+  soft_deleted_at?: string | null;
+};
+
+function normalizeProject(project: TestProject) {
+  return {
+    owner_user_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    soft_deleted_at: null,
+    ...project,
+  };
+}
+
 function projectsResponse(
-  projects: Array<{
-    id: string;
-    slug: string;
-    name: string;
-    status: "active" | "archived";
-    created_at: string;
-    updated_at: string;
-    archived_at: string | null;
-  }>,
+  projects: TestProject[],
 ) {
   return jsonResponse(
     {
-      projects,
+      projects: projects.map(normalizeProject),
     },
     { status: 200 },
   );
 }
 
-function projectResponse(project: {
-  id: string;
-  slug: string;
-  name: string;
-  status: "active" | "archived";
-  created_at: string;
-  updated_at: string;
-  archived_at: string | null;
-}) {
+function projectResponse(project: TestProject) {
   return jsonResponse(
     {
-      project,
+      project: normalizeProject(project),
     },
     { status: 200 },
   );
@@ -275,6 +288,36 @@ describe("auth routing", () => {
     expect(screen.getByRole("heading", { name: /projects/i })).toBeInTheDocument();
   });
 
+  test("authenticated console routes render the console shell", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const path = requestPath(input);
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse();
+      }
+
+      if (path === "/api/v1/projects") {
+        return projectsResponse([]);
+      }
+
+      throw new Error(`Unexpected request for ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter("/projects");
+
+    expect(
+      await screen.findByRole("navigation", { name: /console navigation/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("admin@example.com")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /projects/i })).toBeInTheDocument();
+  });
+
   test("projects page renders the authenticated user's project list", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const path = requestPath(input);
@@ -321,6 +364,56 @@ describe("auth routing", () => {
     expect(screen.getByText(/legacy console/i)).toBeInTheDocument();
     expect(screen.getByText(/docs-site/i)).toBeInTheDocument();
     expect(screen.getByText(/archived project/i)).toBeInTheDocument();
+  });
+
+  test("projects page shows mixed project statuses in one console list", async () => {
+    const now = "2026-04-23T12:00:00Z";
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const path = requestPath(input);
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse();
+      }
+
+      if (path === "/api/v1/projects") {
+        return projectsResponse([
+          {
+            id: "11111111-1111-1111-1111-111111111111",
+            slug: "docs-site",
+            name: "Docs Site",
+            status: "active",
+            created_at: now,
+            updated_at: now,
+            archived_at: null,
+          },
+          {
+            id: "22222222-2222-2222-2222-222222222222",
+            slug: "old-site",
+            name: "Old Site",
+            status: "soft_deleted",
+            created_at: now,
+            updated_at: now,
+            archived_at: null,
+            soft_deleted_at: now,
+          },
+        ]);
+      }
+
+      throw new Error(`Unexpected request for ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter("/projects");
+
+    expect(await screen.findByText("Docs Site")).toBeInTheDocument();
+    expect(screen.getByText("Old Site")).toBeInTheDocument();
+    expect(screen.getByText("Active")).toBeInTheDocument();
+    expect(screen.getByText("Soft deleted")).toBeInTheDocument();
   });
 
   test("projects page creates a project and refreshes the inventory", async () => {
@@ -451,6 +544,109 @@ describe("auth routing", () => {
 
     expect(await screen.findByRole("heading", { name: /docs site/i })).toBeInTheDocument();
     expect(screen.getByText(/deployment history/i)).toBeInTheDocument();
+  });
+
+  test("admin project details show management sections and hard delete", async () => {
+    const projectId = "11111111-1111-1111-1111-111111111111";
+    const now = "2026-04-23T12:00:00Z";
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const path = requestPath(input);
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse();
+      }
+
+      if (path === `/api/v1/projects/${projectId}`) {
+        return projectResponse({
+          id: projectId,
+          slug: "docs-site",
+          name: "Docs Site",
+          status: "soft_deleted",
+          created_at: now,
+          updated_at: now,
+          archived_at: null,
+          soft_deleted_at: now,
+        });
+      }
+
+      throw new Error(`Unexpected request for ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter(`/projects/${projectId}`);
+
+    expect(await screen.findByRole("heading", { name: /docs site/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /overview/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /edit project/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /lifecycle/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /transfer owner/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /danger zone/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /hard delete/i })).toBeInTheDocument();
+  });
+
+  test("project detail actions call backend action endpoints", async () => {
+    const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+    const projectId = "11111111-1111-1111-1111-111111111111";
+    const now = "2026-04-23T12:00:00Z";
+    const project = {
+      id: projectId,
+      slug: "docs-site",
+      name: "Docs Site",
+      status: "active" as const,
+      created_at: now,
+      updated_at: now,
+      archived_at: null,
+      soft_deleted_at: null,
+    };
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = requestPath(input);
+      const method =
+        input instanceof Request ? input.method : (init?.method ?? "GET");
+      const body = init?.body ? JSON.parse(init.body.toString()) : undefined;
+      requests.push({ path, method, body });
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse();
+      }
+
+      if (path === `/api/v1/projects/${projectId}` && method === "GET") {
+        return projectResponse(project);
+      }
+
+      if (path === `/api/v1/projects/${projectId}/archive`) {
+        return projectResponse({
+          ...project,
+          status: "archived",
+          archived_at: now,
+        });
+      }
+
+      throw new Error(`Unexpected request for ${method} ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter(`/projects/${projectId}`);
+
+    await userEvent.click(await screen.findByRole("button", { name: /archive project/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^archive$/i }));
+
+    await waitFor(() => {
+      expect(requests).toContainEqual({
+        path: `/api/v1/projects/${projectId}/archive`,
+        method: "POST",
+        body: undefined,
+      });
+    });
   });
 });
 
