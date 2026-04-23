@@ -559,14 +559,15 @@ impl ProjectService {
         {
             return Err(ProjectError::conflict("project still has deployments"));
         }
-        if repository.hard_delete(project.id).await.map_err(map_db_error)? {
+        if repository
+            .hard_delete(project.id)
+            .await
+            .map_err(map_db_error)?
+        {
             return Ok(());
         }
 
-        let current = repository
-            .find_by_id(id)
-            .await
-            .map_err(map_db_error)?;
+        let current = repository.find_by_id(id).await.map_err(map_db_error)?;
         let Some(current) = current else {
             return Err(ProjectError::not_found("project not found"));
         };
@@ -945,7 +946,10 @@ mod tests {
             .into_connection();
         let service = ProjectService::default();
 
-        let archived = service.archive(&database, &actor, project_id).await.unwrap();
+        let archived = service
+            .archive(&database, &actor, project_id)
+            .await
+            .unwrap();
 
         assert_eq!(archived, expected);
     }
@@ -978,7 +982,10 @@ mod tests {
             .into_connection();
         let service = ProjectService::default();
 
-        let unarchived = service.unarchive(&database, &actor, project_id).await.unwrap();
+        let unarchived = service
+            .unarchive(&database, &actor, project_id)
+            .await
+            .unwrap();
 
         assert_eq!(unarchived, expected);
     }
@@ -1011,7 +1018,10 @@ mod tests {
             .into_connection();
         let service = ProjectService::default();
 
-        let deleted = service.soft_delete(&database, &actor, project_id).await.unwrap();
+        let deleted = service
+            .soft_delete(&database, &actor, project_id)
+            .await
+            .unwrap();
 
         assert_eq!(deleted, expected);
     }
@@ -1033,12 +1043,7 @@ mod tests {
         let service = ProjectService::default();
 
         let error = service
-            .restore(
-                &database,
-                &actor,
-                project_id,
-                RestoreProjectStatus::Active,
-            )
+            .restore(&database, &actor, project_id, RestoreProjectStatus::Active)
             .await
             .unwrap_err();
 
@@ -1116,12 +1121,7 @@ mod tests {
         let service = ProjectService::default();
 
         let restored = service
-            .restore(
-                &database,
-                &actor,
-                project_id,
-                RestoreProjectStatus::Active,
-            )
+            .restore(&database, &actor, project_id, RestoreProjectStatus::Active)
             .await
             .unwrap();
 
@@ -1145,12 +1145,7 @@ mod tests {
         let service = ProjectService::default();
 
         let error = service
-            .restore(
-                &database,
-                &actor,
-                project_id,
-                RestoreProjectStatus::Active,
-            )
+            .restore(&database, &actor, project_id, RestoreProjectStatus::Active)
             .await
             .unwrap_err();
 
@@ -1183,7 +1178,10 @@ mod tests {
             .into_connection();
         let service = ProjectService::default();
 
-        let error = service.archive(&database, &actor, project_id).await.unwrap_err();
+        let error = service
+            .archive(&database, &actor, project_id)
+            .await
+            .unwrap_err();
 
         assert_eq!(error.kind(), &ProjectErrorKind::Conflict);
         assert_eq!(error.message(), "project is not active");
@@ -1372,7 +1370,10 @@ mod tests {
             .into_connection();
         let service = ProjectService::default();
 
-        let error = service.hard_delete(&database, &actor, project_id).await.unwrap_err();
+        let error = service
+            .hard_delete(&database, &actor, project_id)
+            .await
+            .unwrap_err();
 
         assert_eq!(error.kind(), &ProjectErrorKind::Conflict);
         assert_eq!(
@@ -1394,7 +1395,9 @@ mod tests {
         );
         let database = MockDatabase::new(DatabaseBackend::Postgres)
             .append_query_results([[existing]])
-            .append_query_results([Vec::<grass_worker_database::entities::deployment::Model>::new()])
+            .append_query_results([
+                Vec::<grass_worker_database::entities::deployment::Model>::new(),
+            ])
             .append_exec_results([MockExecResult {
                 last_insert_id: 0,
                 rows_affected: 1,
@@ -1402,7 +1405,10 @@ mod tests {
             .into_connection();
         let service = ProjectService::default();
 
-        service.hard_delete(&database, &actor, project_id).await.unwrap();
+        service
+            .hard_delete(&database, &actor, project_id)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -1431,7 +1437,10 @@ mod tests {
             .into_connection();
         let service = ProjectService::default();
 
-        let error = service.hard_delete(&database, &actor, project_id).await.unwrap_err();
+        let error = service
+            .hard_delete(&database, &actor, project_id)
+            .await
+            .unwrap_err();
 
         assert_eq!(error.kind(), &ProjectErrorKind::Conflict);
         assert_eq!(error.message(), "project still has deployments");

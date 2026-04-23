@@ -1,8 +1,12 @@
-import type { RouteObject } from "react-router-dom";
+import { Navigate, type RouteObject } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { HomePage } from "./routes/home-page";
+import { ConsoleLayout } from "./routes/console-layout";
 import { LoginPage } from "./routes/login-page";
+import { ProjectDetailsPage } from "./routes/project-details-page";
 import { ProtectedRoute } from "./routes/protected-route";
+import { ProjectsPage } from "./routes/projects-page";
+import { SetupPage } from "./routes/setup-page";
+import { SystemModeGate } from "./routes/system-mode-gate";
 
 function ProtectedNotFound() {
   return (
@@ -25,19 +29,41 @@ function ProtectedNotFound() {
 
 export const routes: RouteObject[] = [
   {
-    path: "/login",
-    element: <LoginPage />,
-  },
-  {
-    element: <ProtectedRoute />,
+    element: <SystemModeGate />,
     children: [
       {
-        index: true,
-        element: <HomePage />,
+        path: "/setup",
+        element: <SetupPage />,
       },
       {
-        path: "*",
-        element: <ProtectedNotFound />,
+        path: "/login",
+        element: <LoginPage />,
+      },
+      {
+        element: <ProtectedRoute />,
+        children: [
+          {
+            element: <ConsoleLayout />,
+            children: [
+              {
+                index: true,
+                element: <Navigate replace to="/projects" />,
+              },
+              {
+                path: "/projects",
+                element: <ProjectsPage />,
+              },
+              {
+                path: "/projects/:projectId",
+                element: <ProjectDetailsPage />,
+              },
+              {
+                path: "*",
+                element: <ProtectedNotFound />,
+              },
+            ],
+          },
+        ],
       },
     ],
   },

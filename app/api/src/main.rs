@@ -6,6 +6,7 @@ use grass_worker_api::{
     },
     app_router,
     domain::setup::SharedSetupBootstrapper,
+    runtime_app_router,
 };
 use grass_worker_config::{DatabaseConfig, ResolvedApiConfig};
 use std::process::ExitCode;
@@ -98,7 +99,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         AppMode::Setup(context) => {
             let listener = tokio::net::TcpListener::bind(context.listen()).await?;
-            let app = app_router(AppMode::Setup(context))?;
+            let app = runtime_app_router(AppMode::Setup(context))?;
 
             axum::serve(listener, app).await?;
         }
@@ -113,10 +114,10 @@ async fn resolve_app_mode(
     runtime_database_connector: SharedRuntimeDatabaseConnector,
 ) -> Result<AppMode, ResolveAppModeError> {
     let Some(database) = resolved.config.database.clone() else {
-        return Ok(AppMode::Setup(SetupContext::database(
-            resolved.config.server.listen,
-            resolved.path,
-        )));
+        return Ok(AppMode::Setup(
+            SetupContext::database(resolved.config.server.listen, resolved.path)
+                .with_development(resolved.config.development.clone()),
+        ));
     };
 
     if bootstrapper
@@ -131,11 +132,14 @@ async fn resolve_app_mode(
         )));
     }
 
-    Ok(AppMode::Setup(SetupContext::admin_with_creator(
-        resolved.config.server.listen,
-        database.clone(),
-        Arc::new(PostgresInitialAdminCreator::new(database)),
-    )))
+    Ok(AppMode::Setup(
+        SetupContext::admin_with_creator(
+            resolved.config.server.listen,
+            database.clone(),
+            Arc::new(PostgresInitialAdminCreator::new(database)),
+        )
+        .with_development(resolved.config.development.clone()),
+    ))
 }
 
 #[cfg(test)]

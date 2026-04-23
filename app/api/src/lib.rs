@@ -9,7 +9,14 @@ use crate::domain::{
     system::ApiInfo,
 };
 use axum::routing::any;
-use axum::{Json, Router, http::Request, response::Response, routing::get};
+use axum::{
+    Json, Router,
+    body::Body,
+    extract::State,
+    http::Request,
+    response::{IntoResponse, Response},
+    routing::get,
+};
 use features::{
     auth::install_auth_routes, projects::install_project_routes, setup::install_setup_routes,
     system::install_system_routes,
@@ -21,6 +28,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+use tower::util::ServiceExt;
 use tower_http::trace::TraceLayer;
 use tracing::Span;
 
@@ -78,11 +86,13 @@ pub enum SetupContext {
         listen: SocketAddr,
         config_path: PathBuf,
         initializer: SharedDatabaseInitializer,
+        development: Option<grass_worker_config::DevelopmentConfig>,
     },
     Admin {
         listen: SocketAddr,
         database: grass_worker_config::DatabaseConfig,
         creator: SharedInitialAdminCreator,
+        development: Option<grass_worker_config::DevelopmentConfig>,
     },
 }
 
@@ -92,18 +102,24 @@ impl std::fmt::Debug for SetupContext {
             Self::Database {
                 listen,
                 config_path,
+                development,
                 ..
             } => f
                 .debug_struct("SetupContext::Database")
                 .field("listen", listen)
                 .field("config_path", config_path)
+                .field("development", development)
                 .finish_non_exhaustive(),
             Self::Admin {
-                listen, database, ..
+                listen,
+                database,
+                development,
+                ..
             } => f
                 .debug_struct("SetupContext::Admin")
                 .field("listen", listen)
                 .field("database", database)
+                .field("development", development)
                 .finish_non_exhaustive(),
         }
     }
@@ -116,32 +132,72 @@ impl PartialEq for SetupContext {
                 Self::Database {
                     listen: left_listen,
                     config_path: left_config_path,
+                    development: left_development,
                     ..
                 },
                 Self::Database {
                     listen: right_listen,
                     config_path: right_config_path,
+                    development: right_development,
                     ..
                 },
-            ) => left_listen == right_listen && left_config_path == right_config_path,
+            ) => {
+                left_listen == right_listen
+                    && left_config_path == right_config_path
+                    && left_development == right_development
+            }
             (
                 Self::Admin {
                     listen: left_listen,
                     database: left_database,
+                    development: left_development,
                     ..
                 },
                 Self::Admin {
                     listen: right_listen,
                     database: right_database,
+                    development: right_development,
                     ..
                 },
-            ) => left_listen == right_listen && left_database == right_database,
+            ) => {
+                left_listen == right_listen
+                    && left_database == right_database
+                    && left_development == right_development
+            }
             _ => false,
         }
     }
 }
 
 impl Eq for SetupContext {}
+
+#[async_trait::async_trait]
+pub trait SetupRuntimeDatabaseConnector: Send + Sync {
+    async fn connect(
+        &self,
+        database: &grass_worker_config::DatabaseConfig,
+    ) -> Result<sea_orm::DatabaseConnection, String>;
+}
+
+pub type SharedSetupRuntimeDatabaseConnector = Arc<dyn SetupRuntimeDatabaseConnector>;
+pub type SharedRuntimeMode = Arc<tokio::sync::RwLock<AppMode>>;
+
+#[derive(Debug)]
+struct PreparedSetupRuntimeDatabaseConnector;
+
+#[async_trait::async_trait]
+impl SetupRuntimeDatabaseConnector for PreparedSetupRuntimeDatabaseConnector {
+    async fn connect(
+        &self,
+        database: &grass_worker_config::DatabaseConfig,
+    ) -> Result<sea_orm::DatabaseConnection, String> {
+        crate::adapters::database::connect_runtime_database(database).await
+    }
+}
+
+fn default_setup_runtime_database_connector() -> SharedSetupRuntimeDatabaseConnector {
+    Arc::new(PreparedSetupRuntimeDatabaseConnector)
+}
 
 impl SetupContext {
     pub fn database(listen: SocketAddr, config_path: PathBuf) -> Self {
@@ -157,6 +213,7 @@ impl SetupContext {
             listen,
             config_path,
             initializer,
+            development: None,
         }
     }
 
@@ -177,6 +234,37 @@ impl SetupContext {
             listen,
             database,
             creator,
+            development: None,
+        }
+    }
+
+    pub fn with_development(
+        self,
+        development: Option<grass_worker_config::DevelopmentConfig>,
+    ) -> Self {
+        match self {
+            Self::Database {
+                listen,
+                config_path,
+                initializer,
+                ..
+            } => Self::Database {
+                listen,
+                config_path,
+                initializer,
+                development,
+            },
+            Self::Admin {
+                listen,
+                database,
+                creator,
+                ..
+            } => Self::Admin {
+                listen,
+                database,
+                creator,
+                development,
+            },
         }
     }
 
@@ -190,6 +278,14 @@ impl SetupContext {
     pub fn listen(&self) -> SocketAddr {
         match self {
             Self::Database { listen, .. } | Self::Admin { listen, .. } => *listen,
+        }
+    }
+
+    pub fn development(&self) -> Option<&grass_worker_config::DevelopmentConfig> {
+        match self {
+            Self::Database { development, .. } | Self::Admin { development, .. } => {
+                development.as_ref()
+            }
         }
     }
 }
@@ -243,36 +339,111 @@ fn with_request_logger(router: Router) -> Router {
     )
 }
 
-pub fn app_router(mode: impl Into<AppMode>) -> std::io::Result<Router> {
-    ensure_rustls_crypto_provider();
+fn resolve_frontend_mode(
+    development: Option<&grass_worker_config::DevelopmentConfig>,
+) -> std::io::Result<FrontendMode> {
+    Ok(match development {
+        Some(development) => FrontendMode::Development {
+            dev_server: development.dev_server.clone(),
+        },
+        None => FrontendMode::Release {
+            public_dir: std::env::current_dir()?.join("public"),
+        },
+    })
+}
 
+fn build_app_router(
+    mode: AppMode,
+    runtime_mode: Option<SharedRuntimeMode>,
+    runtime_database_connector: SharedSetupRuntimeDatabaseConnector,
+) -> std::io::Result<Router> {
     let router = Router::new().route("/health", get(health));
 
-    match mode.into() {
+    match mode {
         AppMode::Normal(context) => {
             let router = install_system_routes(router, ApiInfo::ready());
             let router = install_auth_routes(router, context.state.clone());
             let router = install_project_routes(router, context.state.clone())
                 .route("/api/{*path}", any(api_not_found));
-            let frontend_mode = match context.config.development {
-                Some(development) => FrontendMode::Development {
-                    dev_server: development.dev_server,
-                },
-                None => FrontendMode::Release {
-                    public_dir: std::env::current_dir()?.join("public"),
-                },
-            };
+            let frontend_mode = resolve_frontend_mode(context.config.development.as_ref())?;
 
             Ok(with_request_logger(install_frontend(router, frontend_mode)))
         }
         AppMode::Setup(context) => {
             let stage = context.stage();
+            let frontend_mode = resolve_frontend_mode(context.development())?;
             let router = install_system_routes(router, ApiInfo::setup(stage));
             let router =
-                install_setup_routes(router, context).route("/api/{*path}", any(api_not_found));
-            Ok(with_request_logger(router))
+                install_setup_routes(router, context, runtime_mode, runtime_database_connector)
+                    .route("/api/{*path}", any(api_not_found));
+
+            Ok(install_frontend(router, frontend_mode))
         }
     }
+}
+
+#[derive(Clone)]
+struct RuntimeRouterState {
+    mode: SharedRuntimeMode,
+    runtime_database_connector: SharedSetupRuntimeDatabaseConnector,
+}
+
+async fn dispatch_runtime_request(
+    State(state): State<RuntimeRouterState>,
+    request: Request<Body>,
+) -> Response {
+    let mode = state.mode.read().await.clone();
+    let router = match build_app_router(
+        mode,
+        Some(state.mode.clone()),
+        state.runtime_database_connector.clone(),
+    ) {
+        Ok(router) => router,
+        Err(error) => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                error.to_string(),
+            )
+                .into_response();
+        }
+    };
+
+    match router.oneshot(request).await {
+        Ok(response) => response,
+        Err(never) => match never {},
+    }
+}
+
+pub fn app_router(mode: impl Into<AppMode>) -> std::io::Result<Router> {
+    ensure_rustls_crypto_provider();
+
+    Ok(with_request_logger(build_app_router(
+        mode.into(),
+        None,
+        default_setup_runtime_database_connector(),
+    )?))
+}
+
+pub fn runtime_app_router(mode: impl Into<AppMode>) -> std::io::Result<Router> {
+    runtime_app_router_with_connector(mode.into(), default_setup_runtime_database_connector())
+}
+
+pub(crate) fn runtime_app_router_with_connector(
+    mode: AppMode,
+    runtime_database_connector: SharedSetupRuntimeDatabaseConnector,
+) -> std::io::Result<Router> {
+    ensure_rustls_crypto_provider();
+
+    let state = RuntimeRouterState {
+        mode: Arc::new(tokio::sync::RwLock::new(mode)),
+        runtime_database_connector,
+    };
+
+    Ok(with_request_logger(
+        Router::new()
+            .fallback(dispatch_runtime_request)
+            .with_state(state),
+    ))
 }
 
 #[cfg(test)]
@@ -280,9 +451,10 @@ mod tests {
     use super::*;
     use axum::{
         body::{Body, to_bytes},
-        http::{Request, StatusCode},
+        http::{Request, StatusCode, header},
     };
     use grass_worker_config::{AppConfig, DatabaseConfig};
+    use grass_worker_database::entities::{project, user, user_session};
     use sea_orm::{DatabaseBackend, MockDatabase};
     use std::io::{self, Write};
     use std::path::PathBuf;
@@ -290,6 +462,7 @@ mod tests {
     use tower::ServiceExt;
     use tracing::subscriber::set_default;
     use tracing_subscriber::{fmt, fmt::MakeWriter};
+    use uuid::Uuid;
 
     fn ready_mode() -> AppMode {
         AppMode::Normal(NormalContext::new(
@@ -299,6 +472,17 @@ mod tests {
                 development: None,
             },
             AppState::new(MockDatabase::new(DatabaseBackend::Postgres).into_connection()),
+        ))
+    }
+
+    fn ready_mode_with_database(database: sea_orm::DatabaseConnection) -> AppMode {
+        AppMode::Normal(NormalContext::new(
+            AppConfig {
+                server: grass_worker_config::ServerConfig::default(),
+                database: Some(DatabaseConfig::default()),
+                development: None,
+            },
+            AppState::new(database),
         ))
     }
 
@@ -475,6 +659,254 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ready_mode_create_project_without_cookie_returns_unauthorized() {
+        let response = app_router(ready_mode())
+            .unwrap()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/projects")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"name":"Docs Site","slug":"docs-site"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn ready_mode_create_project_with_cookie_returns_created_project() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-04-19T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let user_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
+        let session_token = "session-token";
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[user_session::Model {
+                id: Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap(),
+                user_id,
+                token_hash: crate::adapters::auth::hash_session_token(session_token),
+                created_at: now,
+                expires_at: now + chrono::Duration::days(7),
+                revoked_at: None,
+            }]])
+            .append_query_results([[user::Model {
+                id: user_id,
+                email: "admin@example.com".to_owned(),
+                is_admin: true,
+                is_initial_admin: true,
+                created_at: now,
+                updated_at: now,
+            }]])
+            .append_query_results([Vec::<project::Model>::new()])
+            .append_exec_results([sea_orm::MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .into_connection();
+        let response = app_router(ready_mode_with_database(database))
+            .unwrap()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/projects")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(
+                        header::COOKIE,
+                        format!(
+                            "{}={session_token}",
+                            crate::domain::auth::SESSION_COOKIE_NAME
+                        ),
+                    )
+                    .body(Body::from(r#"{"name":"Docs Site","slug":"docs-site"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["project"]["slug"], "docs-site");
+        assert_eq!(json["project"]["name"], "Docs Site");
+        assert_eq!(json["project"]["status"], "active");
+    }
+
+    #[tokio::test]
+    async fn ready_mode_create_project_returns_conflict_for_duplicate_slug() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-04-19T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let user_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
+        let session_token = "session-token";
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[user_session::Model {
+                id: Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap(),
+                user_id,
+                token_hash: crate::adapters::auth::hash_session_token(session_token),
+                created_at: now,
+                expires_at: now + chrono::Duration::days(7),
+                revoked_at: None,
+            }]])
+            .append_query_results([[user::Model {
+                id: user_id,
+                email: "admin@example.com".to_owned(),
+                is_admin: true,
+                is_initial_admin: true,
+                created_at: now,
+                updated_at: now,
+            }]])
+            .append_query_results([[project::Model {
+                id: Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap(),
+                owner_user_id: user_id,
+                slug: "docs-site".to_owned(),
+                name: "Docs Site".to_owned(),
+                status: project::ProjectStatus::Active,
+                created_at: now,
+                updated_at: now,
+                archived_at: None,
+                soft_deleted_at: None,
+            }]])
+            .into_connection();
+        let response = app_router(ready_mode_with_database(database))
+            .unwrap()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/projects")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(
+                        header::COOKIE,
+                        format!(
+                            "{}={session_token}",
+                            crate::domain::auth::SESSION_COOKIE_NAME
+                        ),
+                    )
+                    .body(Body::from(r#"{"name":"Docs Site","slug":"docs-site"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn ready_mode_project_details_with_cookie_returns_owned_project() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-04-19T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let user_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
+        let session_token = "session-token";
+        let project_id = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[user_session::Model {
+                id: Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap(),
+                user_id,
+                token_hash: crate::adapters::auth::hash_session_token(session_token),
+                created_at: now,
+                expires_at: now + chrono::Duration::days(7),
+                revoked_at: None,
+            }]])
+            .append_query_results([[user::Model {
+                id: user_id,
+                email: "admin@example.com".to_owned(),
+                is_admin: true,
+                is_initial_admin: true,
+                created_at: now,
+                updated_at: now,
+            }]])
+            .append_query_results([[project::Model {
+                id: project_id,
+                owner_user_id: user_id,
+                slug: "docs-site".to_owned(),
+                name: "Docs Site".to_owned(),
+                status: project::ProjectStatus::Active,
+                created_at: now,
+                updated_at: now,
+                archived_at: None,
+                soft_deleted_at: None,
+            }]])
+            .into_connection();
+        let response = app_router(ready_mode_with_database(database))
+            .unwrap()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/projects/{project_id}"))
+                    .header(
+                        header::COOKIE,
+                        format!(
+                            "{}={session_token}",
+                            crate::domain::auth::SESSION_COOKIE_NAME
+                        ),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["project"]["id"], project_id.to_string());
+        assert_eq!(json["project"]["slug"], "docs-site");
+        assert_eq!(json["project"]["name"], "Docs Site");
+    }
+
+    #[tokio::test]
+    async fn ready_mode_project_details_returns_not_found_for_missing_project() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-04-19T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let user_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
+        let session_token = "session-token";
+        let project_id = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[user_session::Model {
+                id: Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap(),
+                user_id,
+                token_hash: crate::adapters::auth::hash_session_token(session_token),
+                created_at: now,
+                expires_at: now + chrono::Duration::days(7),
+                revoked_at: None,
+            }]])
+            .append_query_results([[user::Model {
+                id: user_id,
+                email: "admin@example.com".to_owned(),
+                is_admin: true,
+                is_initial_admin: true,
+                created_at: now,
+                updated_at: now,
+            }]])
+            .append_query_results([Vec::<project::Model>::new()])
+            .into_connection();
+        let response = app_router(ready_mode_with_database(database))
+            .unwrap()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/projects/{project_id}"))
+                    .header(
+                        header::COOKIE,
+                        format!(
+                            "{}={session_token}",
+                            crate::domain::auth::SESSION_COOKIE_NAME
+                        ),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn setup_mode_exposes_api_info() {
         let response = app_router(AppMode::Setup(SetupContext::database(
             "127.0.0.1:3000".parse().unwrap(),
@@ -550,7 +982,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn setup_mode_root_no_longer_returns_html() {
+    async fn setup_mode_root_serves_frontend_html() {
         let response = app_router(AppMode::Setup(SetupContext::database(
             "127.0.0.1:3000".parse().unwrap(),
             PathBuf::from("config.toml"),
@@ -560,7 +992,12 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let html = std::str::from_utf8(&body).unwrap();
+
+        assert!(html.contains("Grass Worker Console"));
+        assert!(html.contains(r#"<div id="app"></div>"#));
     }
 
     #[tokio::test]

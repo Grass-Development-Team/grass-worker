@@ -1,3 +1,5 @@
+import { ApiError, request } from "./client";
+
 export const currentUserQueryKey = ["current-user"] as const;
 
 export type CurrentUser = {
@@ -7,52 +9,9 @@ export type CurrentUser = {
   is_initial_admin: boolean;
 };
 
-type ErrorEnvelope = {
-  error?: string;
-};
-
 type UserEnvelope = {
   user: CurrentUser;
 };
-
-export class ApiError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
-
-  if (init.body && !headers.has("content-type")) {
-    headers.set("content-type", "application/json");
-  }
-
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    ...init,
-    headers,
-  });
-
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
-  const text = await response.text();
-  const json = text ? (JSON.parse(text) as T | ErrorEnvelope) : null;
-
-  if (!response.ok) {
-    throw new ApiError(
-      response.status,
-      (json as ErrorEnvelope | null)?.error ?? "Request failed",
-    );
-  }
-
-  return json as T;
-}
 
 export async function login(
   email: string,
