@@ -10,11 +10,11 @@ import { Label } from "@/components/ui/label";
 
 function safeRedirect(value: string | null) {
   if (!value) {
-    return "/";
+    return "/projects";
   }
 
   if (!value.startsWith("/") || value.startsWith("//")) {
-    return "/";
+    return "/projects";
   }
 
   return value;
@@ -25,12 +25,17 @@ export function LoginPage() {
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const redirect = safeRedirect(searchParams.get("redirect"));
+  const requestedEmail = searchParams.get("email") ?? "";
   const { data: currentUser, isPending } = useQuery({
     queryKey: currentUserQueryKey,
     queryFn: getCurrentUser,
   });
-  const [email, setEmail] = React.useState("");
+  const [email, setEmail] = React.useState(requestedEmail);
   const [password, setPassword] = React.useState("");
+
+  React.useEffect(() => {
+    setEmail(requestedEmail);
+  }, [requestedEmail]);
 
   const mutation = useMutation({
     mutationFn: () => login(email, password),

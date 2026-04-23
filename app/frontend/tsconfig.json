@@ -4,9 +4,8 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["./src/*"]
     },
     "lib": ["DOM", "DOM.Iterable", "ESNext"],
     "types": ["node", "vite/client", "vitest/globals"],
