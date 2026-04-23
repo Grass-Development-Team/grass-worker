@@ -4,8 +4,9 @@ use crate::entities::{
 use async_trait::async_trait;
 use sea_orm::entity::prelude::DateTimeUtc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait,
-    QueryFilter, Set, sea_query::OnConflict,
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, DbErr,
+    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Select, Set,
+    sea_query::{OnConflict, Query},
 };
 use uuid::Uuid;
 
@@ -16,6 +17,22 @@ pub struct NewProject {
     pub slug: String,
     pub name: String,
     pub created_at: DateTimeUtc,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectListFilter {
+    Active,
+    Archived,
+    SoftDeleted,
+    ActiveAndArchived,
+    All,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateProject {
+    pub name: String,
+    pub slug: String,
+    pub updated_at: DateTimeUtc,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,13 +81,46 @@ pub struct NewUserSession {
 #[async_trait]
 pub trait ProjectRepository {
     async fn create(&self, new_project: NewProject) -> Result<project::Model, DbErr>;
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<project::Model>, DbErr>;
     async fn find_by_slug(&self, slug: &str) -> Result<Option<project::Model>, DbErr>;
-    async fn list_by_owner(&self, owner_user_id: Uuid) -> Result<Vec<project::Model>, DbErr>;
-    async fn archive(
+    async fn list_by_owner(
+        &self,
+        owner_user_id: Uuid,
+        filter: ProjectListFilter,
+    ) -> Result<Vec<project::Model>, DbErr>;
+    async fn list_all(&self, filter: ProjectListFilter) -> Result<Vec<project::Model>, DbErr>;
+    async fn update_details(
         &self,
         id: Uuid,
-        archived_at: DateTimeUtc,
+        update: UpdateProject,
     ) -> Result<Option<project::Model>, DbErr>;
+    async fn set_status(
+        &self,
+        id: Uuid,
+        status: project::ProjectStatus,
+        updated_at: DateTimeUtc,
+        archived_at: Option<DateTimeUtc>,
+        soft_deleted_at: Option<DateTimeUtc>,
+    ) -> Result<Option<project::Model>, DbErr>;
+    async fn set_status_if_current(
+        &self,
+        id: Uuid,
+        current_status: project::ProjectStatus,
+        next_status: project::ProjectStatus,
+        updated_at: DateTimeUtc,
+        archived_at: Option<DateTimeUtc>,
+        soft_deleted_at: Option<DateTimeUtc>,
+    ) -> Result<Option<project::Model>, DbErr>;
+    async fn transfer_owner_if_current(
+        &self,
+        id: Uuid,
+        current_owner_user_id: Uuid,
+        current_status: project::ProjectStatus,
+        owner_user_id: Uuid,
+        updated_at: DateTimeUtc,
+    ) -> Result<Option<project::Model>, DbErr>;
+    async fn hard_delete(&self, id: Uuid) -> Result<bool, DbErr>;
+    async fn has_deployments(&self, id: Uuid) -> Result<bool, DbErr>;
 }
 
 #[async_trait]
@@ -129,6 +179,34 @@ impl SeaOrmProjectRepository {
     pub fn new(database: DatabaseConnection) -> Self {
         Self { database }
     }
+
+    #[cfg(test)]
+    pub fn into_connection(self) -> DatabaseConnection {
+        self.database
+    }
+}
+
+fn apply_project_list_filter(
+    query: Select<project::Entity>,
+    filter: ProjectListFilter,
+) -> Select<project::Entity> {
+    match filter {
+        ProjectListFilter::Active => {
+            query.filter(project::Column::Status.eq(project::ProjectStatus::Active))
+        }
+        ProjectListFilter::Archived => {
+            query.filter(project::Column::Status.eq(project::ProjectStatus::Archived))
+        }
+        ProjectListFilter::SoftDeleted => {
+            query.filter(project::Column::Status.eq(project::ProjectStatus::SoftDeleted))
+        }
+        ProjectListFilter::ActiveAndArchived => query.filter(
+            Condition::any()
+                .add(project::Column::Status.eq(project::ProjectStatus::Active))
+                .add(project::Column::Status.eq(project::ProjectStatus::Archived)),
+        ),
+        ProjectListFilter::All => query,
+    }
 }
 
 #[async_trait]
@@ -143,6 +221,7 @@ impl ProjectRepository for SeaOrmProjectRepository {
             created_at: new_project.created_at,
             updated_at: new_project.created_at,
             archived_at: None,
+            soft_deleted_at: None,
         };
 
         project::Entity::insert(project::ActiveModel {
@@ -154,11 +233,16 @@ impl ProjectRepository for SeaOrmProjectRepository {
             created_at: Set(model.created_at),
             updated_at: Set(model.updated_at),
             archived_at: Set(model.archived_at),
+            soft_deleted_at: Set(model.soft_deleted_at),
         })
         .exec_without_returning(&self.database)
         .await?;
 
         Ok(model)
+    }
+
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<project::Model>, DbErr> {
+        project::Entity::find_by_id(id).one(&self.database).await
     }
 
     async fn find_by_slug(&self, slug: &str) -> Result<Option<project::Model>, DbErr> {
@@ -168,35 +252,150 @@ impl ProjectRepository for SeaOrmProjectRepository {
             .await
     }
 
-    async fn list_by_owner(&self, owner_user_id: Uuid) -> Result<Vec<project::Model>, DbErr> {
-        project::Entity::find()
-            .filter(project::Column::OwnerUserId.eq(owner_user_id))
+    async fn list_by_owner(
+        &self,
+        owner_user_id: Uuid,
+        filter: ProjectListFilter,
+    ) -> Result<Vec<project::Model>, DbErr> {
+        apply_project_list_filter(
+            project::Entity::find().filter(project::Column::OwnerUserId.eq(owner_user_id)),
+            filter,
+        )
+        .order_by_desc(project::Column::UpdatedAt)
+        .all(&self.database)
+        .await
+    }
+
+    async fn list_all(&self, filter: ProjectListFilter) -> Result<Vec<project::Model>, DbErr> {
+        apply_project_list_filter(project::Entity::find(), filter)
+            .order_by_desc(project::Column::UpdatedAt)
             .all(&self.database)
             .await
     }
 
-    async fn archive(
+    async fn update_details(
         &self,
         id: Uuid,
-        archived_at: DateTimeUtc,
+        update: UpdateProject,
+    ) -> Result<Option<project::Model>, DbErr> {
+        let update_result = project::Entity::update_many()
+            .set(project::ActiveModel {
+                name: Set(update.name),
+                slug: Set(update.slug),
+                updated_at: Set(update.updated_at),
+                ..Default::default()
+            })
+            .filter(project::Column::Id.eq(id))
+            .filter(project::Column::Status.ne(project::ProjectStatus::SoftDeleted))
+            .exec(&self.database)
+            .await?;
+        if update_result.rows_affected == 0 {
+            return Ok(None);
+        }
+
+        project::Entity::find_by_id(id).one(&self.database).await
+    }
+
+    async fn set_status(
+        &self,
+        id: Uuid,
+        status: project::ProjectStatus,
+        updated_at: DateTimeUtc,
+        archived_at: Option<DateTimeUtc>,
+        soft_deleted_at: Option<DateTimeUtc>,
     ) -> Result<Option<project::Model>, DbErr> {
         let existing = project::Entity::find_by_id(id).one(&self.database).await?;
         let Some(existing) = existing else {
             return Ok(None);
         };
 
-        let mut active_model: project::ActiveModel = existing.clone().into();
-        active_model.status = Set(project::ProjectStatus::Archived);
-        active_model.updated_at = Set(archived_at);
-        active_model.archived_at = Set(Some(archived_at));
-        active_model.update(&self.database).await?;
+        let mut active_model: project::ActiveModel = existing.into();
+        active_model.status = Set(status);
+        active_model.updated_at = Set(updated_at);
+        active_model.archived_at = Set(archived_at);
+        active_model.soft_deleted_at = Set(soft_deleted_at);
 
-        Ok(Some(project::Model {
-            status: project::ProjectStatus::Archived,
-            updated_at: archived_at,
-            archived_at: Some(archived_at),
-            ..existing
-        }))
+        active_model.update(&self.database).await.map(Some)
+    }
+
+    async fn set_status_if_current(
+        &self,
+        id: Uuid,
+        current_status: project::ProjectStatus,
+        next_status: project::ProjectStatus,
+        updated_at: DateTimeUtc,
+        archived_at: Option<DateTimeUtc>,
+        soft_deleted_at: Option<DateTimeUtc>,
+    ) -> Result<Option<project::Model>, DbErr> {
+        let update_result = project::Entity::update_many()
+            .set(project::ActiveModel {
+                status: Set(next_status),
+                updated_at: Set(updated_at),
+                archived_at: Set(archived_at),
+                soft_deleted_at: Set(soft_deleted_at),
+                ..Default::default()
+            })
+            .filter(project::Column::Id.eq(id))
+            .filter(project::Column::Status.eq(current_status))
+            .exec(&self.database)
+            .await?;
+        if update_result.rows_affected == 0 {
+            return Ok(None);
+        }
+
+        project::Entity::find_by_id(id).one(&self.database).await
+    }
+
+    async fn transfer_owner_if_current(
+        &self,
+        id: Uuid,
+        current_owner_user_id: Uuid,
+        current_status: project::ProjectStatus,
+        owner_user_id: Uuid,
+        updated_at: DateTimeUtc,
+    ) -> Result<Option<project::Model>, DbErr> {
+        let update_result = project::Entity::update_many()
+            .set(project::ActiveModel {
+                owner_user_id: Set(owner_user_id),
+                updated_at: Set(updated_at),
+                ..Default::default()
+            })
+            .filter(project::Column::Id.eq(id))
+            .filter(project::Column::OwnerUserId.eq(current_owner_user_id))
+            .filter(project::Column::Status.eq(current_status))
+            .exec(&self.database)
+            .await?;
+        if update_result.rows_affected == 0 {
+            return Ok(None);
+        }
+
+        project::Entity::find_by_id(id).one(&self.database).await
+    }
+
+    async fn hard_delete(&self, id: Uuid) -> Result<bool, DbErr> {
+        let delete_result = project::Entity::delete_many()
+            .filter(project::Column::Id.eq(id))
+            .filter(project::Column::Status.eq(project::ProjectStatus::SoftDeleted))
+            .filter(
+                project::Column::Id.not_in_subquery(
+                    Query::select()
+                        .column(deployment::Column::ProjectId)
+                        .from(deployment::Entity)
+                        .and_where(deployment::Column::ProjectId.eq(id))
+                        .to_owned(),
+                ),
+            )
+            .exec(&self.database)
+            .await?;
+
+        Ok(delete_result.rows_affected > 0)
+    }
+
+    async fn has_deployments(&self, id: Uuid) -> Result<bool, DbErr> {
+        deployment::Entity::find()
+            .filter(deployment::Column::ProjectId.eq(id))
+            .exists(&self.database)
+            .await
     }
 }
 
