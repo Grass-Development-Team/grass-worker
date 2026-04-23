@@ -173,16 +173,16 @@ export function SetupPage() {
         password: adminForm.password,
       }),
     onSuccess: async () => {
-      await refreshSystemInfo();
-      const systemInfo = await queryClient.fetchQuery<SystemInfo>({
-        queryKey: systemInfoQueryKey,
-        queryFn: getSystemInfo,
-      });
+      const systemInfo = await getSystemInfo();
 
       if (systemInfo.mode === "ready") {
         const email = encodeURIComponent(adminForm.email.trim());
+        queryClient.setQueryData<SystemInfo>(systemInfoQueryKey, systemInfo);
         await navigate(`/login?redirect=%2Fprojects&email=${email}`, { replace: true });
+        return;
       }
+
+      queryClient.setQueryData<SystemInfo>(systemInfoQueryKey, systemInfo);
     },
   });
 
