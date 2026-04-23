@@ -11,7 +11,8 @@ use crate::domain::{
 use axum::routing::any;
 use axum::{Json, Router, http::Request, response::Response, routing::get};
 use features::{
-    auth::install_auth_routes, setup::install_setup_routes, system::install_system_routes,
+    auth::install_auth_routes, projects::install_project_routes, setup::install_setup_routes,
+    system::install_system_routes,
 };
 use frontend::{FrontendMode, install_frontend};
 use grass_worker_config::AppConfig;
@@ -27,6 +28,7 @@ use tracing::Span;
 pub struct AppState {
     pub database: Arc<sea_orm::DatabaseConnection>,
     pub auth: crate::adapters::auth::AuthService,
+    pub projects: crate::domain::project::ProjectService,
 }
 
 impl AppState {
@@ -34,6 +36,7 @@ impl AppState {
         Self {
             database: Arc::new(database),
             auth: crate::adapters::auth::AuthService::default(),
+            projects: crate::domain::project::ProjectService::default(),
         }
     }
 }
@@ -248,7 +251,8 @@ pub fn app_router(mode: impl Into<AppMode>) -> std::io::Result<Router> {
     match mode.into() {
         AppMode::Normal(context) => {
             let router = install_system_routes(router, ApiInfo::ready());
-            let router = install_auth_routes(router, context.state.clone())
+            let router = install_auth_routes(router, context.state.clone());
+            let router = install_project_routes(router, context.state.clone())
                 .route("/api/{*path}", any(api_not_found));
             let frontend_mode = match context.config.development {
                 Some(development) => FrontendMode::Development {
@@ -349,6 +353,16 @@ mod tests {
         assert_eq!(state.auth, crate::adapters::auth::AuthService::default());
     }
 
+    #[test]
+    fn app_state_new_initializes_project_service() {
+        let state = AppState::new(MockDatabase::new(DatabaseBackend::Postgres).into_connection());
+
+        assert_eq!(
+            state.projects,
+            crate::domain::project::ProjectService::default()
+        );
+    }
+
     #[tokio::test]
     async fn health_returns_service_status() {
         let response = app_router(ready_mode())
@@ -442,6 +456,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ready_mode_mounts_project_routes_before_api_fallback() {
+        let response = app_router(ready_mode())
+            .unwrap()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/projects")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "missing session");
+    }
+
+    #[tokio::test]
     async fn setup_mode_exposes_api_info() {
         let response = app_router(AppMode::Setup(SetupContext::database(
             "127.0.0.1:3000".parse().unwrap(),
@@ -524,6 +557,25 @@ mod tests {
         )))
         .unwrap()
         .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn setup_mode_does_not_expose_project_routes() {
+        let response = app_router(AppMode::Setup(SetupContext::database(
+            "127.0.0.1:3000".parse().unwrap(),
+            PathBuf::from("config.toml"),
+        )))
+        .unwrap()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/projects")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
 
