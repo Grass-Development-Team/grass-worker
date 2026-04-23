@@ -88,16 +88,25 @@ struct ProjectsEnvelope {
 pub fn install_project_routes(router: Router, state: AppState) -> Router {
     let project_router = Router::new()
         .route("/api/v1/projects", post(create_project).get(list_projects))
-        .route("/api/v1/projects/{id}", get(get_project).patch(update_project))
+        .route(
+            "/api/v1/projects/{id}",
+            get(get_project).patch(update_project),
+        )
         .route("/api/v1/projects/{id}/archive", post(archive_project))
         .route("/api/v1/projects/{id}/unarchive", post(unarchive_project))
-        .route("/api/v1/projects/{id}/soft-delete", post(soft_delete_project))
+        .route(
+            "/api/v1/projects/{id}/soft-delete",
+            post(soft_delete_project),
+        )
         .route("/api/v1/projects/{id}/restore", post(restore_project))
         .route(
             "/api/v1/projects/{id}/transfer-owner",
             post(transfer_project_owner),
         )
-        .route("/api/v1/projects/{id}/hard-delete", post(hard_delete_project))
+        .route(
+            "/api/v1/projects/{id}/hard-delete",
+            post(hard_delete_project),
+        )
         .layer(Extension(state));
 
     router.merge(project_router)
@@ -256,7 +265,11 @@ async fn archive_project(
         Err(response) => return response,
     };
 
-    match state.projects.archive(state.database.as_ref(), &actor, id).await {
+    match state
+        .projects
+        .archive(state.database.as_ref(), &actor, id)
+        .await
+    {
         Ok(project) => Json(ProjectEnvelope {
             project: project.into(),
         })
@@ -381,7 +394,12 @@ async fn transfer_project_owner(
 
     match state
         .projects
-        .transfer_owner(state.database.as_ref(), &actor, id, payload.owner_email.as_str())
+        .transfer_owner(
+            state.database.as_ref(),
+            &actor,
+            id,
+            payload.owner_email.as_str(),
+        )
         .await
     {
         Ok(project) => Json(ProjectEnvelope {
@@ -406,7 +424,11 @@ async fn hard_delete_project(
         Err(response) => return response,
     };
 
-    match state.projects.hard_delete(state.database.as_ref(), &actor, id).await {
+    match state
+        .projects
+        .hard_delete(state.database.as_ref(), &actor, id)
+        .await
+    {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => project_error_response(error),
     }
@@ -1541,7 +1563,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::CONFLICT);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["error"], "project must be soft deleted before hard delete");
+        assert_eq!(
+            json["error"],
+            "project must be soft deleted before hard delete"
+        );
     }
 
     #[tokio::test]
@@ -1594,7 +1619,9 @@ mod tests {
             .append_query_results([[sample_session(admin.id, token)]])
             .append_query_results([[admin]])
             .append_query_results([[project.clone()]])
-            .append_query_results([Vec::<grass_worker_database::entities::deployment::Model>::new()])
+            .append_query_results([
+                Vec::<grass_worker_database::entities::deployment::Model>::new(),
+            ])
             .append_exec_results([MockExecResult {
                 last_insert_id: 0,
                 rows_affected: 1,

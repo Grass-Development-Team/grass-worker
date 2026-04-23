@@ -324,7 +324,11 @@ mod tests {
                 .iter()
                 .any(|statement| statement.contains("UPDATE \"projects\""))
         );
-        assert!(statements.iter().any(|statement| statement.contains("'active'")));
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("'active'"))
+        );
         assert!(
             statements
                 .iter()
@@ -591,7 +595,11 @@ mod tests {
         assert_eq!(updated, None);
 
         let statements = sql_statements(repository.into_connection());
-        assert!(statements.iter().any(|statement| statement.contains("'active'")));
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("'active'"))
+        );
         assert!(
             statements
                 .iter()
