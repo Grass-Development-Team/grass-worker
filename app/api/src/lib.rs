@@ -43,8 +43,8 @@ impl AppState {
     pub fn new(database: sea_orm::DatabaseConnection) -> Self {
         Self {
             database: Arc::new(database),
-            auth: crate::adapters::auth::AuthService::default(),
-            projects: crate::domain::project::ProjectService::default(),
+            auth: crate::adapters::auth::AuthService,
+            projects: crate::domain::project::ProjectService,
         }
     }
 }
@@ -534,17 +534,14 @@ mod tests {
     fn app_state_new_initializes_auth_service() {
         let state = AppState::new(MockDatabase::new(DatabaseBackend::Postgres).into_connection());
 
-        assert_eq!(state.auth, crate::adapters::auth::AuthService::default());
+        assert_eq!(state.auth, crate::adapters::auth::AuthService);
     }
 
     #[test]
     fn app_state_new_initializes_project_service() {
         let state = AppState::new(MockDatabase::new(DatabaseBackend::Postgres).into_connection());
 
-        assert_eq!(
-            state.projects,
-            crate::domain::project::ProjectService::default()
-        );
+        assert_eq!(state.projects, crate::domain::project::ProjectService);
     }
 
     #[tokio::test]

@@ -194,7 +194,7 @@ async fn get_project(
     };
     let id = match parse_project_id(&id) {
         Ok(id) => id,
-        Err(response) => return response,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
     };
 
     match state
@@ -222,7 +222,7 @@ async fn update_project(
     };
     let id = match parse_project_id(&id) {
         Ok(id) => id,
-        Err(response) => return response,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
     };
     let Json(payload) = match payload {
         Ok(payload) => payload,
@@ -262,7 +262,7 @@ async fn archive_project(
     };
     let id = match parse_project_id(&id) {
         Ok(id) => id,
-        Err(response) => return response,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
     };
 
     match state
@@ -289,7 +289,7 @@ async fn unarchive_project(
     };
     let id = match parse_project_id(&id) {
         Ok(id) => id,
-        Err(response) => return response,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
     };
 
     match state
@@ -316,7 +316,7 @@ async fn soft_delete_project(
     };
     let id = match parse_project_id(&id) {
         Ok(id) => id,
-        Err(response) => return response,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
     };
 
     match state
@@ -344,7 +344,7 @@ async fn restore_project(
     };
     let id = match parse_project_id(&id) {
         Ok(id) => id,
-        Err(response) => return response,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
     };
     let Json(payload) = match payload {
         Ok(payload) => payload,
@@ -379,7 +379,7 @@ async fn transfer_project_owner(
     };
     let id = match parse_project_id(&id) {
         Ok(id) => id,
-        Err(response) => return response,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
     };
     let Json(payload) = match payload {
         Ok(payload) => payload,
@@ -421,7 +421,7 @@ async fn hard_delete_project(
     };
     let id = match parse_project_id(&id) {
         Ok(id) => id,
-        Err(response) => return response,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
     };
 
     match state
@@ -468,9 +468,8 @@ fn auth_error_response(error: crate::domain::auth::AuthError) -> axum::response:
     }
 }
 
-fn parse_project_id(raw: &str) -> Result<Uuid, axum::response::Response> {
-    Uuid::parse_str(raw)
-        .map_err(|_error| error_response(StatusCode::BAD_REQUEST, "invalid project id"))
+fn parse_project_id(raw: &str) -> Result<Uuid, &'static str> {
+    Uuid::parse_str(raw).map_err(|_error| "invalid project id")
 }
 
 fn project_error_response(error: crate::domain::project::ProjectError) -> axum::response::Response {
