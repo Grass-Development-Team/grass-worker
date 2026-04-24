@@ -615,12 +615,11 @@ impl ProjectService {
         };
         let repository = project_repository(database);
 
-        if slug != existing.slug {
-            if let Some(found) = repository.find_by_slug(&slug).await.map_err(map_db_error)? {
-                if found.id != existing.id {
-                    return Err(ProjectError::conflict("slug already exists"));
-                }
-            }
+        if slug != existing.slug
+            && let Some(found) = repository.find_by_slug(&slug).await.map_err(map_db_error)?
+            && found.id != existing.id
+        {
+            return Err(ProjectError::conflict("slug already exists"));
         }
 
         repository
@@ -767,7 +766,7 @@ mod tests {
         let database = MockDatabase::new(DatabaseBackend::Postgres)
             .append_query_results([[existing]])
             .into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         let error = service
             .create(&database, &actor, "Docs Site", "docs-site")
@@ -782,7 +781,7 @@ mod tests {
     async fn list_returns_forbidden_for_non_admin_soft_deleted_status() {
         let actor = sample_actor(false);
         let database = MockDatabase::new(DatabaseBackend::Postgres).into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         let error = service
             .list(&database, &actor, ProjectListStatus::SoftDeleted)
@@ -807,7 +806,7 @@ mod tests {
         let database = MockDatabase::new(DatabaseBackend::Postgres)
             .append_query_results([[soft_deleted]])
             .into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         let error = service
             .get(&database, &actor, project_id)
@@ -833,7 +832,7 @@ mod tests {
             .append_query_results(vec![vec![existing.clone()], vec![], vec![existing.clone()]])
             .append_exec_errors([DbErr::Custom("duplicate key: slug".to_owned())])
             .into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         let error = service
             .update(
@@ -868,7 +867,7 @@ mod tests {
                 rows_affected: 1,
             }])
             .into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         let updated = service
             .update(&database, &actor, project_id, None, None)
@@ -904,7 +903,7 @@ mod tests {
                 rows_affected: 0,
             }])
             .into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         let error = service
             .update(&database, &actor, project_id, Some("Docs Site V2"), None)
@@ -944,7 +943,7 @@ mod tests {
                 rows_affected: 1,
             }])
             .into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         let archived = service
             .archive(&database, &actor, project_id)
@@ -980,7 +979,7 @@ mod tests {
                 rows_affected: 1,
             }])
             .into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         let unarchived = service
             .unarchive(&database, &actor, project_id)
@@ -1016,7 +1015,7 @@ mod tests {
                 rows_affected: 1,
             }])
             .into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         let deleted = service
             .soft_delete(&database, &actor, project_id)
@@ -1040,7 +1039,7 @@ mod tests {
         let database = MockDatabase::new(DatabaseBackend::Postgres)
             .append_query_results([[existing]])
             .into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         let error = service
             .restore(&database, &actor, project_id, RestoreProjectStatus::Active)
@@ -1077,7 +1076,7 @@ mod tests {
                 rows_affected: 1,
             }])
             .into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         let restored = service
             .restore(
@@ -1118,7 +1117,7 @@ mod tests {
                 rows_affected: 1,
             }])
             .into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         let restored = service
             .restore(&database, &actor, project_id, RestoreProjectStatus::Active)
@@ -1142,7 +1141,7 @@ mod tests {
         let database = MockDatabase::new(DatabaseBackend::Postgres)
             .append_query_results([[existing]])
             .into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         let error = service
             .restore(&database, &actor, project_id, RestoreProjectStatus::Active)
@@ -1176,7 +1175,7 @@ mod tests {
                 rows_affected: 0,
             }])
             .into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         let error = service
             .archive(&database, &actor, project_id)
@@ -1202,7 +1201,7 @@ mod tests {
             .append_query_results([[existing]])
             .append_query_results([Vec::<grass_worker_database::entities::user::Model>::new()])
             .into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         let error = service
             .transfer_owner(&database, &actor, project_id, "missing@example.com")
@@ -1247,7 +1246,7 @@ mod tests {
                 rows_affected: 1,
             }])
             .into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         let transferred = service
             .transfer_owner(&database, &actor, project_id, "new-owner@example.com")
@@ -1271,7 +1270,7 @@ mod tests {
         let database = MockDatabase::new(DatabaseBackend::Postgres)
             .append_query_results([[existing]])
             .into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         let error = service
             .transfer_owner(&database, &actor, project_id, "   ")
@@ -1316,7 +1315,7 @@ mod tests {
                 rows_affected: 1,
             }])
             .into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         let transferred = service
             .transfer_owner(&database, &actor, project_id, "new-owner@example.com")
@@ -1340,7 +1339,7 @@ mod tests {
         let database = MockDatabase::new(DatabaseBackend::Postgres)
             .append_query_results([[existing]])
             .into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         let error = service
             .transfer_owner(&database, &actor, project_id, "new-owner@example.com")
@@ -1368,7 +1367,7 @@ mod tests {
         let database = MockDatabase::new(DatabaseBackend::Postgres)
             .append_query_results([[existing]])
             .into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         let error = service
             .hard_delete(&database, &actor, project_id)
@@ -1403,7 +1402,7 @@ mod tests {
                 rows_affected: 1,
             }])
             .into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         service
             .hard_delete(&database, &actor, project_id)
@@ -1435,7 +1434,7 @@ mod tests {
                 finished_at: None,
             }]])
             .into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         let error = service
             .hard_delete(&database, &actor, project_id)
@@ -1478,7 +1477,7 @@ mod tests {
             }])
             .append_query_results([[current]])
             .into_connection();
-        let service = ProjectService::default();
+        let service = ProjectService;
 
         let error = service
             .transfer_owner(&database, &actor, project_id, "new-owner@example.com")
