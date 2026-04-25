@@ -324,42 +324,20 @@ describe("auth routing", () => {
 
     renderRouter("/projects");
 
-    expect(
-      await screen.findByRole("navigation", { name: /console navigation/i }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("admin@example.com")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /projects/i })).toBeInTheDocument();
-  });
-
-  test("admin users see an Admin navigation link", async () => {
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
-      const path = requestPath(input);
-
-      if (path === "/api/v1/info") {
-        return readyInfoResponse();
-      }
-
-      if (path === "/api/v1/me") {
-        return currentUserResponse({ is_admin: true });
-      }
-
-      if (path === "/api/v1/projects") {
-        return projectsResponse([]);
-      }
-
-      throw new Error(`Unexpected request for ${path}`);
+    const navigation = await screen.findByRole("navigation", {
+      name: /console navigation/i,
     });
 
-    vi.stubGlobal("fetch", fetchMock);
-
-    renderRouter("/projects");
-
-    expect(
-      await screen.findByRole("link", { name: /^admin$/i }),
-    ).toBeInTheDocument();
+    expect(navigation).toBeInTheDocument();
+    expect(navigation).toHaveTextContent("Workspace");
+    expect(navigation).toHaveTextContent("Admin");
+    expect(screen.getByText("admin@example.com")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /^projects$/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /user settings/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /project management/i })).toBeInTheDocument();
   });
 
-  test("non-admin users do not see an Admin navigation link", async () => {
+  test("non-admin users see workspace navigation without project management", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const path = requestPath(input);
 
@@ -374,18 +352,62 @@ describe("auth routing", () => {
         });
       }
 
-      if (path === "/api/v1/projects") {
-        return projectsResponse([]);
-      }
-
       throw new Error(`Unexpected request for ${path}`);
     });
 
     vi.stubGlobal("fetch", fetchMock);
 
-    renderRouter("/projects");
+    renderRouter("/settings");
 
-    expect(await screen.findByRole("heading", { name: /projects/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /^settings$/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /^projects$/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /user settings/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /user settings/i })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(
+      screen.getByRole("navigation", { name: /console navigation/i }),
+    ).not.toHaveTextContent("Admin");
+    expect(
+      screen.queryByRole("link", { name: /project management/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  test("admin users see project management as the current admin navigation entry", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+
+      if (url.pathname === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (url.pathname === "/api/v1/me") {
+        return currentUserResponse({ is_admin: true });
+      }
+
+      if (
+        url.pathname === "/api/v1/projects" &&
+        url.searchParams.get("status") === "soft_deleted"
+      ) {
+        return projectsResponse([]);
+      }
+
+      throw new Error(`Unexpected request for ${url.pathname}${url.search}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter("/admin/projects/deleted");
+
+    const projectManagementLink = await screen.findByRole("link", {
+      name: /project management/i,
+    });
+
+    expect(
+      screen.getByRole("navigation", { name: /console navigation/i }),
+    ).toHaveTextContent("Admin");
+    expect(projectManagementLink).toHaveAttribute("aria-current", "page");
     expect(screen.queryByRole("link", { name: /^admin$/i })).not.toBeInTheDocument();
   });
 
@@ -1245,7 +1267,7 @@ describe("auth routing", () => {
       expect(router.state.location.pathname).toBe("/projects");
     });
 
-    await userEvent.click(screen.getByRole("link", { name: /^admin$/i }));
+    await userEvent.click(screen.getByRole("link", { name: /project management/i }));
 
     await waitFor(() => {
       expect(router.state.location.pathname).toBe("/admin/projects/deleted");
