@@ -529,6 +529,7 @@ mod tests {
     use grass_worker_database::entities::{project, user, user_session};
     use sea_orm::{
         DatabaseBackend, DatabaseConnection, MockDatabase, MockDatabaseConnection, MockExecResult,
+        Statement,
     };
     use std::sync::Arc;
     use tower::ServiceExt;
@@ -644,6 +645,16 @@ mod tests {
             }
             None => assert!(payload["soft_deleted_at"].is_null()),
         }
+    }
+
+    fn project_select_statement(connection: Arc<MockDatabaseConnection>) -> Statement {
+        DatabaseConnection::MockDatabaseConnection(connection)
+            .into_transaction_log()
+            .iter()
+            .flat_map(|entry| entry.statements().iter())
+            .find(|statement| statement.sql.contains("FROM \"projects\""))
+            .cloned()
+            .unwrap()
     }
 
     #[tokio::test]
@@ -830,21 +841,17 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let transaction_log =
-            DatabaseConnection::MockDatabaseConnection(connection).into_transaction_log();
-        let statements = transaction_log
-            .iter()
-            .flat_map(|entry| entry.statements().iter())
-            .map(std::string::ToString::to_string)
-            .collect::<Vec<_>>();
-        let project_select = statements
-            .iter()
-            .find(|statement| statement.contains("FROM \"projects\""))
-            .unwrap();
+        let project_select = project_select_statement(connection);
 
-        assert!(project_select.contains("'active'"));
-        assert!(project_select.contains("'archived'"));
-        assert!(!project_select.contains("'soft_deleted'"));
+        assert!(project_select.sql.contains("WHERE"));
+        assert_eq!(
+            project_select.values.as_ref().map(|values| values.0.len()),
+            Some(2)
+        );
+        let rendered = project_select.to_string();
+        assert!(rendered.contains("'active'"));
+        assert!(rendered.contains("'archived'"));
+        assert!(!rendered.contains("'soft_deleted'"));
     }
 
     #[tokio::test]
@@ -910,20 +917,16 @@ mod tests {
         assert_project_payload(&projects[1], &archived);
         assert_project_payload(&projects[2], &soft_deleted);
 
-        let transaction_log =
-            DatabaseConnection::MockDatabaseConnection(connection).into_transaction_log();
-        let statements = transaction_log
-            .iter()
-            .flat_map(|entry| entry.statements().iter())
-            .map(std::string::ToString::to_string)
-            .collect::<Vec<_>>();
-        let project_select = statements
-            .iter()
-            .find(|statement| statement.contains("FROM \"projects\""))
-            .unwrap();
-        assert!(!project_select.contains("'active'"));
-        assert!(!project_select.contains("'archived'"));
-        assert!(!project_select.contains("'soft_deleted'"));
+        let project_select = project_select_statement(connection);
+        assert!(!project_select.sql.contains("WHERE"));
+        assert_eq!(
+            project_select.values.as_ref().map(|values| values.0.len()),
+            Some(0)
+        );
+        let rendered = project_select.to_string();
+        assert!(!rendered.contains("'active'"));
+        assert!(!rendered.contains("'archived'"));
+        assert!(!rendered.contains("'soft_deleted'"));
     }
 
     #[tokio::test]
