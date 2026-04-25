@@ -4,12 +4,13 @@ export const projectsQueryKey = ["projects"] as const;
 export const projectQueryKey = (projectId: string) => ["projects", projectId] as const;
 export const projectsListQueryKey = (
   query: ProjectsQuery = {},
-) => query.status ? [...projectsQueryKey, query.status] as const : projectsQueryKey;
+) => query.status === "soft_deleted"
+  ? [...projectsQueryKey, "soft_deleted"] as const
+  : projectsQueryKey;
 
 export type ProjectStatus = "active" | "archived" | "soft_deleted";
-export type ProjectsQueryStatus = "all" | "soft_deleted";
 export type ProjectsQuery = {
-  status?: ProjectsQueryStatus;
+  status?: "soft_deleted";
 };
 
 export type Project = {
