@@ -902,7 +902,7 @@ describe("auth routing", () => {
     const requests: Array<{ path: string; method: string }> = [];
     const projectId = "11111111-1111-1111-1111-111111111111";
     const now = "2026-04-23T12:00:00Z";
-    const projects = [
+    const activeProjects: TestProject[] = [
       {
         id: projectId,
         slug: "docs-site",
@@ -924,6 +924,7 @@ describe("auth routing", () => {
         soft_deleted_at: null,
       },
     ];
+    const project = activeProjects[0];
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const path = requestPath(input);
       const method =
@@ -939,16 +940,20 @@ describe("auth routing", () => {
       }
 
       if (path === "/api/v1/projects" && method === "GET") {
-        return projectsResponse(projects);
+        return projectsResponse(activeProjects);
       }
 
       if (path === `/api/v1/projects/${projectId}` && method === "GET") {
-        return projectResponse(projects[0]);
+        return projectResponse(project);
       }
 
       if (path === `/api/v1/projects/${projectId}/soft-delete` && method === "POST") {
+        activeProjects.splice(
+          activeProjects.findIndex((item) => item.id === projectId),
+          1,
+        );
         return projectResponse({
-          ...projects[0],
+          ...project,
           status: "soft_deleted",
           soft_deleted_at: now,
         });
