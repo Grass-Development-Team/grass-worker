@@ -7,6 +7,7 @@ import { LoginPage } from "./routes/login-page";
 import { ProjectDetailsPage } from "./routes/project-details-page";
 import { ProtectedRoute } from "./routes/protected-route";
 import { ProjectsPage } from "./routes/projects-page";
+import { SettingsPage } from "./routes/settings-page";
 import { SetupPage } from "./routes/setup-page";
 import { SystemModeGate } from "./routes/system-mode-gate";
 
@@ -60,11 +61,19 @@ export const routes: RouteObject[] = [
                 element: <ProjectDetailsPage />,
               },
               {
+                path: "/settings",
+                element: <SettingsPage />,
+              },
+              {
                 path: "/admin/*",
                 element: <AdminRoute />,
                 children: [
                   {
                     index: true,
+                    element: <Navigate replace to="/admin/projects" />,
+                  },
+                  {
+                    path: "projects",
                     element: <Navigate replace to="/admin/projects/deleted" />,
                   },
                   {
