@@ -4,7 +4,6 @@ import { ApiError } from "@/api/client";
 import {
   archiveProject,
   getProject,
-  hardDeleteProject,
   projectQueryKey,
   projectsQueryKey,
   restoreProject,
@@ -40,6 +39,10 @@ function errorMessage(error: unknown, fallback: string) {
 }
 
 function projectDescription(project: Project) {
+  if (project.status === "soft_deleted") {
+    return "Deleted project";
+  }
+
   return `${projectStatusLabel(project.status)} project`;
 }
 
@@ -95,21 +98,16 @@ export function ProjectDetailsPage() {
     },
   });
   const dangerMutation = useMutation({
-    mutationFn: (action: "soft-delete" | "hard-delete") => {
+    mutationFn: () => {
       if (!projectId) throw new Error("Project id is required");
-      if (action === "soft-delete") return softDeleteProject(projectId);
-      return hardDeleteProject(projectId);
+      return softDeleteProject(projectId);
     },
-    onSuccess: async (result, action) => {
-      if (action === "hard-delete") {
-        await queryClient.invalidateQueries({ queryKey: projectsQueryKey });
-        queryClient.removeQueries({ queryKey: projectQueryKey(projectId ?? "") });
-        await navigate("/projects", { replace: true });
-        return;
-      }
-
-      setProjectData(result as Project);
-      await queryClient.invalidateQueries({ queryKey: projectsQueryKey });
+    onSuccess: async () => {
+      queryClient.setQueryData<Project[]>(projectsQueryKey, (current) =>
+        current?.filter((item) => item.id !== projectId),
+      );
+      queryClient.removeQueries({ queryKey: projectQueryKey(projectId ?? "") });
+      await navigate("/projects", { replace: true });
     },
   });
 
@@ -165,7 +163,6 @@ export function ProjectDetailsPage() {
   }
 
   const project = query.data;
-  const canHardDelete = currentUser.is_admin && project.status === "soft_deleted";
 
   return (
     <div className="space-y-6">
@@ -236,15 +233,13 @@ export function ProjectDetailsPage() {
       />
 
       <DangerZoneCard
-        canHardDelete={canHardDelete}
         error={
           dangerMutation.isError
             ? errorMessage(dangerMutation.error, "Danger zone action failed")
             : null
         }
         isPending={dangerMutation.isPending}
-        onHardDelete={() => dangerMutation.mutate("hard-delete")}
-        onSoftDelete={() => dangerMutation.mutate("soft-delete")}
+        onDelete={() => dangerMutation.mutate()}
         project={project}
       />
 

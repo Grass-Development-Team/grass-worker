@@ -21,20 +21,16 @@ import {
 } from "@/components/ui/card";
 
 type DangerZoneCardProps = {
-  canHardDelete: boolean;
   error: string | null;
   isPending: boolean;
-  onHardDelete: () => void;
-  onSoftDelete: () => void;
+  onDelete: () => void;
   project: Project;
 };
 
 export function DangerZoneCard({
-  canHardDelete,
   error,
   isPending,
-  onHardDelete,
-  onSoftDelete,
+  onDelete,
   project,
 }: DangerZoneCardProps) {
   return (
@@ -43,10 +39,7 @@ export function DangerZoneCard({
         <CardTitle>
           <h2>Danger Zone</h2>
         </CardTitle>
-        <CardDescription>
-          Soft delete hides the project from normal users. Administrator hard delete permanently
-          removes a soft-deleted project.
-        </CardDescription>
+        <CardDescription>Delete removes this project from the workspace.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {error ? (
@@ -61,51 +54,23 @@ export function DangerZoneCard({
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button disabled={isPending} type="button" variant="destructive">
-                  Soft delete project
+                  Delete project
                 </Button>
               </AlertDialogTrigger>
               <AlertDialogContent>
                 <AlertDialogHeader>
-                  <AlertDialogTitle>Soft delete project?</AlertDialogTitle>
+                  <AlertDialogTitle>Delete project?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    Normal users will no longer see this project. Administrators can still restore
-                    or permanently delete it.
+                    This removes the project from the workspace and hides it from normal use.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogCancel>Cancel</AlertDialogCancel>
                   <AlertDialogAction
                     className="bg-destructive/10 text-destructive hover:bg-destructive/20"
-                    onClick={onSoftDelete}
+                    onClick={onDelete}
                   >
-                    Soft delete
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          ) : null}
-
-          {canHardDelete ? (
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button disabled={isPending} type="button" variant="destructive">
-                  Hard delete
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Hard delete project?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    This permanently removes the soft-deleted project and cannot be undone.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction
-                    className="bg-destructive/10 text-destructive hover:bg-destructive/20"
-                    onClick={onHardDelete}
-                  >
-                    Hard delete
+                    Delete project
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>

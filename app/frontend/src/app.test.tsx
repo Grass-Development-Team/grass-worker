@@ -363,7 +363,7 @@ describe("auth routing", () => {
     expect(await screen.findByText(/docs site/i)).toBeInTheDocument();
     expect(screen.getByText(/legacy console/i)).toBeInTheDocument();
     expect(screen.getByText(/docs-site/i)).toBeInTheDocument();
-    expect(screen.getByText(/archived project/i)).toBeInTheDocument();
+    expect(screen.getByText("Archived project")).toBeInTheDocument();
   });
 
   test("projects page shows mixed project statuses in one console list", async () => {
@@ -414,6 +414,12 @@ describe("auth routing", () => {
     expect(screen.getByText("Old Site")).toBeInTheDocument();
     expect(screen.getByText("Active")).toBeInTheDocument();
     expect(screen.getByText("Soft deleted")).toBeInTheDocument();
+    expect(
+      screen.getByText("Track active and archived projects for this workspace."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/administrator-visible soft-deleted projects/i),
+    ).not.toBeInTheDocument();
   });
 
   test("projects page creates a project and refreshes the inventory", async () => {
@@ -536,7 +542,7 @@ describe("auth routing", () => {
 
     const { router } = renderRouter("/projects");
 
-    await userEvent.click(await screen.findByRole("button", { name: /view details/i }));
+    await userEvent.click((await screen.findAllByRole("button", { name: /view details/i }))[0]);
 
     await waitFor(() => {
       expect(router.state.location.pathname).toBe(`/projects/${project.id}`);
@@ -546,7 +552,7 @@ describe("auth routing", () => {
     expect(screen.getByText(/deployment history/i)).toBeInTheDocument();
   });
 
-  test("admin project details show management sections and hard delete", async () => {
+  test("workspace project details use delete wording and hide hard delete", async () => {
     const projectId = "11111111-1111-1111-1111-111111111111";
     const now = "2026-04-23T12:00:00Z";
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
@@ -565,11 +571,11 @@ describe("auth routing", () => {
           id: projectId,
           slug: "docs-site",
           name: "Docs Site",
-          status: "soft_deleted",
+          status: "active",
           created_at: now,
           updated_at: now,
           archived_at: null,
-          soft_deleted_at: now,
+          soft_deleted_at: null,
         });
       }
 
@@ -586,7 +592,93 @@ describe("auth routing", () => {
     expect(screen.getByRole("heading", { name: /lifecycle/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /transfer owner/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /danger zone/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /hard delete/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /delete project/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /hard delete/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/soft delete project/i)).not.toBeInTheDocument();
+  });
+
+  test("deleting a project soft-deletes it and returns to the projects list without it", async () => {
+    const requests: Array<{ path: string; method: string }> = [];
+    const projectId = "11111111-1111-1111-1111-111111111111";
+    const now = "2026-04-23T12:00:00Z";
+    const projects = [
+      {
+        id: projectId,
+        slug: "docs-site",
+        name: "Docs Site",
+        status: "active" as const,
+        created_at: now,
+        updated_at: now,
+        archived_at: null,
+        soft_deleted_at: null,
+      },
+      {
+        id: "22222222-2222-2222-2222-222222222222",
+        slug: "marketing-site",
+        name: "Marketing Site",
+        status: "active" as const,
+        created_at: now,
+        updated_at: now,
+        archived_at: null,
+        soft_deleted_at: null,
+      },
+    ];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = requestPath(input);
+      const method =
+        input instanceof Request ? input.method : (init?.method ?? "GET");
+      requests.push({ path, method });
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse();
+      }
+
+      if (path === "/api/v1/projects" && method === "GET") {
+        return projectsResponse(projects);
+      }
+
+      if (path === `/api/v1/projects/${projectId}` && method === "GET") {
+        return projectResponse(projects[0]);
+      }
+
+      if (path === `/api/v1/projects/${projectId}/soft-delete` && method === "POST") {
+        return projectResponse({
+          ...projects[0],
+          status: "soft_deleted",
+          soft_deleted_at: now,
+        });
+      }
+
+      throw new Error(`Unexpected request for ${method} ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { router } = renderRouter("/projects");
+
+    await userEvent.click((await screen.findAllByRole("button", { name: /view details/i }))[0]);
+
+    expect(await screen.findByRole("button", { name: /delete project/i })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /delete project/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^delete project$/i }));
+
+    await waitFor(() => {
+      expect(requests).toContainEqual({
+        path: `/api/v1/projects/${projectId}/soft-delete`,
+        method: "POST",
+      });
+    });
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/projects");
+    });
+
+    expect(await screen.findByText("Marketing Site")).toBeInTheDocument();
+    expect(screen.queryByText("Docs Site")).not.toBeInTheDocument();
   });
 
   test("project detail actions call backend action endpoints", async () => {

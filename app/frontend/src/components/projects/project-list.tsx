@@ -54,9 +54,7 @@ export function ProjectList({ isLoading, onViewProject, projects }: ProjectListP
         <CardTitle>
           <h2>Project inventory</h2>
         </CardTitle>
-        <CardDescription>
-          One console list for active, archived, and administrator-visible soft-deleted projects.
-        </CardDescription>
+        <CardDescription>Track active and archived projects for this workspace.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {isLoading ? (
