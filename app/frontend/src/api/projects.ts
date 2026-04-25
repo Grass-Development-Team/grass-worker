@@ -2,8 +2,15 @@ import { request } from "./client";
 
 export const projectsQueryKey = ["projects"] as const;
 export const projectQueryKey = (projectId: string) => ["projects", projectId] as const;
+export const projectsListQueryKey = (
+  query: ProjectsQuery = {},
+) => query.status ? [...projectsQueryKey, query.status] as const : projectsQueryKey;
 
 export type ProjectStatus = "active" | "archived" | "soft_deleted";
+export type ProjectsQueryStatus = "all" | "soft_deleted";
+export type ProjectsQuery = {
+  status?: ProjectsQueryStatus;
+};
 
 export type Project = {
   id: string;
@@ -25,8 +32,18 @@ type ProjectRecordEnvelope = {
   project: Project;
 };
 
-export async function getProjects(): Promise<Project[]> {
-  const response = await request<ProjectsEnvelope>("/api/v1/projects");
+export async function getProjects(query: ProjectsQuery = {}): Promise<Project[]> {
+  const searchParams = new URLSearchParams();
+
+  if (query.status) {
+    searchParams.set("status", query.status);
+  }
+
+  const response = await request<ProjectsEnvelope>(
+    searchParams.size > 0
+      ? `/api/v1/projects?${searchParams.toString()}`
+      : "/api/v1/projects",
+  );
   return response.projects;
 }
 

@@ -1,4 +1,4 @@
-import { FolderKanban, LogOut, Menu } from "lucide-react";
+import { FolderKanban, LogOut, Menu, Shield } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { currentUserQueryKey, logout, type CurrentUser } from "@/api/auth";
@@ -18,13 +18,28 @@ type ConsoleSidebarProps = {
   currentUser: CurrentUser;
 };
 
-const navigationItems = [
+const baseNavigationItems = [
   {
     href: "/projects",
     label: "Projects",
     icon: FolderKanban,
   },
 ];
+
+function navigationItems(currentUser: CurrentUser) {
+  if (!currentUser.is_admin) {
+    return baseNavigationItems;
+  }
+
+  return [
+    ...baseNavigationItems,
+    {
+      href: "/admin",
+      label: "Admin",
+      icon: Shield,
+    },
+  ];
+}
 
 function ConsoleNavigation({ currentUser }: ConsoleSidebarProps) {
   const location = useLocation();
@@ -53,7 +68,7 @@ function ConsoleNavigation({ currentUser }: ConsoleSidebarProps) {
       </div>
 
       <nav aria-label="Console navigation" className="space-y-1">
-        {navigationItems.map((item) => {
+        {navigationItems(currentUser).map((item) => {
           const Icon = item.icon;
           const active = location.pathname === item.href ||
             location.pathname.startsWith(`${item.href}/`);

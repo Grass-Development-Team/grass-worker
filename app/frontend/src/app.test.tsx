@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import { getProjects } from "@/api/projects";
 import { routes } from "./router";
 
 function jsonResponse(body: unknown, init: ResponseInit): Response {
@@ -95,6 +96,18 @@ function requestPath(input: string | URL | Request): string {
   }
 
   return new URL(input.url, "http://localhost").pathname;
+}
+
+function requestUrl(input: string | URL | Request): URL {
+  if (typeof input === "string") {
+    return new URL(input, "http://localhost");
+  }
+
+  if (input instanceof URL) {
+    return input;
+  }
+
+  return new URL(input.url, "http://localhost");
 }
 
 function createTestQueryClient() {
@@ -316,6 +329,91 @@ describe("auth routing", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("admin@example.com")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /projects/i })).toBeInTheDocument();
+  });
+
+  test("admin users see an Admin navigation link", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const path = requestPath(input);
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse({ is_admin: true });
+      }
+
+      if (path === "/api/v1/projects") {
+        return projectsResponse([]);
+      }
+
+      throw new Error(`Unexpected request for ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter("/projects");
+
+    expect(
+      await screen.findByRole("link", { name: /^admin$/i }),
+    ).toBeInTheDocument();
+  });
+
+  test("non-admin users are redirected away from admin deleted routes", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const path = requestPath(input);
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse({
+          is_admin: false,
+          is_initial_admin: false,
+        });
+      }
+
+      if (path === "/api/v1/projects") {
+        return projectsResponse([]);
+      }
+
+      throw new Error(`Unexpected request for ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { router } = renderRouter("/admin/projects/deleted");
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/projects");
+    });
+
+    expect(await screen.findByRole("heading", { name: /projects/i })).toBeInTheDocument();
+  });
+
+  test("admin route redirects index to deleted projects", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const path = requestPath(input);
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse({ is_admin: true });
+      }
+
+      throw new Error(`Unexpected request for ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { router } = renderRouter("/admin");
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/admin/projects/deleted");
+    });
   });
 
   test("projects page renders the authenticated user's project list", async () => {
@@ -726,6 +824,27 @@ describe("auth routing", () => {
         body: undefined,
       });
     });
+  });
+});
+
+describe("projects api", () => {
+  test("getProjects requests soft-deleted projects when asked", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+
+      if (
+        url.pathname === "/api/v1/projects" &&
+        url.searchParams.get("status") === "soft_deleted"
+      ) {
+        return projectsResponse([]);
+      }
+
+      throw new Error(`Unexpected request for ${url.pathname}${url.search}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getProjects({ status: "soft_deleted" })).resolves.toEqual([]);
   });
 });
 
