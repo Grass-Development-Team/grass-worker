@@ -507,7 +507,8 @@ describe("auth routing", () => {
       expect(router.state.location.pathname).toBe("/admin/projects/deleted");
     });
 
-    expect(await screen.findByRole("heading", { name: /deleted projects/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /project management/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /recovery queue/i })).toBeInTheDocument();
   });
 
   test("non-admin users are redirected away from unknown admin routes", async () => {
@@ -584,7 +585,8 @@ describe("auth routing", () => {
       expect(router.state.location.pathname).toBe("/admin/projects/deleted");
     });
 
-    expect(await screen.findByRole("heading", { name: /deleted projects/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /project management/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /recovery queue/i })).toBeInTheDocument();
     expect(await screen.findByText("Docs Site")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /restore active/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /restore archived/i })).toBeInTheDocument();
@@ -1191,7 +1193,7 @@ describe("auth routing", () => {
     expect(screen.queryByText("Docs Site")).not.toBeInTheDocument();
   });
 
-  test("soft-deleting from project details refreshes the admin deleted-project list", async () => {
+  test("soft-deleting from project details refreshes the admin project-management queue", async () => {
     const projectId = "11111111-1111-1111-1111-111111111111";
     const now = "2026-04-23T12:00:00Z";
     const project = {
@@ -1272,7 +1274,8 @@ describe("auth routing", () => {
     await waitFor(() => {
       expect(router.state.location.pathname).toBe("/admin/projects/deleted");
     });
-    expect(await screen.findByRole("heading", { name: /deleted projects/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /project management/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /recovery queue/i })).toBeInTheDocument();
     expect(screen.getByText("Docs Site")).toBeInTheDocument();
   });
 
