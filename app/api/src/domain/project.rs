@@ -75,6 +75,7 @@ impl ProjectError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectListStatus {
+    Workspace,
     Active,
     Archived,
     SoftDeleted,
@@ -161,6 +162,7 @@ fn map_list_filter(
     status: ProjectListStatus,
 ) -> Result<ProjectListFilter, ProjectError> {
     match status {
+        ProjectListStatus::Workspace => Ok(ProjectListFilter::ActiveAndArchived),
         ProjectListStatus::Active => Ok(ProjectListFilter::Active),
         ProjectListStatus::Archived => Ok(ProjectListFilter::Archived),
         ProjectListStatus::SoftDeleted if actor.is_admin => Ok(ProjectListFilter::SoftDeleted),

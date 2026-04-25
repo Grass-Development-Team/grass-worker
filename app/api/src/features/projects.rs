@@ -168,7 +168,7 @@ async fn list_projects(
     };
     let status = query
         .status
-        .unwrap_or(crate::domain::project::ProjectListStatus::All);
+        .unwrap_or(crate::domain::project::ProjectListStatus::Workspace);
 
     match state
         .projects
@@ -773,6 +773,68 @@ mod tests {
             .iter()
             .find(|statement| statement.contains("FROM \"projects\""))
             .unwrap();
+        assert!(project_select.contains("'active'"));
+        assert!(project_select.contains("'archived'"));
+        assert!(!project_select.contains("'soft_deleted'"));
+    }
+
+    #[tokio::test]
+    async fn list_projects_default_query_hides_soft_deleted_projects_for_admin() {
+        let admin = sample_user(Uuid::new_v4(), true);
+        let token = "session-token";
+        let active = sample_project(
+            Uuid::new_v4(),
+            admin.id,
+            project::ProjectStatus::Active,
+            "docs-site",
+            "Docs Site",
+        );
+        let archived = sample_project(
+            Uuid::new_v4(),
+            admin.id,
+            project::ProjectStatus::Archived,
+            "docs-legacy",
+            "Docs Legacy",
+        );
+        let connection = Arc::new(MockDatabaseConnection::new(
+            MockDatabase::new(DatabaseBackend::Postgres)
+                .append_query_results([[sample_session(admin.id, token)]])
+                .append_query_results([[admin.clone()]])
+                .append_query_results([vec![active.clone(), archived.clone()]]),
+        ));
+        let app = install_project_routes(
+            Router::new(),
+            AppState::new(DatabaseConnection::MockDatabaseConnection(
+                connection.clone(),
+            )),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/projects")
+                    .header(header::COOKIE, session_cookie(token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let transaction_log =
+            DatabaseConnection::MockDatabaseConnection(connection).into_transaction_log();
+        let statements = transaction_log
+            .iter()
+            .flat_map(|entry| entry.statements().iter())
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>();
+        let project_select = statements
+            .iter()
+            .find(|statement| statement.contains("FROM \"projects\""))
+            .unwrap();
+
         assert!(project_select.contains("'active'"));
         assert!(project_select.contains("'archived'"));
         assert!(!project_select.contains("'soft_deleted'"));
