@@ -166,15 +166,22 @@ async fn list_projects(
             return error_response(StatusCode::BAD_REQUEST, error.to_string());
         }
     };
-    let status = query
-        .status
-        .unwrap_or(crate::domain::project::ProjectListStatus::Workspace);
+    let projects = match query.status {
+        Some(status) => {
+            state
+                .projects
+                .list(state.database.as_ref(), &actor, status)
+                .await
+        }
+        None => {
+            state
+                .projects
+                .list_default(state.database.as_ref(), &actor)
+                .await
+        }
+    };
 
-    match state
-        .projects
-        .list(state.database.as_ref(), &actor, status)
-        .await
-    {
+    match projects {
         Ok(projects) => Json(ProjectsEnvelope {
             projects: projects.into_iter().map(ProjectResponse::from).collect(),
         })
@@ -838,6 +845,113 @@ mod tests {
         assert!(project_select.contains("'active'"));
         assert!(project_select.contains("'archived'"));
         assert!(!project_select.contains("'soft_deleted'"));
+    }
+
+    #[tokio::test]
+    async fn list_projects_all_query_includes_soft_deleted_projects_for_admin() {
+        let admin = sample_user(Uuid::new_v4(), true);
+        let token = "session-token";
+        let active = sample_project(
+            Uuid::new_v4(),
+            admin.id,
+            project::ProjectStatus::Active,
+            "docs-site",
+            "Docs Site",
+        );
+        let archived = sample_project(
+            Uuid::new_v4(),
+            admin.id,
+            project::ProjectStatus::Archived,
+            "docs-legacy",
+            "Docs Legacy",
+        );
+        let soft_deleted = sample_project(
+            Uuid::new_v4(),
+            admin.id,
+            project::ProjectStatus::SoftDeleted,
+            "docs-retired",
+            "Docs Retired",
+        );
+        let connection = Arc::new(MockDatabaseConnection::new(
+            MockDatabase::new(DatabaseBackend::Postgres)
+                .append_query_results([[sample_session(admin.id, token)]])
+                .append_query_results([[admin.clone()]])
+                .append_query_results([vec![
+                    active.clone(),
+                    archived.clone(),
+                    soft_deleted.clone(),
+                ]]),
+        ));
+        let app = install_project_routes(
+            Router::new(),
+            AppState::new(DatabaseConnection::MockDatabaseConnection(
+                connection.clone(),
+            )),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/projects?status=all")
+                    .header(header::COOKIE, session_cookie(token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let projects = json["projects"].as_array().unwrap();
+        assert_eq!(projects.len(), 3);
+        assert_project_payload(&projects[0], &active);
+        assert_project_payload(&projects[1], &archived);
+        assert_project_payload(&projects[2], &soft_deleted);
+
+        let transaction_log =
+            DatabaseConnection::MockDatabaseConnection(connection).into_transaction_log();
+        let statements = transaction_log
+            .iter()
+            .flat_map(|entry| entry.statements().iter())
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>();
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("FROM \"projects\""))
+        );
+    }
+
+    #[tokio::test]
+    async fn list_projects_rejects_workspace_status_query() {
+        let admin = sample_user(Uuid::new_v4(), true);
+        let token = "session-token";
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[sample_session(admin.id, token)]])
+            .append_query_results([[admin]])
+            .append_query_results([Vec::<project::Model>::new()])
+            .into_connection();
+        let app = install_project_routes(Router::new(), AppState::new(database));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/projects?status=workspace")
+                    .header(header::COOKIE, session_cookie(token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let error = json["error"].as_str().unwrap();
+        assert!(error.contains("workspace"));
     }
 
     #[tokio::test]
