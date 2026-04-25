@@ -917,11 +917,13 @@ mod tests {
             .flat_map(|entry| entry.statements().iter())
             .map(std::string::ToString::to_string)
             .collect::<Vec<_>>();
-        assert!(
-            statements
-                .iter()
-                .any(|statement| statement.contains("FROM \"projects\""))
-        );
+        let project_select = statements
+            .iter()
+            .find(|statement| statement.contains("FROM \"projects\""))
+            .unwrap();
+        assert!(!project_select.contains("'active'"));
+        assert!(!project_select.contains("'archived'"));
+        assert!(!project_select.contains("'soft_deleted'"));
     }
 
     #[tokio::test]
