@@ -359,6 +359,36 @@ describe("auth routing", () => {
     ).toBeInTheDocument();
   });
 
+  test("non-admin users do not see an Admin navigation link", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const path = requestPath(input);
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse({
+          is_admin: false,
+          is_initial_admin: false,
+        });
+      }
+
+      if (path === "/api/v1/projects") {
+        return projectsResponse([]);
+      }
+
+      throw new Error(`Unexpected request for ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter("/projects");
+
+    expect(await screen.findByRole("heading", { name: /projects/i })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /^admin$/i })).not.toBeInTheDocument();
+  });
+
   test("non-admin users are redirected away from admin deleted routes", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const path = requestPath(input);
@@ -392,19 +422,37 @@ describe("auth routing", () => {
     expect(await screen.findByRole("heading", { name: /projects/i })).toBeInTheDocument();
   });
 
-  test("admin route redirects index to deleted projects", async () => {
+  test("admin deleted projects page fetches only soft-deleted projects", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
-      const path = requestPath(input);
+      const url = requestUrl(input);
 
-      if (path === "/api/v1/info") {
+      if (url.pathname === "/api/v1/info") {
         return readyInfoResponse();
       }
 
-      if (path === "/api/v1/me") {
+      if (url.pathname === "/api/v1/me") {
         return currentUserResponse({ is_admin: true });
       }
 
-      throw new Error(`Unexpected request for ${path}`);
+      if (
+        url.pathname === "/api/v1/projects" &&
+        url.searchParams.get("status") === "soft_deleted"
+      ) {
+        return projectsResponse([
+          {
+            id: "11111111-1111-1111-1111-111111111111",
+            slug: "docs-site",
+            name: "Docs Site",
+            status: "soft_deleted",
+            created_at: "2026-04-20T10:00:00Z",
+            updated_at: "2026-04-23T12:00:00Z",
+            archived_at: null,
+            soft_deleted_at: "2026-04-23T12:00:00Z",
+          },
+        ]);
+      }
+
+      throw new Error(`Unexpected request for ${url.pathname}${url.search}`);
     });
 
     vi.stubGlobal("fetch", fetchMock);
@@ -414,6 +462,21 @@ describe("auth routing", () => {
     await waitFor(() => {
       expect(router.state.location.pathname).toBe("/admin/projects/deleted");
     });
+
+    expect(await screen.findByRole("heading", { name: /deleted projects/i })).toBeInTheDocument();
+    expect(await screen.findByText("Docs Site")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /restore active/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /restore archived/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /hard delete/i })).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(([calledInput]) => {
+        const url = requestUrl(calledInput);
+        return (
+          url.pathname === "/api/v1/projects" &&
+          url.searchParams.get("status") === "soft_deleted"
+        );
+      }),
+    ).toBe(true);
   });
 
   test("projects page renders the authenticated user's project list", async () => {
@@ -764,6 +827,228 @@ describe("auth routing", () => {
 
     expect(await screen.findByText("Marketing Site")).toBeInTheDocument();
     expect(screen.queryByText("Docs Site")).not.toBeInTheDocument();
+  });
+
+  test("admin deleted projects page restores from the admin area", async () => {
+    const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+    const projectId = "11111111-1111-1111-1111-111111111111";
+    const deletedProjects = [
+      {
+        id: projectId,
+        slug: "docs-site",
+        name: "Docs Site",
+        status: "soft_deleted" as const,
+        created_at: "2026-04-20T10:00:00Z",
+        updated_at: "2026-04-23T12:00:00Z",
+        archived_at: null,
+        soft_deleted_at: "2026-04-23T12:00:00Z",
+      },
+    ];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = requestUrl(input);
+      const method =
+        input instanceof Request ? input.method : (init?.method ?? "GET");
+      const body = init?.body ? JSON.parse(init.body.toString()) : undefined;
+      requests.push({ path: `${url.pathname}${url.search}`, method, body });
+
+      if (url.pathname === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (url.pathname === "/api/v1/me") {
+        return currentUserResponse({ is_admin: true });
+      }
+
+      if (
+        url.pathname === "/api/v1/projects" &&
+        url.searchParams.get("status") === "soft_deleted" &&
+        method === "GET"
+      ) {
+        return projectsResponse(deletedProjects);
+      }
+
+      if (url.pathname === `/api/v1/projects/${projectId}/restore` && method === "POST") {
+        deletedProjects.splice(0, 1);
+
+        return projectResponse({
+          id: projectId,
+          slug: "docs-site",
+          name: "Docs Site",
+          status: "active",
+          created_at: "2026-04-20T10:00:00Z",
+          updated_at: "2026-04-23T12:10:00Z",
+          archived_at: null,
+          soft_deleted_at: null,
+        });
+      }
+
+      throw new Error(`Unexpected request for ${method} ${url.pathname}${url.search}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter("/admin/projects/deleted");
+
+    await userEvent.click(await screen.findByRole("button", { name: /restore active/i }));
+
+    await waitFor(() => {
+      expect(requests).toContainEqual({
+        path: `/api/v1/projects/${projectId}/restore`,
+        method: "POST",
+        body: { status: "active" },
+      });
+    });
+
+    expect(await screen.findByText(/no deleted projects/i)).toBeInTheDocument();
+    expect(screen.queryByText("Docs Site")).not.toBeInTheDocument();
+  });
+
+  test("admin deleted projects page hard-deletes from the admin area", async () => {
+    const requests: Array<{ path: string; method: string }> = [];
+    const projectId = "11111111-1111-1111-1111-111111111111";
+    const deletedProjects = [
+      {
+        id: projectId,
+        slug: "docs-site",
+        name: "Docs Site",
+        status: "soft_deleted" as const,
+        created_at: "2026-04-20T10:00:00Z",
+        updated_at: "2026-04-23T12:00:00Z",
+        archived_at: null,
+        soft_deleted_at: "2026-04-23T12:00:00Z",
+      },
+    ];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = requestUrl(input);
+      const method =
+        input instanceof Request ? input.method : (init?.method ?? "GET");
+      requests.push({ path: `${url.pathname}${url.search}`, method });
+
+      if (url.pathname === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (url.pathname === "/api/v1/me") {
+        return currentUserResponse({ is_admin: true });
+      }
+
+      if (
+        url.pathname === "/api/v1/projects" &&
+        url.searchParams.get("status") === "soft_deleted" &&
+        method === "GET"
+      ) {
+        return projectsResponse(deletedProjects);
+      }
+
+      if (url.pathname === `/api/v1/projects/${projectId}/hard-delete` && method === "POST") {
+        deletedProjects.splice(0, 1);
+        return new Response(null, { status: 204 });
+      }
+
+      throw new Error(`Unexpected request for ${method} ${url.pathname}${url.search}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter("/admin/projects/deleted");
+
+    await userEvent.click(await screen.findByRole("button", { name: /hard delete/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^hard delete$/i }));
+
+    await waitFor(() => {
+      expect(requests).toContainEqual({
+        path: `/api/v1/projects/${projectId}/hard-delete`,
+        method: "POST",
+      });
+    });
+
+    expect(await screen.findByText(/no deleted projects/i)).toBeInTheDocument();
+    expect(screen.queryByText("Docs Site")).not.toBeInTheDocument();
+  });
+
+  test("soft-deleting from project details refreshes the admin deleted-project list", async () => {
+    const projectId = "11111111-1111-1111-1111-111111111111";
+    const now = "2026-04-23T12:00:00Z";
+    const project = {
+      id: projectId,
+      slug: "docs-site",
+      name: "Docs Site",
+      status: "active" as const,
+      created_at: now,
+      updated_at: now,
+      archived_at: null,
+      soft_deleted_at: null,
+    };
+    const activeProjects = [
+      project,
+    ];
+    const deletedProjects: TestProject[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = requestUrl(input);
+      const method =
+        input instanceof Request ? input.method : (init?.method ?? "GET");
+
+      if (url.pathname === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (url.pathname === "/api/v1/me") {
+        return currentUserResponse({ is_admin: true });
+      }
+
+      if (
+        url.pathname === "/api/v1/projects" &&
+        url.searchParams.get("status") === "soft_deleted" &&
+        method === "GET"
+      ) {
+        return projectsResponse(deletedProjects);
+      }
+
+      if (url.pathname === "/api/v1/projects" && !url.search && method === "GET") {
+        return projectsResponse(activeProjects);
+      }
+
+      if (url.pathname === `/api/v1/projects/${projectId}` && method === "GET") {
+        return projectResponse(project);
+      }
+
+      if (url.pathname === `/api/v1/projects/${projectId}/soft-delete` && method === "POST") {
+        activeProjects.splice(0, 1);
+        const deletedProject = {
+          ...project,
+          status: "soft_deleted" as const,
+          updated_at: "2026-04-23T12:05:00Z",
+          soft_deleted_at: "2026-04-23T12:05:00Z",
+        };
+        deletedProjects.push(deletedProject);
+        return projectResponse(deletedProject);
+      }
+
+      throw new Error(`Unexpected request for ${method} ${url.pathname}${url.search}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { router } = renderRouter("/admin/projects/deleted");
+
+    expect(await screen.findByText(/no deleted projects/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("link", { name: /^projects$/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /view details/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /delete project/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^delete project$/i }));
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/projects");
+    });
+
+    await userEvent.click(screen.getByRole("link", { name: /^admin$/i }));
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/admin/projects/deleted");
+    });
+    expect(await screen.findByRole("heading", { name: /deleted projects/i })).toBeInTheDocument();
+    expect(screen.getByText("Docs Site")).toBeInTheDocument();
   });
 
   test("project detail actions call backend action endpoints", async () => {

@@ -5,6 +5,7 @@ import {
   archiveProject,
   getProject,
   projectQueryKey,
+  projectsListQueryKey,
   projectsQueryKey,
   restoreProject,
   softDeleteProject,
@@ -51,6 +52,8 @@ export function ProjectDetailsPage() {
   const navigate = useNavigate();
   const { projectId } = useParams<{ projectId: string }>();
   const queryClient = useQueryClient();
+  const activeProjectsListQueryKey = projectsListQueryKey();
+  const deletedProjectsListQueryKey = projectsListQueryKey({ status: "soft_deleted" });
   const query = useQuery({
     queryKey: projectQueryKey(projectId ?? ""),
     queryFn: () => getProject(projectId ?? ""),
@@ -60,7 +63,7 @@ export function ProjectDetailsPage() {
   const setProjectData = (project: Project) => {
     if (!projectId) return;
     queryClient.setQueryData(projectQueryKey(projectId), project);
-    queryClient.setQueryData<Project[]>(projectsQueryKey, (current) =>
+    queryClient.setQueryData<Project[]>(activeProjectsListQueryKey, (current) =>
       current?.map((item) => (item.id === project.id ? project : item)),
     );
   };
@@ -85,8 +88,13 @@ export function ProjectDetailsPage() {
       if (action.type === "unarchive") return unarchiveProject(projectId);
       return restoreProject(projectId, action.status);
     },
-    onSuccess: async (project) => {
+    onSuccess: async (project, action) => {
       setProjectData(project);
+      if (action.type === "restore") {
+        queryClient.setQueryData<Project[]>(deletedProjectsListQueryKey, (current) =>
+          (current ?? []).filter((item) => item.id !== project.id),
+        );
+      }
       await queryClient.invalidateQueries({ queryKey: projectsQueryKey });
     },
   });
@@ -102,11 +110,16 @@ export function ProjectDetailsPage() {
       if (!projectId) throw new Error("Project id is required");
       return softDeleteProject(projectId);
     },
-    onSuccess: async () => {
-      queryClient.setQueryData<Project[]>(projectsQueryKey, (current) =>
+    onSuccess: async (project) => {
+      queryClient.setQueryData<Project[]>(activeProjectsListQueryKey, (current) =>
         current?.filter((item) => item.id !== projectId),
       );
+      queryClient.setQueryData<Project[]>(deletedProjectsListQueryKey, (current) => {
+        const remainingProjects = (current ?? []).filter((item) => item.id !== project.id);
+        return [project, ...remainingProjects];
+      });
       queryClient.removeQueries({ queryKey: projectQueryKey(projectId ?? "") });
+      await queryClient.invalidateQueries({ queryKey: projectsQueryKey });
       await navigate("/projects", { replace: true });
     },
   });
