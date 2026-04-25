@@ -366,7 +366,7 @@ describe("auth routing", () => {
     expect(screen.getByText("Archived project")).toBeInTheDocument();
   });
 
-  test("projects page shows mixed project statuses in one console list", async () => {
+  test("projects page copy no longer mentions administrator-visible deleted projects", async () => {
     const now = "2026-04-23T12:00:00Z";
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const path = requestPath(input);
@@ -390,16 +390,6 @@ describe("auth routing", () => {
             updated_at: now,
             archived_at: null,
           },
-          {
-            id: "22222222-2222-2222-2222-222222222222",
-            slug: "old-site",
-            name: "Old Site",
-            status: "soft_deleted",
-            created_at: now,
-            updated_at: now,
-            archived_at: null,
-            soft_deleted_at: now,
-          },
         ]);
       }
 
@@ -411,9 +401,6 @@ describe("auth routing", () => {
     renderRouter("/projects");
 
     expect(await screen.findByText("Docs Site")).toBeInTheDocument();
-    expect(screen.getByText("Old Site")).toBeInTheDocument();
-    expect(screen.getByText("Active")).toBeInTheDocument();
-    expect(screen.getByText("Soft deleted")).toBeInTheDocument();
     expect(
       screen.getByText("Track active and archived projects for this workspace."),
     ).toBeInTheDocument();
