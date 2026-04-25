@@ -422,6 +422,39 @@ describe("auth routing", () => {
     expect(await screen.findByRole("heading", { name: /projects/i })).toBeInTheDocument();
   });
 
+  test("non-admin users are redirected away from unknown admin routes", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const path = requestPath(input);
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse({
+          is_admin: false,
+          is_initial_admin: false,
+        });
+      }
+
+      if (path === "/api/v1/projects") {
+        return projectsResponse([]);
+      }
+
+      throw new Error(`Unexpected request for ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { router } = renderRouter("/admin/unknown");
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/projects");
+    });
+
+    expect(await screen.findByRole("heading", { name: /projects/i })).toBeInTheDocument();
+  });
+
   test("admin deleted projects page fetches only soft-deleted projects", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = requestUrl(input);
@@ -477,6 +510,36 @@ describe("auth routing", () => {
         );
       }),
     ).toBe(true);
+  });
+
+  test("admin deleted projects page shows load errors without the empty state", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+
+      if (url.pathname === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (url.pathname === "/api/v1/me") {
+        return currentUserResponse({ is_admin: true });
+      }
+
+      if (
+        url.pathname === "/api/v1/projects" &&
+        url.searchParams.get("status") === "soft_deleted"
+      ) {
+        return jsonResponse({ error: "load failed" }, { status: 500 });
+      }
+
+      throw new Error(`Unexpected request for ${url.pathname}${url.search}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter("/admin/projects/deleted");
+
+    expect(await screen.findByText(/unable to load deleted projects/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no deleted projects/i)).not.toBeInTheDocument();
   });
 
   test("projects page renders the authenticated user's project list", async () => {
@@ -896,6 +959,80 @@ describe("auth routing", () => {
         path: `/api/v1/projects/${projectId}/restore`,
         method: "POST",
         body: { status: "active" },
+      });
+    });
+
+    expect(await screen.findByText(/no deleted projects/i)).toBeInTheDocument();
+    expect(screen.queryByText("Docs Site")).not.toBeInTheDocument();
+  });
+
+  test("admin deleted projects page restores archived from the admin area", async () => {
+    const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+    const projectId = "11111111-1111-1111-1111-111111111111";
+    const deletedProjects = [
+      {
+        id: projectId,
+        slug: "docs-site",
+        name: "Docs Site",
+        status: "soft_deleted" as const,
+        created_at: "2026-04-20T10:00:00Z",
+        updated_at: "2026-04-23T12:00:00Z",
+        archived_at: null,
+        soft_deleted_at: "2026-04-23T12:00:00Z",
+      },
+    ];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = requestUrl(input);
+      const method =
+        input instanceof Request ? input.method : (init?.method ?? "GET");
+      const body = init?.body ? JSON.parse(init.body.toString()) : undefined;
+      requests.push({ path: `${url.pathname}${url.search}`, method, body });
+
+      if (url.pathname === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (url.pathname === "/api/v1/me") {
+        return currentUserResponse({ is_admin: true });
+      }
+
+      if (
+        url.pathname === "/api/v1/projects" &&
+        url.searchParams.get("status") === "soft_deleted" &&
+        method === "GET"
+      ) {
+        return projectsResponse(deletedProjects);
+      }
+
+      if (url.pathname === `/api/v1/projects/${projectId}/restore` && method === "POST") {
+        deletedProjects.splice(0, 1);
+
+        return projectResponse({
+          id: projectId,
+          slug: "docs-site",
+          name: "Docs Site",
+          status: "archived",
+          created_at: "2026-04-20T10:00:00Z",
+          updated_at: "2026-04-23T12:10:00Z",
+          archived_at: "2026-04-23T12:10:00Z",
+          soft_deleted_at: null,
+        });
+      }
+
+      throw new Error(`Unexpected request for ${method} ${url.pathname}${url.search}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter("/admin/projects/deleted");
+
+    await userEvent.click(await screen.findByRole("button", { name: /restore archived/i }));
+
+    await waitFor(() => {
+      expect(requests).toContainEqual({
+        path: `/api/v1/projects/${projectId}/restore`,
+        method: "POST",
+        body: { status: "archived" },
       });
     });
 

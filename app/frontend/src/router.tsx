@@ -60,7 +60,7 @@ export const routes: RouteObject[] = [
                 element: <ProjectDetailsPage />,
               },
               {
-                path: "/admin",
+                path: "/admin/*",
                 element: <AdminRoute />,
                 children: [
                   {
@@ -70,6 +70,10 @@ export const routes: RouteObject[] = [
                   {
                     path: "projects/deleted",
                     element: <AdminDeletedProjectsPage />,
+                  },
+                  {
+                    path: "*",
+                    element: <ProtectedNotFound />,
                   },
                 ],
               },
