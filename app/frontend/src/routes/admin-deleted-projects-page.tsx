@@ -99,27 +99,29 @@ export function AdminDeletedProjectsPage() {
         </Alert>
       ) : null}
 
-      <DeletedProjectList
-        actionError={
-          actionMutation.isError
-            ? errorMessage(actionMutation.error, "Unable to update deleted project")
-            : null
-        }
-        isLoading={deletedProjectsQuery.isPending}
-        onHardDelete={(projectId) =>
-          actionMutation.mutate({ type: "hard_delete", projectId })}
-        onRestore={(projectId, status) =>
-          actionMutation.mutate({ type: "restore", projectId, status })}
-        pendingAction={actionMutation.isPending
-          ? actionMutation.variables?.type === "restore"
-            ? actionMutation.variables.status === "active"
-              ? "restore_active"
-              : "restore_archived"
-            : "hard_delete"
-          : null}
-        pendingProjectId={actionMutation.isPending ? actionMutation.variables?.projectId ?? null : null}
-        projects={deletedProjectsQuery.data ?? []}
-      />
+      {deletedProjectsQuery.isError ? null : (
+        <DeletedProjectList
+          actionError={
+            actionMutation.isError
+              ? errorMessage(actionMutation.error, "Unable to update deleted project")
+              : null
+          }
+          isLoading={deletedProjectsQuery.isPending}
+          onHardDelete={(projectId) =>
+            actionMutation.mutate({ type: "hard_delete", projectId })}
+          onRestore={(projectId, status) =>
+            actionMutation.mutate({ type: "restore", projectId, status })}
+          pendingAction={actionMutation.isPending
+            ? actionMutation.variables?.type === "restore"
+              ? actionMutation.variables.status === "active"
+                ? "restore_active"
+                : "restore_archived"
+              : "hard_delete"
+            : null}
+          pendingProjectId={actionMutation.isPending ? actionMutation.variables?.projectId ?? null : null}
+          projects={deletedProjectsQuery.data ?? []}
+        />
+      )}
     </div>
   );
 }
