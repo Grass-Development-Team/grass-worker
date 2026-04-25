@@ -79,12 +79,12 @@ export function AdminDeletedProjectsPage() {
             type="button"
             variant="outline"
           >
-            {deletedProjectsQuery.isPending ? "Refreshing..." : "Refresh deleted projects"}
+            {deletedProjectsQuery.isPending ? "Refreshing..." : "Refresh recovery queue"}
           </Button>
         }
-        description={`Review soft-deleted projects that ${currentUser.email} can recover or remove permanently.`}
+        description={`Review the deleted project recovery queue and permanent cleanup actions available to ${currentUser.email}.`}
         eyebrow="Admin"
-        title="Deleted projects"
+        title="Project management"
       />
 
       {deletedProjectsQuery.isError ? (
