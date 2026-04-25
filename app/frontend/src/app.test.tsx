@@ -389,6 +389,39 @@ describe("auth routing", () => {
     expect(screen.queryByRole("link", { name: /^admin$/i })).not.toBeInTheDocument();
   });
 
+  test("authenticated users can reach the settings placeholder inside the console", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const path = requestPath(input);
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse({
+          is_admin: false,
+          is_initial_admin: false,
+        });
+      }
+
+      throw new Error(`Unexpected request for ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { router } = renderRouter("/settings");
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/settings");
+    });
+
+    expect(
+      await screen.findByRole("navigation", { name: /console navigation/i }),
+    ).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /^settings$/i })).toBeInTheDocument();
+    expect(screen.getByText(/settings are not implemented yet/i)).toBeInTheDocument();
+  });
+
   test("non-admin users are redirected away from admin deleted routes", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const path = requestPath(input);
@@ -420,6 +453,39 @@ describe("auth routing", () => {
     });
 
     expect(await screen.findByRole("heading", { name: /projects/i })).toBeInTheDocument();
+  });
+
+  test("admin project management entry redirects to the deleted-project recovery route", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+
+      if (url.pathname === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (url.pathname === "/api/v1/me") {
+        return currentUserResponse({ is_admin: true });
+      }
+
+      if (
+        url.pathname === "/api/v1/projects" &&
+        url.searchParams.get("status") === "soft_deleted"
+      ) {
+        return projectsResponse([]);
+      }
+
+      throw new Error(`Unexpected request for ${url.pathname}${url.search}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { router } = renderRouter("/admin/projects");
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/admin/projects/deleted");
+    });
+
+    expect(await screen.findByRole("heading", { name: /deleted projects/i })).toBeInTheDocument();
   });
 
   test("non-admin users are redirected away from unknown admin routes", async () => {
