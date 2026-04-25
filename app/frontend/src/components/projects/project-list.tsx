@@ -25,7 +25,7 @@ function formatTimestamp(value: string) {
 
 function projectStatusDescription(project: Project) {
   if (project.status === "soft_deleted") {
-    return "Soft deleted project";
+    return "Deleted project";
   }
 
   if (project.status === "archived") {
@@ -37,7 +37,7 @@ function projectStatusDescription(project: Project) {
 
 function projectLastEvent(project: Project) {
   if (project.soft_deleted_at) {
-    return { label: "Soft deleted at", value: project.soft_deleted_at };
+    return { label: "Deleted at", value: project.soft_deleted_at };
   }
 
   if (project.archived_at) {
