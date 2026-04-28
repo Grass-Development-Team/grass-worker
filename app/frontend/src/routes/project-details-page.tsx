@@ -1,6 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import * as React from "react";
 import { useNavigate, useOutletContext, useParams } from "react-router-dom";
 import { ApiError } from "@/api/client";
+import {
+  createProjectDeployment,
+  deploymentQueryKey,
+  deploymentsQueryKey,
+  getProjectDeployments,
+  type Deployment,
+} from "@/api/deployments";
 import {
   archiveProject,
   getProject,
@@ -15,6 +23,8 @@ import {
   type Project,
 } from "@/api/projects";
 import { ConsolePageHeader } from "@/components/console/console-page-header";
+import { CreateDeploymentCard } from "@/components/deployments/create-deployment-card";
+import { DeploymentList } from "@/components/deployments/deployment-list";
 import { DangerZoneCard } from "@/components/projects/danger-zone-card";
 import { EditProjectForm } from "@/components/projects/edit-project-form";
 import { LifecycleActionsCard } from "@/components/projects/lifecycle-actions-card";
@@ -52,11 +62,17 @@ export function ProjectDetailsPage() {
   const navigate = useNavigate();
   const { projectId } = useParams<{ projectId: string }>();
   const queryClient = useQueryClient();
+  const [deploymentResetToken, setDeploymentResetToken] = React.useState(0);
   const activeProjectsListQueryKey = projectsListQueryKey();
   const deletedProjectsListQueryKey = projectsListQueryKey({ status: "soft_deleted" });
   const query = useQuery({
     queryKey: projectQueryKey(projectId ?? ""),
     queryFn: () => getProject(projectId ?? ""),
+    enabled: Boolean(projectId),
+  });
+  const deploymentsQuery = useQuery({
+    queryKey: deploymentsQueryKey(projectId ?? ""),
+    queryFn: () => getProjectDeployments(projectId ?? ""),
     enabled: Boolean(projectId),
   });
 
@@ -123,6 +139,19 @@ export function ProjectDetailsPage() {
       await navigate("/projects", { replace: true });
     },
   });
+  const createDeploymentMutation = useMutation({
+    mutationFn: (input: { source_branch?: string; source_revision?: string }) =>
+      createProjectDeployment(projectId ?? "", input),
+    onSuccess: async (deployment) => {
+      queryClient.setQueryData<Deployment[]>(
+        deploymentsQueryKey(projectId ?? ""),
+        (current) => [deployment, ...(current ?? []).filter((item) => item.id !== deployment.id)],
+      );
+      queryClient.setQueryData(deploymentQueryKey(projectId ?? "", deployment.id), deployment);
+      setDeploymentResetToken((current) => current + 1);
+      await deploymentsQuery.refetch();
+    },
+  });
 
   if (!projectId) {
     return (
@@ -176,6 +205,16 @@ export function ProjectDetailsPage() {
   }
 
   const project = query.data;
+  const deploymentCreateError = createDeploymentMutation.isError
+    ? errorMessage(createDeploymentMutation.error, "Unable to create deployment")
+    : null;
+  const deploymentCreateDisabled = project.status !== "active" || dangerMutation.isPending;
+  const deploymentCreateDisabledReason =
+    project.status === "archived"
+      ? "Archived projects cannot create new deployments."
+      : project.status === "soft_deleted"
+        ? "Restore the project before creating deployments."
+        : null;
 
   return (
     <div className="space-y-6">
@@ -245,6 +284,34 @@ export function ProjectDetailsPage() {
         project={project}
       />
 
+      {deploymentsQuery.isError ? (
+        <Alert variant="destructive">
+          <AlertTitle>Unable to load deployments</AlertTitle>
+          <AlertDescription>
+            {errorMessage(deploymentsQuery.error, "The deployment history request failed.")}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
+        <DeploymentList
+          deployments={deploymentsQuery.data ?? []}
+          isLoading={deploymentsQuery.isPending}
+          onViewDeployment={(deploymentId) =>
+            void navigate(`/projects/${projectId}/deployments/${deploymentId}`)
+          }
+        />
+        <CreateDeploymentCard
+          disabled={deploymentCreateDisabled}
+          disabledReason={deploymentCreateDisabledReason}
+          error={deploymentCreateError}
+          isCreating={createDeploymentMutation.isPending}
+          onCreateDeployment={(input) => createDeploymentMutation.mutate(input)}
+          onResetError={() => createDeploymentMutation.reset()}
+          resetToken={deploymentResetToken}
+        />
+      </div>
+
       <DangerZoneCard
         error={
           dangerMutation.isError
@@ -255,17 +322,6 @@ export function ProjectDetailsPage() {
         onDelete={() => dangerMutation.mutate()}
         project={project}
       />
-
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            <h2>Deployment history</h2>
-          </CardTitle>
-          <CardDescription>
-            This route is ready for deployment records to plug in next.
-          </CardDescription>
-        </CardHeader>
-      </Card>
     </div>
   );
 }
