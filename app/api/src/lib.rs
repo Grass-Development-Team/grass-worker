@@ -675,9 +675,7 @@ mod tests {
 
     #[tokio::test]
     async fn ready_mode_create_project_with_cookie_returns_created_project() {
-        let now = chrono::DateTime::parse_from_rfc3339("2026-04-19T12:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
+        let now = chrono::Utc::now();
         let user_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
         let session_token = "session-token";
         let database = MockDatabase::new(DatabaseBackend::Postgres)
@@ -734,9 +732,7 @@ mod tests {
 
     #[tokio::test]
     async fn ready_mode_create_project_returns_conflict_for_duplicate_slug() {
-        let now = chrono::DateTime::parse_from_rfc3339("2026-04-19T12:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
+        let now = chrono::Utc::now();
         let user_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
         let session_token = "session-token";
         let database = MockDatabase::new(DatabaseBackend::Postgres)
@@ -793,9 +789,7 @@ mod tests {
 
     #[tokio::test]
     async fn ready_mode_project_details_with_cookie_returns_owned_project() {
-        let now = chrono::DateTime::parse_from_rfc3339("2026-04-19T12:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
+        let now = chrono::Utc::now();
         let user_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
         let session_token = "session-token";
         let project_id = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
@@ -857,9 +851,7 @@ mod tests {
 
     #[tokio::test]
     async fn ready_mode_project_details_returns_not_found_for_missing_project() {
-        let now = chrono::DateTime::parse_from_rfc3339("2026-04-19T12:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
+        let now = chrono::Utc::now();
         let user_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
         let session_token = "session-token";
         let project_id = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();

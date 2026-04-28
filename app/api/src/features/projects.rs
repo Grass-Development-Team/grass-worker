@@ -553,7 +553,7 @@ mod tests {
     }
 
     fn sample_session(user_id: Uuid, token: &str) -> user_session::Model {
-        let created_at = Utc.with_ymd_and_hms(2026, 4, 23, 8, 0, 0).unwrap();
+        let created_at = Utc::now();
 
         user_session::Model {
             id: Uuid::new_v4(),
