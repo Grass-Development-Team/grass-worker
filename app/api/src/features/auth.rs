@@ -319,12 +319,8 @@ mod tests {
 
     #[tokio::test]
     async fn current_user_returns_user_envelope_for_valid_session_cookie() {
-        let created_at = chrono::DateTime::parse_from_rfc3339("2026-04-17T10:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let expires_at = chrono::DateTime::parse_from_rfc3339("2026-04-24T10:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
+        let created_at = Utc::now() - chrono::Duration::days(1);
+        let expires_at = Utc::now() + chrono::Duration::days(7);
         let user = user::Model {
             id: Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap(),
             email: "admin@example.com".to_owned(),
@@ -422,12 +418,8 @@ mod tests {
 
     #[tokio::test]
     async fn current_user_returns_unauthorized_for_expired_session() {
-        let created_at = chrono::DateTime::parse_from_rfc3339("2026-04-17T10:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let expired_at = chrono::DateTime::parse_from_rfc3339("2026-04-18T10:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
+        let created_at = Utc::now() - chrono::Duration::days(8);
+        let expired_at = Utc::now() - chrono::Duration::days(1);
         let session = user_session::Model {
             id: Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap(),
             user_id: Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap(),
