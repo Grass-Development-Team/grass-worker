@@ -45,6 +45,7 @@ function currentUserResponse(
 }
 
 type TestProjectStatus = "active" | "archived" | "soft_deleted";
+type TestDeploymentStatus = "pending" | "processing" | "ready" | "failed" | "canceled";
 
 type TestProject = {
   id: string;
@@ -56,6 +57,17 @@ type TestProject = {
   updated_at: string;
   archived_at: string | null;
   soft_deleted_at?: string | null;
+};
+
+type TestDeployment = {
+  id: string;
+  project_id: string;
+  status: TestDeploymentStatus;
+  source_branch?: string | null;
+  source_revision?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
 };
 
 function normalizeProject(project: TestProject) {
@@ -81,6 +93,34 @@ function projectResponse(project: TestProject) {
   return jsonResponse(
     {
       project: normalizeProject(project),
+    },
+    { status: 200 },
+  );
+}
+
+function normalizeDeployment(deployment: TestDeployment) {
+  return {
+    source_branch: null,
+    source_revision: null,
+    started_at: null,
+    finished_at: null,
+    ...deployment,
+  };
+}
+
+function deploymentsResponse(deployments: TestDeployment[]) {
+  return jsonResponse(
+    {
+      deployments: deployments.map(normalizeDeployment),
+    },
+    { status: 200 },
+  );
+}
+
+function deploymentResponse(deployment: TestDeployment) {
+  return jsonResponse(
+    {
+      deployment: normalizeDeployment(deployment),
     },
     { status: 200 },
   );
@@ -851,6 +891,80 @@ describe("auth routing", () => {
 
     expect(await screen.findByRole("heading", { name: /docs site/i })).toBeInTheDocument();
     expect(screen.getByText(/deployment history/i)).toBeInTheDocument();
+  });
+
+  test("project deployment detail route renders deployment metadata", async () => {
+    const projectId = "11111111-1111-1111-1111-111111111111";
+    const deploymentId = "22222222-2222-2222-2222-222222222222";
+    const deployment = {
+      id: deploymentId,
+      project_id: projectId,
+      status: "pending" as const,
+      source_branch: "main",
+      source_revision: "deadbeef",
+      created_at: "2026-04-28T12:00:00Z",
+      started_at: null,
+      finished_at: null,
+    };
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const path = requestPath(input);
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse();
+      }
+
+      if (path === `/api/v1/projects/${projectId}/deployments/${deploymentId}`) {
+        return deploymentResponse(deployment);
+      }
+
+      throw new Error(`Unexpected request for ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter(`/projects/${projectId}/deployments/${deploymentId}`);
+
+    expect(
+      await screen.findByRole("heading", { name: /deployment details/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("main")).toBeInTheDocument();
+    expect(screen.getByText("deadbeef")).toBeInTheDocument();
+    expect(screen.getByText(/pending/i)).toBeInTheDocument();
+  });
+
+  test("project deployment detail route renders an error state when lookup fails", async () => {
+    const projectId = "11111111-1111-1111-1111-111111111111";
+    const deploymentId = "22222222-2222-2222-2222-222222222222";
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const path = requestPath(input);
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse();
+      }
+
+      if (path === `/api/v1/projects/${projectId}/deployments/${deploymentId}`) {
+        return jsonResponse({ error: "deployment not found" }, { status: 404 });
+      }
+
+      throw new Error(`Unexpected request for ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter(`/projects/${projectId}/deployments/${deploymentId}`);
+
+    expect(
+      await screen.findByRole("heading", { name: /deployment unavailable/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/deployment not found/i)).toBeInTheDocument();
   });
 
   test("workspace project details use delete wording and hide hard delete", async () => {
