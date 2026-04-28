@@ -7,6 +7,8 @@ pub enum ProjectStatus {
     Active,
     #[sea_orm(string_value = "archived")]
     Archived,
+    #[sea_orm(string_value = "soft_deleted")]
+    SoftDeleted,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -21,6 +23,7 @@ pub struct Model {
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
     pub archived_at: Option<DateTimeUtc>,
+    pub soft_deleted_at: Option<DateTimeUtc>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

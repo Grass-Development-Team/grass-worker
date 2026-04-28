@@ -11,6 +11,8 @@ use axum::{
     routing::{get, post},
 };
 use grass_worker_config::{AppConfig, DatabaseConfig, ServerConfig, write_api_database_config};
+use grass_worker_database::entities::user;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
@@ -92,6 +94,16 @@ impl AdminSetupRequest {
     }
 }
 
+async fn database_has_admin(
+    connection: &sea_orm::DatabaseConnection,
+) -> Result<bool, sea_orm::DbErr> {
+    Ok(user::Entity::find()
+        .filter(user::Column::IsAdmin.eq(true))
+        .one(connection)
+        .await?
+        .is_some())
+}
+
 pub fn install_setup_routes(
     router: Router,
     context: SetupContext,
@@ -149,9 +161,31 @@ async fn setup_database(
     }
 
     if let Some(runtime_mode) = state.runtime_mode {
-        *runtime_mode.write().await = AppMode::Setup(
-            SetupContext::admin(listen, database.clone()).with_development(development),
-        );
+        let connection = match state.runtime_database_connector.connect(&database).await {
+            Ok(connection) => connection,
+            Err(error) => {
+                return error_response(StatusCode::INTERNAL_SERVER_ERROR, error);
+            }
+        };
+
+        let next_mode = match database_has_admin(&connection).await {
+            Ok(true) => AppMode::Normal(NormalContext::new(
+                AppConfig {
+                    server,
+                    database: Some(database.clone()),
+                    development: development.clone(),
+                },
+                AppState::new(connection),
+            )),
+            Ok(false) => AppMode::Setup(
+                SetupContext::admin(listen, database.clone()).with_development(development),
+            ),
+            Err(error) => {
+                return error_response(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+            }
+        };
+
+        *runtime_mode.write().await = next_mode;
     }
 
     (
@@ -254,11 +288,14 @@ mod tests {
         body::{Body, to_bytes},
         http::{Request, StatusCode},
     };
+    use chrono::Utc;
     use grass_worker_config::DatabaseConfig;
-    use sea_orm::{DatabaseBackend, MockDatabase};
+    use grass_worker_database::entities::user;
+    use sea_orm::{DatabaseBackend, DatabaseConnection, MockDatabase, MockDatabaseConnection};
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use tower::ServiceExt;
+    use uuid::Uuid;
 
     #[derive(Debug)]
     struct FailingDatabaseInitializer;
@@ -334,14 +371,30 @@ mod tests {
         }
     }
 
-    #[derive(Debug, Default)]
+    #[derive(Debug)]
     struct RecordingRuntimeDatabaseConnector {
         last_database: Mutex<Option<DatabaseConfig>>,
+        connection: Arc<MockDatabaseConnection>,
     }
 
     impl RecordingRuntimeDatabaseConnector {
+        fn with_connection(connection: MockDatabaseConnection) -> Self {
+            Self {
+                last_database: Mutex::new(None),
+                connection: Arc::new(connection),
+            }
+        }
+
         fn last_database(&self) -> Option<DatabaseConfig> {
             self.last_database.lock().unwrap().clone()
+        }
+    }
+
+    impl Default for RecordingRuntimeDatabaseConnector {
+        fn default() -> Self {
+            Self::with_connection(MockDatabaseConnection::new(MockDatabase::new(
+                DatabaseBackend::Postgres,
+            )))
         }
     }
 
@@ -352,7 +405,22 @@ mod tests {
             database: &DatabaseConfig,
         ) -> Result<sea_orm::DatabaseConnection, String> {
             *self.last_database.lock().unwrap() = Some(database.clone());
-            Ok(MockDatabase::new(DatabaseBackend::Postgres).into_connection())
+            Ok(DatabaseConnection::MockDatabaseConnection(
+                self.connection.clone(),
+            ))
+        }
+    }
+
+    fn sample_admin_user() -> user::Model {
+        let now = Utc::now();
+
+        user::Model {
+            id: Uuid::new_v4(),
+            email: "admin@example.com".to_owned(),
+            is_admin: true,
+            is_initial_admin: true,
+            created_at: now,
+            updated_at: now,
         }
     }
 
@@ -572,7 +640,12 @@ mod tests {
     #[tokio::test]
     async fn runtime_setup_database_request_advances_to_admin_stage() {
         let initializer = Arc::new(RecordingDatabaseInitializer::success());
-        let connector = Arc::new(RecordingRuntimeDatabaseConnector::default());
+        let connector = Arc::new(RecordingRuntimeDatabaseConnector::with_connection(
+            MockDatabaseConnection::new(
+                MockDatabase::new(DatabaseBackend::Postgres)
+                    .append_query_results([Vec::<user::Model>::new()]),
+            ),
+        ));
         let temp_dir = tempfile::tempdir().unwrap();
         let config_path = temp_dir.path().join("config.toml");
         let app = runtime_app_router_with_connector(
@@ -618,6 +691,62 @@ mod tests {
 
         assert_eq!(json["mode"], "setup");
         assert_eq!(json["stage"], "admin");
+    }
+
+    #[tokio::test]
+    async fn runtime_setup_database_request_skips_admin_stage_when_initial_admin_exists() {
+        let initializer = Arc::new(RecordingDatabaseInitializer::success());
+        let connector = Arc::new(RecordingRuntimeDatabaseConnector::with_connection(
+            MockDatabaseConnection::new(
+                MockDatabase::new(DatabaseBackend::Postgres)
+                    .append_query_results([[sample_admin_user()]]),
+            ),
+        ));
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+        let app = runtime_app_router_with_connector(
+            AppMode::Setup(SetupContext::database_with_initializer(
+                "127.0.0.1:3000".parse().unwrap(),
+                config_path,
+                initializer,
+            )),
+            connector,
+        )
+        .unwrap();
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/setup/database")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"host":"127.0.0.1","port":5432,"db_name":"grass_worker","user":"postgres","password":"secret"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let info = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/info")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(info.status(), StatusCode::OK);
+        let body = to_bytes(info.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["mode"], "ready");
+        assert!(json.get("stage").is_none());
     }
 
     #[tokio::test]
