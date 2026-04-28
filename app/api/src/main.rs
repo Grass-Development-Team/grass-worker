@@ -4,8 +4,9 @@ use grass_worker_api::{
         database::connect_runtime_database,
         setup::{PostgresInitialAdminCreator, default_setup_bootstrapper},
     },
-    app_router, runtime_app_router,
+    app_router,
     domain::setup::SharedSetupBootstrapper,
+    runtime_app_router,
 };
 use grass_worker_config::{DatabaseConfig, ResolvedApiConfig};
 use std::process::ExitCode;
@@ -113,11 +114,10 @@ async fn resolve_app_mode(
     runtime_database_connector: SharedRuntimeDatabaseConnector,
 ) -> Result<AppMode, ResolveAppModeError> {
     let Some(database) = resolved.config.database.clone() else {
-        return Ok(AppMode::Setup(SetupContext::database(
-            resolved.config.server.listen,
-            resolved.path,
-        )
-        .with_development(resolved.config.development.clone())));
+        return Ok(AppMode::Setup(
+            SetupContext::database(resolved.config.server.listen, resolved.path)
+                .with_development(resolved.config.development.clone()),
+        ));
     };
 
     if bootstrapper
@@ -132,12 +132,14 @@ async fn resolve_app_mode(
         )));
     }
 
-    Ok(AppMode::Setup(SetupContext::admin_with_creator(
-        resolved.config.server.listen,
-        database.clone(),
-        Arc::new(PostgresInitialAdminCreator::new(database)),
-    )
-    .with_development(resolved.config.development.clone())))
+    Ok(AppMode::Setup(
+        SetupContext::admin_with_creator(
+            resolved.config.server.listen,
+            database.clone(),
+            Arc::new(PostgresInitialAdminCreator::new(database)),
+        )
+        .with_development(resolved.config.development.clone()),
+    ))
 }
 
 #[cfg(test)]

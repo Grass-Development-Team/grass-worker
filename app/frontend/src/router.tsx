@@ -1,8 +1,13 @@
-import type { RouteObject } from "react-router-dom";
+import { Navigate, type RouteObject } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { HomePage } from "./routes/home-page";
+import { AdminRoute } from "./routes/admin-route";
+import { AdminDeletedProjectsPage } from "./routes/admin-deleted-projects-page";
+import { ConsoleLayout } from "./routes/console-layout";
 import { LoginPage } from "./routes/login-page";
+import { ProjectDetailsPage } from "./routes/project-details-page";
 import { ProtectedRoute } from "./routes/protected-route";
+import { ProjectsPage } from "./routes/projects-page";
+import { SettingsPage } from "./routes/settings-page";
 import { SetupPage } from "./routes/setup-page";
 import { SystemModeGate } from "./routes/system-mode-gate";
 
@@ -41,12 +46,51 @@ export const routes: RouteObject[] = [
         element: <ProtectedRoute />,
         children: [
           {
-            index: true,
-            element: <HomePage />,
-          },
-          {
-            path: "*",
-            element: <ProtectedNotFound />,
+            element: <ConsoleLayout />,
+            children: [
+              {
+                index: true,
+                element: <Navigate replace to="/projects" />,
+              },
+              {
+                path: "/projects",
+                element: <ProjectsPage />,
+              },
+              {
+                path: "/projects/:projectId",
+                element: <ProjectDetailsPage />,
+              },
+              {
+                path: "/settings",
+                element: <SettingsPage />,
+              },
+              {
+                path: "/admin/*",
+                element: <AdminRoute />,
+                children: [
+                  {
+                    index: true,
+                    element: <Navigate replace to="/admin/projects" />,
+                  },
+                  {
+                    path: "projects",
+                    element: <Navigate replace to="/admin/projects/deleted" />,
+                  },
+                  {
+                    path: "projects/deleted",
+                    element: <AdminDeletedProjectsPage />,
+                  },
+                  {
+                    path: "*",
+                    element: <ProtectedNotFound />,
+                  },
+                ],
+              },
+              {
+                path: "*",
+                element: <ProtectedNotFound />,
+              },
+            ],
           },
         ],
       },

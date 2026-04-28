@@ -71,7 +71,7 @@ function ProgressCard({ stage }: { stage: SetupStage }) {
     },
     {
       title: "Ready",
-      description: "Return to the console root and continue through normal sign-in.",
+      description: "Return to the projects console and continue through normal sign-in.",
       state: "upcoming",
     },
   ] as const;
@@ -173,16 +173,16 @@ export function SetupPage() {
         password: adminForm.password,
       }),
     onSuccess: async () => {
-      await refreshSystemInfo();
-      const systemInfo = await queryClient.fetchQuery<SystemInfo>({
-        queryKey: systemInfoQueryKey,
-        queryFn: getSystemInfo,
-      });
+      const systemInfo = await getSystemInfo();
 
       if (systemInfo.mode === "ready") {
         const email = encodeURIComponent(adminForm.email.trim());
-        await navigate(`/login?redirect=%2F&email=${email}`, { replace: true });
+        queryClient.setQueryData<SystemInfo>(systemInfoQueryKey, systemInfo);
+        await navigate(`/login?redirect=%2Fprojects&email=${email}`, { replace: true });
+        return;
       }
+
+      queryClient.setQueryData<SystemInfo>(systemInfoQueryKey, systemInfo);
     },
   });
 
@@ -217,7 +217,7 @@ export function SetupPage() {
   }
 
   if (query.data.mode === "ready") {
-    return <Navigate replace to="/" />;
+    return <Navigate replace to="/projects" />;
   }
 
   const stage = query.data.stage;

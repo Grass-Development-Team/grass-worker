@@ -10,17 +10,27 @@ mod tests {
     };
     use super::repository::{
         DeploymentArtifactRepository, DeploymentRepository, NewDeployment, NewDeploymentArtifact,
-        NewProject, NewUser, NewUserPasswordCredential, NewUserSession, ProjectRepository,
-        SeaOrmDeploymentArtifactRepository, SeaOrmDeploymentRepository, SeaOrmProjectRepository,
-        SeaOrmUserPasswordCredentialRepository, SeaOrmUserRepository, SeaOrmUserSessionRepository,
-        UserPasswordCredentialRepository, UserRepository, UserSessionRepository,
-        find_password_credential_by_user_id, find_session_by_token_hash, find_user_by_email,
-        find_user_by_id, insert_session, revoke_session_by_token_hash,
+        NewProject, NewUser, NewUserPasswordCredential, NewUserSession, ProjectListFilter,
+        ProjectRepository, SeaOrmDeploymentArtifactRepository, SeaOrmDeploymentRepository,
+        SeaOrmProjectRepository, SeaOrmUserPasswordCredentialRepository, SeaOrmUserRepository,
+        SeaOrmUserSessionRepository, UpdateProject, UserPasswordCredentialRepository,
+        UserRepository, UserSessionRepository, find_password_credential_by_user_id,
+        find_session_by_token_hash, find_user_by_email, find_user_by_id, insert_session,
+        revoke_session_by_token_hash,
     };
     use grass_worker_config::DatabaseConfig;
     use sea_orm::EntityName;
-    use sea_orm::{DatabaseBackend, MockDatabase, MockExecResult};
+    use sea_orm::{DatabaseBackend, DatabaseConnection, MockDatabase, MockExecResult};
     use uuid::Uuid;
+
+    fn sql_statements(database: DatabaseConnection) -> Vec<String> {
+        database
+            .into_transaction_log()
+            .iter()
+            .flat_map(|entry| entry.statements().iter())
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+    }
 
     #[test]
     fn project_entity_uses_expected_table_name() {
@@ -128,6 +138,7 @@ mod tests {
         assert_eq!(project.created_at, created_at);
         assert_eq!(project.updated_at, created_at);
         assert_eq!(project.archived_at, None);
+        assert_eq!(project.soft_deleted_at, None);
     }
 
     #[tokio::test]
@@ -135,7 +146,98 @@ mod tests {
         let created_at = chrono::DateTime::parse_from_rfc3339("2026-04-16T12:00:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
+        let owner_user_id = Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap();
         let project = project::Model {
+            id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
+            owner_user_id,
+            slug: "docs-site".to_owned(),
+            name: "Docs Site".to_owned(),
+            status: project::ProjectStatus::Active,
+            created_at,
+            updated_at: created_at,
+            archived_at: None,
+            soft_deleted_at: None,
+        };
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[project.clone()]])
+            .into_connection();
+        let repository = SeaOrmProjectRepository::new(database);
+
+        let projects = repository
+            .list_by_owner(owner_user_id, ProjectListFilter::ActiveAndArchived)
+            .await
+            .unwrap();
+
+        assert_eq!(projects, vec![project]);
+
+        let statements = sql_statements(repository.into_connection());
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("FROM \"projects\""))
+        );
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("\"projects\".\"owner_user_id\""))
+        );
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("ORDER BY \"projects\".\"updated_at\" DESC"))
+        );
+    }
+
+    #[tokio::test]
+    async fn project_repository_find_by_id_returns_matching_project() {
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-04-16T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let soft_deleted_at = chrono::DateTime::parse_from_rfc3339("2026-04-22T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let project = project::Model {
+            id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
+            owner_user_id: Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap(),
+            slug: "docs-site".to_owned(),
+            name: "Docs Site".to_owned(),
+            status: project::ProjectStatus::SoftDeleted,
+            created_at,
+            updated_at: soft_deleted_at,
+            archived_at: None,
+            soft_deleted_at: Some(soft_deleted_at),
+        };
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[project.clone()]])
+            .into_connection();
+        let repository = SeaOrmProjectRepository::new(database);
+
+        let found = repository.find_by_id(project.id).await.unwrap();
+
+        assert_eq!(found, Some(project));
+
+        let statements = sql_statements(repository.into_connection());
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("FROM \"projects\""))
+        );
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"))
+        );
+    }
+
+    #[tokio::test]
+    async fn project_repository_soft_delete_updates_status_and_timestamp() {
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-04-16T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let soft_deleted_at = chrono::DateTime::parse_from_rfc3339("2026-04-23T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let existing = project::Model {
             id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
             owner_user_id: Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap(),
             slug: "docs-site".to_owned(),
@@ -144,6 +246,186 @@ mod tests {
             created_at,
             updated_at: created_at,
             archived_at: None,
+            soft_deleted_at: None,
+        };
+        let expected = project::Model {
+            status: project::ProjectStatus::SoftDeleted,
+            updated_at: soft_deleted_at,
+            soft_deleted_at: Some(soft_deleted_at),
+            ..existing.clone()
+        };
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[existing.clone()]])
+            .append_query_results([[expected.clone()]])
+            .into_connection();
+        let repository = SeaOrmProjectRepository::new(database);
+
+        let updated = repository
+            .set_status(
+                existing.id,
+                project::ProjectStatus::SoftDeleted,
+                soft_deleted_at,
+                None,
+                Some(soft_deleted_at),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(updated, Some(expected));
+
+        let statements = sql_statements(repository.into_connection());
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("UPDATE \"projects\""))
+        );
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("soft_deleted"))
+        );
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("\"soft_deleted_at\""))
+        );
+    }
+
+    #[tokio::test]
+    async fn project_repository_set_status_if_current_refuses_stale_status() {
+        let updated_at = chrono::DateTime::parse_from_rfc3339("2026-04-23T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 0,
+            }])
+            .into_connection();
+        let repository = SeaOrmProjectRepository::new(database);
+
+        let updated = repository
+            .set_status_if_current(
+                Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
+                project::ProjectStatus::Active,
+                project::ProjectStatus::SoftDeleted,
+                updated_at,
+                None,
+                Some(updated_at),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(updated, None);
+
+        let statements = sql_statements(repository.into_connection());
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("UPDATE \"projects\""))
+        );
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("'active'"))
+        );
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("'soft_deleted'"))
+        );
+    }
+
+    #[tokio::test]
+    async fn project_repository_hard_delete_reports_deleted_row() {
+        let project_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .into_connection();
+        let repository = SeaOrmProjectRepository::new(database);
+
+        let deleted = repository.hard_delete(project_id).await.unwrap();
+
+        assert!(deleted);
+
+        let statements = sql_statements(repository.into_connection());
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("DELETE FROM \"projects\""))
+        );
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("FROM \"deployments\""))
+        );
+        assert!(
+            statements.iter().any(|statement| {
+                statement.contains("NOT IN") || statement.contains("NOT EXISTS")
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn project_repository_hard_delete_requires_soft_deleted_status() {
+        let project_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .into_connection();
+        let repository = SeaOrmProjectRepository::new(database);
+
+        let deleted = repository.hard_delete(project_id).await.unwrap();
+
+        assert!(deleted);
+
+        let statements = sql_statements(repository.into_connection());
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("'soft_deleted'"))
+        );
+    }
+
+    #[tokio::test]
+    async fn project_repository_hard_delete_reports_not_deleted_when_deployments_exist() {
+        let project_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 0,
+            }])
+            .into_connection();
+        let repository = SeaOrmProjectRepository::new(database);
+
+        let deleted = repository.hard_delete(project_id).await.unwrap();
+
+        assert!(!deleted);
+    }
+
+    #[tokio::test]
+    async fn project_repository_list_all_filters_soft_deleted_and_orders_by_updated_at_desc() {
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-04-16T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let deleted_at = chrono::DateTime::parse_from_rfc3339("2026-04-23T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let project = project::Model {
+            id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
+            owner_user_id: Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap(),
+            slug: "docs-site".to_owned(),
+            name: "Docs Site".to_owned(),
+            status: project::ProjectStatus::SoftDeleted,
+            created_at,
+            updated_at: deleted_at,
+            archived_at: None,
+            soft_deleted_at: Some(deleted_at),
         };
         let database = MockDatabase::new(DatabaseBackend::Postgres)
             .append_query_results([[project.clone()]])
@@ -151,11 +433,245 @@ mod tests {
         let repository = SeaOrmProjectRepository::new(database);
 
         let projects = repository
-            .list_by_owner(project.owner_user_id)
+            .list_all(ProjectListFilter::SoftDeleted)
             .await
             .unwrap();
 
         assert_eq!(projects, vec![project]);
+
+        let statements = sql_statements(repository.into_connection());
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("FROM \"projects\""))
+        );
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("soft_deleted"))
+        );
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("ORDER BY \"projects\".\"updated_at\" DESC"))
+        );
+    }
+
+    #[tokio::test]
+    async fn project_repository_update_details_updates_name_slug_and_updated_at() {
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-04-16T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let updated_at = chrono::DateTime::parse_from_rfc3339("2026-04-23T09:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let existing = project::Model {
+            id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
+            owner_user_id: Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap(),
+            slug: "docs-site".to_owned(),
+            name: "Docs Site".to_owned(),
+            status: project::ProjectStatus::Active,
+            created_at,
+            updated_at: created_at,
+            archived_at: None,
+            soft_deleted_at: None,
+        };
+        let expected = project::Model {
+            slug: "docs-v2".to_owned(),
+            name: "Docs Site V2".to_owned(),
+            updated_at,
+            ..existing.clone()
+        };
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .append_query_results([[expected.clone()]])
+            .into_connection();
+        let repository = SeaOrmProjectRepository::new(database);
+
+        let updated = repository
+            .update_details(
+                existing.id,
+                UpdateProject {
+                    name: "Docs Site V2".to_owned(),
+                    slug: "docs-v2".to_owned(),
+                    updated_at,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(updated, Some(expected));
+
+        let statements = sql_statements(repository.into_connection());
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("UPDATE \"projects\""))
+        );
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("\"name\""))
+        );
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("\"slug\""))
+        );
+    }
+
+    #[tokio::test]
+    async fn project_repository_update_details_refuses_soft_deleted_rows() {
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-04-16T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let soft_deleted_at = chrono::DateTime::parse_from_rfc3339("2026-04-23T09:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let soft_deleted = project::Model {
+            id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
+            owner_user_id: Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap(),
+            slug: "docs-site".to_owned(),
+            name: "Docs Site".to_owned(),
+            status: project::ProjectStatus::SoftDeleted,
+            created_at,
+            updated_at: soft_deleted_at,
+            archived_at: None,
+            soft_deleted_at: Some(soft_deleted_at),
+        };
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[soft_deleted.clone()], [soft_deleted]])
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 0,
+            }])
+            .into_connection();
+        let repository = SeaOrmProjectRepository::new(database);
+
+        let updated = repository
+            .update_details(
+                Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
+                UpdateProject {
+                    name: "Docs Site V2".to_owned(),
+                    slug: "docs-v2".to_owned(),
+                    updated_at: chrono::DateTime::parse_from_rfc3339("2026-04-23T10:00:00Z")
+                        .unwrap()
+                        .with_timezone(&chrono::Utc),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(updated, None);
+    }
+
+    #[tokio::test]
+    async fn project_repository_transfer_owner_if_current_refuses_stale_status() {
+        let updated_at = chrono::DateTime::parse_from_rfc3339("2026-04-23T11:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 0,
+            }])
+            .into_connection();
+        let repository = SeaOrmProjectRepository::new(database);
+
+        let updated = repository
+            .transfer_owner_if_current(
+                Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
+                Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap(),
+                project::ProjectStatus::Active,
+                Uuid::parse_str("88888888-8888-8888-8888-888888888888").unwrap(),
+                updated_at,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(updated, None);
+
+        let statements = sql_statements(repository.into_connection());
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("'active'"))
+        );
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("\"owner_user_id\""))
+        );
+    }
+
+    #[tokio::test]
+    async fn project_repository_transfer_owner_if_current_refuses_stale_owner() {
+        let updated_at = chrono::DateTime::parse_from_rfc3339("2026-04-23T11:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 0,
+            }])
+            .into_connection();
+        let repository = SeaOrmProjectRepository::new(database);
+
+        let updated = repository
+            .transfer_owner_if_current(
+                Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
+                Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap(),
+                project::ProjectStatus::Active,
+                Uuid::parse_str("88888888-8888-8888-8888-888888888888").unwrap(),
+                updated_at,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(updated, None);
+
+        let statements = sql_statements(repository.into_connection());
+        assert!(
+            statements
+                .iter()
+                .any(|statement| statement.contains("99999999-9999-9999-9999-999999999999"))
+        );
+    }
+
+    #[tokio::test]
+    async fn project_repository_has_deployments_uses_exists_sql() {
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-04-16T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let project_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[deployment::Model {
+                id: Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap(),
+                project_id,
+                status: deployment::DeploymentStatus::Pending,
+                source_branch: None,
+                source_revision: None,
+                created_at,
+                started_at: None,
+                finished_at: None,
+            }]])
+            .into_connection();
+        let repository = SeaOrmProjectRepository::new(database);
+
+        let has_deployments = repository.has_deployments(project_id).await.unwrap();
+
+        assert!(has_deployments);
+
+        let statements = sql_statements(repository.into_connection());
+        assert!(statements.iter().any(|statement| {
+            let normalized = statement.to_ascii_lowercase();
+            normalized.contains("count(")
+                || normalized.contains("exists(")
+                || normalized.contains("select 1")
+        }));
     }
 
     #[tokio::test]
