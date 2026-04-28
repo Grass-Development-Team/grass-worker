@@ -126,6 +126,7 @@ pub trait ProjectRepository {
 #[async_trait]
 pub trait DeploymentRepository {
     async fn create(&self, new_deployment: NewDeployment) -> Result<deployment::Model, DbErr>;
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<deployment::Model>, DbErr>;
     async fn list_by_project(&self, project_id: Uuid) -> Result<Vec<deployment::Model>, DbErr>;
 }
 
@@ -408,6 +409,11 @@ impl SeaOrmDeploymentRepository {
     pub fn new(database: DatabaseConnection) -> Self {
         Self { database }
     }
+
+    #[cfg(test)]
+    pub fn into_connection(self) -> DatabaseConnection {
+        self.database
+    }
 }
 
 #[async_trait]
@@ -440,9 +446,15 @@ impl DeploymentRepository for SeaOrmDeploymentRepository {
         Ok(model)
     }
 
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<deployment::Model>, DbErr> {
+        deployment::Entity::find_by_id(id).one(&self.database).await
+    }
+
     async fn list_by_project(&self, project_id: Uuid) -> Result<Vec<deployment::Model>, DbErr> {
         deployment::Entity::find()
             .filter(deployment::Column::ProjectId.eq(project_id))
+            .order_by_desc(deployment::Column::CreatedAt)
+            .order_by_desc(deployment::Column::Id)
             .all(&self.database)
             .await
     }
