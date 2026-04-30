@@ -18,8 +18,8 @@ use axum::{
     routing::get,
 };
 use features::{
-    auth::install_auth_routes, projects::install_project_routes, setup::install_setup_routes,
-    system::install_system_routes,
+    auth::install_auth_routes, deployments::install_deployment_routes,
+    projects::install_project_routes, setup::install_setup_routes, system::install_system_routes,
 };
 use frontend::{FrontendMode, install_frontend};
 use grass_worker_config::AppConfig;
@@ -37,6 +37,7 @@ pub struct AppState {
     pub database: Arc<sea_orm::DatabaseConnection>,
     pub auth: crate::adapters::auth::AuthService,
     pub projects: crate::domain::project::ProjectService,
+    pub deployments: crate::domain::deployment::DeploymentService,
 }
 
 impl AppState {
@@ -45,6 +46,7 @@ impl AppState {
             database: Arc::new(database),
             auth: crate::adapters::auth::AuthService,
             projects: crate::domain::project::ProjectService,
+            deployments: crate::domain::deployment::DeploymentService,
         }
     }
 }
@@ -363,7 +365,8 @@ fn build_app_router(
         AppMode::Normal(context) => {
             let router = install_system_routes(router, ApiInfo::ready());
             let router = install_auth_routes(router, context.state.clone());
-            let router = install_project_routes(router, context.state.clone())
+            let router = install_project_routes(router, context.state.clone());
+            let router = install_deployment_routes(router, context.state.clone())
                 .route("/api/{*path}", any(api_not_found));
             let frontend_mode = resolve_frontend_mode(context.config.development.as_ref())?;
 

@@ -45,6 +45,7 @@ function currentUserResponse(
 }
 
 type TestProjectStatus = "active" | "archived" | "soft_deleted";
+type TestDeploymentStatus = "pending" | "processing" | "ready" | "failed" | "canceled";
 
 type TestProject = {
   id: string;
@@ -56,6 +57,17 @@ type TestProject = {
   updated_at: string;
   archived_at: string | null;
   soft_deleted_at?: string | null;
+};
+
+type TestDeployment = {
+  id: string;
+  project_id: string;
+  status: TestDeploymentStatus;
+  source_branch?: string | null;
+  source_revision?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
 };
 
 function normalizeProject(project: TestProject) {
@@ -81,6 +93,34 @@ function projectResponse(project: TestProject) {
   return jsonResponse(
     {
       project: normalizeProject(project),
+    },
+    { status: 200 },
+  );
+}
+
+function normalizeDeployment(deployment: TestDeployment) {
+  return {
+    source_branch: null,
+    source_revision: null,
+    started_at: null,
+    finished_at: null,
+    ...deployment,
+  };
+}
+
+function deploymentsResponse(deployments: TestDeployment[]) {
+  return jsonResponse(
+    {
+      deployments: deployments.map(normalizeDeployment),
+    },
+    { status: 200 },
+  );
+}
+
+function deploymentResponse(deployment: TestDeployment) {
+  return jsonResponse(
+    {
+      deployment: normalizeDeployment(deployment),
     },
     { status: 200 },
   );
@@ -851,6 +891,350 @@ describe("auth routing", () => {
 
     expect(await screen.findByRole("heading", { name: /docs site/i })).toBeInTheDocument();
     expect(screen.getByText(/deployment history/i)).toBeInTheDocument();
+  });
+
+  test("project deployment detail route renders deployment metadata", async () => {
+    const projectId = "11111111-1111-1111-1111-111111111111";
+    const deploymentId = "22222222-2222-2222-2222-222222222222";
+    const deployment = {
+      id: deploymentId,
+      project_id: projectId,
+      status: "pending" as const,
+      source_branch: "main",
+      source_revision: "deadbeef",
+      created_at: "2026-04-28T12:00:00Z",
+      started_at: null,
+      finished_at: null,
+    };
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const path = requestPath(input);
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse();
+      }
+
+      if (path === `/api/v1/projects/${projectId}/deployments/${deploymentId}`) {
+        return deploymentResponse(deployment);
+      }
+
+      throw new Error(`Unexpected request for ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter(`/projects/${projectId}/deployments/${deploymentId}`);
+
+    expect(
+      await screen.findByRole("heading", { name: /deployment details/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("main")).toBeInTheDocument();
+    expect(screen.getByText("deadbeef")).toBeInTheDocument();
+    expect(screen.getByText(/pending/i)).toBeInTheDocument();
+  });
+
+  test("project deployment detail route renders an error state when lookup fails", async () => {
+    const projectId = "11111111-1111-1111-1111-111111111111";
+    const deploymentId = "22222222-2222-2222-2222-222222222222";
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const path = requestPath(input);
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse();
+      }
+
+      if (path === `/api/v1/projects/${projectId}/deployments/${deploymentId}`) {
+        return jsonResponse({ error: "deployment not found" }, { status: 404 });
+      }
+
+      throw new Error(`Unexpected request for ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter(`/projects/${projectId}/deployments/${deploymentId}`);
+
+    expect(
+      await screen.findByRole("heading", { name: /deployment unavailable/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/deployment not found/i)).toBeInTheDocument();
+  });
+
+  test("project details loads deployment history and links to deployment details", async () => {
+    const projectId = "11111111-1111-1111-1111-111111111111";
+    const deploymentId = "22222222-2222-2222-2222-222222222222";
+    const now = "2026-04-28T12:00:00Z";
+    const project = {
+      id: projectId,
+      slug: "docs-site",
+      name: "Docs Site",
+      status: "active" as const,
+      created_at: now,
+      updated_at: now,
+      archived_at: null,
+      soft_deleted_at: null,
+    };
+    const deployment = {
+      id: deploymentId,
+      project_id: projectId,
+      status: "pending" as const,
+      source_branch: "main",
+      source_revision: "deadbeef",
+      created_at: now,
+      started_at: null,
+      finished_at: null,
+    };
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = requestPath(input);
+      const method =
+        input instanceof Request ? input.method : (init?.method ?? "GET");
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse();
+      }
+
+      if (path === `/api/v1/projects/${projectId}` && method === "GET") {
+        return projectResponse(project);
+      }
+
+      if (path === `/api/v1/projects/${projectId}/deployments` && method === "GET") {
+        return deploymentsResponse([deployment]);
+      }
+
+      if (
+        path === `/api/v1/projects/${projectId}/deployments/${deploymentId}` &&
+        method === "GET"
+      ) {
+        return deploymentResponse(deployment);
+      }
+
+      throw new Error(`Unexpected request for ${method} ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { router } = renderRouter(`/projects/${projectId}`);
+
+    expect(await screen.findByText("deadbeef")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /view deployment details/i }));
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe(
+        `/projects/${projectId}/deployments/${deploymentId}`,
+      );
+    });
+  });
+
+  test("project details can create a deployment and prepend it to history", async () => {
+    const projectId = "11111111-1111-1111-1111-111111111111";
+    const createdAt = "2026-04-28T12:10:00Z";
+    const project = {
+      id: projectId,
+      slug: "docs-site",
+      name: "Docs Site",
+      status: "active" as const,
+      created_at: "2026-04-28T12:00:00Z",
+      updated_at: "2026-04-28T12:00:00Z",
+      archived_at: null,
+      soft_deleted_at: null,
+    };
+    const deployments: TestDeployment[] = [];
+    const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = requestPath(input);
+      const method =
+        input instanceof Request ? input.method : (init?.method ?? "GET");
+      const body = init?.body ? JSON.parse(init.body.toString()) : undefined;
+      requests.push({ path, method, body });
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse();
+      }
+
+      if (path === `/api/v1/projects/${projectId}` && method === "GET") {
+        return projectResponse(project);
+      }
+
+      if (path === `/api/v1/projects/${projectId}/deployments` && method === "GET") {
+        return deploymentsResponse(deployments);
+      }
+
+      if (path === `/api/v1/projects/${projectId}/deployments` && method === "POST") {
+        const created = {
+          id: "22222222-2222-2222-2222-222222222222",
+          project_id: projectId,
+          status: "pending" as const,
+          source_branch: body?.source_branch ?? null,
+          source_revision: body?.source_revision ?? null,
+          created_at: createdAt,
+          started_at: null,
+          finished_at: null,
+        };
+        deployments.unshift(created);
+        return deploymentResponse(created);
+      }
+
+      throw new Error(`Unexpected request for ${method} ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter(`/projects/${projectId}`);
+
+    await userEvent.type(await screen.findByLabelText(/source branch/i), "main");
+    await userEvent.type(screen.getByLabelText(/source revision/i), "deadbeef");
+    await userEvent.click(screen.getByRole("button", { name: /create deployment/i }));
+
+    await waitFor(() => {
+      expect(requests).toContainEqual({
+        path: `/api/v1/projects/${projectId}/deployments`,
+        method: "POST",
+        body: {
+          source_branch: "main",
+          source_revision: "deadbeef",
+        },
+      });
+    });
+
+    expect(await screen.findByText("deadbeef")).toBeInTheDocument();
+    expect(screen.getAllByText(/pending/i).length).toBeGreaterThan(0);
+  });
+
+  test("project details omit blank deployment source fields and show manual fallbacks", async () => {
+    const projectId = "11111111-1111-1111-1111-111111111111";
+    const createdAt = "2026-04-28T12:10:00Z";
+    const project = {
+      id: projectId,
+      slug: "docs-site",
+      name: "Docs Site",
+      status: "active" as const,
+      created_at: "2026-04-28T12:00:00Z",
+      updated_at: "2026-04-28T12:00:00Z",
+      archived_at: null,
+      soft_deleted_at: null,
+    };
+    const deployments: TestDeployment[] = [];
+    const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = requestPath(input);
+      const method =
+        input instanceof Request ? input.method : (init?.method ?? "GET");
+      const body = init?.body ? JSON.parse(init.body.toString()) : undefined;
+      requests.push({ path, method, body });
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse();
+      }
+
+      if (path === `/api/v1/projects/${projectId}` && method === "GET") {
+        return projectResponse(project);
+      }
+
+      if (path === `/api/v1/projects/${projectId}/deployments` && method === "GET") {
+        return deploymentsResponse(deployments);
+      }
+
+      if (path === `/api/v1/projects/${projectId}/deployments` && method === "POST") {
+        const created = {
+          id: "33333333-3333-3333-3333-333333333333",
+          project_id: projectId,
+          status: "pending" as const,
+          source_branch: body?.source_branch ?? null,
+          source_revision: body?.source_revision ?? null,
+          created_at: createdAt,
+          started_at: null,
+          finished_at: null,
+        };
+        deployments.unshift(created);
+        return deploymentResponse(created);
+      }
+
+      throw new Error(`Unexpected request for ${method} ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter(`/projects/${projectId}`);
+
+    await userEvent.click(await screen.findByRole("button", { name: /create deployment/i }));
+
+    await waitFor(() => {
+      expect(requests).toContainEqual({
+        path: `/api/v1/projects/${projectId}/deployments`,
+        method: "POST",
+        body: {},
+      });
+    });
+
+    expect(await screen.findByText("Manual deployment")).toBeInTheDocument();
+    expect(screen.getByText("not set")).toBeInTheDocument();
+  });
+
+  test("archived projects disable deployment creation", async () => {
+    const projectId = "11111111-1111-1111-1111-111111111111";
+    const now = "2026-04-28T12:00:00Z";
+    const project = {
+      id: projectId,
+      slug: "docs-site",
+      name: "Docs Site",
+      status: "archived" as const,
+      created_at: now,
+      updated_at: now,
+      archived_at: now,
+      soft_deleted_at: null,
+    };
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = requestPath(input);
+      const method =
+        input instanceof Request ? input.method : (init?.method ?? "GET");
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse();
+      }
+
+      if (path === `/api/v1/projects/${projectId}` && method === "GET") {
+        return projectResponse(project);
+      }
+
+      if (path === `/api/v1/projects/${projectId}/deployments` && method === "GET") {
+        return deploymentsResponse([]);
+      }
+
+      throw new Error(`Unexpected request for ${method} ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter(`/projects/${projectId}`);
+
+    expect(
+      await screen.findByText(/archived projects cannot create new deployments/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /create deployment/i })).toBeDisabled();
   });
 
   test("workspace project details use delete wording and hide hard delete", async () => {

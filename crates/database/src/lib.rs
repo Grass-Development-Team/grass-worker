@@ -703,6 +703,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn deployment_repository_find_by_id_returns_matching_deployment() {
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-04-16T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let deployment_id = Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap();
+        let project_id = Uuid::parse_str("cccccccc-cccc-cccc-cccc-cccccccccccc").unwrap();
+        let deployment = deployment::Model {
+            id: deployment_id,
+            project_id,
+            status: deployment::DeploymentStatus::Pending,
+            source_branch: Some("main".to_owned()),
+            source_revision: Some("deadbeef".to_owned()),
+            created_at,
+            started_at: None,
+            finished_at: None,
+        };
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[deployment.clone()]])
+            .into_connection();
+        let repository = SeaOrmDeploymentRepository::new(database);
+
+        let loaded = repository.find_by_id(deployment_id).await.unwrap();
+
+        assert_eq!(loaded, Some(deployment));
+
+        let statements = sql_statements(repository.into_connection());
+        let select = statements
+            .iter()
+            .find(|statement| statement.contains("FROM \"deployments\""))
+            .unwrap();
+        assert!(select.contains("WHERE \"deployments\".\"id\" ="));
+        assert!(select.contains("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"));
+        assert!(!select.contains("cccccccc-cccc-cccc-cccc-cccccccccccc"));
+    }
+
+    #[tokio::test]
+    async fn deployment_repository_lists_project_deployments_with_stable_newest_first_sql() {
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([Vec::<deployment::Model>::new()])
+            .into_connection();
+        let repository = SeaOrmDeploymentRepository::new(database);
+        let project_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
+
+        let _deployments = repository.list_by_project(project_id).await.unwrap();
+
+        let statements = sql_statements(repository.into_connection());
+        let select = statements
+            .iter()
+            .find(|statement| statement.contains("FROM \"deployments\""))
+            .unwrap();
+
+        assert!(select.contains("ORDER BY"));
+        assert!(select.contains("\"deployments\".\"project_id\""));
+
+        let created_at_order = select
+            .find("\"deployments\".\"created_at\" DESC")
+            .unwrap();
+        let id_order = select.find("\"deployments\".\"id\" DESC").unwrap();
+        assert!(created_at_order < id_order);
+    }
+
+    #[tokio::test]
     async fn deployment_repository_create_returns_pending_deployment() {
         let database = MockDatabase::new(DatabaseBackend::Postgres)
             .append_exec_results([MockExecResult {

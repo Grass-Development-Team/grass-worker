@@ -4,6 +4,7 @@ import { AdminRoute } from "./routes/admin-route";
 import { AdminDeletedProjectsPage } from "./routes/admin-deleted-projects-page";
 import { ConsoleLayout } from "./routes/console-layout";
 import { LoginPage } from "./routes/login-page";
+import { ProjectDeploymentDetailsPage } from "./routes/project-deployment-details-page";
 import { ProjectDetailsPage } from "./routes/project-details-page";
 import { ProtectedRoute } from "./routes/protected-route";
 import { ProjectsPage } from "./routes/projects-page";
@@ -59,6 +60,10 @@ export const routes: RouteObject[] = [
               {
                 path: "/projects/:projectId",
                 element: <ProjectDetailsPage />,
+              },
+              {
+                path: "/projects/:projectId/deployments/:deploymentId",
+                element: <ProjectDeploymentDetailsPage />,
               },
               {
                 path: "/settings",
