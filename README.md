@@ -1,13 +1,13 @@
 # grass-worker
 
-Initial scaffold for a self-hosted static deployment platform.
+Control-plane workspace for a self-hosted static deployment platform.
 
 ## Apps
 
-- `app/api`: control-plane API placeholder
+- `app/api`: control-plane API, setup/ready mode switching, frontend asset delivery
 - `app/node`: node-agent placeholder
-- `app/frontend`: frontend placeholder
-- `crates/config`: shared configuration defaults
+- `app/frontend`: React console for setup, sign-in, projects, and deployment records
+- `crates/config`: shared configuration loading and defaults
 
 ## Commands
 
@@ -23,15 +23,24 @@ just run-frontend
 just build-release
 ```
 
-## Scope
+## Current State
 
-This repository currently contains only the initial runnable skeleton:
+The repository has moved beyond the initial scaffold and currently provides:
 
-- Axum-based `api` and `node` services with `/` and `/health`
-- Bun-powered frontend placeholder with `Hello, World`
-- Minimal shared config defaults
+- setup/ready mode switching in `app/api`, including Stage 1 database setup and Stage 2 initial admin setup
+- frontend-backed setup flow at `/setup`
+- session auth with `POST /api/v1/auth/login`, `GET /api/v1/me`, and `POST /api/v1/auth/logout`
+- project management APIs and console flows for create/list/detail/update/archive/unarchive/soft-delete/restore/transfer owner/hard-delete
+- deployment record APIs and console flows for create/list/detail under each project
+- frontend development proxy, runtime `./public` override, and embedded asset fallback
 
-The frontend currently uses a Vite-compatible placeholder under Bun so the desired frontend stack can be swapped in later without changing the repository shape.
+Still intentionally missing at this stage:
+
+- deployment state transitions beyond the initial `pending` record
+- artifact registration/publication APIs
+- release activation and rollback
+- real `app/node` task execution
+- source-to-build automation
 
 ## Runtime Config
 
@@ -69,11 +78,12 @@ Rules:
 - `app/api` enters setup mode on `server.listen` when `config.toml` or `[database]` is missing.
 - If `[database]` exists but no admin user exists yet, `app/api` enters the `admin` setup stage.
 - `GET /api/v1/info` is available in both modes and reports whether the API is in `ready` or `setup`.
+- setup mode is frontend-driven; open `/setup` and let the console call `GET /api/v1/info` plus `/api/v1/setup/*`.
 - In ready mode, auth endpoints are available:
   - `POST /api/v1/auth/login`
   - `GET /api/v1/me`
   - `POST /api/v1/auth/logout`
-- Setup mode is API-only; the backend no longer serves placeholder HTML on `/`.
+- In ready mode, the control API also exposes project management and project-scoped deployment record routes under `/api/v1/*`.
 - In setup mode, `GET /api/v1/setup/state` reports the current setup stage.
 - In setup mode, `POST /api/v1/setup/database` accepts:
 
@@ -100,13 +110,13 @@ Rules:
 ```
 
 - A successful `POST /api/v1/setup/admin` creates the first admin user and its password credential.
-- After `database` or `admin` setup completes, restart `app/api` so startup mode is re-evaluated.
+- Successful setup requests advance the in-memory runtime mode immediately; database setup moves to `admin` or `ready`, and admin setup moves to `ready`.
 - Once `[database]` exists, `app/api` uses the configured PostgreSQL connection, creates the configured schema if needed, and runs pending migrations on startup.
 - `app/node` requires `[node]` boot config and does not have a setup mode fallback.
 - `schema` is optional and defaults to `public`.
 - With `[development]`, `app/api` proxies frontend routes to `development.dev_server`.
 - Without `[development]`, `app/api` serves frontend assets by checking `./public/` first and then falling back to embedded assets.
-- The frontend now exposes `/login` and a protected `/` console shell in ready mode.
+- The frontend exposes `/setup`, `/login`, and a protected console shell with project and deployment record pages in ready mode.
 - `/health` remains backend-owned, and API routes now live under `/api/v1/*`.
 
 ## Frontend Chain
