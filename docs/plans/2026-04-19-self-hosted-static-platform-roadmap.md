@@ -38,8 +38,8 @@
 - [x] 登录、会话鉴权、当前用户 API
 - [x] 项目管理 API 与控制台
 - [x] deployment record 创建 / 查询 / 详情基础
-- [ ] deployment 状态流转约束
-- [ ] artifact 登记 / 发布激活 / 回滚
+- [x] deployment 状态流转约束
+- [ ] artifact 发布激活 / 回滚
 - [ ] `node` 真实任务执行
 - [ ] Git source 自动构建链路
 
@@ -50,7 +50,7 @@
 - [x] Phase 0: Foundation And Bootstrap
 - [x] Phase 1: Identity Access Loop
 - [x] Phase 2: Project Management Loop
-- [ ] Phase 3: Deployment Record Loop
+- [x] Phase 3: Deployment Record Loop
 - [ ] Phase 4: First Usable Static Release Loop
 - [ ] Phase 5: Delivery Routing And Domain Model
 - [ ] Phase 6: Node Agent Integration
@@ -137,7 +137,7 @@
 - [x] `POST /api/v1/projects/:id/deployments`
 - [x] `GET /api/v1/projects/:id/deployments`
 - [x] `GET /api/v1/projects/:id/deployments/:deploymentId`
-- [ ] deployment 状态流转约束
+- [x] deployment 状态流转约束
 - [x] 前端部署列表页
 - [x] 前端部署详情页
 
@@ -145,7 +145,7 @@
 
 - [x] 可以在项目下创建 deployment 记录
 - [x] 可以查看 deployment 列表和详情
-- [ ] deployment 状态流转在 API 层自洽
+- [x] deployment 状态流转在 API 层自洽
 
 为什么现在做：
 
@@ -158,8 +158,8 @@
 
 范围：
 
-- [ ] deployment artifact 上传或登记接口
-- [ ] artifact 元数据与校验信息落库
+- [x] deployment artifact 上传或登记接口
+- [x] artifact 元数据与校验信息落库
 - [ ] 当前激活 deployment 模型
 - [ ] 发布激活接口
 - [ ] 回滚接口
@@ -167,7 +167,7 @@
 
 完成标准：
 
-- [ ] 管理员可以为项目上传静态产物
+- [x] 管理员可以为项目上传或登记静态产物
 - [ ] 可以把某个 deployment 激活为线上版本
 - [ ] 可以回滚到上一个可用版本
 - [ ] 浏览器可以真实访问站点
@@ -351,8 +351,8 @@ roadmap 确认后，后续工作一律按这个规则继续：
 
 当前应该进入的阶段：
 
-- [ ] Phase 3: Deployment Record Loop
+- [ ] Phase 4: First Usable Static Release Loop
 
 当前建议优先拆出的第一个最小功能：
 
-- [ ] deployment 状态流转约束
+- [ ] 当前激活 deployment 模型

@@ -7,7 +7,7 @@ use axum::{
     routing::{get, post},
 };
 use axum_extra::extract::CookieJar;
-use grass_worker_database::entities::deployment;
+use grass_worker_database::entities::{deployment, deployment_artifact};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -22,6 +22,37 @@ struct CreateDeploymentRequest {
     source_branch: Option<String>,
     #[serde(default)]
     source_revision: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TransitionDeploymentStatus {
+    Processing,
+    Ready,
+    Failed,
+    Canceled,
+}
+
+#[derive(Debug, Deserialize)]
+struct TransitionDeploymentRequest {
+    status: TransitionDeploymentStatus,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ArtifactKindRequest {
+    StaticSite,
+    BuildLog,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateDeploymentArtifactRequest {
+    kind: ArtifactKindRequest,
+    storage_path: String,
+    #[serde(default)]
+    checksum_sha256: Option<String>,
+    #[serde(default)]
+    size_bytes: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -61,6 +92,41 @@ struct DeploymentsEnvelope {
     deployments: Vec<DeploymentResponse>,
 }
 
+#[derive(Debug, Serialize)]
+struct DeploymentArtifactResponse {
+    id: Uuid,
+    deployment_id: Uuid,
+    kind: &'static str,
+    storage_path: String,
+    checksum_sha256: Option<String>,
+    size_bytes: Option<i64>,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<deployment_artifact::Model> for DeploymentArtifactResponse {
+    fn from(value: deployment_artifact::Model) -> Self {
+        Self {
+            id: value.id,
+            deployment_id: value.deployment_id,
+            kind: artifact_kind_label(value.kind),
+            storage_path: value.storage_path,
+            checksum_sha256: value.checksum_sha256,
+            size_bytes: value.size_bytes,
+            created_at: value.created_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct DeploymentArtifactEnvelope {
+    artifact: DeploymentArtifactResponse,
+}
+
+#[derive(Debug, Serialize)]
+struct DeploymentArtifactsEnvelope {
+    artifacts: Vec<DeploymentArtifactResponse>,
+}
+
 pub fn install_deployment_routes(router: Router, state: AppState) -> Router {
     let deployment_router = Router::new()
         .route(
@@ -70,6 +136,14 @@ pub fn install_deployment_routes(router: Router, state: AppState) -> Router {
         .route(
             "/api/v1/projects/{id}/deployments/{deployment_id}",
             get(get_deployment),
+        )
+        .route(
+            "/api/v1/projects/{id}/deployments/{deployment_id}/transition",
+            post(transition_deployment),
+        )
+        .route(
+            "/api/v1/projects/{id}/deployments/{deployment_id}/artifacts",
+            post(create_deployment_artifact).get(list_deployment_artifacts),
         )
         .layer(Extension(state));
 
@@ -181,6 +255,138 @@ async fn get_deployment(
     }
 }
 
+async fn transition_deployment(
+    Extension(state): Extension<AppState>,
+    jar: CookieJar,
+    Path((id, deployment_id)): Path<(String, String)>,
+    payload: Result<Json<TransitionDeploymentRequest>, JsonRejection>,
+) -> axum::response::Response {
+    let actor = match authenticated_user(&state, jar).await {
+        Ok(actor) => actor,
+        Err(response) => return response,
+    };
+    let project_id = match parse_project_id(&id) {
+        Ok(id) => id,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+    };
+    let deployment_id = match parse_deployment_id(&deployment_id) {
+        Ok(id) => id,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+    };
+    let Json(payload) = match payload {
+        Ok(payload) => payload,
+        Err(error) => {
+            tracing::warn!(error = %error, "transition deployment request rejected: invalid payload");
+            return error_response(StatusCode::BAD_REQUEST, error.to_string());
+        }
+    };
+
+    match state
+        .deployments
+        .transition_for_project(
+            state.database.as_ref(),
+            &actor,
+            project_id,
+            deployment_id,
+            transition_status(payload.status),
+        )
+        .await
+    {
+        Ok(deployment) => Json(DeploymentEnvelope {
+            deployment: deployment.into(),
+        })
+        .into_response(),
+        Err(error) => deployment_error_response(error),
+    }
+}
+
+async fn create_deployment_artifact(
+    Extension(state): Extension<AppState>,
+    jar: CookieJar,
+    Path((id, deployment_id)): Path<(String, String)>,
+    payload: Result<Json<CreateDeploymentArtifactRequest>, JsonRejection>,
+) -> axum::response::Response {
+    let actor = match authenticated_user(&state, jar).await {
+        Ok(actor) => actor,
+        Err(response) => return response,
+    };
+    let project_id = match parse_project_id(&id) {
+        Ok(id) => id,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+    };
+    let deployment_id = match parse_deployment_id(&deployment_id) {
+        Ok(id) => id,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+    };
+    let Json(payload) = match payload {
+        Ok(payload) => payload,
+        Err(error) => {
+            tracing::warn!(error = %error, "create deployment artifact request rejected: invalid payload");
+            return error_response(StatusCode::BAD_REQUEST, error.to_string());
+        }
+    };
+
+    match state
+        .deployments
+        .register_artifact_for_project(
+            state.database.as_ref(),
+            &actor,
+            project_id,
+            deployment_id,
+            crate::domain::deployment::RegisterDeploymentArtifactInput {
+                kind: artifact_kind(payload.kind),
+                storage_path: payload.storage_path,
+                checksum_sha256: payload.checksum_sha256,
+                size_bytes: payload.size_bytes,
+            },
+        )
+        .await
+    {
+        Ok(artifact) => (
+            StatusCode::CREATED,
+            Json(DeploymentArtifactEnvelope {
+                artifact: artifact.into(),
+            }),
+        )
+            .into_response(),
+        Err(error) => deployment_error_response(error),
+    }
+}
+
+async fn list_deployment_artifacts(
+    Extension(state): Extension<AppState>,
+    jar: CookieJar,
+    Path((id, deployment_id)): Path<(String, String)>,
+) -> axum::response::Response {
+    let actor = match authenticated_user(&state, jar).await {
+        Ok(actor) => actor,
+        Err(response) => return response,
+    };
+    let project_id = match parse_project_id(&id) {
+        Ok(id) => id,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+    };
+    let deployment_id = match parse_deployment_id(&deployment_id) {
+        Ok(id) => id,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+    };
+
+    match state
+        .deployments
+        .list_artifacts_for_project(state.database.as_ref(), &actor, project_id, deployment_id)
+        .await
+    {
+        Ok(artifacts) => Json(DeploymentArtifactsEnvelope {
+            artifacts: artifacts
+                .into_iter()
+                .map(DeploymentArtifactResponse::from)
+                .collect(),
+        })
+        .into_response(),
+        Err(error) => deployment_error_response(error),
+    }
+}
+
 async fn authenticated_user(
     state: &AppState,
     jar: CookieJar,
@@ -221,6 +427,22 @@ fn parse_project_id(raw: &str) -> Result<Uuid, &'static str> {
 
 fn parse_deployment_id(raw: &str) -> Result<Uuid, &'static str> {
     Uuid::parse_str(raw).map_err(|_error| "invalid deployment id")
+}
+
+fn transition_status(status: TransitionDeploymentStatus) -> deployment::DeploymentStatus {
+    match status {
+        TransitionDeploymentStatus::Processing => deployment::DeploymentStatus::Processing,
+        TransitionDeploymentStatus::Ready => deployment::DeploymentStatus::Ready,
+        TransitionDeploymentStatus::Failed => deployment::DeploymentStatus::Failed,
+        TransitionDeploymentStatus::Canceled => deployment::DeploymentStatus::Canceled,
+    }
+}
+
+fn artifact_kind(kind: ArtifactKindRequest) -> deployment_artifact::ArtifactKind {
+    match kind {
+        ArtifactKindRequest::StaticSite => deployment_artifact::ArtifactKind::StaticSite,
+        ArtifactKindRequest::BuildLog => deployment_artifact::ArtifactKind::BuildLog,
+    }
 }
 
 fn deployment_error_response(
@@ -266,6 +488,13 @@ fn deployment_status_label(status: deployment::DeploymentStatus) -> &'static str
     }
 }
 
+fn artifact_kind_label(kind: deployment_artifact::ArtifactKind) -> &'static str {
+    match kind {
+        deployment_artifact::ArtifactKind::StaticSite => "static_site",
+        deployment_artifact::ArtifactKind::BuildLog => "build_log",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,7 +504,9 @@ mod tests {
         http::{Request, StatusCode, header},
     };
     use chrono::{Duration, TimeZone, Utc};
-    use grass_worker_database::entities::{deployment, project, user, user_session};
+    use grass_worker_database::entities::{
+        deployment, deployment_artifact, project, user, user_session,
+    };
     use sea_orm::{DatabaseBackend, MockDatabase, MockExecResult};
     use tower::ServiceExt;
     use uuid::Uuid;
@@ -342,6 +573,62 @@ mod tests {
             created_at,
             started_at: None,
             finished_at: None,
+        }
+    }
+
+    fn sample_deployment_with_status(
+        id: Uuid,
+        project_id: Uuid,
+        status: deployment::DeploymentStatus,
+    ) -> deployment::Model {
+        let created_at = Utc.with_ymd_and_hms(2026, 4, 28, 9, 0, 0).unwrap();
+        let started_at = if matches!(
+            status,
+            deployment::DeploymentStatus::Processing
+                | deployment::DeploymentStatus::Ready
+                | deployment::DeploymentStatus::Failed
+                | deployment::DeploymentStatus::Canceled
+        ) {
+            Some(created_at + Duration::minutes(5))
+        } else {
+            None
+        };
+        let finished_at = if matches!(
+            status,
+            deployment::DeploymentStatus::Ready
+                | deployment::DeploymentStatus::Failed
+                | deployment::DeploymentStatus::Canceled
+        ) {
+            Some(created_at + Duration::minutes(15))
+        } else {
+            None
+        };
+
+        deployment::Model {
+            id,
+            project_id,
+            status,
+            source_branch: Some("main".to_owned()),
+            source_revision: Some("deadbeef".to_owned()),
+            created_at,
+            started_at,
+            finished_at,
+        }
+    }
+
+    fn sample_artifact(
+        id: Uuid,
+        deployment_id: Uuid,
+        kind: deployment_artifact::ArtifactKind,
+    ) -> deployment_artifact::Model {
+        deployment_artifact::Model {
+            id,
+            deployment_id,
+            kind,
+            storage_path: "s3://artifacts/docs-site".to_owned(),
+            checksum_sha256: Some("abc123".to_owned()),
+            size_bytes: Some(1024),
+            created_at: Utc.with_ymd_and_hms(2026, 4, 28, 9, 30, 0).unwrap(),
         }
     }
 
@@ -502,5 +789,263 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["error"], "deployment not found");
+    }
+
+    #[tokio::test]
+    async fn transition_deployment_returns_updated_envelope() {
+        let owner = sample_user(Uuid::new_v4(), false);
+        let token = "session-token";
+        let project_id = Uuid::new_v4();
+        let deployment_id = Uuid::new_v4();
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[sample_session(owner.id, token)]])
+            .append_query_results([[owner.clone()]])
+            .append_query_results([[sample_project(
+                project_id,
+                owner.id,
+                project::ProjectStatus::Active,
+            )]])
+            .append_query_results([[sample_deployment_with_status(
+                deployment_id,
+                project_id,
+                deployment::DeploymentStatus::Pending,
+            )]])
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .append_query_results([[sample_deployment_with_status(
+                deployment_id,
+                project_id,
+                deployment::DeploymentStatus::Processing,
+            )]])
+            .into_connection();
+        let app = install_deployment_routes(Router::new(), AppState::new(database));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/projects/{project_id}/deployments/{deployment_id}/transition"
+                    ))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::COOKIE, session_cookie(token))
+                    .body(Body::from(r#"{"status":"processing"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["deployment"]["id"], deployment_id.to_string());
+        assert_eq!(json["deployment"]["status"], "processing");
+        assert!(json["deployment"]["started_at"].is_string());
+        assert!(json["deployment"]["finished_at"].is_null());
+    }
+
+    #[tokio::test]
+    async fn create_deployment_artifact_returns_created_envelope() {
+        let owner = sample_user(Uuid::new_v4(), false);
+        let token = "session-token";
+        let project_id = Uuid::new_v4();
+        let deployment_id = Uuid::new_v4();
+        let artifact_id = Uuid::new_v4();
+        let artifact = sample_artifact(
+            artifact_id,
+            deployment_id,
+            deployment_artifact::ArtifactKind::StaticSite,
+        );
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[sample_session(owner.id, token)]])
+            .append_query_results([[owner.clone()]])
+            .append_query_results([[sample_project(
+                project_id,
+                owner.id,
+                project::ProjectStatus::Active,
+            )]])
+            .append_query_results([[sample_deployment_with_status(
+                deployment_id,
+                project_id,
+                deployment::DeploymentStatus::Processing,
+            )]])
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .into_connection();
+        let app = install_deployment_routes(Router::new(), AppState::new(database));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/projects/{project_id}/deployments/{deployment_id}/artifacts"
+                    ))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::COOKIE, session_cookie(token))
+                    .body(Body::from(
+                        r#"{"kind":"static_site","storage_path":"s3://artifacts/docs-site","checksum_sha256":"abc123","size_bytes":1024}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["artifact"]["deployment_id"], deployment_id.to_string());
+        assert_eq!(json["artifact"]["kind"], "static_site");
+        assert_eq!(json["artifact"]["storage_path"], artifact.storage_path);
+        assert_eq!(
+            json["artifact"]["checksum_sha256"],
+            artifact.checksum_sha256.unwrap()
+        );
+        assert_eq!(json["artifact"]["size_bytes"], 1024);
+    }
+
+    #[tokio::test]
+    async fn transition_deployment_rejects_finishing_from_pending() {
+        let owner = sample_user(Uuid::new_v4(), false);
+        let token = "session-token";
+        let project_id = Uuid::new_v4();
+        let deployment_id = Uuid::new_v4();
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[sample_session(owner.id, token)]])
+            .append_query_results([[owner.clone()]])
+            .append_query_results([[sample_project(
+                project_id,
+                owner.id,
+                project::ProjectStatus::Active,
+            )]])
+            .append_query_results([[sample_deployment_with_status(
+                deployment_id,
+                project_id,
+                deployment::DeploymentStatus::Pending,
+            )]])
+            .into_connection();
+        let app = install_deployment_routes(Router::new(), AppState::new(database));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/projects/{project_id}/deployments/{deployment_id}/transition"
+                    ))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::COOKIE, session_cookie(token))
+                    .body(Body::from(r#"{"status":"ready"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json["error"],
+            "deployment must be processing before it can finish"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_deployment_artifact_rejects_pending_deployment() {
+        let owner = sample_user(Uuid::new_v4(), false);
+        let token = "session-token";
+        let project_id = Uuid::new_v4();
+        let deployment_id = Uuid::new_v4();
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[sample_session(owner.id, token)]])
+            .append_query_results([[owner.clone()]])
+            .append_query_results([[sample_project(
+                project_id,
+                owner.id,
+                project::ProjectStatus::Active,
+            )]])
+            .append_query_results([[sample_deployment_with_status(
+                deployment_id,
+                project_id,
+                deployment::DeploymentStatus::Pending,
+            )]])
+            .into_connection();
+        let app = install_deployment_routes(Router::new(), AppState::new(database));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/projects/{project_id}/deployments/{deployment_id}/artifacts"
+                    ))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::COOKIE, session_cookie(token))
+                    .body(Body::from(
+                        r#"{"kind":"build_log","storage_path":"s3://artifacts/build.log"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "deployment has not started");
+    }
+
+    #[tokio::test]
+    async fn list_deployment_artifacts_returns_envelope() {
+        let owner = sample_user(Uuid::new_v4(), false);
+        let token = "session-token";
+        let project_id = Uuid::new_v4();
+        let deployment_id = Uuid::new_v4();
+        let artifact = sample_artifact(
+            Uuid::new_v4(),
+            deployment_id,
+            deployment_artifact::ArtifactKind::BuildLog,
+        );
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[sample_session(owner.id, token)]])
+            .append_query_results([[owner.clone()]])
+            .append_query_results([[sample_project(
+                project_id,
+                owner.id,
+                project::ProjectStatus::Active,
+            )]])
+            .append_query_results([[sample_deployment_with_status(
+                deployment_id,
+                project_id,
+                deployment::DeploymentStatus::Ready,
+            )]])
+            .append_query_results([[artifact.clone()]])
+            .into_connection();
+        let app = install_deployment_routes(Router::new(), AppState::new(database));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/api/v1/projects/{project_id}/deployments/{deployment_id}/artifacts"
+                    ))
+                    .header(header::COOKIE, session_cookie(token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["artifacts"].as_array().unwrap().len(), 1);
+        assert_eq!(json["artifacts"][0]["id"], artifact.id.to_string());
+        assert_eq!(json["artifacts"][0]["kind"], "build_log");
     }
 }

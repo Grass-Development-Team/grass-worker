@@ -541,13 +541,13 @@
 
 ## 8. Current Recommendation
 
-当前 `dev` 已经具备 setup/ready 切换、数据库初始化、首个管理员创建、登录会话、项目控制台，以及 project-scoped deployment record 基础链路。严格按 master plan 检查，`Phase 2` 仍缺管理员用户清单类能力，`Phase 3` 仍缺 deployment 状态流转约束与 `deployment_artifacts` 对外 API。
+当前 `dev` 已经具备 setup/ready 切换、数据库初始化、首个管理员创建、登录会话、项目控制台、deployment 状态流转，以及 `deployment_artifacts` 的登记 / 查询 API 与前端落点。严格按当前 master plan 检查，`Phase 0` 到 `Phase 3` 已经可以视为收尾完成。
 
 建议下一轮只做一个最小功能：
 
-1. 保持当前 `/api/v1/*` 合同不变，不提前进入静态发布、node 执行或 source 自动构建。
-2. 先补 deployment 状态流转约束，让 deployment 不再只是一次性写入 `pending` 记录。
-3. 状态流转闭环后，再单独补 `deployment_artifacts` 对外 API。
-4. `Phase 2` 的管理员用户清单能力作为独立最小功能补齐，不和 deployment 子系统混做。
+1. 保持当前 `/api/v1/*` 的 project / deployment / artifact 合同不变，先进入静态发布最小闭环。
+2. 先补“当前激活 deployment”模型，让 artifact 已登记但尚未对外生效的状态有明确落点。
+3. 在 activation 模型稳定后，再补发布切换与 rollback API。
+4. 最后再把静态目录对外访问链路接上，不和 node 执行或 source 自动构建混做。
 
-这样可以继续保持“单轮一个最小功能”的节奏，避免把 Phase 3 的控制面收尾和后续 Phase 4/5 的发布链路缠在一起。
+这样可以继续保持“单轮一个最小功能”的节奏，把当前已经成型的控制面继续推到首个可上线静态版本，而不提前把 node 执行或 source 自动构建缠进来。
