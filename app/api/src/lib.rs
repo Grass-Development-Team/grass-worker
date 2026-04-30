@@ -20,6 +20,7 @@ use axum::{
 use features::{
     auth::install_auth_routes, deployments::install_deployment_routes,
     projects::install_project_routes, setup::install_setup_routes, system::install_system_routes,
+    users::install_user_routes,
 };
 use frontend::{FrontendMode, install_frontend};
 use grass_worker_config::AppConfig;
@@ -38,6 +39,7 @@ pub struct AppState {
     pub auth: crate::adapters::auth::AuthService,
     pub projects: crate::domain::project::ProjectService,
     pub deployments: crate::domain::deployment::DeploymentService,
+    pub users: crate::domain::user::UserService,
 }
 
 impl AppState {
@@ -47,6 +49,7 @@ impl AppState {
             auth: crate::adapters::auth::AuthService,
             projects: crate::domain::project::ProjectService,
             deployments: crate::domain::deployment::DeploymentService,
+            users: crate::domain::user::UserService,
         }
     }
 }
@@ -366,7 +369,8 @@ fn build_app_router(
             let router = install_system_routes(router, ApiInfo::ready());
             let router = install_auth_routes(router, context.state.clone());
             let router = install_project_routes(router, context.state.clone());
-            let router = install_deployment_routes(router, context.state.clone())
+            let router = install_deployment_routes(router, context.state.clone());
+            let router = install_user_routes(router, context.state.clone())
                 .route("/api/{*path}", any(api_not_found));
             let frontend_mode = resolve_frontend_mode(context.config.development.as_ref())?;
 
@@ -896,6 +900,67 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn ready_mode_admin_users_with_cookie_returns_user_list() {
+        let now = chrono::Utc::now();
+        let admin_user_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
+        let member_user_id = Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap();
+        let session_token = "session-token";
+        let admin_user = user::Model {
+            id: admin_user_id,
+            email: "admin@example.com".to_owned(),
+            is_admin: true,
+            is_initial_admin: true,
+            created_at: now,
+            updated_at: now,
+        };
+        let member_user = user::Model {
+            id: member_user_id,
+            email: "member@example.com".to_owned(),
+            is_admin: false,
+            is_initial_admin: false,
+            created_at: now,
+            updated_at: now,
+        };
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[user_session::Model {
+                id: Uuid::parse_str("cccccccc-cccc-cccc-cccc-cccccccccccc").unwrap(),
+                user_id: admin_user_id,
+                token_hash: crate::adapters::auth::hash_session_token(session_token),
+                created_at: now,
+                expires_at: now + chrono::Duration::days(7),
+                revoked_at: None,
+            }]])
+            .append_query_results([[admin_user.clone()]])
+            .append_query_results([vec![admin_user.clone(), member_user.clone()]])
+            .into_connection();
+        let response = app_router(ready_mode_with_database(database))
+            .unwrap()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/admin/users")
+                    .header(
+                        header::COOKIE,
+                        format!(
+                            "{}={session_token}",
+                            crate::domain::auth::SESSION_COOKIE_NAME
+                        ),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["users"].as_array().unwrap().len(), 2);
+        assert_eq!(json["users"][0]["email"], "admin@example.com");
+        assert_eq!(json["users"][1]["email"], "member@example.com");
     }
 
     #[tokio::test]

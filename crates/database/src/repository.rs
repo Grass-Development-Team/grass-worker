@@ -152,6 +152,7 @@ pub trait UserRepository {
     ) -> Result<user::Model, DbErr>;
     async fn find_by_email(&self, email: &str) -> Result<Option<user::Model>, DbErr>;
     async fn has_admin(&self) -> Result<bool, DbErr>;
+    async fn list_all(&self) -> Result<Vec<user::Model>, DbErr>;
 }
 
 #[async_trait]
@@ -679,6 +680,14 @@ impl UserRepository for SeaOrmUserRepository {
             .await?;
 
         Ok(admin.is_some())
+    }
+
+    async fn list_all(&self) -> Result<Vec<user::Model>, DbErr> {
+        user::Entity::find()
+            .order_by_asc(user::Column::CreatedAt)
+            .order_by_asc(user::Column::Email)
+            .all(&self.database)
+            .await
     }
 }
 

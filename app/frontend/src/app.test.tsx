@@ -70,6 +70,15 @@ type TestDeployment = {
   finished_at?: string | null;
 };
 
+type TestUser = {
+  id: string;
+  email: string;
+  is_admin: boolean;
+  is_initial_admin: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
 function normalizeProject(project: TestProject) {
   return {
     owner_user_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -121,6 +130,15 @@ function deploymentResponse(deployment: TestDeployment) {
   return jsonResponse(
     {
       deployment: normalizeDeployment(deployment),
+    },
+    { status: 200 },
+  );
+}
+
+function usersResponse(users: TestUser[]) {
+  return jsonResponse(
+    {
+      users,
     },
     { status: 200 },
   );
@@ -449,6 +467,51 @@ describe("auth routing", () => {
     ).toHaveTextContent("Admin");
     expect(projectManagementLink).toHaveAttribute("aria-current", "page");
     expect(screen.queryByRole("link", { name: /^admin$/i })).not.toBeInTheDocument();
+  });
+
+  test("admin users page loads the admin user inventory", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = requestUrl(input);
+
+      if (url.pathname === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (url.pathname === "/api/v1/me") {
+        return currentUserResponse({ is_admin: true });
+      }
+
+      if (url.pathname === "/api/v1/admin/users") {
+        return usersResponse([
+          {
+            id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            email: "admin@example.com",
+            is_admin: true,
+            is_initial_admin: true,
+            created_at: "2026-04-17T10:00:00Z",
+            updated_at: "2026-04-17T10:00:00Z",
+          },
+          {
+            id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            email: "member@example.com",
+            is_admin: false,
+            is_initial_admin: false,
+            created_at: "2026-04-18T10:00:00Z",
+            updated_at: "2026-04-18T10:00:00Z",
+          },
+        ]);
+      }
+
+      throw new Error(`Unexpected request for ${url.pathname}${url.search}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter("/admin/users");
+
+    expect(await screen.findByRole("heading", { name: /^users$/i })).toBeInTheDocument();
+    expect(await screen.findByText("member@example.com")).toBeInTheDocument();
+    expect(screen.getAllByText("admin@example.com").length).toBeGreaterThan(0);
   });
 
   test("authenticated users can reach the settings placeholder inside the console", async () => {

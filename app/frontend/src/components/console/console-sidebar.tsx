@@ -1,4 +1,4 @@
-import { FolderKanban, LogOut, Menu, Settings, Shield } from "lucide-react";
+import { FolderKanban, LogOut, Menu, Settings, Shield, Users } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { currentUserQueryKey, logout, type CurrentUser } from "@/api/auth";
@@ -67,6 +67,12 @@ function navigationGroups(currentUser: CurrentUser): NavigationGroup[] {
           label: "Project management",
           icon: Shield,
           matches: (pathname) => matchesConsolePath("/admin/projects", pathname),
+        },
+        {
+          href: "/admin/users",
+          label: "Users",
+          icon: Users,
+          matches: (pathname) => matchesConsolePath("/admin/users", pathname),
         },
       ],
     },
