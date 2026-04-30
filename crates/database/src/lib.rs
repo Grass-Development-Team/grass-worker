@@ -757,9 +757,7 @@ mod tests {
         assert!(select.contains("ORDER BY"));
         assert!(select.contains("\"deployments\".\"project_id\""));
 
-        let created_at_order = select
-            .find("\"deployments\".\"created_at\" DESC")
-            .unwrap();
+        let created_at_order = select.find("\"deployments\".\"created_at\" DESC").unwrap();
         let id_order = select.find("\"deployments\".\"id\" DESC").unwrap();
         assert!(created_at_order < id_order);
     }

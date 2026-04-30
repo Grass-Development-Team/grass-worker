@@ -25,7 +25,9 @@ export function DeploymentOverviewCard({ deployment }: { deployment: Deployment 
           <div className="space-y-1">
             <CardDescription>{deployment.id}</CardDescription>
             <CardTitle>Deployment details</CardTitle>
-            <CardDescription>Read-only deployment record for this project.</CardDescription>
+            <CardDescription>
+              Deployment record and current lifecycle state for this project.
+            </CardDescription>
           </div>
           <DeploymentStatusBadge status={deployment.status} />
         </div>

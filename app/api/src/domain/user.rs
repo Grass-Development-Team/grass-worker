@@ -73,6 +73,9 @@ impl UserService {
             return Err(UserError::forbidden("forbidden"));
         }
 
-        user_repository(database).list_all().await.map_err(map_db_error)
+        user_repository(database)
+            .list_all()
+            .await
+            .map_err(map_db_error)
     }
 }

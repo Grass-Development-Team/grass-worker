@@ -1,10 +1,5 @@
 use crate::AppState;
-use axum::{
-    Extension, Json, Router,
-    http::StatusCode,
-    response::IntoResponse,
-    routing::get,
-};
+use axum::{Extension, Json, Router, http::StatusCode, response::IntoResponse, routing::get};
 use axum_extra::extract::CookieJar;
 use grass_worker_database::entities::user;
 use serde::Serialize;

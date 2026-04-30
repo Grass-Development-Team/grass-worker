@@ -54,8 +54,7 @@ export function CreateDeploymentCard({
           <h2>Create deployment</h2>
         </CardTitle>
         <CardDescription>
-          Record a new deployment intent for this project before artifact and execution support
-          lands.
+          Record a new deployment intent for this project before execution automation lands.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">

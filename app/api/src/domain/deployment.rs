@@ -3,9 +3,10 @@ use crate::domain::{
     project::{self, enforce_project_visibility},
 };
 use chrono::Utc;
-use grass_worker_database::entities::{deployment, project as project_entity};
+use grass_worker_database::entities::{deployment, deployment_artifact, project as project_entity};
 use grass_worker_database::repository::{
-    DeploymentRepository, NewDeployment, ProjectRepository, SeaOrmDeploymentRepository,
+    DeploymentArtifactRepository, DeploymentRepository, NewDeployment, NewDeploymentArtifact,
+    ProjectRepository, SeaOrmDeploymentArtifactRepository, SeaOrmDeploymentRepository,
     SeaOrmProjectRepository,
 };
 use sea_orm::{DatabaseConnection, DbErr};
@@ -13,6 +14,14 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DeploymentService;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisterDeploymentArtifactInput {
+    pub kind: deployment_artifact::ArtifactKind,
+    pub storage_path: String,
+    pub checksum_sha256: Option<String>,
+    pub size_bytes: Option<i64>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeploymentErrorKind {
@@ -124,6 +133,61 @@ fn deployment_repository(database: &DatabaseConnection) -> SeaOrmDeploymentRepos
     SeaOrmDeploymentRepository::new(clone_database_connection(database))
 }
 
+fn deployment_artifact_repository(
+    database: &DatabaseConnection,
+) -> SeaOrmDeploymentArtifactRepository {
+    SeaOrmDeploymentArtifactRepository::new(clone_database_connection(database))
+}
+
+fn transition_plan(
+    current_status: &deployment::DeploymentStatus,
+    next_status: &deployment::DeploymentStatus,
+) -> Result<
+    (
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    ),
+    DeploymentError,
+> {
+    let now = Utc::now();
+
+    match (current_status, next_status) {
+        (deployment::DeploymentStatus::Pending, deployment::DeploymentStatus::Processing) => {
+            Ok((Some(now), None))
+        }
+        (deployment::DeploymentStatus::Pending, deployment::DeploymentStatus::Canceled) => {
+            Ok((None, Some(now)))
+        }
+        (deployment::DeploymentStatus::Processing, deployment::DeploymentStatus::Ready)
+        | (deployment::DeploymentStatus::Processing, deployment::DeploymentStatus::Failed)
+        | (deployment::DeploymentStatus::Processing, deployment::DeploymentStatus::Canceled) => {
+            Ok((None, Some(now)))
+        }
+        (deployment::DeploymentStatus::Pending, deployment::DeploymentStatus::Ready)
+        | (deployment::DeploymentStatus::Pending, deployment::DeploymentStatus::Failed) => Err(
+            DeploymentError::conflict("deployment must be processing before it can finish"),
+        ),
+        (_, deployment::DeploymentStatus::Pending) => Err(DeploymentError::conflict(
+            "deployment cannot transition back to pending",
+        )),
+        (current, next) if current == next => Err(DeploymentError::conflict(format!(
+            "deployment is already {}",
+            deployment_status_label(current)
+        ))),
+        _ => Err(DeploymentError::conflict("deployment is already finished")),
+    }
+}
+
+fn deployment_status_label(status: &deployment::DeploymentStatus) -> &'static str {
+    match status {
+        deployment::DeploymentStatus::Pending => "pending",
+        deployment::DeploymentStatus::Processing => "processing",
+        deployment::DeploymentStatus::Ready => "ready",
+        deployment::DeploymentStatus::Failed => "failed",
+        deployment::DeploymentStatus::Canceled => "canceled",
+    }
+}
+
 impl DeploymentService {
     async fn load_visible_project(
         &self,
@@ -148,7 +212,9 @@ impl DeploymentService {
         source_branch: Option<&str>,
         source_revision: Option<&str>,
     ) -> Result<deployment::Model, DeploymentError> {
-        let project = self.load_visible_project(database, actor, project_id).await?;
+        let project = self
+            .load_visible_project(database, actor, project_id)
+            .await?;
         if project.status != project_entity::ProjectStatus::Active {
             return Err(DeploymentError::conflict("project is not active"));
         }
@@ -177,7 +243,9 @@ impl DeploymentService {
         actor: &AuthenticatedUser,
         project_id: Uuid,
     ) -> Result<Vec<deployment::Model>, DeploymentError> {
-        let _project = self.load_visible_project(database, actor, project_id).await?;
+        let _project = self
+            .load_visible_project(database, actor, project_id)
+            .await?;
         deployment_repository(database)
             .list_by_project(project_id)
             .await
@@ -191,7 +259,9 @@ impl DeploymentService {
         project_id: Uuid,
         deployment_id: Uuid,
     ) -> Result<deployment::Model, DeploymentError> {
-        let _project = self.load_visible_project(database, actor, project_id).await?;
+        let _project = self
+            .load_visible_project(database, actor, project_id)
+            .await?;
         let deployment = deployment_repository(database)
             .find_by_id(deployment_id)
             .await
@@ -203,6 +273,87 @@ impl DeploymentService {
         }
 
         Ok(deployment)
+    }
+
+    pub async fn transition_for_project(
+        &self,
+        database: &DatabaseConnection,
+        actor: &AuthenticatedUser,
+        project_id: Uuid,
+        deployment_id: Uuid,
+        next_status: deployment::DeploymentStatus,
+    ) -> Result<deployment::Model, DeploymentError> {
+        let deployment = self
+            .get_for_project(database, actor, project_id, deployment_id)
+            .await?;
+        let (started_at, finished_at) = transition_plan(&deployment.status, &next_status)?;
+
+        deployment_repository(database)
+            .set_status_if_current(
+                deployment_id,
+                deployment.status,
+                next_status,
+                started_at,
+                finished_at,
+            )
+            .await
+            .map_err(map_db_error)?
+            .ok_or_else(|| DeploymentError::conflict("deployment status changed during transition"))
+    }
+
+    pub async fn list_artifacts_for_project(
+        &self,
+        database: &DatabaseConnection,
+        actor: &AuthenticatedUser,
+        project_id: Uuid,
+        deployment_id: Uuid,
+    ) -> Result<Vec<deployment_artifact::Model>, DeploymentError> {
+        let _deployment = self
+            .get_for_project(database, actor, project_id, deployment_id)
+            .await?;
+
+        deployment_artifact_repository(database)
+            .list_by_deployment(deployment_id)
+            .await
+            .map_err(map_db_error)
+    }
+
+    pub async fn register_artifact_for_project(
+        &self,
+        database: &DatabaseConnection,
+        actor: &AuthenticatedUser,
+        project_id: Uuid,
+        deployment_id: Uuid,
+        input: RegisterDeploymentArtifactInput,
+    ) -> Result<deployment_artifact::Model, DeploymentError> {
+        let deployment = self
+            .get_for_project(database, actor, project_id, deployment_id)
+            .await?;
+
+        if deployment.status == deployment::DeploymentStatus::Pending {
+            return Err(DeploymentError::conflict("deployment has not started"));
+        }
+
+        let storage_path = normalize_optional_field(Some(input.storage_path.as_str()))
+            .ok_or_else(|| DeploymentError::validation("storage_path is required"))?;
+        if input.size_bytes.is_some_and(|value| value < 0) {
+            return Err(DeploymentError::validation(
+                "size_bytes must be greater than or equal to 0",
+            ));
+        }
+
+        deployment_artifact_repository(database)
+            .create(NewDeploymentArtifact {
+                id: Uuid::new_v4(),
+                deployment_id,
+                kind: input.kind,
+                storage_path,
+                checksum_sha256: normalize_optional_field(input.checksum_sha256.as_deref()),
+                size_bytes: input.size_bytes,
+                created_at: Utc::now(),
+            })
+            .await
+            .map_err(map_db_error)
     }
 }
 
@@ -445,7 +596,12 @@ mod tests {
             .into_connection();
 
         let error = DeploymentService
-            .get_for_project(&database, &actor(owner_id, false), project_id, deployment_id)
+            .get_for_project(
+                &database,
+                &actor(owner_id, false),
+                project_id,
+                deployment_id,
+            )
             .await
             .unwrap_err();
 

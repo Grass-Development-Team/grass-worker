@@ -31,14 +31,13 @@ The repository has moved beyond the initial scaffold and currently provides:
 - frontend-backed setup flow at `/setup`
 - session auth with `POST /api/v1/auth/login`, `GET /api/v1/me`, and `POST /api/v1/auth/logout`
 - project management APIs and console flows for create/list/detail/update/archive/unarchive/soft-delete/restore/transfer owner/hard-delete
-- deployment record APIs and console flows for create/list/detail under each project
+- deployment record APIs and console flows for create/list/detail/status transitions under each project
+- deployment artifact registration/list APIs and deployment-detail console workflows
 - frontend development proxy, runtime `./public` override, and embedded asset fallback
 
 Still intentionally missing at this stage:
 
-- deployment state transitions beyond the initial `pending` record
-- artifact registration/publication APIs
-- release activation and rollback
+- artifact publication/activation and rollback
 - real `app/node` task execution
 - source-to-build automation
 

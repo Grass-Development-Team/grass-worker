@@ -4,8 +4,8 @@ use crate::entities::{
 use async_trait::async_trait;
 use sea_orm::entity::prelude::DateTimeUtc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, DbErr,
-    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Select, Set,
+    ActiveModelTrait, ActiveValue, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection,
+    DbErr, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Select, Set,
     sea_query::{OnConflict, Query},
 };
 use uuid::Uuid;
@@ -128,6 +128,14 @@ pub trait DeploymentRepository {
     async fn create(&self, new_deployment: NewDeployment) -> Result<deployment::Model, DbErr>;
     async fn find_by_id(&self, id: Uuid) -> Result<Option<deployment::Model>, DbErr>;
     async fn list_by_project(&self, project_id: Uuid) -> Result<Vec<deployment::Model>, DbErr>;
+    async fn set_status_if_current(
+        &self,
+        id: Uuid,
+        current_status: deployment::DeploymentStatus,
+        next_status: deployment::DeploymentStatus,
+        started_at: Option<DateTimeUtc>,
+        finished_at: Option<DateTimeUtc>,
+    ) -> Result<Option<deployment::Model>, DbErr>;
 }
 
 #[async_trait]
@@ -459,6 +467,38 @@ impl DeploymentRepository for SeaOrmDeploymentRepository {
             .all(&self.database)
             .await
     }
+
+    async fn set_status_if_current(
+        &self,
+        id: Uuid,
+        current_status: deployment::DeploymentStatus,
+        next_status: deployment::DeploymentStatus,
+        started_at: Option<DateTimeUtc>,
+        finished_at: Option<DateTimeUtc>,
+    ) -> Result<Option<deployment::Model>, DbErr> {
+        let update_result = deployment::Entity::update_many()
+            .set(deployment::ActiveModel {
+                status: Set(next_status),
+                started_at: match started_at {
+                    Some(value) => Set(Some(value)),
+                    None => ActiveValue::NotSet,
+                },
+                finished_at: match finished_at {
+                    Some(value) => Set(Some(value)),
+                    None => ActiveValue::NotSet,
+                },
+                ..Default::default()
+            })
+            .filter(deployment::Column::Id.eq(id))
+            .filter(deployment::Column::Status.eq(current_status))
+            .exec(&self.database)
+            .await?;
+        if update_result.rows_affected == 0 {
+            return Ok(None);
+        }
+
+        deployment::Entity::find_by_id(id).one(&self.database).await
+    }
 }
 
 #[derive(Debug)]
@@ -509,6 +549,8 @@ impl DeploymentArtifactRepository for SeaOrmDeploymentArtifactRepository {
     ) -> Result<Vec<deployment_artifact::Model>, DbErr> {
         deployment_artifact::Entity::find()
             .filter(deployment_artifact::Column::DeploymentId.eq(deployment_id))
+            .order_by_desc(deployment_artifact::Column::CreatedAt)
+            .order_by_desc(deployment_artifact::Column::Id)
             .all(&self.database)
             .await
     }

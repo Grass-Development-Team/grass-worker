@@ -70,6 +70,18 @@ type TestDeployment = {
   finished_at?: string | null;
 };
 
+type TestDeploymentArtifactKind = "static_site" | "build_log";
+
+type TestDeploymentArtifact = {
+  id: string;
+  deployment_id: string;
+  kind: TestDeploymentArtifactKind;
+  storage_path: string;
+  checksum_sha256?: string | null;
+  size_bytes?: number | null;
+  created_at: string;
+};
+
 type TestUser = {
   id: string;
   email: string;
@@ -132,6 +144,32 @@ function deploymentResponse(deployment: TestDeployment) {
       deployment: normalizeDeployment(deployment),
     },
     { status: 200 },
+  );
+}
+
+function normalizeDeploymentArtifact(artifact: TestDeploymentArtifact) {
+  return {
+    checksum_sha256: null,
+    size_bytes: null,
+    ...artifact,
+  };
+}
+
+function deploymentArtifactsResponse(artifacts: TestDeploymentArtifact[]) {
+  return jsonResponse(
+    {
+      artifacts: artifacts.map(normalizeDeploymentArtifact),
+    },
+    { status: 200 },
+  );
+}
+
+function deploymentArtifactResponse(artifact: TestDeploymentArtifact) {
+  return jsonResponse(
+    {
+      artifact: normalizeDeploymentArtifact(artifact),
+    },
+    { status: 201 },
   );
 }
 
@@ -969,8 +1007,10 @@ describe("auth routing", () => {
       started_at: null,
       finished_at: null,
     };
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const path = requestPath(input);
+      const method =
+        input instanceof Request ? input.method : (init?.method ?? "GET");
 
       if (path === "/api/v1/info") {
         return readyInfoResponse();
@@ -980,11 +1020,21 @@ describe("auth routing", () => {
         return currentUserResponse();
       }
 
-      if (path === `/api/v1/projects/${projectId}/deployments/${deploymentId}`) {
+      if (
+        path === `/api/v1/projects/${projectId}/deployments/${deploymentId}` &&
+        method === "GET"
+      ) {
         return deploymentResponse(deployment);
       }
 
-      throw new Error(`Unexpected request for ${path}`);
+      if (
+        path === `/api/v1/projects/${projectId}/deployments/${deploymentId}/artifacts` &&
+        method === "GET"
+      ) {
+        return deploymentArtifactsResponse([]);
+      }
+
+      throw new Error(`Unexpected request for ${method} ${path}`);
     });
 
     vi.stubGlobal("fetch", fetchMock);
@@ -996,14 +1046,30 @@ describe("auth routing", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("main")).toBeInTheDocument();
     expect(screen.getByText("deadbeef")).toBeInTheDocument();
-    expect(screen.getByText(/pending/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/pending/i).length).toBeGreaterThan(0);
   });
 
-  test("project deployment detail route renders an error state when lookup fails", async () => {
+  test("project deployment detail route manages lifecycle and deployment artifacts", async () => {
     const projectId = "11111111-1111-1111-1111-111111111111";
     const deploymentId = "22222222-2222-2222-2222-222222222222";
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+    const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+    let deployment: TestDeployment = {
+      id: deploymentId,
+      project_id: projectId,
+      status: "pending",
+      source_branch: "main",
+      source_revision: "deadbeef",
+      created_at: "2026-04-28T12:00:00Z",
+      started_at: null,
+      finished_at: null,
+    };
+    const artifacts: TestDeploymentArtifact[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const path = requestPath(input);
+      const method =
+        input instanceof Request ? input.method : (init?.method ?? "GET");
+      const body = init?.body ? JSON.parse(init.body.toString()) : undefined;
+      requests.push({ path, method, body });
 
       if (path === "/api/v1/info") {
         return readyInfoResponse();
@@ -1013,11 +1079,124 @@ describe("auth routing", () => {
         return currentUserResponse();
       }
 
-      if (path === `/api/v1/projects/${projectId}/deployments/${deploymentId}`) {
+      if (path === `/api/v1/projects/${projectId}/deployments/${deploymentId}` && method === "GET") {
+        return deploymentResponse(deployment);
+      }
+
+      if (
+        path === `/api/v1/projects/${projectId}/deployments/${deploymentId}/artifacts` &&
+        method === "GET"
+      ) {
+        return deploymentArtifactsResponse(artifacts);
+      }
+
+      if (
+        path === `/api/v1/projects/${projectId}/deployments/${deploymentId}/transition` &&
+        method === "POST"
+      ) {
+        deployment = {
+          ...deployment,
+          status: "processing",
+          started_at: "2026-04-28T12:05:00Z",
+        };
+        return deploymentResponse(deployment);
+      }
+
+      if (
+        path === `/api/v1/projects/${projectId}/deployments/${deploymentId}/artifacts` &&
+        method === "POST"
+      ) {
+        const artifact: TestDeploymentArtifact = {
+          id: "33333333-3333-3333-3333-333333333333",
+          deployment_id: deploymentId,
+          kind: (body?.kind ?? "build_log") as TestDeploymentArtifactKind,
+          storage_path: body?.storage_path ?? "s3://artifacts/build.log",
+          checksum_sha256: body?.checksum_sha256 ?? null,
+          size_bytes: body?.size_bytes ?? null,
+          created_at: "2026-04-28T12:10:00Z",
+        };
+        artifacts.unshift(artifact);
+        return deploymentArtifactResponse(artifact);
+      }
+
+      throw new Error(`Unexpected request for ${method} ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter(`/projects/${projectId}/deployments/${deploymentId}`);
+
+    expect(
+      await screen.findByRole("button", { name: /start processing/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/no artifacts registered yet/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /start processing/i }));
+
+    await waitFor(() => {
+      expect(requests).toContainEqual({
+        path: `/api/v1/projects/${projectId}/deployments/${deploymentId}/transition`,
+        method: "POST",
+        body: { status: "processing" },
+      });
+    });
+
+    expect(await screen.findAllByText(/processing/i)).not.toHaveLength(0);
+
+    await userEvent.selectOptions(screen.getByLabelText(/artifact kind/i), "build_log");
+    await userEvent.type(screen.getByLabelText(/storage path/i), "s3://artifacts/build.log");
+    await userEvent.type(screen.getByLabelText(/sha256 checksum/i), "abc123");
+    await userEvent.type(screen.getByLabelText(/size bytes/i), "1024");
+    await userEvent.click(screen.getByRole("button", { name: /register artifact/i }));
+
+    await waitFor(() => {
+      expect(requests).toContainEqual({
+        path: `/api/v1/projects/${projectId}/deployments/${deploymentId}/artifacts`,
+        method: "POST",
+        body: {
+          kind: "build_log",
+          storage_path: "s3://artifacts/build.log",
+          checksum_sha256: "abc123",
+          size_bytes: 1024,
+        },
+      });
+    });
+
+    expect(await screen.findByText("s3://artifacts/build.log")).toBeInTheDocument();
+    expect(screen.getAllByText(/build_log/i).length).toBeGreaterThan(0);
+  });
+
+  test("project deployment detail route renders an error state when lookup fails", async () => {
+    const projectId = "11111111-1111-1111-1111-111111111111";
+    const deploymentId = "22222222-2222-2222-2222-222222222222";
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = requestPath(input);
+      const method =
+        input instanceof Request ? input.method : (init?.method ?? "GET");
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse();
+      }
+
+      if (
+        path === `/api/v1/projects/${projectId}/deployments/${deploymentId}` &&
+        method === "GET"
+      ) {
         return jsonResponse({ error: "deployment not found" }, { status: 404 });
       }
 
-      throw new Error(`Unexpected request for ${path}`);
+      if (
+        path === `/api/v1/projects/${projectId}/deployments/${deploymentId}/artifacts` &&
+        method === "GET"
+      ) {
+        return deploymentArtifactsResponse([]);
+      }
+
+      throw new Error(`Unexpected request for ${method} ${path}`);
     });
 
     vi.stubGlobal("fetch", fetchMock);
@@ -1080,6 +1259,13 @@ describe("auth routing", () => {
         method === "GET"
       ) {
         return deploymentResponse(deployment);
+      }
+
+      if (
+        path === `/api/v1/projects/${projectId}/deployments/${deploymentId}/artifacts` &&
+        method === "GET"
+      ) {
+        return deploymentArtifactsResponse([]);
       }
 
       throw new Error(`Unexpected request for ${method} ${path}`);
