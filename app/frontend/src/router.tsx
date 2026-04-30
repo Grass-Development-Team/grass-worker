@@ -2,6 +2,7 @@ import { Navigate, type RouteObject } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { AdminRoute } from "./routes/admin-route";
 import { AdminDeletedProjectsPage } from "./routes/admin-deleted-projects-page";
+import { AdminUsersPage } from "./routes/admin-users-page";
 import { ConsoleLayout } from "./routes/console-layout";
 import { LoginPage } from "./routes/login-page";
 import { ProjectDeploymentDetailsPage } from "./routes/project-deployment-details-page";
@@ -84,6 +85,10 @@ export const routes: RouteObject[] = [
                   {
                     path: "projects/deleted",
                     element: <AdminDeletedProjectsPage />,
+                  },
+                  {
+                    path: "users",
+                    element: <AdminUsersPage />,
                   },
                   {
                     path: "*",
