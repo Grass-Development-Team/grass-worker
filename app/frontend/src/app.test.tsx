@@ -82,6 +82,15 @@ type TestDeploymentArtifact = {
   created_at: string;
 };
 
+type TestRelease = {
+  project_id: string;
+  project_slug: string;
+  site_url: string;
+  active_deployment_id?: string | null;
+  active_deployment?: TestDeployment | null;
+  rollback_deployment_id?: string | null;
+};
+
 type TestUser = {
   id: string;
   email: string;
@@ -170,6 +179,27 @@ function deploymentArtifactResponse(artifact: TestDeploymentArtifact) {
       artifact: normalizeDeploymentArtifact(artifact),
     },
     { status: 201 },
+  );
+}
+
+function normalizeRelease(release: TestRelease) {
+  return {
+    active_deployment_id: null,
+    active_deployment: null,
+    rollback_deployment_id: null,
+    ...release,
+    active_deployment: release.active_deployment
+      ? normalizeDeployment(release.active_deployment)
+      : null,
+  };
+}
+
+function releaseResponse(release: TestRelease) {
+  return jsonResponse(
+    {
+      release: normalizeRelease(release),
+    },
+    { status: 200 },
   );
 }
 
@@ -1166,6 +1196,99 @@ describe("auth routing", () => {
     expect(screen.getAllByText(/build_log/i).length).toBeGreaterThan(0);
   });
 
+  test("project deployment detail route can activate the live release", async () => {
+    const projectId = "11111111-1111-1111-1111-111111111111";
+    const deploymentId = "22222222-2222-2222-2222-222222222222";
+    const deployment: TestDeployment = {
+      id: deploymentId,
+      project_id: projectId,
+      status: "ready",
+      source_branch: "main",
+      source_revision: "deadbeef",
+      created_at: "2026-04-28T12:00:00Z",
+      started_at: "2026-04-28T12:05:00Z",
+      finished_at: "2026-04-28T12:10:00Z",
+    };
+    const artifact: TestDeploymentArtifact = {
+      id: "33333333-3333-3333-3333-333333333333",
+      deployment_id: deploymentId,
+      kind: "static_site",
+      storage_path: "/tmp/docs-site",
+      checksum_sha256: "abc123",
+      size_bytes: 1024,
+      created_at: "2026-04-28T12:11:00Z",
+    };
+    let release: TestRelease = {
+      project_id: projectId,
+      project_slug: "docs-site",
+      site_url: "/sites/docs-site",
+      active_deployment_id: null,
+      active_deployment: null,
+      rollback_deployment_id: null,
+    };
+    const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = requestPath(input);
+      const method = input instanceof Request ? input.method : (init?.method ?? "GET");
+      const body = init?.body ? JSON.parse(init.body.toString()) : undefined;
+      requests.push({ path, method, body });
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse();
+      }
+
+      if (path === `/api/v1/projects/${projectId}/deployments/${deploymentId}` && method === "GET") {
+        return deploymentResponse(deployment);
+      }
+
+      if (
+        path === `/api/v1/projects/${projectId}/deployments/${deploymentId}/artifacts` &&
+        method === "GET"
+      ) {
+        return deploymentArtifactsResponse([artifact]);
+      }
+
+      if (path === `/api/v1/projects/${projectId}/release` && method === "GET") {
+        return releaseResponse(release);
+      }
+
+      if (path === `/api/v1/projects/${projectId}/release/activate` && method === "POST") {
+        release = {
+          ...release,
+          active_deployment_id: deploymentId,
+          active_deployment: deployment,
+        };
+        return releaseResponse(release);
+      }
+
+      throw new Error(`Unexpected request for ${method} ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter(`/projects/${projectId}/deployments/${deploymentId}`);
+
+    expect(
+      await screen.findByRole("button", { name: /activate release/i }),
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /activate release/i }));
+
+    await waitFor(() => {
+      expect(requests).toContainEqual({
+        path: `/api/v1/projects/${projectId}/release/activate`,
+        method: "POST",
+        body: { deployment_id: deploymentId },
+      });
+    });
+
+    expect(await screen.findByText(/currently live/i)).toBeInTheDocument();
+  });
+
   test("project deployment detail route renders an error state when lookup fails", async () => {
     const projectId = "11111111-1111-1111-1111-111111111111";
     const deploymentId = "22222222-2222-2222-2222-222222222222";
@@ -1284,6 +1407,113 @@ describe("auth routing", () => {
         `/projects/${projectId}/deployments/${deploymentId}`,
       );
     });
+  });
+
+  test("project details shows the live release and can roll back", async () => {
+    const projectId = "11111111-1111-1111-1111-111111111111";
+    const currentDeploymentId = "22222222-2222-2222-2222-222222222222";
+    const previousDeploymentId = "33333333-3333-3333-3333-333333333333";
+    const now = "2026-04-28T12:00:00Z";
+    const project = {
+      id: projectId,
+      slug: "docs-site",
+      name: "Docs Site",
+      status: "active" as const,
+      created_at: now,
+      updated_at: now,
+      archived_at: null,
+      soft_deleted_at: null,
+    };
+    const currentDeployment: TestDeployment = {
+      id: currentDeploymentId,
+      project_id: projectId,
+      status: "ready",
+      source_branch: "main",
+      source_revision: "current",
+      created_at: now,
+      started_at: now,
+      finished_at: now,
+    };
+    const previousDeployment: TestDeployment = {
+      id: previousDeploymentId,
+      project_id: projectId,
+      status: "ready",
+      source_branch: "main",
+      source_revision: "previous",
+      created_at: "2026-04-28T11:00:00Z",
+      started_at: "2026-04-28T11:00:00Z",
+      finished_at: "2026-04-28T11:00:00Z",
+    };
+    let release: TestRelease = {
+      project_id: projectId,
+      project_slug: "docs-site",
+      site_url: "/sites/docs-site",
+      active_deployment_id: currentDeploymentId,
+      active_deployment: currentDeployment,
+      rollback_deployment_id: previousDeploymentId,
+    };
+    const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = requestPath(input);
+      const method = input instanceof Request ? input.method : (init?.method ?? "GET");
+      const body = init?.body ? JSON.parse(init.body.toString()) : undefined;
+      requests.push({ path, method, body });
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse();
+      }
+
+      if (path === `/api/v1/projects/${projectId}` && method === "GET") {
+        return projectResponse(project);
+      }
+
+      if (path === `/api/v1/projects/${projectId}/deployments` && method === "GET") {
+        return deploymentsResponse([currentDeployment, previousDeployment]);
+      }
+
+      if (path === `/api/v1/projects/${projectId}/release` && method === "GET") {
+        return releaseResponse(release);
+      }
+
+      if (path === `/api/v1/projects/${projectId}/release/rollback` && method === "POST") {
+        release = {
+          ...release,
+          active_deployment_id: previousDeploymentId,
+          active_deployment: previousDeployment,
+          rollback_deployment_id: currentDeploymentId,
+        };
+        return releaseResponse(release);
+      }
+
+      throw new Error(`Unexpected request for ${method} ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter(`/projects/${projectId}`);
+
+    expect(await screen.findByRole("link", { name: /open live site/i })).toHaveAttribute(
+      "href",
+      "/sites/docs-site",
+    );
+    expect(screen.getByRole("button", { name: /roll back release/i })).toBeInTheDocument();
+    expect(screen.getAllByText("current").length).toBeGreaterThan(0);
+
+    await userEvent.click(screen.getByRole("button", { name: /roll back release/i }));
+
+    await waitFor(() => {
+      expect(requests).toContainEqual({
+        path: `/api/v1/projects/${projectId}/release/rollback`,
+        method: "POST",
+        body: undefined,
+      });
+    });
+
+    expect((await screen.findAllByText("previous")).length).toBeGreaterThan(0);
   });
 
   test("project details can create a deployment and prepend it to history", async () => {
