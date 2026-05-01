@@ -577,6 +577,7 @@ mod tests {
         project::Model {
             id,
             owner_user_id,
+            active_deployment_id: None,
             slug: slug.to_owned(),
             name: name.to_owned(),
             status: status.clone(),

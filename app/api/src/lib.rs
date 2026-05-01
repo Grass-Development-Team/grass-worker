@@ -19,8 +19,8 @@ use axum::{
 };
 use features::{
     auth::install_auth_routes, deployments::install_deployment_routes,
-    projects::install_project_routes, setup::install_setup_routes, system::install_system_routes,
-    users::install_user_routes,
+    projects::install_project_routes, releases::install_release_routes,
+    setup::install_setup_routes, system::install_system_routes, users::install_user_routes,
 };
 use frontend::{FrontendMode, install_frontend};
 use grass_worker_config::AppConfig;
@@ -39,6 +39,7 @@ pub struct AppState {
     pub auth: crate::adapters::auth::AuthService,
     pub projects: crate::domain::project::ProjectService,
     pub deployments: crate::domain::deployment::DeploymentService,
+    pub releases: crate::domain::release::ReleaseService,
     pub users: crate::domain::user::UserService,
 }
 
@@ -49,6 +50,7 @@ impl AppState {
             auth: crate::adapters::auth::AuthService,
             projects: crate::domain::project::ProjectService,
             deployments: crate::domain::deployment::DeploymentService,
+            releases: crate::domain::release::ReleaseService,
             users: crate::domain::user::UserService,
         }
     }
@@ -370,6 +372,7 @@ fn build_app_router(
             let router = install_auth_routes(router, context.state.clone());
             let router = install_project_routes(router, context.state.clone());
             let router = install_deployment_routes(router, context.state.clone());
+            let router = install_release_routes(router, context.state.clone());
             let router = install_user_routes(router, context.state.clone())
                 .route("/api/{*path}", any(api_not_found));
             let frontend_mode = resolve_frontend_mode(context.config.development.as_ref())?;
@@ -461,11 +464,15 @@ mod tests {
         http::{Request, StatusCode, header},
     };
     use grass_worker_config::{AppConfig, DatabaseConfig};
-    use grass_worker_database::entities::{project, user, user_session};
+    use grass_worker_database::entities::{
+        deployment, deployment_artifact, project, user, user_session,
+    };
     use sea_orm::{DatabaseBackend, MockDatabase};
+    use std::fs;
     use std::io::{self, Write};
     use std::path::PathBuf;
     use std::sync::Mutex;
+    use tempfile::tempdir;
     use tower::ServiceExt;
     use tracing::subscriber::set_default;
     use tracing_subscriber::{fmt, fmt::MakeWriter};
@@ -762,6 +769,7 @@ mod tests {
             .append_query_results([[project::Model {
                 id: Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap(),
                 owner_user_id: user_id,
+                active_deployment_id: None,
                 slug: "docs-site".to_owned(),
                 name: "Docs Site".to_owned(),
                 status: project::ProjectStatus::Active,
@@ -795,6 +803,355 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ready_mode_activate_release_returns_release_envelope() {
+        let now = chrono::Utc::now();
+        let user_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
+        let project_id = Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap();
+        let deployment_id = Uuid::parse_str("cccccccc-cccc-cccc-cccc-cccccccccccc").unwrap();
+        let session_token = "session-token";
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[user_session::Model {
+                id: Uuid::parse_str("dddddddd-dddd-dddd-dddd-dddddddddddd").unwrap(),
+                user_id,
+                token_hash: crate::adapters::auth::hash_session_token(session_token),
+                created_at: now,
+                expires_at: now + chrono::Duration::days(7),
+                revoked_at: None,
+            }]])
+            .append_query_results([[user::Model {
+                id: user_id,
+                email: "owner@example.com".to_owned(),
+                is_admin: false,
+                is_initial_admin: false,
+                created_at: now,
+                updated_at: now,
+            }]])
+            .append_query_results([[project::Model {
+                id: project_id,
+                owner_user_id: user_id,
+                active_deployment_id: None,
+                slug: "docs-site".to_owned(),
+                name: "Docs Site".to_owned(),
+                status: project::ProjectStatus::Active,
+                created_at: now,
+                updated_at: now,
+                archived_at: None,
+                soft_deleted_at: None,
+            }]])
+            .append_query_results([[deployment::Model {
+                id: deployment_id,
+                project_id,
+                status: deployment::DeploymentStatus::Ready,
+                source_branch: Some("main".to_owned()),
+                source_revision: Some("deadbeef".to_owned()),
+                created_at: now,
+                started_at: Some(now),
+                finished_at: Some(now),
+            }]])
+            .append_query_results([[deployment_artifact::Model {
+                id: Uuid::parse_str("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee").unwrap(),
+                deployment_id,
+                kind: deployment_artifact::ArtifactKind::StaticSite,
+                storage_path: "/tmp/docs-site".to_owned(),
+                checksum_sha256: Some("abc123".to_owned()),
+                size_bytes: Some(1024),
+                created_at: now,
+            }]])
+            .append_exec_results([sea_orm::MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .append_query_results([[project::Model {
+                id: project_id,
+                owner_user_id: user_id,
+                active_deployment_id: Some(deployment_id),
+                slug: "docs-site".to_owned(),
+                name: "Docs Site".to_owned(),
+                status: project::ProjectStatus::Active,
+                created_at: now,
+                updated_at: now,
+                archived_at: None,
+                soft_deleted_at: None,
+            }]])
+            .append_query_results([[deployment::Model {
+                id: deployment_id,
+                project_id,
+                status: deployment::DeploymentStatus::Ready,
+                source_branch: Some("main".to_owned()),
+                source_revision: Some("deadbeef".to_owned()),
+                created_at: now,
+                started_at: Some(now),
+                finished_at: Some(now),
+            }]])
+            .append_query_results([Vec::<deployment::Model>::new()])
+            .into_connection();
+        let response = app_router(ready_mode_with_database(database))
+            .unwrap()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/projects/{project_id}/release/activate"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(
+                        header::COOKIE,
+                        format!(
+                            "{}={session_token}",
+                            crate::domain::auth::SESSION_COOKIE_NAME
+                        ),
+                    )
+                    .body(Body::from(format!(
+                        r#"{{"deployment_id":"{deployment_id}"}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["release"]["project_id"], project_id.to_string());
+        assert_eq!(json["release"]["project_slug"], "docs-site");
+        assert_eq!(
+            json["release"]["active_deployment_id"],
+            deployment_id.to_string()
+        );
+        assert_eq!(
+            json["release"]["active_deployment"]["id"],
+            deployment_id.to_string()
+        );
+        assert_eq!(json["release"]["site_url"], "/sites/docs-site");
+    }
+
+    #[tokio::test]
+    async fn ready_mode_rollback_release_returns_previous_ready_static_release() {
+        let now = chrono::Utc::now();
+        let user_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
+        let project_id = Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap();
+        let current_deployment_id =
+            Uuid::parse_str("cccccccc-cccc-cccc-cccc-cccccccccccc").unwrap();
+        let previous_deployment_id =
+            Uuid::parse_str("dddddddd-dddd-dddd-dddd-dddddddddddd").unwrap();
+        let session_token = "session-token";
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[user_session::Model {
+                id: Uuid::parse_str("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee").unwrap(),
+                user_id,
+                token_hash: crate::adapters::auth::hash_session_token(session_token),
+                created_at: now,
+                expires_at: now + chrono::Duration::days(7),
+                revoked_at: None,
+            }]])
+            .append_query_results([[user::Model {
+                id: user_id,
+                email: "owner@example.com".to_owned(),
+                is_admin: false,
+                is_initial_admin: false,
+                created_at: now,
+                updated_at: now,
+            }]])
+            .append_query_results([[project::Model {
+                id: project_id,
+                owner_user_id: user_id,
+                active_deployment_id: Some(current_deployment_id),
+                slug: "docs-site".to_owned(),
+                name: "Docs Site".to_owned(),
+                status: project::ProjectStatus::Active,
+                created_at: now,
+                updated_at: now,
+                archived_at: None,
+                soft_deleted_at: None,
+            }]])
+            .append_query_results([vec![
+                deployment::Model {
+                    id: current_deployment_id,
+                    project_id,
+                    status: deployment::DeploymentStatus::Ready,
+                    source_branch: Some("main".to_owned()),
+                    source_revision: Some("current".to_owned()),
+                    created_at: now,
+                    started_at: Some(now),
+                    finished_at: Some(now),
+                },
+                deployment::Model {
+                    id: previous_deployment_id,
+                    project_id,
+                    status: deployment::DeploymentStatus::Ready,
+                    source_branch: Some("main".to_owned()),
+                    source_revision: Some("previous".to_owned()),
+                    created_at: now - chrono::Duration::hours(1),
+                    started_at: Some(now - chrono::Duration::hours(1)),
+                    finished_at: Some(now - chrono::Duration::hours(1)),
+                },
+            ]])
+            .append_query_results([[deployment_artifact::Model {
+                id: Uuid::parse_str("ffffffff-ffff-ffff-ffff-ffffffffffff").unwrap(),
+                deployment_id: previous_deployment_id,
+                kind: deployment_artifact::ArtifactKind::StaticSite,
+                storage_path: "/tmp/docs-site-previous".to_owned(),
+                checksum_sha256: Some("prev".to_owned()),
+                size_bytes: Some(1024),
+                created_at: now,
+            }]])
+            .append_exec_results([sea_orm::MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .append_query_results([[project::Model {
+                id: project_id,
+                owner_user_id: user_id,
+                active_deployment_id: Some(previous_deployment_id),
+                slug: "docs-site".to_owned(),
+                name: "Docs Site".to_owned(),
+                status: project::ProjectStatus::Active,
+                created_at: now,
+                updated_at: now,
+                archived_at: None,
+                soft_deleted_at: None,
+            }]])
+            .append_query_results([[deployment::Model {
+                id: previous_deployment_id,
+                project_id,
+                status: deployment::DeploymentStatus::Ready,
+                source_branch: Some("main".to_owned()),
+                source_revision: Some("previous".to_owned()),
+                created_at: now - chrono::Duration::hours(1),
+                started_at: Some(now - chrono::Duration::hours(1)),
+                finished_at: Some(now - chrono::Duration::hours(1)),
+            }]])
+            .append_query_results([vec![
+                deployment::Model {
+                    id: current_deployment_id,
+                    project_id,
+                    status: deployment::DeploymentStatus::Ready,
+                    source_branch: Some("main".to_owned()),
+                    source_revision: Some("current".to_owned()),
+                    created_at: now,
+                    started_at: Some(now),
+                    finished_at: Some(now),
+                },
+                deployment::Model {
+                    id: previous_deployment_id,
+                    project_id,
+                    status: deployment::DeploymentStatus::Ready,
+                    source_branch: Some("main".to_owned()),
+                    source_revision: Some("previous".to_owned()),
+                    created_at: now - chrono::Duration::hours(1),
+                    started_at: Some(now - chrono::Duration::hours(1)),
+                    finished_at: Some(now - chrono::Duration::hours(1)),
+                },
+            ]])
+            .append_query_results([[deployment_artifact::Model {
+                id: Uuid::parse_str("11111111-2222-3333-4444-555555555555").unwrap(),
+                deployment_id: current_deployment_id,
+                kind: deployment_artifact::ArtifactKind::StaticSite,
+                storage_path: "/tmp/docs-site-current".to_owned(),
+                checksum_sha256: Some("current".to_owned()),
+                size_bytes: Some(2048),
+                created_at: now,
+            }]])
+            .into_connection();
+        let response = app_router(ready_mode_with_database(database))
+            .unwrap()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/projects/{project_id}/release/rollback"))
+                    .header(
+                        header::COOKIE,
+                        format!(
+                            "{}={session_token}",
+                            crate::domain::auth::SESSION_COOKIE_NAME
+                        ),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(
+            json["release"]["active_deployment_id"],
+            previous_deployment_id.to_string()
+        );
+        assert_eq!(
+            json["release"]["rollback_deployment_id"],
+            current_deployment_id.to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn ready_mode_serves_active_static_site_with_spa_fallback() {
+        let now = chrono::Utc::now();
+        let project_id = Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap();
+        let deployment_id = Uuid::parse_str("cccccccc-cccc-cccc-cccc-cccccccccccc").unwrap();
+        let site_dir = tempdir().unwrap();
+        fs::write(
+            site_dir.path().join("index.html"),
+            "<html>Published Docs Site</html>",
+        )
+        .unwrap();
+
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[project::Model {
+                id: project_id,
+                owner_user_id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
+                active_deployment_id: Some(deployment_id),
+                slug: "docs-site".to_owned(),
+                name: "Docs Site".to_owned(),
+                status: project::ProjectStatus::Active,
+                created_at: now,
+                updated_at: now,
+                archived_at: None,
+                soft_deleted_at: None,
+            }]])
+            .append_query_results([[deployment::Model {
+                id: deployment_id,
+                project_id,
+                status: deployment::DeploymentStatus::Ready,
+                source_branch: Some("main".to_owned()),
+                source_revision: Some("deadbeef".to_owned()),
+                created_at: now,
+                started_at: Some(now),
+                finished_at: Some(now),
+            }]])
+            .append_query_results([[deployment_artifact::Model {
+                id: Uuid::parse_str("dddddddd-dddd-dddd-dddd-dddddddddddd").unwrap(),
+                deployment_id,
+                kind: deployment_artifact::ArtifactKind::StaticSite,
+                storage_path: site_dir.path().to_string_lossy().into_owned(),
+                checksum_sha256: Some("abc123".to_owned()),
+                size_bytes: Some(1024),
+                created_at: now,
+            }]])
+            .into_connection();
+
+        let response = app_router(ready_mode_with_database(database))
+            .unwrap()
+            .oneshot(
+                Request::builder()
+                    .uri("/sites/docs-site/docs/getting-started")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(
+            std::str::from_utf8(&body)
+                .unwrap()
+                .contains("Published Docs Site")
+        );
+    }
+
+    #[tokio::test]
     async fn ready_mode_project_details_with_cookie_returns_owned_project() {
         let now = chrono::Utc::now();
         let user_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
@@ -820,6 +1177,7 @@ mod tests {
             .append_query_results([[project::Model {
                 id: project_id,
                 owner_user_id: user_id,
+                active_deployment_id: None,
                 slug: "docs-site".to_owned(),
                 name: "Docs Site".to_owned(),
                 status: project::ProjectStatus::Active,
