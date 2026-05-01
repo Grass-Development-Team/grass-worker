@@ -131,233 +131,230 @@
 
 ## 4. Phase Roadmap
 
-## Phase 0: Foundation And Static Asset Chain
+## Phase 0: Foundation And Bootstrap
 
-目标：先把仓库、基础应用、配置、前端资源链路稳定下来，形成能运行、能测试、能扩展的底座。
+目标：建立 setup、数据库初始化、前端资产链路和控制面骨架，保证仓库在缺省配置与开发模式下都能稳定启动。
 
 范围：
 
 - Rust workspace 与三应用目录结构
-- `app/api` / `app/node` Hello World + `/health`
-- Bun 前端占位页
-- TOML boot config 加载与 `config.toml` 启动引导
-- 缺省 boot config 时进入 setup mode 的基础入口与临时监听地址策略
-- `[development].dev_server` 代理链路
+- `app/api` / `app/node` / `app/frontend` 基础骨架与 `/health`
+- `config.toml` 启动引导与 `[development].dev_server` 代理
+- 缺省配置时的 setup mode 入口与 runtime mode 切换
 - `./public` 优先 + `crates/assets` 嵌入回退
-- `build.rs` 对嵌入资源做编译期校验
+- SeaORM 迁移基础设施与 Stage 1 database setup
+- Stage 2 initial admin setup 前的数据库引导链路
+- `users` / `user_sessions` / `projects` / `deployments` / `deployment_artifacts` 基础表与 repository abstraction
 - `just` 命令统一开发流程
 
 完成标准：
 
-- 单机启动后可以访问 API 与前端占位页；首次启动缺少配置时也有明确 setup 入口
-- 本地开发可以让 API 代理前端 dev server
-- release 构建产物包含前端资源
+- 缺少数据库配置时，`app/api` 可以进入 setup 并完成数据库初始化
+- `app/api` 可以稳定进入 `ready` 模式
+- release 构建产物包含可用前端资源与数据库迁移基础
 
-## Phase 1: Database And Bootstrap Foundation
+## Phase 1: Identity Access Loop
 
-目标：先把 PostgreSQL 连接、迁移、首次数据库引导、核心表结构和 repository 边界稳定下来，作为后续身份、项目、部署等业务阶段的共用底座。
+目标：让单管理员可以正式登录，系统能稳定识别“当前是谁”。
 
 范围：
 
-- SeaORM 迁移基础设施
-- PostgreSQL 连接、schema 选择与 repository 抽象
-- PostgreSQL 配置字段采用 `host`、`port`、`db_name`、`user`、`password`，可选 `schema`
-- `app/api` 启动时自动准备 `schema` 并执行迁移，不依赖单独 migration CLI
-- 首次启动 Stage 1：数据库 setup API，负责收集 PostgreSQL 连接信息、写回 `config.toml`、验证连接并推进迁移
-- `projects`、`deployments`、`deployment_artifacts` 基础表
-- `projects`
-  - `id`、`owner_user_id`、`slug`、`name`、`status`、`created_at`、`updated_at`、`archived_at`
-- `deployments`
-  - `id`、`project_id`、`status`、`source_branch`、`source_revision`、`created_at`、`started_at`、`finished_at`
-- `deployment_artifacts`
-  - `id`、`deployment_id`、`kind`、`storage_path`、`checksum_sha256`、`size_bytes`、`created_at`
-- `users` 基础表
-  - `id`、`email`、`is_admin`、`is_initial_admin`、`created_at`、`updated_at`
-- `user_password_credentials`
-  - `user_id`、`password_hash`、`password_updated_at`
-- `user_sessions`
-  - `id`、`user_id`、`token_hash`、`created_at`、`expires_at`、`revoked_at`
-- 项目状态与部署状态枚举
-- 基础 repository abstraction
-- 本阶段只完成数据库结构和持久化边界；不急着把注册、登录、项目 API 一次性混进来
+- 首个管理员创建完成后的登录闭环
+- 基于 `email` 的密码认证
+- session 签发、持久化、读取与注销
+- `POST /api/v1/auth/login` / `GET /api/v1/me` / `POST /api/v1/auth/logout`
+- 前端登录页与基于会话的路由守卫
+- handler 之外的身份读取与权限边界收口
 
 完成标准：
 
-- 缺少数据库配置时，`app/api` 可以进入 Stage 1 setup 并完成数据库初始化
-- 可以在 `app/api` 启动时连接到指定 PostgreSQL database/schema 并自动完成迁移
-- 核心业务表与身份相关基础表、对应 repository abstraction 可用
-- API 层与持久化层职责分离
+- 初始管理员可以从前端正式登录
+- API 可以稳定返回当前登录用户
+- 未登录用户不能访问后续业务页面
 
-## Phase 2: Identity And Admin Roles
+## Phase 2: Project Management Loop
 
-目标：补齐最小用户系统、首个管理员引导和平台管理员能力，明确“谁可以创建和管理资源”。
-
-范围：
-
-- 数据库可用但不存在管理员时，进入 Stage 2 setup，而不是直接开放正常控制台
-- 首个管理员创建流程
-- 首个管理员带 `is_initial_admin` 特殊属性，不能被删除
-- 首期只支持 `email` 作为唯一登录标识，不单独引入 `username`
-- 密码或 token 认证
-- session / access token 基础设施
-- 普通用户与管理员权限模型
-- 管理员查看全部用户、项目、部署
-
-完成标准：
-
-- 数据库已初始化但还没有管理员时，系统仍停留在 setup 流程直到首个管理员创建完成
-- 普通用户只能访问自身资源
-- 管理员是用户超集
-- 首个管理员不可删除
-- 权限检查不散落在 handler 中
-
-## Phase 3: Project And Deployment Domain Model
-
-目标：在身份模型确定后，建立最核心的控制面业务模型，让“某个用户拥有项目，一个项目可以有多次部署”成为系统主线。
+目标：让登录后的管理员可以管理项目，并具备最小平台管理视角。
 
 范围：
 
-- 项目归属先落到用户
 - `projects.owner_user_id` 指向 `users.id`
-- `projects`、`deployments`、`deployment_artifacts` 对外 API
-- 项目创建、查询、归档 API
-- 部署记录查询 API
-- 项目状态与部署状态枚举在业务接口中的落地
+- 项目创建、查询、详情、更新 API
+- 项目归档、取消归档、软删除、恢复、转移 owner、硬删除
+- 前端项目列表页、项目创建入口、项目详情页
+- 管理员恢复/清理已删除项目的控制台入口
+- 管理员查看全部用户、项目、部署的最小能力
 
 完成标准：
 
-- 登录用户可以创建并查询自己的项目
-- 可以持久化并查询项目对应的部署记录
-- API 层继续通过 service/repository 边界访问持久化层
+- 管理员可以创建并查看自己的项目
+- 管理员可以完成项目生命周期管理
+- 管理员具备最小 user/project/deployment 管理视角
 
-## Phase 4: Build Execution Pipeline
+## Phase 3: Deployment Record Loop
 
-目标：先把“可重复构建”跑通。
+目标：先把 deployment 作为控制面对象做完整，不碰自动构建。
 
 范围：
 
-- 构建任务模型
-- 构建日志与阶段状态
-- 容器执行器抽象
-- 首选支持 Podman/Docker，接口设计兼容后续 containerd
-- bun 构建约定：安装依赖、执行构建命令、产物收集
-- 工作目录隔离、超时、退出码处理
+- `POST /api/v1/projects/:id/deployments`
+- `GET /api/v1/projects/:id/deployments`
+- `GET /api/v1/projects/:id/deployments/:deploymentId`
+- deployment 状态流转约束
+- 前端部署列表页与部署详情页
+- API 继续通过 service / repository 边界访问持久化层
 
 完成标准：
 
-- 能基于本地或测试仓库执行一次 bun 静态站点构建
-- 能保存构建日志、状态、产物目录
-- 执行器失败路径可测试
+- 可以在项目下创建 deployment 记录
+- 可以查看 deployment 列表和详情
+- deployment 状态流转在 API 层自洽
 
-## Phase 5: Static Publication And Routing
+## Phase 4: First Usable Static Release Loop
 
-目标：把产物发布成真正可访问的静态站点。
+目标：不依赖 `node`，先让一个静态站点真正上线。
 
 范围：
 
-- 发布目录布局规范
-- 当前生效版本与历史版本切换
-- 自定义域名基础模型
+- deployment artifact 上传或登记接口
+- artifact 元数据、校验信息与存储路径落库
+- 当前激活 deployment 模型
+- 发布激活接口
+- 回滚接口
+- 静态目录对外访问链路
+
+完成标准：
+
+- 管理员可以为项目上传或登记静态产物
+- 可以把某个 deployment 激活为线上版本
+- 可以回滚到上一个可用版本
+- 浏览器可以真实访问静态站点
+
+## Phase 5: Delivery Routing And Domain Model
+
+目标：把“站点如何被访问”这件事正式化。
+
+范围：
+
+- project 到站点访问路径的映射规则
+- SPA fallback / 静态资源 / 404 / index / cache 策略整理
+- 基础域名/主机名模型
 - 站点路由抽象
-- Caddy adapter：配置文件生成、校验、重载
-- 流量统计接口预留与基础计数桩
+- 路由配置 adapter（例如 Caddy 配置生成、校验、重载）
 
 完成标准：
 
-- 一次成功构建可被发布
-- 平台能够切换某项目当前线上版本
-- 域名配置链路具备最小闭环
+- 一个项目的站点访问规则是明确且稳定的
+- 静态站点和 SPA 场景都能解释清楚
+- 基础域名配置链路具备最小闭环
 
-## Phase 6: Teams And Shared Ownership
+## Phase 6: Node Agent Integration
 
-目标：让团队成为一等公民，支持多成员协作与资源归属。
+目标：把 `app/node` 从占位服务接入真实执行链路。
 
 范围：
 
-- 团队模型
-- 团队成员关系
-- 团队管理员角色
-- 项目归属可为用户或团队
-- 团队维度的项目、成员、订阅管理 API
+- control-plane 与 node 的认证方案
+- deployment task claim / poll 协议
+- node 心跳和能力上报
+- node 更新 deployment 状态
+- node 上传或登记 artifact
+- 基础执行日志回传
 
 完成标准：
 
-- 团队管理员可以管理团队用户与项目
-- 资源归属与权限检查可正确区分“个人项目”和“团队项目”
+- node 可以领取任务
+- node 可以驱动 deployment 从 `pending` 走到 `ready` 或 `failed`
+- 控制台能看到 node 执行结果
 
-## Phase 7: Groups, Subscriptions, And Quotas
+## Phase 7: Source-To-Build Automation
 
-目标：把配额与商业规则从业务资源中解耦。
+目标：从“手动上传产物”升级到“从 source 自动构建产物”。
 
 范围：
 
-- 用户分组与团队分组模型分开设计
-- 分组可绑定额度、节点白名单、可创建团队数、项目数、带宽额度等
-- 订阅模型定义“把谁分配到哪些分组”
-- 管理员手动分配与订阅自动分配并存
-- 配额校验统一由策略服务执行
+- 首个 source 类型定稿
+- source revision / snapshot 模型
+- build command / install command / output dir 模型
+- node checkout / build / collect artifact 合同
+- 构建失败日志展示
+- 构建完成后自动衔接发布
 
 完成标准：
 
-- 创建项目、创建团队、发布部署等关键动作都经过配额校验
-- 分组和订阅变更能立即影响权限和额度
+- 管理员可以从 source 发起真实构建
+- 构建成功后可以形成可发布 artifact
+- 构建失败时日志和状态可见
 
-## Phase 8: Source Providers And Webhooks
+## Phase 8: Single-Admin Hardening
 
-目标：让平台真正支持“推代码即部署”。
+目标：把单管理员版本从“能跑”提升到“能持续使用”。
 
 范围：
 
-- Git 仓库连接模型
-- 仓库凭据存储
-- GitHub webhook
-- Gitea webhook
-- Forgejo webhook
-- 触发策略：指定分支、手动触发、自动触发
+- deployment cancel / retry
+- artifact retention / cleanup
+- 并发部署规则
+- 操作审计日志
+- 常见失败恢复路径
+- 安装与升级文档
 
 完成标准：
 
-- 一次 push 事件可以触发新的部署流程
-- provider 差异收敛在 adapter 层
+- 单管理员可以长期维护多个项目
+- 常见失败场景都有恢复路径
 
-## Phase 9: Multi-Node Control And Execution
+## Phase 9: Multi-User Migration
 
-目标：把单机方案扩展成主从节点方案。
+目标：从单管理员产品迁移到真正的多用户控制面。
 
 范围：
 
-- 控制面与节点通信协议
-- 节点注册、鉴权、证书或密钥体系
-- 心跳与节点状态管理
-- 节点角色与标签过滤（节点/主机可以选择 可构建/可部署/可构建可部署/主机模式（只能管理节点）。如果启用某些功能，主机也可以作为节点接到父主机，父主机管理主机，然后主机管理节点（同样的节点也可以是主机））
-- 构建任务、部署任务调度
-- 失败重试与节点不可用隔离
+- 普通用户创建/登录策略
+- project ownership 权限检查补全
+- session + resource authorization 收口
+- 角色模型
+- UI 按角色裁剪操作
 
 完成标准：
 
-- 控制面可以把任务分派到具备相应角色的节点
-- 通信链路默认加密
-- 单机模式与多节点模式共享一套任务抽象
+- 多用户可以共存
+- 用户之间无法越权访问项目和部署
 
-## Phase 10: Operations, Metering, And Hardening
+## Phase 10: Team / Quota / Subscription
 
-目标：补足可运维性、可观测性和安全边界。
+目标：补齐产品化层能力。
 
 范围：
 
-- 结构化日志
-- 指标与健康状态
-- 审计日志
-- 更完整的限流与防滥用
-- 备份/恢复策略
-- 数据清理策略
-- 配置热更新边界
+- team / workspace 模型
+- 项目共享与成员管理
+- 使用量统计
+- quota enforcement
+- subscription / plan 模型
+- 管理端能力
 
 完成标准：
 
-- 可以定位一次构建/部署失败原因
-- 可以追踪管理员关键操作
-- 具备上线前基础安全检查清单
+- 平台具备团队化能力
+- 平台具备基础商业化能力
+
+## Phase 11: Production Operations
+
+目标：把 self-hosted 平台提升到可正式运维。
+
+范围：
+
+- metrics / tracing / dashboard
+- 备份与恢复
+- 安全加固
+- 升级兼容策略
+- release checklist
+
+完成标准：
+
+- 平台可作为正式 self-hosted 产品交付
+- 运维侧有明确观察、恢复和升级路径
 
 ## 5. Cross-Cutting Design Tracks
 

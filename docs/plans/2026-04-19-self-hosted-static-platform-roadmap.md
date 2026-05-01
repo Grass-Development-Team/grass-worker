@@ -318,7 +318,7 @@
 ### Milestone C: Can Publish Static Sites Manually
 
 - [x] 可以创建 deployment
-- [ ] 可以上传或登记 artifact
+- [x] 可以上传或登记 artifact
 - [ ] 可以激活和回滚发布
 - [ ] 可以真实访问静态站点
 
