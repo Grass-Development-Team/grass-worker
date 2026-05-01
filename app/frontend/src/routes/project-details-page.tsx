@@ -22,6 +22,11 @@ import {
   updateProject,
   type Project,
 } from "@/api/projects";
+import {
+  getProjectRelease,
+  projectReleaseQueryKey,
+  rollbackProjectRelease,
+} from "@/api/releases";
 import { ConsolePageHeader } from "@/components/console/console-page-header";
 import { CreateDeploymentCard } from "@/components/deployments/create-deployment-card";
 import { DeploymentList } from "@/components/deployments/deployment-list";
@@ -57,6 +62,10 @@ function projectDescription(project: Project) {
   return `${projectStatusLabel(project.status)} project`;
 }
 
+function releaseDeploymentLabel(sourceRevision: string | null, sourceBranch: string | null) {
+  return sourceRevision ?? sourceBranch ?? "Manual deployment";
+}
+
 export function ProjectDetailsPage() {
   const { currentUser } = useOutletContext<ProtectedOutletContext>();
   const navigate = useNavigate();
@@ -74,6 +83,12 @@ export function ProjectDetailsPage() {
     queryKey: deploymentsQueryKey(projectId ?? ""),
     queryFn: () => getProjectDeployments(projectId ?? ""),
     enabled: Boolean(projectId),
+  });
+  const releaseQuery = useQuery({
+    queryKey: projectReleaseQueryKey(projectId ?? ""),
+    queryFn: () => getProjectRelease(projectId ?? ""),
+    enabled: Boolean(projectId),
+    retry: false,
   });
 
   const setProjectData = (project: Project) => {
@@ -152,6 +167,15 @@ export function ProjectDetailsPage() {
       await deploymentsQuery.refetch();
     },
   });
+  const rollbackReleaseMutation = useMutation({
+    mutationFn: () => rollbackProjectRelease(projectId ?? ""),
+    onSuccess: async (release) => {
+      if (!projectId) return;
+
+      queryClient.setQueryData(projectReleaseQueryKey(projectId), release);
+      await queryClient.invalidateQueries({ queryKey: projectReleaseQueryKey(projectId) });
+    },
+  });
 
   if (!projectId) {
     return (
@@ -215,6 +239,8 @@ export function ProjectDetailsPage() {
       : project.status === "soft_deleted"
         ? "Restore the project before creating deployments."
         : null;
+  const liveRelease = releaseQuery.data?.active_deployment;
+  const canRollbackRelease = Boolean(releaseQuery.data?.rollback_deployment_id);
 
   return (
     <div className="space-y-6">
@@ -240,6 +266,66 @@ export function ProjectDetailsPage() {
       />
 
       <ProjectOverviewCard project={project} />
+
+      {releaseQuery.data ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              <h2>Live release</h2>
+            </CardTitle>
+            <CardDescription>
+              The deployment currently mapped to the public site path for this project.
+            </CardDescription>
+          </CardHeader>
+          <div className="px-6 pb-6">
+            {liveRelease ? (
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <p className="text-sm text-muted-foreground">Current deployment</p>
+                  <p className="font-medium text-foreground">
+                    {releaseDeploymentLabel(
+                      liveRelease.source_revision,
+                      liveRelease.source_branch,
+                    )}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-3">
+                  <Button asChild type="button" variant="outline">
+                    <a href={releaseQuery.data.site_url} rel="noreferrer" target="_blank">
+                      Open live site
+                    </a>
+                  </Button>
+                  <Button
+                    disabled={!canRollbackRelease || rollbackReleaseMutation.isPending}
+                    onClick={() => rollbackReleaseMutation.mutate()}
+                    type="button"
+                    variant="outline"
+                  >
+                    {rollbackReleaseMutation.isPending
+                      ? "Rolling back..."
+                      : "Roll back release"}
+                  </Button>
+                </div>
+                {rollbackReleaseMutation.isError ? (
+                  <Alert variant="destructive">
+                    <AlertTitle>Release rollback failed</AlertTitle>
+                    <AlertDescription>
+                      {errorMessage(
+                        rollbackReleaseMutation.error,
+                        "Unable to roll back the live release.",
+                      )}
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                No deployment is live yet for this project.
+              </p>
+            )}
+          </div>
+        </Card>
+      ) : null}
 
       <EditProjectForm
         error={

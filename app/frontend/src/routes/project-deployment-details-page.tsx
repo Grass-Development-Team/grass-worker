@@ -15,6 +15,11 @@ import {
   type DeploymentArtifactKind,
   type DeploymentStatus,
 } from "@/api/deployments";
+import {
+  activateProjectRelease,
+  getProjectRelease,
+  projectReleaseQueryKey,
+} from "@/api/releases";
 import { ConsolePageHeader } from "@/components/console/console-page-header";
 import { DeploymentOverviewCard } from "@/components/deployments/deployment-overview-card";
 import { DeploymentStatusBadge } from "@/components/deployments/deployment-status-badge";
@@ -279,6 +284,12 @@ export function ProjectDeploymentDetailsPage() {
     queryFn: () => getProjectDeploymentArtifacts(projectId ?? "", deploymentId ?? ""),
     enabled: Boolean(projectId && deploymentId),
   });
+  const releaseQuery = useQuery({
+    queryKey: projectReleaseQueryKey(projectId ?? ""),
+    queryFn: () => getProjectRelease(projectId ?? ""),
+    enabled: Boolean(projectId),
+    retry: false,
+  });
   const transitionMutation = useMutation({
     mutationFn: (status: Exclude<DeploymentStatus, "pending">) =>
       transitionProjectDeployment(projectId ?? "", deploymentId ?? "", { status }),
@@ -317,6 +328,15 @@ export function ProjectDeploymentDetailsPage() {
       await queryClient.invalidateQueries({
         queryKey: deploymentArtifactsQueryKey(projectId, deploymentId),
       });
+    },
+  });
+  const activateReleaseMutation = useMutation({
+    mutationFn: () => activateProjectRelease(projectId ?? "", deploymentId ?? ""),
+    onSuccess: async (release) => {
+      if (!projectId) return;
+
+      queryClient.setQueryData(projectReleaseQueryKey(projectId), release);
+      await queryClient.invalidateQueries({ queryKey: projectReleaseQueryKey(projectId) });
     },
   });
 
@@ -388,6 +408,18 @@ export function ProjectDeploymentDetailsPage() {
     ? "Start processing before registering artifacts."
     : null;
   const isRefreshing = query.isFetching || artifactsQuery.isFetching;
+  const hasStaticSiteArtifact = (artifactsQuery.data ?? []).some(
+    (artifact) => artifact.kind === "static_site",
+  );
+  const isCurrentlyLive = releaseQuery.data?.active_deployment_id === deployment.id;
+  const activateReleaseDisabled =
+    deployment.status !== "ready" || !hasStaticSiteArtifact || activateReleaseMutation.isPending;
+  const activateReleaseDisabledReason =
+    deployment.status !== "ready"
+      ? "Only ready deployments can be activated."
+      : !hasStaticSiteArtifact
+        ? "Register a static_site artifact before activating the release."
+        : null;
 
   return (
     <div className="space-y-6">
@@ -419,6 +451,63 @@ export function ProjectDeploymentDetailsPage() {
       />
 
       <DeploymentOverviewCard deployment={deployment} />
+
+      <Card>
+        <CardHeader>
+          <CardTitle>
+            <h2>Release controls</h2>
+          </CardTitle>
+          <CardDescription>
+            Promote this deployment to the live site once the static artifact is ready.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {isCurrentlyLive ? (
+            <Alert>
+              <AlertTitle>Currently live</AlertTitle>
+              <AlertDescription>
+                This deployment is serving traffic at {releaseQuery.data?.site_url}.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
+          {activateReleaseMutation.isError ? (
+            <Alert variant="destructive">
+              <AlertTitle>Release activation failed</AlertTitle>
+              <AlertDescription>
+                {errorMessage(
+                  activateReleaseMutation.error,
+                  "Unable to activate this deployment as the live release.",
+                )}
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
+          {activateReleaseDisabledReason ? (
+            <Alert>
+              <AlertTitle>Release activation unavailable</AlertTitle>
+              <AlertDescription>{activateReleaseDisabledReason}</AlertDescription>
+            </Alert>
+          ) : null}
+
+          <div className="flex flex-wrap gap-3">
+            <Button
+              disabled={activateReleaseDisabled || isCurrentlyLive}
+              onClick={() => activateReleaseMutation.mutate()}
+              type="button"
+            >
+              {activateReleaseMutation.isPending ? "Activating..." : "Activate release"}
+            </Button>
+            {releaseQuery.data?.site_url ? (
+              <Button asChild type="button" variant="outline">
+                <a href={releaseQuery.data.site_url} rel="noreferrer" target="_blank">
+                  Open live site
+                </a>
+              </Button>
+            ) : null}
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
