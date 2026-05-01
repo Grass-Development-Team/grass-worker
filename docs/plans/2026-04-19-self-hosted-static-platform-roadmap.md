@@ -39,7 +39,7 @@
 - [x] 项目管理 API 与控制台
 - [x] deployment record 创建 / 查询 / 详情基础
 - [x] deployment 状态流转约束
-- [ ] artifact 发布激活 / 回滚
+- [x] artifact 发布激活 / 回滚
 - [ ] `node` 真实任务执行
 - [ ] Git source 自动构建链路
 
@@ -51,7 +51,7 @@
 - [x] Phase 1: Identity Access Loop
 - [x] Phase 2: Project Management Loop
 - [x] Phase 3: Deployment Record Loop
-- [ ] Phase 4: First Usable Static Release Loop
+- [x] Phase 4: First Usable Static Release Loop
 - [ ] Phase 5: Delivery Routing And Domain Model
 - [ ] Phase 6: Node Agent Integration
 - [ ] Phase 7: Source-To-Build Automation
@@ -160,17 +160,17 @@
 
 - [x] deployment artifact 上传或登记接口
 - [x] artifact 元数据与校验信息落库
-- [ ] 当前激活 deployment 模型
-- [ ] 发布激活接口
-- [ ] 回滚接口
-- [ ] 静态目录对外访问链路
+- [x] 当前激活 deployment 模型
+- [x] 发布激活接口
+- [x] 回滚接口
+- [x] 静态目录对外访问链路
 
 完成标准：
 
 - [x] 管理员可以为项目上传或登记静态产物
-- [ ] 可以把某个 deployment 激活为线上版本
-- [ ] 可以回滚到上一个可用版本
-- [ ] 浏览器可以真实访问站点
+- [x] 可以把某个 deployment 激活为线上版本
+- [x] 可以回滚到上一个可用版本
+- [x] 浏览器可以真实访问站点
 
 为什么先于 node：
 
@@ -351,8 +351,8 @@ roadmap 确认后，后续工作一律按这个规则继续：
 
 当前应该进入的阶段：
 
-- [ ] Phase 4: First Usable Static Release Loop
+- [ ] Phase 5: Delivery Routing And Domain Model
 
 当前建议优先拆出的第一个最小功能：
 
-- [ ] 当前激活 deployment 模型
+- [ ] project 到站点访问路径的映射规则
