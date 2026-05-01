@@ -387,6 +387,7 @@ mod tests {
         project::Model {
             id,
             owner_user_id,
+            active_deployment_id: None,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
             status: status.clone(),

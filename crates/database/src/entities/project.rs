@@ -17,6 +17,7 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
     pub owner_user_id: Uuid,
+    pub active_deployment_id: Option<Uuid>,
     pub slug: String,
     pub name: String,
     pub status: ProjectStatus,
