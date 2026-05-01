@@ -694,6 +694,7 @@ mod tests {
         project::Model {
             id: Uuid::new_v4(),
             owner_user_id,
+            active_deployment_id: None,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
             status,
@@ -726,6 +727,7 @@ mod tests {
         project::Model {
             id,
             owner_user_id,
+            active_deployment_id: None,
             slug: slug.to_owned(),
             name: name.to_owned(),
             status,

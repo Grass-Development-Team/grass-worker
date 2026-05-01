@@ -150,6 +150,7 @@ mod tests {
         let project = project::Model {
             id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
             owner_user_id,
+            active_deployment_id: None,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
             status: project::ProjectStatus::Active,
@@ -199,6 +200,7 @@ mod tests {
         let project = project::Model {
             id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
             owner_user_id: Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap(),
+            active_deployment_id: None,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
             status: project::ProjectStatus::SoftDeleted,
@@ -240,6 +242,7 @@ mod tests {
         let existing = project::Model {
             id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
             owner_user_id: Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap(),
+            active_deployment_id: None,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
             status: project::ProjectStatus::Active,
@@ -419,6 +422,7 @@ mod tests {
         let project = project::Model {
             id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
             owner_user_id: Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap(),
+            active_deployment_id: None,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
             status: project::ProjectStatus::SoftDeleted,
@@ -468,6 +472,7 @@ mod tests {
         let existing = project::Model {
             id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
             owner_user_id: Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap(),
+            active_deployment_id: None,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
             status: project::ProjectStatus::Active,
@@ -534,6 +539,7 @@ mod tests {
         let soft_deleted = project::Model {
             id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
             owner_user_id: Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap(),
+            active_deployment_id: None,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
             status: project::ProjectStatus::SoftDeleted,

@@ -111,6 +111,12 @@ pub trait ProjectRepository {
         archived_at: Option<DateTimeUtc>,
         soft_deleted_at: Option<DateTimeUtc>,
     ) -> Result<Option<project::Model>, DbErr>;
+    async fn set_active_deployment(
+        &self,
+        id: Uuid,
+        active_deployment_id: Option<Uuid>,
+        updated_at: DateTimeUtc,
+    ) -> Result<Option<project::Model>, DbErr>;
     async fn transfer_owner_if_current(
         &self,
         id: Uuid,
@@ -225,6 +231,7 @@ impl ProjectRepository for SeaOrmProjectRepository {
         let model = project::Model {
             id: new_project.id,
             owner_user_id: new_project.owner_user_id,
+            active_deployment_id: None,
             slug: new_project.slug,
             name: new_project.name,
             status: project::ProjectStatus::Active,
@@ -237,6 +244,7 @@ impl ProjectRepository for SeaOrmProjectRepository {
         project::Entity::insert(project::ActiveModel {
             id: Set(model.id),
             owner_user_id: Set(model.owner_user_id),
+            active_deployment_id: Set(model.active_deployment_id),
             slug: Set(model.slug.clone()),
             name: Set(model.name.clone()),
             status: Set(model.status.clone()),
@@ -373,6 +381,28 @@ impl ProjectRepository for SeaOrmProjectRepository {
             .filter(project::Column::Id.eq(id))
             .filter(project::Column::OwnerUserId.eq(current_owner_user_id))
             .filter(project::Column::Status.eq(current_status))
+            .exec(&self.database)
+            .await?;
+        if update_result.rows_affected == 0 {
+            return Ok(None);
+        }
+
+        project::Entity::find_by_id(id).one(&self.database).await
+    }
+
+    async fn set_active_deployment(
+        &self,
+        id: Uuid,
+        active_deployment_id: Option<Uuid>,
+        updated_at: DateTimeUtc,
+    ) -> Result<Option<project::Model>, DbErr> {
+        let update_result = project::Entity::update_many()
+            .set(project::ActiveModel {
+                active_deployment_id: Set(active_deployment_id),
+                updated_at: Set(updated_at),
+                ..Default::default()
+            })
+            .filter(project::Column::Id.eq(id))
             .exec(&self.database)
             .await?;
         if update_result.rows_affected == 0 {
