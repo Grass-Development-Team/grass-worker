@@ -6,7 +6,8 @@ pub mod repository;
 mod tests {
     use super::connection::{create_schema_sql, postgres_connection_string, set_search_path_sql};
     use super::entities::{
-        deployment, deployment_artifact, project, user, user_password_credential, user_session,
+        deployment, deployment_artifact, platform_host_source, project, project_host_binding,
+        user, user_password_credential, user_session,
     };
     use super::repository::{
         DeploymentArtifactRepository, DeploymentRepository, NewDeployment, NewDeploymentArtifact,
@@ -47,6 +48,22 @@ mod tests {
         assert_eq!(
             deployment_artifact::Entity.table_name(),
             "deployment_artifacts"
+        );
+    }
+
+    #[test]
+    fn platform_host_source_entity_uses_expected_table_name() {
+        assert_eq!(
+            platform_host_source::Entity.table_name(),
+            "platform_host_sources"
+        );
+    }
+
+    #[test]
+    fn project_host_binding_entity_uses_expected_table_name() {
+        assert_eq!(
+            project_host_binding::Entity.table_name(),
+            "project_host_bindings"
         );
     }
 

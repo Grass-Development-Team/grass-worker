@@ -2,6 +2,7 @@ mod m20260416_000001_create_core_tables;
 mod m20260417_000002_add_initial_admin_flag;
 mod m20260423_000003_expand_project_lifecycle;
 mod m20260501_000004_add_project_active_deployment;
+mod m20260503_000005_add_host_binding_models;
 
 pub use sea_orm_migration::prelude::*;
 
@@ -15,6 +16,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260417_000002_add_initial_admin_flag::Migration),
             Box::new(m20260423_000003_expand_project_lifecycle::Migration),
             Box::new(m20260501_000004_add_project_active_deployment::Migration),
+            Box::new(m20260503_000005_add_host_binding_models::Migration),
         ]
     }
 }
@@ -62,5 +64,17 @@ mod tests {
             migrations[3].name(),
             "m20260501_000004_add_project_active_deployment"
         );
+    }
+
+    #[test]
+    fn migrator_registers_host_binding_models_migration() {
+        let names = Migrator::migrations()
+            .into_iter()
+            .map(|migration| migration.name().to_owned())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(
+            &"m20260503_000005_add_host_binding_models".to_owned()
+        ));
     }
 }

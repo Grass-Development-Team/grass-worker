@@ -39,6 +39,8 @@ pub enum Relation {
     Owner,
     #[sea_orm(has_many = "super::deployment::Entity")]
     Deployments,
+    #[sea_orm(has_many = "super::project_host_binding::Entity")]
+    HostBindings,
 }
 
 impl Related<super::user::Entity> for Entity {
@@ -50,6 +52,12 @@ impl Related<super::user::Entity> for Entity {
 impl Related<super::deployment::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Deployments.def()
+    }
+}
+
+impl Related<super::project_host_binding::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::HostBindings.def()
     }
 }
 
