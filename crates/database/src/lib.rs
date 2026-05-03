@@ -177,6 +177,7 @@ mod tests {
         let statements = sql_statements(repository.into_connection());
         assert!(statements.iter().any(|statement| {
             statement.contains("ORDER BY \"platform_host_sources\".\"created_at\" ASC")
+                && statement.contains("\"platform_host_sources\".\"id\" ASC")
         }));
     }
 
@@ -251,6 +252,86 @@ mod tests {
         assert!(statements.iter().any(|statement| {
             statement.contains("ORDER BY \"project_host_bindings\".\"is_primary\" DESC")
                 && statement.contains("\"project_host_bindings\".\"created_at\" ASC")
+                && statement.contains("\"project_host_bindings\".\"id\" ASC")
+        }));
+    }
+
+    #[tokio::test]
+    async fn project_host_binding_repository_clears_only_primary_bindings_for_project() {
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .into_connection();
+        let repository = SeaOrmProjectHostBindingRepository::new(database);
+
+        let cleared = repository
+            .clear_primary_for_project(project_id(), created_at())
+            .await
+            .unwrap();
+
+        assert_eq!(cleared, 1);
+
+        let statements = sql_statements(repository.into_connection());
+        assert!(statements.iter().any(|statement| {
+            let statement = statement.to_ascii_lowercase();
+            statement.contains("update \"project_host_bindings\"")
+                && statement.contains("\"project_host_bindings\".\"project_id\"")
+                && statement.contains("\"project_host_bindings\".\"is_primary\" = true")
+                && statement.contains("set \"is_primary\" = false")
+        }));
+    }
+
+    #[tokio::test]
+    async fn project_host_binding_repository_sets_primary_by_clearing_existing_primary_first() {
+        let updated_at = created_at();
+        let target = project_host_binding::Model {
+            id: Uuid::parse_str("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee").unwrap(),
+            project_id: project_id(),
+            source_id: Some(source_id()),
+            host: "docs.example.com".to_owned(),
+            is_primary: false,
+            created_at: updated_at,
+            updated_at,
+        };
+        let promoted = project_host_binding::Model {
+            is_primary: true,
+            updated_at,
+            ..target.clone()
+        };
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[target.clone()], [promoted.clone()]])
+            .append_exec_results([
+                MockExecResult {
+                    last_insert_id: 0,
+                    rows_affected: 1,
+                },
+                MockExecResult {
+                    last_insert_id: 0,
+                    rows_affected: 1,
+                },
+            ])
+            .into_connection();
+        let repository = SeaOrmProjectHostBindingRepository::new(database);
+
+        let binding = repository.set_primary(target.id, updated_at).await.unwrap().unwrap();
+
+        assert_eq!(binding, promoted);
+
+        let statements = sql_statements(repository.into_connection());
+        assert!(statements.iter().any(|statement| {
+            let statement = statement.to_ascii_lowercase();
+            statement.contains("update \"project_host_bindings\"")
+                && statement.contains("\"project_host_bindings\".\"project_id\"")
+                && statement.contains("\"project_host_bindings\".\"is_primary\" = true")
+                && statement.contains("set \"is_primary\" = false")
+        }));
+        assert!(statements.iter().any(|statement| {
+            let statement = statement.to_ascii_lowercase();
+            statement.contains("update \"project_host_bindings\"")
+                && statement.contains("\"project_host_bindings\".\"id\"")
+                && statement.contains("set \"is_primary\" = true")
         }));
     }
 

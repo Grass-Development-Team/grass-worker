@@ -7,6 +7,7 @@ use sea_orm::entity::prelude::DateTimeUtc;
 use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection,
     DbErr, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Select, Set,
+    TransactionTrait,
     sea_query::{OnConflict, Query},
 };
 use uuid::Uuid;
@@ -705,6 +706,7 @@ impl PlatformHostSourceRepository for SeaOrmPlatformHostSourceRepository {
     async fn list_all(&self) -> Result<Vec<platform_host_source::Model>, DbErr> {
         platform_host_source::Entity::find()
             .order_by_asc(platform_host_source::Column::CreatedAt)
+            .order_by_asc(platform_host_source::Column::Id)
             .all(&self.database)
             .await
     }
@@ -819,6 +821,7 @@ impl ProjectHostBindingRepository for SeaOrmProjectHostBindingRepository {
             .filter(project_host_binding::Column::ProjectId.eq(project_id))
             .order_by_desc(project_host_binding::Column::IsPrimary)
             .order_by_asc(project_host_binding::Column::CreatedAt)
+            .order_by_asc(project_host_binding::Column::Id)
             .all(&self.database)
             .await
     }
@@ -835,6 +838,7 @@ impl ProjectHostBindingRepository for SeaOrmProjectHostBindingRepository {
                 ..Default::default()
             })
             .filter(project_host_binding::Column::ProjectId.eq(project_id))
+            .filter(project_host_binding::Column::IsPrimary.eq(true))
             .exec(&self.database)
             .await?;
 
@@ -846,6 +850,26 @@ impl ProjectHostBindingRepository for SeaOrmProjectHostBindingRepository {
         id: Uuid,
         updated_at: DateTimeUtc,
     ) -> Result<Option<project_host_binding::Model>, DbErr> {
+        let transaction = self.database.begin().await?;
+        let existing = project_host_binding::Entity::find_by_id(id)
+            .one(&transaction)
+            .await?;
+        let Some(existing) = existing else {
+            transaction.rollback().await?;
+            return Ok(None);
+        };
+
+        project_host_binding::Entity::update_many()
+            .set(project_host_binding::ActiveModel {
+                is_primary: Set(false),
+                updated_at: Set(updated_at),
+                ..Default::default()
+            })
+            .filter(project_host_binding::Column::ProjectId.eq(existing.project_id))
+            .filter(project_host_binding::Column::IsPrimary.eq(true))
+            .exec(&transaction)
+            .await?;
+
         let update_result = project_host_binding::Entity::update_many()
             .set(project_host_binding::ActiveModel {
                 is_primary: Set(true),
@@ -853,15 +877,20 @@ impl ProjectHostBindingRepository for SeaOrmProjectHostBindingRepository {
                 ..Default::default()
             })
             .filter(project_host_binding::Column::Id.eq(id))
-            .exec(&self.database)
+            .exec(&transaction)
             .await?;
         if update_result.rows_affected == 0 {
+            transaction.rollback().await?;
             return Ok(None);
         }
 
-        project_host_binding::Entity::find_by_id(id)
-            .one(&self.database)
+        let updated = project_host_binding::Entity::find_by_id(id)
+            .one(&transaction)
             .await
+            ?;
+        transaction.commit().await?;
+
+        Ok(updated)
     }
 
     async fn delete(&self, id: Uuid) -> Result<bool, DbErr> {
