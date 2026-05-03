@@ -46,7 +46,7 @@ async fn release_frontend_handler(
 }
 
 #[derive(Debug)]
-struct AssetResponse {
+pub(crate) struct AssetResponse {
     bytes: Vec<u8>,
     content_type: String,
 }
@@ -63,7 +63,7 @@ impl IntoResponse for AssetResponse {
     }
 }
 
-fn resolve_release_asset(
+pub(crate) fn resolve_release_asset(
     public_dir: &Path,
     request_path: &str,
 ) -> std::io::Result<Option<AssetResponse>> {

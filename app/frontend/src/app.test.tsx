@@ -85,7 +85,7 @@ type TestDeploymentArtifact = {
 type TestRelease = {
   project_id: string;
   project_slug: string;
-  site_url: string;
+  primary_host: string | null;
   active_deployment_id?: string | null;
   active_deployment?: TestDeployment | null;
   rollback_deployment_id?: string | null;
@@ -1221,7 +1221,7 @@ describe("auth routing", () => {
     let release: TestRelease = {
       project_id: projectId,
       project_slug: "docs-site",
-      site_url: "/sites/docs-site",
+      primary_host: null,
       active_deployment_id: null,
       active_deployment: null,
       rollback_deployment_id: null,
@@ -1287,6 +1287,7 @@ describe("auth routing", () => {
     });
 
     expect(await screen.findByText(/currently live/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /open live site/i })).toBeDisabled();
   });
 
   test("project deployment detail route renders an error state when lookup fails", async () => {
@@ -1447,7 +1448,7 @@ describe("auth routing", () => {
     let release: TestRelease = {
       project_id: projectId,
       project_slug: "docs-site",
-      site_url: "/sites/docs-site",
+      primary_host: "docs.example.com",
       active_deployment_id: currentDeploymentId,
       active_deployment: currentDeployment,
       rollback_deployment_id: previousDeploymentId,
@@ -1498,7 +1499,7 @@ describe("auth routing", () => {
 
     expect(await screen.findByRole("link", { name: /open live site/i })).toHaveAttribute(
       "href",
-      "/sites/docs-site",
+      "https://docs.example.com",
     );
     expect(screen.getByRole("button", { name: /roll back release/i })).toBeInTheDocument();
     expect(screen.getAllByText("current").length).toBeGreaterThan(0);

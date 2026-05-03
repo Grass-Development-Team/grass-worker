@@ -7,7 +7,7 @@ export const projectReleaseQueryKey = (projectId: string) =>
 export type Release = {
   project_id: string;
   project_slug: string;
-  site_url: string;
+  primary_host: string | null;
   active_deployment_id: string | null;
   active_deployment: Deployment | null;
   rollback_deployment_id: string | null;
@@ -44,4 +44,12 @@ export async function rollbackProjectRelease(projectId: string): Promise<Release
     },
   );
   return response.release;
+}
+
+export function releasePublicUrl(primaryHost: string | null): string | null {
+  if (!primaryHost) {
+    return null;
+  }
+
+  return `https://${primaryHost}`;
 }

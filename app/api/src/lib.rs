@@ -19,8 +19,10 @@ use axum::{
 };
 use features::{
     auth::install_auth_routes, deployments::install_deployment_routes,
-    projects::install_project_routes, releases::install_release_routes,
-    setup::install_setup_routes, system::install_system_routes, users::install_user_routes,
+    hosts::install_host_routes, platform_host_sources::install_platform_host_source_routes,
+    projects::install_project_routes, public_sites::install_public_site_frontend,
+    releases::install_release_routes, setup::install_setup_routes,
+    system::install_system_routes, users::install_user_routes,
 };
 use frontend::{FrontendMode, install_frontend};
 use grass_worker_config::AppConfig;
@@ -377,11 +379,20 @@ fn build_app_router(
             let router = install_project_routes(router, context.state.clone());
             let router = install_deployment_routes(router, context.state.clone());
             let router = install_release_routes(router, context.state.clone());
+            let router = install_host_routes(router, context.state.clone());
+            let router = install_platform_host_source_routes(router, context.state.clone());
             let router = install_user_routes(router, context.state.clone())
                 .route("/api/{*path}", any(api_not_found));
             let frontend_mode = resolve_frontend_mode(context.config.development.as_ref())?;
 
-            Ok(with_request_logger(install_frontend(router, frontend_mode)))
+            match frontend_mode {
+                FrontendMode::Development { dev_server } => Ok(with_request_logger(
+                    install_frontend(router, FrontendMode::Development { dev_server }),
+                )),
+                FrontendMode::Release { public_dir } => Ok(with_request_logger(
+                    install_public_site_frontend(router, context.state.clone(), public_dir),
+                )),
+            }
         }
         AppMode::Setup(context) => {
             let stage = context.stage();
@@ -618,6 +629,218 @@ async fn resolve_by_host_returns_active_ready_static_site() {
 }
 
 #[cfg(test)]
+fn ready_mode_for_route_tests(database: sea_orm::DatabaseConnection) -> AppMode {
+    use grass_worker_config::{AppConfig, DatabaseConfig};
+
+    AppMode::Normal(NormalContext::new(
+        AppConfig {
+            server: grass_worker_config::ServerConfig::default(),
+            database: Some(DatabaseConfig::default()),
+            development: None,
+        },
+        AppState::new(database),
+    ))
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn create_project_host_returns_created_binding() {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode, header},
+    };
+    use grass_worker_database::entities::{project, project_host_binding, user, user_session};
+    use sea_orm::{DatabaseBackend, MockDatabase, MockExecResult};
+    use tower::ServiceExt;
+    use uuid::Uuid;
+
+    let now = chrono::Utc::now();
+    let user_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
+    let project_id = Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap();
+    let session_token = "session-token";
+    let database = MockDatabase::new(DatabaseBackend::Postgres)
+        .append_query_results([[user_session::Model {
+            id: Uuid::parse_str("cccccccc-cccc-cccc-cccc-cccccccccccc").unwrap(),
+            user_id,
+            token_hash: crate::adapters::auth::hash_session_token(session_token),
+            created_at: now,
+            expires_at: now + chrono::Duration::days(7),
+            revoked_at: None,
+        }]])
+        .append_query_results([[user::Model {
+            id: user_id,
+            email: "owner@example.com".to_owned(),
+            is_admin: false,
+            is_initial_admin: false,
+            created_at: now,
+            updated_at: now,
+        }]])
+        .append_query_results([[project::Model {
+            id: project_id,
+            owner_user_id: user_id,
+            active_deployment_id: None,
+            slug: "docs-site".to_owned(),
+            name: "Docs Site".to_owned(),
+            status: project::ProjectStatus::Active,
+            created_at: now,
+            updated_at: now,
+            archived_at: None,
+            soft_deleted_at: None,
+        }]])
+        .append_query_results([Vec::<project_host_binding::Model>::new()])
+        .append_exec_results([MockExecResult {
+            last_insert_id: 0,
+            rows_affected: 1,
+        }])
+        .into_connection();
+
+    let response = app_router(ready_mode_for_route_tests(database))
+        .unwrap()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/projects/{project_id}/hosts"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(
+                    header::COOKIE,
+                    format!(
+                        "{}={session_token}",
+                        crate::domain::auth::SESSION_COOKIE_NAME
+                    ),
+                )
+                .body(Body::from(r#"{"host":" Docs.Example.com "}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["host"]["project_id"], project_id.to_string());
+    assert_eq!(json["host"]["source_id"], serde_json::Value::Null);
+    assert_eq!(json["host"]["host"], "docs.example.com");
+    assert_eq!(json["host"]["is_primary"], true);
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn ready_mode_serves_active_static_site_by_host() {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode, header},
+    };
+    use grass_worker_database::entities::{
+        deployment, deployment_artifact, project, project_host_binding,
+    };
+    use sea_orm::{DatabaseBackend, MockDatabase};
+    use std::fs;
+    use tempfile::tempdir;
+    use tower::ServiceExt;
+    use uuid::Uuid;
+
+    let now = chrono::Utc::now();
+    let project_id = Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap();
+    let deployment_id = Uuid::parse_str("cccccccc-cccc-cccc-cccc-cccccccccccc").unwrap();
+    let site_dir = tempdir().unwrap();
+    fs::write(
+        site_dir.path().join("index.html"),
+        "<html>Published Docs Site</html>",
+    )
+    .unwrap();
+
+    let database = MockDatabase::new(DatabaseBackend::Postgres)
+        .append_query_results([[project_host_binding::Model {
+            id: Uuid::parse_str("dddddddd-dddd-dddd-dddd-dddddddddddd").unwrap(),
+            project_id,
+            source_id: None,
+            host: "docs.example.com".to_owned(),
+            is_primary: true,
+            created_at: now,
+            updated_at: now,
+        }]])
+        .append_query_results([[project::Model {
+            id: project_id,
+            owner_user_id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
+            active_deployment_id: Some(deployment_id),
+            slug: "docs-site".to_owned(),
+            name: "Docs Site".to_owned(),
+            status: project::ProjectStatus::Active,
+            created_at: now,
+            updated_at: now,
+            archived_at: None,
+            soft_deleted_at: None,
+        }]])
+        .append_query_results([[deployment::Model {
+            id: deployment_id,
+            project_id,
+            status: deployment::DeploymentStatus::Ready,
+            source_branch: Some("main".to_owned()),
+            source_revision: Some("deadbeef".to_owned()),
+            created_at: now,
+            started_at: Some(now),
+            finished_at: Some(now),
+        }]])
+        .append_query_results([[deployment_artifact::Model {
+            id: Uuid::parse_str("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee").unwrap(),
+            deployment_id,
+            kind: deployment_artifact::ArtifactKind::StaticSite,
+            storage_path: site_dir.path().to_string_lossy().into_owned(),
+            checksum_sha256: Some("abc123".to_owned()),
+            size_bytes: Some(1024),
+            created_at: now,
+        }]])
+        .into_connection();
+
+    let response = app_router(ready_mode_for_route_tests(database))
+        .unwrap()
+        .oneshot(
+            Request::builder()
+                .uri("/docs/getting-started")
+                .header(header::HOST, "docs.example.com")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert!(
+        std::str::from_utf8(&body)
+            .unwrap()
+            .contains("Published Docs Site")
+    );
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn ready_mode_old_sites_path_returns_not_found() {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use sea_orm::{DatabaseBackend, MockDatabase};
+    use tower::ServiceExt;
+
+    let response = app_router(ready_mode_for_route_tests(
+        MockDatabase::new(DatabaseBackend::Postgres).into_connection(),
+    ))
+    .unwrap()
+    .oneshot(
+        Request::builder()
+            .uri("/sites/docs-site/docs/getting-started")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use axum::{
@@ -629,11 +852,9 @@ mod tests {
         deployment, deployment_artifact, project, project_host_binding, user, user_session,
     };
     use sea_orm::{DatabaseBackend, MockDatabase};
-    use std::fs;
     use std::io::{self, Write};
     use std::path::PathBuf;
     use std::sync::Mutex;
-    use tempfile::tempdir;
     use tower::ServiceExt;
     use tracing::subscriber::set_default;
     use tracing_subscriber::{fmt, fmt::MakeWriter};
@@ -1097,7 +1318,7 @@ mod tests {
             json["release"]["active_deployment"]["id"],
             deployment_id.to_string()
         );
-        assert_eq!(json["release"]["site_url"], "/sites/docs-site");
+        assert_eq!(json["release"]["primary_host"], serde_json::Value::Null);
     }
 
     #[tokio::test]
@@ -1259,72 +1480,6 @@ mod tests {
         assert_eq!(
             json["release"]["rollback_deployment_id"],
             current_deployment_id.to_string()
-        );
-    }
-
-    #[tokio::test]
-    async fn ready_mode_serves_active_static_site_with_spa_fallback() {
-        let now = chrono::Utc::now();
-        let project_id = Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap();
-        let deployment_id = Uuid::parse_str("cccccccc-cccc-cccc-cccc-cccccccccccc").unwrap();
-        let site_dir = tempdir().unwrap();
-        fs::write(
-            site_dir.path().join("index.html"),
-            "<html>Published Docs Site</html>",
-        )
-        .unwrap();
-
-        let database = MockDatabase::new(DatabaseBackend::Postgres)
-            .append_query_results([[project::Model {
-                id: project_id,
-                owner_user_id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
-                active_deployment_id: Some(deployment_id),
-                slug: "docs-site".to_owned(),
-                name: "Docs Site".to_owned(),
-                status: project::ProjectStatus::Active,
-                created_at: now,
-                updated_at: now,
-                archived_at: None,
-                soft_deleted_at: None,
-            }]])
-            .append_query_results([[deployment::Model {
-                id: deployment_id,
-                project_id,
-                status: deployment::DeploymentStatus::Ready,
-                source_branch: Some("main".to_owned()),
-                source_revision: Some("deadbeef".to_owned()),
-                created_at: now,
-                started_at: Some(now),
-                finished_at: Some(now),
-            }]])
-            .append_query_results([[deployment_artifact::Model {
-                id: Uuid::parse_str("dddddddd-dddd-dddd-dddd-dddddddddddd").unwrap(),
-                deployment_id,
-                kind: deployment_artifact::ArtifactKind::StaticSite,
-                storage_path: site_dir.path().to_string_lossy().into_owned(),
-                checksum_sha256: Some("abc123".to_owned()),
-                size_bytes: Some(1024),
-                created_at: now,
-            }]])
-            .into_connection();
-
-        let response = app_router(ready_mode_with_database(database))
-            .unwrap()
-            .oneshot(
-                Request::builder()
-                    .uri("/sites/docs-site/docs/getting-started")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        assert!(
-            std::str::from_utf8(&body)
-                .unwrap()
-                .contains("Published Docs Site")
         );
     }
 

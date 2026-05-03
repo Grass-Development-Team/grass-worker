@@ -25,6 +25,7 @@ import {
 import {
   getProjectRelease,
   projectReleaseQueryKey,
+  releasePublicUrl,
   rollbackProjectRelease,
 } from "@/api/releases";
 import { ConsolePageHeader } from "@/components/console/console-page-header";
@@ -240,6 +241,7 @@ export function ProjectDetailsPage() {
         ? "Restore the project before creating deployments."
         : null;
   const liveRelease = releaseQuery.data?.active_deployment;
+  const liveSiteUrl = releasePublicUrl(releaseQuery.data?.primary_host ?? null);
   const canRollbackRelease = Boolean(releaseQuery.data?.rollback_deployment_id);
 
   return (
@@ -274,7 +276,7 @@ export function ProjectDetailsPage() {
               <h2>Live release</h2>
             </CardTitle>
             <CardDescription>
-              The deployment currently mapped to the public site path for this project.
+              The deployment currently mapped to the primary public host for this project.
             </CardDescription>
           </CardHeader>
           <div className="px-6 pb-6">
@@ -290,11 +292,17 @@ export function ProjectDetailsPage() {
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-3">
-                  <Button asChild type="button" variant="outline">
-                    <a href={releaseQuery.data.site_url} rel="noreferrer" target="_blank">
+                  {liveSiteUrl ? (
+                    <Button asChild type="button" variant="outline">
+                      <a href={liveSiteUrl} rel="noreferrer" target="_blank">
+                        Open live site
+                      </a>
+                    </Button>
+                  ) : (
+                    <Button disabled type="button" variant="outline">
                       Open live site
-                    </a>
-                  </Button>
+                    </Button>
+                  )}
                   <Button
                     disabled={!canRollbackRelease || rollbackReleaseMutation.isPending}
                     onClick={() => rollbackReleaseMutation.mutate()}
