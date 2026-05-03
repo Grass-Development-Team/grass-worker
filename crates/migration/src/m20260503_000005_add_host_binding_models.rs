@@ -145,7 +145,7 @@ impl MigrationTrait for Migration {
             .get_connection()
             .execute_unprepared(
                 r#"
-                CREATE UNIQUE INDEX uq-project-host-bindings-primary-per-project
+                CREATE UNIQUE INDEX uq_project_host_bindings_primary_per_project
                 ON project_host_bindings (project_id)
                 WHERE is_primary = true
                 "#,
@@ -160,7 +160,7 @@ impl MigrationTrait for Migration {
             .get_connection()
             .execute_unprepared(
                 r#"
-                DROP INDEX IF EXISTS "uq-project-host-bindings-primary-per-project"
+                DROP INDEX IF EXISTS "uq_project_host_bindings_primary_per_project"
                 "#,
             )
             .await?;
