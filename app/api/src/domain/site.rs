@@ -138,7 +138,7 @@ impl SiteService {
         binding: project_host_binding::Model,
         project: project::Model,
     ) -> Result<Option<ResolvedSite>, SiteError> {
-        if project.status != project::ProjectStatus::Active {
+        if project.status == project::ProjectStatus::SoftDeleted {
             return Ok(None);
         }
 
@@ -211,7 +211,11 @@ mod tests {
     use grass_worker_database::entities::deployment_artifact;
     use sea_orm::{DatabaseBackend, MockDatabase};
 
-    fn sample_project(id: Uuid, active_deployment_id: Option<Uuid>) -> project::Model {
+    fn sample_project(
+        id: Uuid,
+        active_deployment_id: Option<Uuid>,
+        status: project::ProjectStatus,
+    ) -> project::Model {
         let now = Utc.with_ymd_and_hms(2026, 5, 3, 10, 0, 0).unwrap();
         project::Model {
             id,
@@ -219,7 +223,7 @@ mod tests {
             active_deployment_id,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
-            status: project::ProjectStatus::Active,
+            status,
             created_at: now,
             updated_at: now,
             archived_at: None,
@@ -260,7 +264,11 @@ mod tests {
         let deployment_id = Uuid::new_v4();
         let database = MockDatabase::new(DatabaseBackend::Postgres)
             .append_query_results([[sample_binding(project_id)]])
-            .append_query_results([[sample_project(project_id, Some(deployment_id))]])
+            .append_query_results([[sample_project(
+                project_id,
+                Some(deployment_id),
+                project::ProjectStatus::Active,
+            )]])
             .append_query_results([[sample_deployment(deployment_id, project_id)]])
             .append_query_results([[deployment_artifact::Model {
                 id: Uuid::new_v4(),
@@ -274,7 +282,7 @@ mod tests {
             .into_connection();
 
         let resolved = SiteService
-            .resolve_by_host(&database, " Docs.Example.com.:443 ")
+            .resolve_by_host(&database, "Docs.EXAMPLE.com:443.")
             .await
             .unwrap();
 
@@ -287,5 +295,36 @@ mod tests {
                 root_dir: "/tmp/docs-site".to_owned(),
             })
         );
+    }
+
+    #[tokio::test]
+    async fn resolve_by_host_returns_archived_project_site_when_deployment_ready() {
+        let project_id = Uuid::new_v4();
+        let deployment_id = Uuid::new_v4();
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[sample_binding(project_id)]])
+            .append_query_results([[sample_project(
+                project_id,
+                Some(deployment_id),
+                project::ProjectStatus::Archived,
+            )]])
+            .append_query_results([[sample_deployment(deployment_id, project_id)]])
+            .append_query_results([[deployment_artifact::Model {
+                id: Uuid::new_v4(),
+                deployment_id,
+                kind: deployment_artifact::ArtifactKind::StaticSite,
+                storage_path: "/tmp/docs-site".to_owned(),
+                checksum_sha256: Some("abc123".to_owned()),
+                size_bytes: Some(1024),
+                created_at: Utc.with_ymd_and_hms(2026, 5, 3, 10, 15, 0).unwrap(),
+            }]])
+            .into_connection();
+
+        let resolved = SiteService
+            .resolve_by_host(&database, "docs.example.com")
+            .await
+            .unwrap();
+
+        assert_eq!(resolved.as_ref().map(|site| site.root_dir.as_str()), Some("/tmp/docs-site"));
     }
 }

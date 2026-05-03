@@ -99,6 +99,29 @@ fn map_db_error(error: sea_orm::DbErr) -> HostError {
     HostError::internal(error.to_string())
 }
 
+fn is_host_conflict(error: &sea_orm::DbErr) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    (message.contains("duplicate") || message.contains("unique"))
+        && (message.contains("host")
+            || message.contains("project_host_bindings")
+            || message.contains("uq_project_host_bindings_primary_per_project"))
+}
+
+fn map_write_error(error: sea_orm::DbErr) -> HostError {
+    let message = error.to_string().to_ascii_lowercase();
+    if is_host_conflict(&error) {
+        if message.contains("uq_project_host_bindings_primary_per_project")
+            || message.contains("is_primary")
+        {
+            HostError::conflict("project already has a primary host")
+        } else {
+            HostError::conflict("host already exists")
+        }
+    } else {
+        map_db_error(error)
+    }
+}
+
 fn clone_database_connection(database: &DatabaseConnection) -> DatabaseConnection {
     match database {
         DatabaseConnection::SqlxPostgresPoolConnection(connection) => {
@@ -142,7 +165,7 @@ fn host_matches_source_base_domain(
 }
 
 pub fn normalize_host(host: &str) -> Result<String, HostError> {
-    let trimmed = host.trim();
+    let trimmed = host.trim().trim_end_matches('.');
     if trimmed.is_empty() {
         return Err(HostError::validation("host is required"));
     }
@@ -243,13 +266,13 @@ impl HostService {
                 created_at: Utc::now(),
             })
             .await
-            .map_err(map_db_error)?;
+            .map_err(map_write_error)?;
 
         if should_promote && !created.is_primary {
             return host_binding_repository(database)
                 .set_primary(created.id, Utc::now())
                 .await
-                .map_err(map_db_error)?
+                .map_err(map_write_error)?
                 .ok_or_else(|| HostError::internal("failed to promote host binding to primary"));
         }
 
@@ -262,7 +285,7 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
     use grass_worker_database::entities::project;
-    use sea_orm::{DatabaseBackend, MockDatabase, MockExecResult};
+    use sea_orm::{DatabaseBackend, DbErr, MockDatabase, MockExecResult};
 
     fn actor(id: Uuid, is_admin: bool) -> AuthenticatedUser {
         AuthenticatedUser {
@@ -299,10 +322,7 @@ mod tests {
 
     #[test]
     fn normalize_host_strips_port_and_trailing_dot() {
-        assert_eq!(
-            normalize_host("  Docs.Example.com.:443  ").unwrap(),
-            "docs.example.com"
-        );
+        assert_eq!(normalize_host("Docs.EXAMPLE.com:443.").unwrap(), "docs.example.com");
     }
 
     #[tokio::test]
@@ -338,5 +358,37 @@ mod tests {
 
         assert_eq!(binding.host, "docs.example.com");
         assert!(binding.is_primary);
+    }
+
+    #[tokio::test]
+    async fn create_binding_maps_duplicate_host_write_failure_to_conflict() {
+        let owner_id = Uuid::new_v4();
+        let project_id = Uuid::new_v4();
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[sample_project(
+                project_id,
+                owner_id,
+                project::ProjectStatus::Active,
+            )]])
+            .append_query_results([Vec::<project_host_binding::Model>::new()])
+            .append_exec_errors([DbErr::Custom("duplicate key: host".to_owned())])
+            .into_connection();
+
+        let error = HostService
+            .create_for_project(
+                &database,
+                &actor(owner_id, false),
+                project_id,
+                CreateProjectHostInput {
+                    source_id: None,
+                    host: "docs.example.com".to_owned(),
+                    is_primary: None,
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.kind(), &HostErrorKind::Conflict);
+        assert_eq!(error.message(), "host already exists");
     }
 }
