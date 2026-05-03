@@ -38,8 +38,10 @@ pub struct AppState {
     pub database: Arc<sea_orm::DatabaseConnection>,
     pub auth: crate::adapters::auth::AuthService,
     pub projects: crate::domain::project::ProjectService,
+    pub hosts: crate::domain::host::HostService,
     pub deployments: crate::domain::deployment::DeploymentService,
     pub releases: crate::domain::release::ReleaseService,
+    pub sites: crate::domain::site::SiteService,
     pub users: crate::domain::user::UserService,
 }
 
@@ -49,8 +51,10 @@ impl AppState {
             database: Arc::new(database),
             auth: crate::adapters::auth::AuthService,
             projects: crate::domain::project::ProjectService,
+            hosts: crate::domain::host::HostService,
             deployments: crate::domain::deployment::DeploymentService,
             releases: crate::domain::release::ReleaseService,
+            sites: crate::domain::site::SiteService,
             users: crate::domain::user::UserService,
         }
     }
@@ -457,6 +461,163 @@ pub(crate) fn runtime_app_router_with_connector(
 }
 
 #[cfg(test)]
+#[test]
+fn normalize_host_strips_port_and_trailing_dot() {
+    assert_eq!(
+        crate::domain::host::normalize_host("  Docs.Example.com.:443  ").unwrap(),
+        "docs.example.com"
+    );
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn create_binding_promotes_first_binding_to_primary() {
+    use chrono::{TimeZone, Utc};
+    use grass_worker_database::entities::{project, project_host_binding};
+    use sea_orm::{DatabaseBackend, MockDatabase, MockExecResult};
+    use uuid::Uuid;
+
+    fn actor(id: Uuid) -> crate::domain::auth::AuthenticatedUser {
+        crate::domain::auth::AuthenticatedUser {
+            id,
+            email: "owner@example.com".to_owned(),
+            is_admin: false,
+            is_initial_admin: false,
+        }
+    }
+
+    fn sample_project(id: Uuid, owner_user_id: Uuid) -> project::Model {
+        let now = Utc.with_ymd_and_hms(2026, 5, 3, 9, 0, 0).unwrap();
+        project::Model {
+            id,
+            owner_user_id,
+            active_deployment_id: None,
+            slug: "docs-site".to_owned(),
+            name: "Docs Site".to_owned(),
+            status: project::ProjectStatus::Active,
+            created_at: now,
+            updated_at: now,
+            archived_at: None,
+            soft_deleted_at: None,
+        }
+    }
+
+    let owner_id = Uuid::new_v4();
+    let project_id = Uuid::new_v4();
+    let database = MockDatabase::new(DatabaseBackend::Postgres)
+        .append_query_results([[sample_project(project_id, owner_id)]])
+        .append_query_results([Vec::<project_host_binding::Model>::new()])
+        .append_exec_results([MockExecResult {
+            last_insert_id: 0,
+            rows_affected: 1,
+        }])
+        .into_connection();
+
+    let binding = crate::domain::host::HostService
+        .create_for_project(
+            &database,
+            &actor(owner_id),
+            project_id,
+            crate::domain::host::CreateProjectHostInput {
+                source_id: None,
+                host: " Docs.Example.com ".to_owned(),
+                is_primary: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(binding.host, "docs.example.com");
+    assert!(binding.is_primary);
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn resolve_by_host_returns_active_ready_static_site() {
+    use chrono::{TimeZone, Utc};
+    use grass_worker_database::entities::{
+        deployment, deployment_artifact, project, project_host_binding,
+    };
+    use sea_orm::{DatabaseBackend, MockDatabase};
+    use uuid::Uuid;
+
+    fn sample_project(id: Uuid, active_deployment_id: Option<Uuid>) -> project::Model {
+        let now = Utc.with_ymd_and_hms(2026, 5, 3, 10, 0, 0).unwrap();
+        project::Model {
+            id,
+            owner_user_id: Uuid::new_v4(),
+            active_deployment_id,
+            slug: "docs-site".to_owned(),
+            name: "Docs Site".to_owned(),
+            status: project::ProjectStatus::Active,
+            created_at: now,
+            updated_at: now,
+            archived_at: None,
+            soft_deleted_at: None,
+        }
+    }
+
+    fn sample_binding(project_id: Uuid) -> project_host_binding::Model {
+        let now = Utc.with_ymd_and_hms(2026, 5, 3, 10, 5, 0).unwrap();
+        project_host_binding::Model {
+            id: Uuid::new_v4(),
+            project_id,
+            source_id: None,
+            host: "docs.example.com".to_owned(),
+            is_primary: true,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn sample_deployment(id: Uuid, project_id: Uuid) -> deployment::Model {
+        let now = Utc.with_ymd_and_hms(2026, 5, 3, 10, 10, 0).unwrap();
+        deployment::Model {
+            id,
+            project_id,
+            status: deployment::DeploymentStatus::Ready,
+            source_branch: Some("main".to_owned()),
+            source_revision: Some("deadbeef".to_owned()),
+            created_at: now,
+            started_at: Some(now),
+            finished_at: Some(now),
+        }
+    }
+
+    let project_id = Uuid::new_v4();
+    let deployment_id = Uuid::new_v4();
+    let database = MockDatabase::new(DatabaseBackend::Postgres)
+        .append_query_results([[sample_binding(project_id)]])
+        .append_query_results([[sample_project(project_id, Some(deployment_id))]])
+        .append_query_results([[sample_deployment(deployment_id, project_id)]])
+        .append_query_results([[deployment_artifact::Model {
+            id: Uuid::new_v4(),
+            deployment_id,
+            kind: deployment_artifact::ArtifactKind::StaticSite,
+            storage_path: "/tmp/docs-site".to_owned(),
+            checksum_sha256: Some("abc123".to_owned()),
+            size_bytes: Some(1024),
+            created_at: Utc.with_ymd_and_hms(2026, 5, 3, 10, 15, 0).unwrap(),
+        }]])
+        .into_connection();
+
+    let resolved = crate::domain::site::SiteService
+        .resolve_by_host(&database, " Docs.Example.com.:443 ")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resolved,
+        Some(crate::domain::site::ResolvedSite {
+            project_id,
+            project_slug: "docs-site".to_owned(),
+            host: "docs.example.com".to_owned(),
+            root_dir: "/tmp/docs-site".to_owned(),
+        })
+    );
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use axum::{
@@ -465,7 +626,7 @@ mod tests {
     };
     use grass_worker_config::{AppConfig, DatabaseConfig};
     use grass_worker_database::entities::{
-        deployment, deployment_artifact, project, user, user_session,
+        deployment, deployment_artifact, project, project_host_binding, user, user_session,
     };
     use sea_orm::{DatabaseBackend, MockDatabase};
     use std::fs;
@@ -556,6 +717,20 @@ mod tests {
         let state = AppState::new(MockDatabase::new(DatabaseBackend::Postgres).into_connection());
 
         assert_eq!(state.projects, crate::domain::project::ProjectService);
+    }
+
+    #[test]
+    fn app_state_new_initializes_host_service() {
+        let state = AppState::new(MockDatabase::new(DatabaseBackend::Postgres).into_connection());
+
+        assert_eq!(state.hosts, crate::domain::host::HostService);
+    }
+
+    #[test]
+    fn app_state_new_initializes_site_service() {
+        let state = AppState::new(MockDatabase::new(DatabaseBackend::Postgres).into_connection());
+
+        assert_eq!(state.sites, crate::domain::site::SiteService);
     }
 
     #[tokio::test]
@@ -873,6 +1048,7 @@ mod tests {
                 archived_at: None,
                 soft_deleted_at: None,
             }]])
+            .append_query_results([Vec::<project_host_binding::Model>::new()])
             .append_query_results([[deployment::Model {
                 id: deployment_id,
                 project_id,
@@ -1010,6 +1186,7 @@ mod tests {
                 archived_at: None,
                 soft_deleted_at: None,
             }]])
+            .append_query_results([Vec::<project_host_binding::Model>::new()])
             .append_query_results([[deployment::Model {
                 id: previous_deployment_id,
                 project_id,

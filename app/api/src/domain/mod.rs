@@ -1,7 +1,9 @@
 pub mod auth;
 pub mod deployment;
+pub mod host;
 pub mod project;
 pub mod release;
 pub mod setup;
+pub mod site;
 pub mod system;
 pub mod user;

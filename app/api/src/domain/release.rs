@@ -5,8 +5,9 @@ use crate::domain::{
 use chrono::Utc;
 use grass_worker_database::entities::{deployment, deployment_artifact, project as project_entity};
 use grass_worker_database::repository::{
-    DeploymentArtifactRepository, DeploymentRepository, ProjectRepository,
-    SeaOrmDeploymentArtifactRepository, SeaOrmDeploymentRepository, SeaOrmProjectRepository,
+    DeploymentArtifactRepository, DeploymentRepository, ProjectHostBindingRepository,
+    ProjectRepository, SeaOrmDeploymentArtifactRepository, SeaOrmDeploymentRepository,
+    SeaOrmProjectHostBindingRepository, SeaOrmProjectRepository,
 };
 use sea_orm::{DatabaseConnection, DbErr};
 use uuid::Uuid;
@@ -18,6 +19,7 @@ pub struct ReleaseService;
 pub struct ReleaseState {
     pub project_id: Uuid,
     pub project_slug: String,
+    pub primary_host: Option<String>,
     pub active_deployment_id: Option<Uuid>,
     pub active_deployment: Option<deployment::Model>,
     pub rollback_deployment_id: Option<Uuid>,
@@ -130,7 +132,11 @@ fn deployment_artifact_repository(
     SeaOrmDeploymentArtifactRepository::new(clone_database_connection(database))
 }
 
-fn static_site_artifact(
+fn host_binding_repository(database: &DatabaseConnection) -> SeaOrmProjectHostBindingRepository {
+    SeaOrmProjectHostBindingRepository::new(clone_database_connection(database))
+}
+
+pub(crate) fn static_site_artifact(
     artifacts: &[deployment_artifact::Model],
 ) -> Option<deployment_artifact::Model> {
     artifacts
@@ -229,6 +235,11 @@ impl ReleaseService {
         database: &DatabaseConnection,
         project: &project_entity::Model,
     ) -> Result<ReleaseState, ReleaseError> {
+        let primary_host = host_binding_repository(database)
+            .find_primary_by_project(project.id)
+            .await
+            .map_err(map_db_error)?
+            .map(|binding| binding.host);
         let active_deployment = match project.active_deployment_id {
             Some(active_deployment_id) => deployment_repository(database)
                 .find_by_id(active_deployment_id)
@@ -248,6 +259,7 @@ impl ReleaseService {
         Ok(ReleaseState {
             project_id: project.id,
             project_slug: project.slug.clone(),
+            primary_host,
             active_deployment_id: project.active_deployment_id,
             active_deployment,
             rollback_deployment_id,
@@ -375,5 +387,64 @@ impl ReleaseService {
             project_slug: project.slug,
             root_dir: artifact.storage_path,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+    use grass_worker_database::entities::{project, project_host_binding};
+    use sea_orm::{DatabaseBackend, MockDatabase};
+
+    fn actor(id: Uuid) -> AuthenticatedUser {
+        AuthenticatedUser {
+            id,
+            email: "owner@example.com".to_owned(),
+            is_admin: false,
+            is_initial_admin: false,
+        }
+    }
+
+    fn sample_project(id: Uuid, owner_user_id: Uuid) -> project::Model {
+        let now = Utc.with_ymd_and_hms(2026, 5, 3, 11, 0, 0).unwrap();
+        project::Model {
+            id,
+            owner_user_id,
+            active_deployment_id: None,
+            slug: "docs-site".to_owned(),
+            name: "Docs Site".to_owned(),
+            status: project::ProjectStatus::Active,
+            created_at: now,
+            updated_at: now,
+            archived_at: None,
+            soft_deleted_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn get_for_project_returns_primary_host_when_present() {
+        let owner_id = Uuid::new_v4();
+        let project_id = Uuid::new_v4();
+        let now = Utc.with_ymd_and_hms(2026, 5, 3, 11, 5, 0).unwrap();
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[sample_project(project_id, owner_id)]])
+            .append_query_results([[project_host_binding::Model {
+                id: Uuid::new_v4(),
+                project_id,
+                source_id: None,
+                host: "docs.example.com".to_owned(),
+                is_primary: true,
+                created_at: now,
+                updated_at: now,
+            }]])
+            .into_connection();
+
+        let release = ReleaseService
+            .get_for_project(&database, &actor(owner_id), project_id)
+            .await
+            .unwrap();
+
+        assert_eq!(release.primary_host.as_deref(), Some("docs.example.com"));
     }
 }
