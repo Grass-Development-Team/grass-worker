@@ -1,5 +1,6 @@
 use crate::entities::{
-    deployment, deployment_artifact, project, user, user_password_credential, user_session,
+    deployment, deployment_artifact, platform_host_source, project, project_host_binding, user,
+    user_password_credential, user_session,
 };
 use async_trait::async_trait;
 use sea_orm::entity::prelude::DateTimeUtc;
@@ -52,6 +53,27 @@ pub struct NewDeploymentArtifact {
     pub storage_path: String,
     pub checksum_sha256: Option<String>,
     pub size_bytes: Option<i64>,
+    pub created_at: DateTimeUtc,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewPlatformHostSource {
+    pub id: Uuid,
+    pub kind: platform_host_source::PlatformHostSourceKind,
+    pub label: String,
+    pub base_domain: String,
+    pub enabled: bool,
+    pub allows_auto_assign: bool,
+    pub created_at: DateTimeUtc,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewProjectHostBinding {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub source_id: Option<Uuid>,
+    pub host: String,
+    pub is_primary: bool,
     pub created_at: DateTimeUtc,
 }
 
@@ -154,6 +176,51 @@ pub trait DeploymentArtifactRepository {
         &self,
         deployment_id: Uuid,
     ) -> Result<Vec<deployment_artifact::Model>, DbErr>;
+}
+
+#[async_trait]
+pub trait PlatformHostSourceRepository {
+    async fn create(
+        &self,
+        new_source: NewPlatformHostSource,
+    ) -> Result<platform_host_source::Model, DbErr>;
+    async fn list_all(&self) -> Result<Vec<platform_host_source::Model>, DbErr>;
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<platform_host_source::Model>, DbErr>;
+    async fn set_enabled(
+        &self,
+        id: Uuid,
+        enabled: bool,
+        updated_at: DateTimeUtc,
+    ) -> Result<Option<platform_host_source::Model>, DbErr>;
+}
+
+#[async_trait]
+pub trait ProjectHostBindingRepository {
+    async fn create(
+        &self,
+        new_binding: NewProjectHostBinding,
+    ) -> Result<project_host_binding::Model, DbErr>;
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<project_host_binding::Model>, DbErr>;
+    async fn find_by_host(&self, host: &str) -> Result<Option<project_host_binding::Model>, DbErr>;
+    async fn find_primary_by_project(
+        &self,
+        project_id: Uuid,
+    ) -> Result<Option<project_host_binding::Model>, DbErr>;
+    async fn list_by_project(
+        &self,
+        project_id: Uuid,
+    ) -> Result<Vec<project_host_binding::Model>, DbErr>;
+    async fn clear_primary_for_project(
+        &self,
+        project_id: Uuid,
+        updated_at: DateTimeUtc,
+    ) -> Result<u64, DbErr>;
+    async fn set_primary(
+        &self,
+        id: Uuid,
+        updated_at: DateTimeUtc,
+    ) -> Result<Option<project_host_binding::Model>, DbErr>;
+    async fn delete(&self, id: Uuid) -> Result<bool, DbErr>;
 }
 
 #[async_trait]
@@ -583,6 +650,227 @@ impl DeploymentArtifactRepository for SeaOrmDeploymentArtifactRepository {
             .order_by_desc(deployment_artifact::Column::Id)
             .all(&self.database)
             .await
+    }
+}
+
+#[derive(Debug)]
+pub struct SeaOrmPlatformHostSourceRepository {
+    database: DatabaseConnection,
+}
+
+impl SeaOrmPlatformHostSourceRepository {
+    pub fn new(database: DatabaseConnection) -> Self {
+        Self { database }
+    }
+
+    #[cfg(test)]
+    pub fn into_connection(self) -> DatabaseConnection {
+        self.database
+    }
+}
+
+#[async_trait]
+impl PlatformHostSourceRepository for SeaOrmPlatformHostSourceRepository {
+    async fn create(
+        &self,
+        new_source: NewPlatformHostSource,
+    ) -> Result<platform_host_source::Model, DbErr> {
+        let model = platform_host_source::Model {
+            id: new_source.id,
+            kind: new_source.kind,
+            label: new_source.label,
+            base_domain: new_source.base_domain,
+            enabled: new_source.enabled,
+            allows_auto_assign: new_source.allows_auto_assign,
+            created_at: new_source.created_at,
+            updated_at: new_source.created_at,
+        };
+
+        platform_host_source::Entity::insert(platform_host_source::ActiveModel {
+            id: Set(model.id),
+            kind: Set(model.kind.clone()),
+            label: Set(model.label.clone()),
+            base_domain: Set(model.base_domain.clone()),
+            enabled: Set(model.enabled),
+            allows_auto_assign: Set(model.allows_auto_assign),
+            created_at: Set(model.created_at),
+            updated_at: Set(model.updated_at),
+        })
+        .exec_without_returning(&self.database)
+        .await?;
+
+        Ok(model)
+    }
+
+    async fn list_all(&self) -> Result<Vec<platform_host_source::Model>, DbErr> {
+        platform_host_source::Entity::find()
+            .order_by_asc(platform_host_source::Column::CreatedAt)
+            .all(&self.database)
+            .await
+    }
+
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<platform_host_source::Model>, DbErr> {
+        platform_host_source::Entity::find_by_id(id)
+            .one(&self.database)
+            .await
+    }
+
+    async fn set_enabled(
+        &self,
+        id: Uuid,
+        enabled: bool,
+        updated_at: DateTimeUtc,
+    ) -> Result<Option<platform_host_source::Model>, DbErr> {
+        let update_result = platform_host_source::Entity::update_many()
+            .set(platform_host_source::ActiveModel {
+                enabled: Set(enabled),
+                updated_at: Set(updated_at),
+                ..Default::default()
+            })
+            .filter(platform_host_source::Column::Id.eq(id))
+            .exec(&self.database)
+            .await?;
+        if update_result.rows_affected == 0 {
+            return Ok(None);
+        }
+
+        platform_host_source::Entity::find_by_id(id)
+            .one(&self.database)
+            .await
+    }
+}
+
+#[derive(Debug)]
+pub struct SeaOrmProjectHostBindingRepository {
+    database: DatabaseConnection,
+}
+
+impl SeaOrmProjectHostBindingRepository {
+    pub fn new(database: DatabaseConnection) -> Self {
+        Self { database }
+    }
+
+    #[cfg(test)]
+    pub fn into_connection(self) -> DatabaseConnection {
+        self.database
+    }
+}
+
+#[async_trait]
+impl ProjectHostBindingRepository for SeaOrmProjectHostBindingRepository {
+    async fn create(
+        &self,
+        new_binding: NewProjectHostBinding,
+    ) -> Result<project_host_binding::Model, DbErr> {
+        let model = project_host_binding::Model {
+            id: new_binding.id,
+            project_id: new_binding.project_id,
+            source_id: new_binding.source_id,
+            host: new_binding.host,
+            is_primary: new_binding.is_primary,
+            created_at: new_binding.created_at,
+            updated_at: new_binding.created_at,
+        };
+
+        project_host_binding::Entity::insert(project_host_binding::ActiveModel {
+            id: Set(model.id),
+            project_id: Set(model.project_id),
+            source_id: Set(model.source_id),
+            host: Set(model.host.clone()),
+            is_primary: Set(model.is_primary),
+            created_at: Set(model.created_at),
+            updated_at: Set(model.updated_at),
+        })
+        .exec_without_returning(&self.database)
+        .await?;
+
+        Ok(model)
+    }
+
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<project_host_binding::Model>, DbErr> {
+        project_host_binding::Entity::find_by_id(id)
+            .one(&self.database)
+            .await
+    }
+
+    async fn find_by_host(&self, host: &str) -> Result<Option<project_host_binding::Model>, DbErr> {
+        project_host_binding::Entity::find()
+            .filter(project_host_binding::Column::Host.eq(host))
+            .one(&self.database)
+            .await
+    }
+
+    async fn find_primary_by_project(
+        &self,
+        project_id: Uuid,
+    ) -> Result<Option<project_host_binding::Model>, DbErr> {
+        project_host_binding::Entity::find()
+            .filter(project_host_binding::Column::ProjectId.eq(project_id))
+            .filter(project_host_binding::Column::IsPrimary.eq(true))
+            .one(&self.database)
+            .await
+    }
+
+    async fn list_by_project(
+        &self,
+        project_id: Uuid,
+    ) -> Result<Vec<project_host_binding::Model>, DbErr> {
+        project_host_binding::Entity::find()
+            .filter(project_host_binding::Column::ProjectId.eq(project_id))
+            .order_by_desc(project_host_binding::Column::IsPrimary)
+            .order_by_asc(project_host_binding::Column::CreatedAt)
+            .all(&self.database)
+            .await
+    }
+
+    async fn clear_primary_for_project(
+        &self,
+        project_id: Uuid,
+        updated_at: DateTimeUtc,
+    ) -> Result<u64, DbErr> {
+        let update_result = project_host_binding::Entity::update_many()
+            .set(project_host_binding::ActiveModel {
+                is_primary: Set(false),
+                updated_at: Set(updated_at),
+                ..Default::default()
+            })
+            .filter(project_host_binding::Column::ProjectId.eq(project_id))
+            .exec(&self.database)
+            .await?;
+
+        Ok(update_result.rows_affected)
+    }
+
+    async fn set_primary(
+        &self,
+        id: Uuid,
+        updated_at: DateTimeUtc,
+    ) -> Result<Option<project_host_binding::Model>, DbErr> {
+        let update_result = project_host_binding::Entity::update_many()
+            .set(project_host_binding::ActiveModel {
+                is_primary: Set(true),
+                updated_at: Set(updated_at),
+                ..Default::default()
+            })
+            .filter(project_host_binding::Column::Id.eq(id))
+            .exec(&self.database)
+            .await?;
+        if update_result.rows_affected == 0 {
+            return Ok(None);
+        }
+
+        project_host_binding::Entity::find_by_id(id)
+            .one(&self.database)
+            .await
+    }
+
+    async fn delete(&self, id: Uuid) -> Result<bool, DbErr> {
+        let delete_result = project_host_binding::Entity::delete_many()
+            .filter(project_host_binding::Column::Id.eq(id))
+            .exec(&self.database)
+            .await?;
+
+        Ok(delete_result.rows_affected > 0)
     }
 }
 
