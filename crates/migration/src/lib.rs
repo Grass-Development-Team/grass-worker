@@ -29,7 +29,7 @@ mod tests {
     fn migrator_registers_initial_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 4);
+        assert_eq!(migrations.len(), 5);
         assert_eq!(migrations[0].name(), "m20260416_000001_create_core_tables");
     }
 
@@ -37,7 +37,7 @@ mod tests {
     fn migrator_registers_initial_admin_flag_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 4);
+        assert_eq!(migrations.len(), 5);
         assert_eq!(
             migrations[1].name(),
             "m20260417_000002_add_initial_admin_flag"
@@ -48,7 +48,7 @@ mod tests {
     fn migrator_registers_project_lifecycle_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 4);
+        assert_eq!(migrations.len(), 5);
         assert_eq!(
             migrations[2].name(),
             "m20260423_000003_expand_project_lifecycle"
@@ -59,7 +59,7 @@ mod tests {
     fn migrator_registers_project_active_deployment_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 4);
+        assert_eq!(migrations.len(), 5);
         assert_eq!(
             migrations[3].name(),
             "m20260501_000004_add_project_active_deployment"
