@@ -192,6 +192,63 @@ pub fn normalize_host(host: &str) -> Result<String, HostError> {
 }
 
 impl HostService {
+    pub async fn auto_assign_platform_host_for_project(
+        &self,
+        database: &DatabaseConnection,
+        project: &project_entity::Model,
+    ) -> Result<Option<project_host_binding::Model>, HostError> {
+        let project = host_bindable_project(project.clone())?;
+        let eligible_sources = host_source_repository(database)
+            .list_all()
+            .await
+            .map_err(map_db_error)?
+            .into_iter()
+            .filter(|source| source.enabled && source.allows_auto_assign)
+            .collect::<Vec<_>>();
+
+        if eligible_sources.len() != 1 {
+            return Ok(None);
+        }
+
+        if !host_binding_repository(database)
+            .list_by_project(project.id)
+            .await
+            .map_err(map_db_error)?
+            .is_empty()
+        {
+            return Ok(None);
+        }
+
+        let source = &eligible_sources[0];
+        let base_domain = normalize_host(&source.base_domain)?;
+        let host = format!("{}.{}", project.slug, base_domain);
+        let created_at = Utc::now();
+
+        match host_binding_repository(database)
+            .create(NewProjectHostBinding {
+                id: Uuid::new_v4(),
+                project_id: project.id,
+                source_id: Some(source.id),
+                host,
+                is_primary: true,
+                created_at,
+            })
+            .await
+        {
+            Ok(binding) => Ok(Some(binding)),
+            Err(error) if is_host_conflict(&error) => {
+                tracing::warn!(
+                    error = %error,
+                    project_id = %project.id,
+                    source_id = %source.id,
+                    "auto-assign platform host skipped due to host conflict"
+                );
+                Ok(None)
+            }
+            Err(error) => Err(map_write_error(error)),
+        }
+    }
+
     async fn load_visible_project(
         &self,
         database: &DatabaseConnection,
@@ -284,7 +341,7 @@ impl HostService {
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
-    use grass_worker_database::entities::project;
+    use grass_worker_database::entities::{platform_host_source, project};
     use sea_orm::{DatabaseBackend, DbErr, MockDatabase, MockExecResult};
 
     fn actor(id: Uuid, is_admin: bool) -> AuthenticatedUser {
@@ -320,9 +377,101 @@ mod tests {
         }
     }
 
+    fn sample_source(
+        id: Uuid,
+        base_domain: &str,
+        enabled: bool,
+        allows_auto_assign: bool,
+    ) -> platform_host_source::Model {
+        let now = Utc.with_ymd_and_hms(2026, 5, 3, 9, 0, 0).unwrap();
+        platform_host_source::Model {
+            id,
+            kind: platform_host_source::PlatformHostSourceKind::WildcardStatic,
+            label: "Primary Sites".to_owned(),
+            base_domain: base_domain.to_owned(),
+            enabled,
+            allows_auto_assign,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
     #[test]
     fn normalize_host_strips_port_and_trailing_dot() {
         assert_eq!(normalize_host("Docs.EXAMPLE.com:443.").unwrap(), "docs.example.com");
+    }
+
+    #[tokio::test]
+    async fn auto_assigns_platform_host_for_single_eligible_source() {
+        let owner_id = Uuid::new_v4();
+        let project_id = Uuid::new_v4();
+        let source_id = Uuid::new_v4();
+        let project = sample_project(project_id, owner_id, project::ProjectStatus::Active);
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[sample_source(
+                source_id,
+                "apps.example.com",
+                true,
+                true,
+            )]])
+            .append_query_results([Vec::<project_host_binding::Model>::new()])
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .into_connection();
+
+        let binding = HostService
+            .auto_assign_platform_host_for_project(&database, &project)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(binding.source_id, Some(source_id));
+        assert_eq!(binding.host, "docs-site.apps.example.com");
+        assert!(binding.is_primary);
+    }
+
+    #[tokio::test]
+    async fn does_not_auto_assign_platform_host_without_eligible_source() {
+        let owner_id = Uuid::new_v4();
+        let project_id = Uuid::new_v4();
+        let project = sample_project(project_id, owner_id, project::ProjectStatus::Active);
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[sample_source(
+                Uuid::new_v4(),
+                "apps.example.com",
+                true,
+                false,
+            )]])
+            .into_connection();
+
+        let binding = HostService
+            .auto_assign_platform_host_for_project(&database, &project)
+            .await
+            .unwrap();
+
+        assert_eq!(binding, None);
+    }
+
+    #[tokio::test]
+    async fn does_not_auto_assign_platform_host_with_multiple_eligible_sources() {
+        let owner_id = Uuid::new_v4();
+        let project_id = Uuid::new_v4();
+        let project = sample_project(project_id, owner_id, project::ProjectStatus::Active);
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([vec![
+                sample_source(Uuid::new_v4(), "apps.example.com", true, true),
+                sample_source(Uuid::new_v4(), "sites.example.com", true, true),
+            ]])
+            .into_connection();
+
+        let binding = HostService
+            .auto_assign_platform_host_for_project(&database, &project)
+            .await
+            .unwrap();
+
+        assert_eq!(binding, None);
     }
 
     #[tokio::test]

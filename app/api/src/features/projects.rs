@@ -139,13 +139,27 @@ async fn create_project(
         )
         .await
     {
-        Ok(project) => (
-            StatusCode::CREATED,
-            Json(ProjectEnvelope {
-                project: project.into(),
-            }),
-        )
-            .into_response(),
+        Ok(project) => {
+            if let Err(error) = state
+                .hosts
+                .auto_assign_platform_host_for_project(state.database.as_ref(), &project)
+                .await
+            {
+                tracing::warn!(
+                    error = %error.message(),
+                    project_id = %project.id,
+                    "project created without auto-assigned platform host"
+                );
+            }
+
+            (
+                StatusCode::CREATED,
+                Json(ProjectEnvelope {
+                    project: project.into(),
+                }),
+            )
+                .into_response()
+        }
         Err(error) => project_error_response(error),
     }
 }

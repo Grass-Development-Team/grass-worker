@@ -849,7 +849,8 @@ mod tests {
     };
     use grass_worker_config::{AppConfig, DatabaseConfig};
     use grass_worker_database::entities::{
-        deployment, deployment_artifact, project, project_host_binding, user, user_session,
+        deployment, deployment_artifact, platform_host_source, project, project_host_binding,
+        user, user_session,
     };
     use sea_orm::{DatabaseBackend, MockDatabase};
     use std::io::{self, Write};
@@ -1138,6 +1139,143 @@ mod tests {
         assert_eq!(json["project"]["slug"], "docs-site");
         assert_eq!(json["project"]["name"], "Docs Site");
         assert_eq!(json["project"]["status"], "active");
+    }
+
+    #[tokio::test]
+    async fn ready_mode_create_project_auto_assigns_platform_host() {
+        let now = chrono::Utc::now();
+        let user_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
+        let source_id = Uuid::parse_str("cccccccc-cccc-cccc-cccc-cccccccccccc").unwrap();
+        let fixed_project_id = Uuid::parse_str("dddddddd-dddd-dddd-dddd-dddddddddddd").unwrap();
+        let binding_id = Uuid::parse_str("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee").unwrap();
+        let session_token = "session-token";
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[user_session::Model {
+                id: Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap(),
+                user_id,
+                token_hash: crate::adapters::auth::hash_session_token(session_token),
+                created_at: now,
+                expires_at: now + chrono::Duration::days(7),
+                revoked_at: None,
+            }]])
+            .append_query_results([[user::Model {
+                id: user_id,
+                email: "admin@example.com".to_owned(),
+                is_admin: true,
+                is_initial_admin: true,
+                created_at: now,
+                updated_at: now,
+            }]])
+            .append_query_results([Vec::<project::Model>::new()])
+            .append_exec_results([sea_orm::MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .append_query_results([[platform_host_source::Model {
+                id: source_id,
+                kind: platform_host_source::PlatformHostSourceKind::WildcardStatic,
+                label: "Primary Sites".to_owned(),
+                base_domain: "apps.example.com".to_owned(),
+                enabled: true,
+                allows_auto_assign: true,
+                created_at: now,
+                updated_at: now,
+            }]])
+            .append_query_results([Vec::<project_host_binding::Model>::new()])
+            .append_exec_results([sea_orm::MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .append_query_results([[user_session::Model {
+                id: Uuid::parse_str("ffffffff-ffff-ffff-ffff-ffffffffffff").unwrap(),
+                user_id,
+                token_hash: crate::adapters::auth::hash_session_token(session_token),
+                created_at: now,
+                expires_at: now + chrono::Duration::days(7),
+                revoked_at: None,
+            }]])
+            .append_query_results([[user::Model {
+                id: user_id,
+                email: "admin@example.com".to_owned(),
+                is_admin: true,
+                is_initial_admin: true,
+                created_at: now,
+                updated_at: now,
+            }]])
+            .append_query_results([[project::Model {
+                id: fixed_project_id,
+                owner_user_id: user_id,
+                active_deployment_id: None,
+                slug: "docs-site".to_owned(),
+                name: "Docs Site".to_owned(),
+                status: project::ProjectStatus::Active,
+                created_at: now,
+                updated_at: now,
+                archived_at: None,
+                soft_deleted_at: None,
+            }]])
+            .append_query_results([vec![project_host_binding::Model {
+                id: binding_id,
+                project_id: fixed_project_id,
+                source_id: Some(source_id),
+                host: "docs-site.apps.example.com".to_owned(),
+                is_primary: true,
+                created_at: now,
+                updated_at: now,
+            }]])
+            .into_connection();
+
+        let app = app_router(ready_mode_with_database(database)).unwrap();
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/projects")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(
+                        header::COOKIE,
+                        format!(
+                            "{}={session_token}",
+                            crate::domain::auth::SESSION_COOKIE_NAME
+                        ),
+                    )
+                    .body(Body::from(r#"{"name":"Docs Site","slug":"docs-site"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+        let create_body = to_bytes(create_response.into_body(), usize::MAX).await.unwrap();
+        let create_json: serde_json::Value = serde_json::from_slice(&create_body).unwrap();
+        let created_project_id = create_json["project"]["id"].as_str().unwrap();
+
+        let hosts_response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/v1/projects/{created_project_id}/hosts"))
+                    .header(
+                        header::COOKIE,
+                        format!(
+                            "{}={session_token}",
+                            crate::domain::auth::SESSION_COOKIE_NAME
+                        ),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(hosts_response.status(), StatusCode::OK);
+        let hosts_body = to_bytes(hosts_response.into_body(), usize::MAX).await.unwrap();
+        let hosts_json: serde_json::Value = serde_json::from_slice(&hosts_body).unwrap();
+
+        assert_eq!(hosts_json["hosts"][0]["host"], "docs-site.apps.example.com");
+        assert_eq!(hosts_json["hosts"][0]["source_id"], source_id.to_string());
+        assert_eq!(hosts_json["hosts"][0]["is_primary"], true);
     }
 
     #[tokio::test]
