@@ -109,9 +109,7 @@ mod tests {
             .map(|migration| migration.name().to_owned())
             .collect::<Vec<_>>();
 
-        assert!(names.contains(
-            &"m20260503_000005_add_host_binding_models".to_owned()
-        ));
+        assert!(names.contains(&"m20260503_000005_add_host_binding_models".to_owned()));
     }
 
     #[test]
@@ -126,24 +124,20 @@ mod tests {
 
         let statements = sql_statements(database);
 
+        assert!(statements.iter().any(|statement| {
+            statement.contains(r#"CREATE TABLE IF NOT EXISTS "platform_host_sources""#)
+        }));
+        assert!(statements.iter().any(|statement| {
+            statement.contains(r#"CREATE TABLE IF NOT EXISTS "project_host_bindings""#)
+        }));
+        assert!(statements.iter().any(|statement| {
+            statement.contains("CREATE UNIQUE INDEX uq_project_host_bindings_primary_per_project")
+        }));
         assert!(
-            statements
-                .iter()
-                .any(|statement| statement.contains(r#"CREATE TABLE IF NOT EXISTS "platform_host_sources""#))
+            statements.iter().all(
+                |statement| !statement.contains("uq-project-host-bindings-primary-per-project")
+            )
         );
-        assert!(
-            statements
-                .iter()
-                .any(|statement| statement.contains(r#"CREATE TABLE IF NOT EXISTS "project_host_bindings""#))
-        );
-        assert!(
-            statements.iter().any(|statement| statement.contains(
-                "CREATE UNIQUE INDEX uq_project_host_bindings_primary_per_project"
-            ))
-        );
-        assert!(statements.iter().all(|statement| !statement.contains(
-            "uq-project-host-bindings-primary-per-project"
-        )));
     }
 
     #[test]
@@ -158,11 +152,15 @@ mod tests {
 
         let statements = sql_statements(database);
 
-        assert!(statements.iter().any(|statement| statement.contains(
-            r#"DROP INDEX IF EXISTS "uq_project_host_bindings_primary_per_project""#
-        )));
-        assert!(statements.iter().all(|statement| !statement.contains(
-            "uq-project-host-bindings-primary-per-project"
-        )));
+        assert!(
+            statements.iter().any(|statement| statement.contains(
+                r#"DROP INDEX IF EXISTS "uq_project_host_bindings_primary_per_project""#
+            ))
+        );
+        assert!(
+            statements.iter().all(
+                |statement| !statement.contains("uq-project-host-bindings-primary-per-project")
+            )
+        );
     }
 }

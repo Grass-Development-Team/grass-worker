@@ -112,7 +112,10 @@ impl MigrationTrait for Migration {
                                 project_host_binding::Entity,
                                 project_host_binding::Column::SourceId,
                             )
-                            .to(platform_host_source::Entity, platform_host_source::Column::Id)
+                            .to(
+                                platform_host_source::Entity,
+                                platform_host_source::Column::Id,
+                            )
                             .on_delete(ForeignKeyAction::SetNull)
                             .on_update(ForeignKeyAction::Cascade),
                     )
