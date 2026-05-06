@@ -17,7 +17,11 @@ struct PublicSiteState {
     public_dir: PathBuf,
 }
 
-pub fn install_public_site_frontend(router: Router, state: AppState, public_dir: PathBuf) -> Router {
+pub fn install_public_site_frontend(
+    router: Router,
+    state: AppState,
+    public_dir: PathBuf,
+) -> Router {
     Router::new()
         .route("/", get(site_or_frontend).head(site_or_frontend))
         .route("/{*path}", get(site_or_frontend).head(site_or_frontend))
@@ -34,13 +38,17 @@ async fn site_or_frontend(
         return StatusCode::NOT_FOUND.into_response();
     }
 
-    let frontend_fallback = || match crate::frontend::resolve_release_asset(&state.public_dir, uri.path()) {
-        Ok(Some(asset)) => asset.into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(_error) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
+    let frontend_fallback =
+        || match crate::frontend::resolve_release_asset(&state.public_dir, uri.path()) {
+            Ok(Some(asset)) => asset.into_response(),
+            Ok(None) => StatusCode::NOT_FOUND.into_response(),
+            Err(_error) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
 
-    let Some(raw_host) = headers.get(header::HOST).and_then(|value| value.to_str().ok()) else {
+    let Some(raw_host) = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+    else {
         return frontend_fallback();
     };
     let normalized_host = match crate::domain::host::normalize_host(raw_host) {

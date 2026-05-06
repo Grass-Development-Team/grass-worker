@@ -49,6 +49,7 @@ async fn release_frontend_handler(
 pub(crate) struct AssetResponse {
     bytes: Vec<u8>,
     content_type: String,
+    cache_control: &'static str,
 }
 
 impl IntoResponse for AssetResponse {
@@ -57,6 +58,10 @@ impl IntoResponse for AssetResponse {
         response.headers_mut().insert(
             HeaderName::from_static("content-type"),
             HeaderValue::from_str(&self.content_type).unwrap(),
+        );
+        response.headers_mut().insert(
+            HeaderName::from_static("cache-control"),
+            HeaderValue::from_static(self.cache_control),
         );
 
         response
@@ -115,11 +120,17 @@ fn load_embedded_asset(requested_path: &str) -> Option<AssetResponse> {
 }
 
 fn asset_response(requested_path: &str, bytes: Vec<u8>) -> AssetResponse {
+    let content_type = mime_guess::from_path(requested_path)
+        .first_or_octet_stream()
+        .to_string();
     AssetResponse {
         bytes,
-        content_type: mime_guess::from_path(requested_path)
-            .first_or_octet_stream()
-            .to_string(),
+        cache_control: if content_type == "text/html" {
+            "no-cache"
+        } else {
+            "public, max-age=3600"
+        },
+        content_type,
     }
 }
 
@@ -273,6 +284,71 @@ mod tests {
 
         assert!(html.contains("Grass Worker Console"));
         assert!(html.contains(r#"<div id="app"></div>"#));
+    }
+
+    #[tokio::test]
+    async fn release_mode_serves_html_with_no_cache_header() {
+        let temp_dir = tempdir().unwrap();
+        let public_dir = temp_dir.path().join("public");
+        fs::create_dir_all(&public_dir).unwrap();
+        fs::write(public_dir.join("index.html"), "<html>cached?</html>").unwrap();
+
+        let app = install_frontend(
+            backend_shell(),
+            FrontendMode::Release {
+                public_dir: public_dir.clone(),
+            },
+        );
+
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("cache-control")
+                .and_then(|value| value.to_str().ok()),
+            Some("no-cache")
+        );
+    }
+
+    #[tokio::test]
+    async fn release_mode_serves_non_html_assets_with_short_public_cache() {
+        let temp_dir = tempdir().unwrap();
+        let public_dir = temp_dir.path().join("public");
+        let assets_dir = public_dir.join("assets");
+        fs::create_dir_all(&assets_dir).unwrap();
+        fs::write(public_dir.join("index.html"), "<html>shell</html>").unwrap();
+        fs::write(assets_dir.join("app.js"), "console.log('ok');").unwrap();
+
+        let app = install_frontend(
+            backend_shell(),
+            FrontendMode::Release {
+                public_dir: public_dir.clone(),
+            },
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/assets/app.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("cache-control")
+                .and_then(|value| value.to_str().ok()),
+            Some("public, max-age=3600")
+        );
     }
 
     #[tokio::test]

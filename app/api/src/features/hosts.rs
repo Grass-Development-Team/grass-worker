@@ -67,7 +67,10 @@ struct HostsEnvelope {
 
 pub fn install_host_routes(router: Router, state: AppState) -> Router {
     let host_router = Router::new()
-        .route("/api/v1/projects/{id}/hosts", get(list_hosts).post(create_host))
+        .route(
+            "/api/v1/projects/{id}/hosts",
+            get(list_hosts).post(create_host),
+        )
         .route(
             "/api/v1/projects/{id}/hosts/{binding_id}/primary",
             post(set_primary_host),
@@ -94,7 +97,11 @@ async fn list_hosts(
         Ok(id) => id,
         Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
     };
-    if let Err(error) = state.projects.get(state.database.as_ref(), &actor, project_id).await {
+    if let Err(error) = state
+        .projects
+        .get(state.database.as_ref(), &actor, project_id)
+        .await
+    {
         return project_error_response(error);
     }
 
@@ -178,7 +185,11 @@ async fn set_primary_host(
         Ok(id) => id,
         Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
     };
-    if let Err(error) = state.projects.get(state.database.as_ref(), &actor, project_id).await {
+    if let Err(error) = state
+        .projects
+        .get(state.database.as_ref(), &actor, project_id)
+        .await
+    {
         return project_error_response(error);
     }
 
@@ -219,7 +230,11 @@ async fn delete_host(
         Ok(id) => id,
         Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
     };
-    if let Err(error) = state.projects.get(state.database.as_ref(), &actor, project_id).await {
+    if let Err(error) = state
+        .projects
+        .get(state.database.as_ref(), &actor, project_id)
+        .await
+    {
         return project_error_response(error);
     }
 
@@ -279,8 +294,9 @@ async fn delete_host(
 fn authenticated_user(
     state: &AppState,
     jar: CookieJar,
-) -> impl std::future::Future<Output = Result<crate::domain::auth::AuthenticatedUser, axum::response::Response>>
-{
+) -> impl std::future::Future<
+    Output = Result<crate::domain::auth::AuthenticatedUser, axum::response::Response>,
+> {
     async move {
         let Some(session_cookie) = jar.get(crate::domain::auth::SESSION_COOKIE_NAME) else {
             return Err(auth_error_response(

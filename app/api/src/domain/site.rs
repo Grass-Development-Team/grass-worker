@@ -325,6 +325,9 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resolved.as_ref().map(|site| site.root_dir.as_str()), Some("/tmp/docs-site"));
+        assert_eq!(
+            resolved.as_ref().map(|site| site.root_dir.as_str()),
+            Some("/tmp/docs-site")
+        );
     }
 }

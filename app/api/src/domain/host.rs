@@ -4,11 +4,12 @@ use crate::domain::{
 };
 use chrono::Utc;
 use grass_worker_database::entities::{
-    platform_host_source, project as project_entity, project_host_binding,
+    host_policy, platform_host_source, project as project_entity, project_host_binding,
 };
 use grass_worker_database::repository::{
-    NewProjectHostBinding, PlatformHostSourceRepository, ProjectHostBindingRepository,
-    ProjectRepository, SeaOrmPlatformHostSourceRepository, SeaOrmProjectHostBindingRepository,
+    HostPolicyRepository, NewProjectHostBinding, PlatformHostSourceRepository,
+    ProjectHostBindingRepository, ProjectListFilter, ProjectRepository, SeaOrmHostPolicyRepository,
+    SeaOrmPlatformHostSourceRepository, SeaOrmProjectHostBindingRepository,
     SeaOrmProjectRepository,
 };
 use sea_orm::DatabaseConnection;
@@ -16,6 +17,9 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HostService;
+
+const DEFAULT_MAX_HOSTS_PER_PROJECT: usize = 10;
+const DEFAULT_MAX_HOSTS_PER_OWNER_USER: usize = 50;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateProjectHostInput {
@@ -37,6 +41,19 @@ pub enum HostErrorKind {
 pub struct HostError {
     kind: HostErrorKind,
     message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HostCapacity {
+    Available,
+    ProjectLimitReached,
+    OwnerLimitReached,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HostPolicyLimits {
+    max_hosts_per_project: usize,
+    max_hosts_per_owner_user: usize,
 }
 
 impl HostError {
@@ -142,6 +159,10 @@ fn host_source_repository(database: &DatabaseConnection) -> SeaOrmPlatformHostSo
     SeaOrmPlatformHostSourceRepository::new(clone_database_connection(database))
 }
 
+fn host_policy_repository(database: &DatabaseConnection) -> SeaOrmHostPolicyRepository {
+    SeaOrmHostPolicyRepository::new(clone_database_connection(database))
+}
+
 fn host_binding_repository(database: &DatabaseConnection) -> SeaOrmProjectHostBindingRepository {
     SeaOrmProjectHostBindingRepository::new(clone_database_connection(database))
 }
@@ -192,6 +213,68 @@ pub fn normalize_host(host: &str) -> Result<String, HostError> {
 }
 
 impl HostService {
+    async fn load_host_policy_limits(
+        &self,
+        database: &DatabaseConnection,
+    ) -> Result<HostPolicyLimits, HostError> {
+        let policy = host_policy_repository(database)
+            .find_current()
+            .await
+            .map_err(map_db_error)?;
+
+        Ok(match policy {
+            Some(host_policy::Model {
+                max_hosts_per_project,
+                max_hosts_per_owner_user,
+                ..
+            }) => HostPolicyLimits {
+                max_hosts_per_project: usize::try_from(max_hosts_per_project).unwrap_or_default(),
+                max_hosts_per_owner_user: usize::try_from(max_hosts_per_owner_user)
+                    .unwrap_or_default(),
+            },
+            None => HostPolicyLimits {
+                max_hosts_per_project: DEFAULT_MAX_HOSTS_PER_PROJECT,
+                max_hosts_per_owner_user: DEFAULT_MAX_HOSTS_PER_OWNER_USER,
+            },
+        })
+    }
+
+    async fn host_capacity_for_project(
+        &self,
+        database: &DatabaseConnection,
+        project: &project_entity::Model,
+        existing_bindings: &[project_host_binding::Model],
+    ) -> Result<HostCapacity, HostError> {
+        let limits = self.load_host_policy_limits(database).await?;
+        if existing_bindings.len() >= limits.max_hosts_per_project {
+            return Ok(HostCapacity::ProjectLimitReached);
+        }
+
+        let owner_projects = project_repository(database)
+            .list_by_owner(project.owner_user_id, ProjectListFilter::ActiveAndArchived)
+            .await
+            .map_err(map_db_error)?;
+        let mut owner_total = existing_bindings.len();
+
+        for owner_project in owner_projects {
+            if owner_project.id == project.id {
+                continue;
+            }
+
+            owner_total += host_binding_repository(database)
+                .list_by_project(owner_project.id)
+                .await
+                .map_err(map_db_error)?
+                .len();
+        }
+
+        if owner_total >= limits.max_hosts_per_owner_user {
+            return Ok(HostCapacity::OwnerLimitReached);
+        }
+
+        Ok(HostCapacity::Available)
+    }
+
     pub async fn auto_assign_platform_host_for_project(
         &self,
         database: &DatabaseConnection,
@@ -215,6 +298,14 @@ impl HostService {
             .await
             .map_err(map_db_error)?
             .is_empty()
+        {
+            return Ok(None);
+        }
+
+        if self
+            .host_capacity_for_project(database, &project, &[])
+            .await?
+            != HostCapacity::Available
         {
             return Ok(None);
         }
@@ -307,6 +398,18 @@ impl HostService {
             .list_by_project(project.id)
             .await
             .map_err(map_db_error)?;
+        match self
+            .host_capacity_for_project(database, &project, &existing_bindings)
+            .await?
+        {
+            HostCapacity::Available => {}
+            HostCapacity::ProjectLimitReached => {
+                return Err(HostError::conflict("project host limit reached"));
+            }
+            HostCapacity::OwnerLimitReached => {
+                return Err(HostError::conflict("owner host limit reached"));
+            }
+        }
         let should_promote = input
             .is_primary
             .unwrap_or_else(|| existing_bindings.iter().all(|binding| !binding.is_primary));
@@ -341,7 +444,7 @@ impl HostService {
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
-    use grass_worker_database::entities::{platform_host_source, project};
+    use grass_worker_database::entities::{host_policy, platform_host_source, project};
     use sea_orm::{DatabaseBackend, DbErr, MockDatabase, MockExecResult};
 
     fn actor(id: Uuid, is_admin: bool) -> AuthenticatedUser {
@@ -396,9 +499,26 @@ mod tests {
         }
     }
 
+    fn sample_policy(
+        max_hosts_per_project: i32,
+        max_hosts_per_owner_user: i32,
+    ) -> host_policy::Model {
+        let now = Utc.with_ymd_and_hms(2026, 5, 3, 9, 30, 0).unwrap();
+        host_policy::Model {
+            id: Uuid::new_v4(),
+            max_hosts_per_project,
+            max_hosts_per_owner_user,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
     #[test]
     fn normalize_host_strips_port_and_trailing_dot() {
-        assert_eq!(normalize_host("Docs.EXAMPLE.com:443.").unwrap(), "docs.example.com");
+        assert_eq!(
+            normalize_host("Docs.EXAMPLE.com:443.").unwrap(),
+            "docs.example.com"
+        );
     }
 
     #[tokio::test]
@@ -408,13 +528,10 @@ mod tests {
         let source_id = Uuid::new_v4();
         let project = sample_project(project_id, owner_id, project::ProjectStatus::Active);
         let database = MockDatabase::new(DatabaseBackend::Postgres)
-            .append_query_results([[sample_source(
-                source_id,
-                "apps.example.com",
-                true,
-                true,
-            )]])
+            .append_query_results([[sample_source(source_id, "apps.example.com", true, true)]])
             .append_query_results([Vec::<project_host_binding::Model>::new()])
+            .append_query_results([Vec::<host_policy::Model>::new()])
+            .append_query_results([Vec::<project::Model>::new()])
             .append_exec_results([MockExecResult {
                 last_insert_id: 0,
                 rows_affected: 1,
@@ -485,6 +602,12 @@ mod tests {
                 project::ProjectStatus::Active,
             )]])
             .append_query_results([Vec::<project_host_binding::Model>::new()])
+            .append_query_results([Vec::<host_policy::Model>::new()])
+            .append_query_results([vec![sample_project(
+                project_id,
+                owner_id,
+                project::ProjectStatus::Active,
+            )]])
             .append_exec_results([MockExecResult {
                 last_insert_id: 0,
                 rows_affected: 1,
@@ -520,6 +643,12 @@ mod tests {
                 project::ProjectStatus::Active,
             )]])
             .append_query_results([Vec::<project_host_binding::Model>::new()])
+            .append_query_results([Vec::<host_policy::Model>::new()])
+            .append_query_results([vec![sample_project(
+                project_id,
+                owner_id,
+                project::ProjectStatus::Active,
+            )]])
             .append_exec_errors([DbErr::Custom("duplicate key: host".to_owned())])
             .into_connection();
 
@@ -539,5 +668,147 @@ mod tests {
 
         assert_eq!(error.kind(), &HostErrorKind::Conflict);
         assert_eq!(error.message(), "host already exists");
+    }
+
+    #[tokio::test]
+    async fn create_binding_rejects_when_project_host_limit_is_reached() {
+        let owner_id = Uuid::new_v4();
+        let project_id = Uuid::new_v4();
+        let existing_binding_id = Uuid::new_v4();
+        let now = Utc.with_ymd_and_hms(2026, 5, 3, 9, 45, 0).unwrap();
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[sample_project(
+                project_id,
+                owner_id,
+                project::ProjectStatus::Active,
+            )]])
+            .append_query_results([vec![project_host_binding::Model {
+                id: existing_binding_id,
+                project_id,
+                source_id: None,
+                host: "docs.example.com".to_owned(),
+                is_primary: true,
+                created_at: now,
+                updated_at: now,
+            }]])
+            .append_query_results([[sample_policy(1, 50)]])
+            .into_connection();
+
+        let error = HostService
+            .create_for_project(
+                &database,
+                &actor(owner_id, false),
+                project_id,
+                CreateProjectHostInput {
+                    source_id: None,
+                    host: "alt.example.com".to_owned(),
+                    is_primary: Some(false),
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.kind(), &HostErrorKind::Conflict);
+        assert_eq!(error.message(), "project host limit reached");
+    }
+
+    #[tokio::test]
+    async fn auto_assign_skips_when_owner_host_limit_is_reached() {
+        let owner_id = Uuid::new_v4();
+        let project_id = Uuid::new_v4();
+        let other_project_id = Uuid::new_v4();
+        let source_id = Uuid::new_v4();
+        let now = Utc.with_ymd_and_hms(2026, 5, 3, 9, 50, 0).unwrap();
+        let project = sample_project(project_id, owner_id, project::ProjectStatus::Active);
+        let other_project = project::Model {
+            id: other_project_id,
+            owner_user_id: owner_id,
+            active_deployment_id: None,
+            slug: "blog-site".to_owned(),
+            name: "Blog Site".to_owned(),
+            status: project::ProjectStatus::Active,
+            created_at: now,
+            updated_at: now,
+            archived_at: None,
+            soft_deleted_at: None,
+        };
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[sample_source(source_id, "apps.example.com", true, true)]])
+            .append_query_results([Vec::<project_host_binding::Model>::new()])
+            .append_query_results([[sample_policy(10, 1)]])
+            .append_query_results([vec![project.clone(), other_project]])
+            .append_query_results([vec![project_host_binding::Model {
+                id: Uuid::new_v4(),
+                project_id: other_project_id,
+                source_id: None,
+                host: "blog.example.com".to_owned(),
+                is_primary: true,
+                created_at: now,
+                updated_at: now,
+            }]])
+            .into_connection();
+
+        let binding = HostService
+            .auto_assign_platform_host_for_project(&database, &project)
+            .await
+            .unwrap();
+
+        assert_eq!(binding, None);
+    }
+
+    #[tokio::test]
+    async fn create_binding_rejects_when_owner_host_limit_is_reached() {
+        let owner_id = Uuid::new_v4();
+        let project_id = Uuid::new_v4();
+        let other_project_id = Uuid::new_v4();
+        let now = Utc.with_ymd_and_hms(2026, 5, 3, 10, 0, 0).unwrap();
+        let current_project = sample_project(project_id, owner_id, project::ProjectStatus::Active);
+        let other_project = project::Model {
+            id: other_project_id,
+            owner_user_id: owner_id,
+            active_deployment_id: None,
+            slug: "blog-site".to_owned(),
+            name: "Blog Site".to_owned(),
+            status: project::ProjectStatus::Active,
+            created_at: now,
+            updated_at: now,
+            archived_at: None,
+            soft_deleted_at: None,
+        };
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[current_project]])
+            .append_query_results([Vec::<project_host_binding::Model>::new()])
+            .append_query_results([[sample_policy(10, 1)]])
+            .append_query_results([vec![
+                sample_project(project_id, owner_id, project::ProjectStatus::Active),
+                other_project,
+            ]])
+            .append_query_results([vec![project_host_binding::Model {
+                id: Uuid::new_v4(),
+                project_id: other_project_id,
+                source_id: None,
+                host: "blog.example.com".to_owned(),
+                is_primary: true,
+                created_at: now,
+                updated_at: now,
+            }]])
+            .into_connection();
+
+        let error = HostService
+            .create_for_project(
+                &database,
+                &actor(owner_id, false),
+                project_id,
+                CreateProjectHostInput {
+                    source_id: None,
+                    host: "alt.example.com".to_owned(),
+                    is_primary: Some(false),
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.kind(), &HostErrorKind::Conflict);
+        assert_eq!(error.message(), "owner host limit reached");
     }
 }

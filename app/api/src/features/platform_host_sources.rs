@@ -105,7 +105,10 @@ async fn list_sources(
         return error_response(StatusCode::FORBIDDEN, "forbidden");
     }
 
-    match host_source_repository(state.database.as_ref()).list_all().await {
+    match host_source_repository(state.database.as_ref())
+        .list_all()
+        .await
+    {
         Ok(sources) => Json(PlatformHostSourcesEnvelope {
             sources: sources
                 .into_iter()

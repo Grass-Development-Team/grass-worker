@@ -1,13 +1,12 @@
 use crate::entities::{
-    deployment, deployment_artifact, platform_host_source, project, project_host_binding, user,
-    user_password_credential, user_session,
+    deployment, deployment_artifact, host_policy, platform_host_source, project,
+    project_host_binding, user, user_password_credential, user_session,
 };
 use async_trait::async_trait;
 use sea_orm::entity::prelude::DateTimeUtc;
 use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection,
-    DbErr, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Select, Set,
-    TransactionTrait,
+    DbErr, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Select, Set, TransactionTrait,
     sea_query::{OnConflict, Query},
 };
 use uuid::Uuid;
@@ -54,6 +53,14 @@ pub struct NewDeploymentArtifact {
     pub storage_path: String,
     pub checksum_sha256: Option<String>,
     pub size_bytes: Option<i64>,
+    pub created_at: DateTimeUtc,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewHostPolicy {
+    pub id: Uuid,
+    pub max_hosts_per_project: i32,
+    pub max_hosts_per_owner_user: i32,
     pub created_at: DateTimeUtc,
 }
 
@@ -177,6 +184,11 @@ pub trait DeploymentArtifactRepository {
         &self,
         deployment_id: Uuid,
     ) -> Result<Vec<deployment_artifact::Model>, DbErr>;
+}
+
+#[async_trait]
+pub trait HostPolicyRepository {
+    async fn find_current(&self) -> Result<Option<host_policy::Model>, DbErr>;
 }
 
 #[async_trait]
@@ -655,6 +667,33 @@ impl DeploymentArtifactRepository for SeaOrmDeploymentArtifactRepository {
 }
 
 #[derive(Debug)]
+pub struct SeaOrmHostPolicyRepository {
+    database: DatabaseConnection,
+}
+
+impl SeaOrmHostPolicyRepository {
+    pub fn new(database: DatabaseConnection) -> Self {
+        Self { database }
+    }
+
+    #[cfg(test)]
+    pub fn into_connection(self) -> DatabaseConnection {
+        self.database
+    }
+}
+
+#[async_trait]
+impl HostPolicyRepository for SeaOrmHostPolicyRepository {
+    async fn find_current(&self) -> Result<Option<host_policy::Model>, DbErr> {
+        host_policy::Entity::find()
+            .order_by_desc(host_policy::Column::UpdatedAt)
+            .order_by_desc(host_policy::Column::Id)
+            .one(&self.database)
+            .await
+    }
+}
+
+#[derive(Debug)]
 pub struct SeaOrmPlatformHostSourceRepository {
     database: DatabaseConnection,
 }
@@ -886,8 +925,7 @@ impl ProjectHostBindingRepository for SeaOrmProjectHostBindingRepository {
 
         let updated = project_host_binding::Entity::find_by_id(id)
             .one(&transaction)
-            .await
-            ?;
+            .await?;
         transaction.commit().await?;
 
         Ok(updated)

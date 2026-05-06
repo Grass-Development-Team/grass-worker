@@ -1,5 +1,6 @@
 pub mod deployment;
 pub mod deployment_artifact;
+pub mod host_policy;
 pub mod platform_host_source;
 pub mod project;
 pub mod project_host_binding;

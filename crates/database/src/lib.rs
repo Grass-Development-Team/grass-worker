@@ -6,20 +6,20 @@ pub mod repository;
 mod tests {
     use super::connection::{create_schema_sql, postgres_connection_string, set_search_path_sql};
     use super::entities::{
-        deployment, deployment_artifact, platform_host_source, project, project_host_binding, user,
-        user_password_credential, user_session,
+        deployment, deployment_artifact, host_policy, platform_host_source, project,
+        project_host_binding, user, user_password_credential, user_session,
     };
     use super::repository::{
-        DeploymentArtifactRepository, DeploymentRepository, NewDeployment, NewDeploymentArtifact,
-        NewProject, NewUser, NewUserPasswordCredential, NewUserSession,
+        DeploymentArtifactRepository, DeploymentRepository, HostPolicyRepository, NewDeployment,
+        NewDeploymentArtifact, NewProject, NewUser, NewUserPasswordCredential, NewUserSession,
         PlatformHostSourceRepository, ProjectHostBindingRepository, ProjectListFilter,
         ProjectRepository, SeaOrmDeploymentArtifactRepository, SeaOrmDeploymentRepository,
-        SeaOrmPlatformHostSourceRepository, SeaOrmProjectHostBindingRepository,
-        SeaOrmProjectRepository, SeaOrmUserPasswordCredentialRepository, SeaOrmUserRepository,
-        SeaOrmUserSessionRepository, UpdateProject, UserPasswordCredentialRepository,
-        UserRepository, UserSessionRepository, find_password_credential_by_user_id,
-        find_session_by_token_hash, find_user_by_email, find_user_by_id, insert_session,
-        revoke_session_by_token_hash,
+        SeaOrmHostPolicyRepository, SeaOrmPlatformHostSourceRepository,
+        SeaOrmProjectHostBindingRepository, SeaOrmProjectRepository,
+        SeaOrmUserPasswordCredentialRepository, SeaOrmUserRepository, SeaOrmUserSessionRepository,
+        UpdateProject, UserPasswordCredentialRepository, UserRepository, UserSessionRepository,
+        find_password_credential_by_user_id, find_session_by_token_hash, find_user_by_email,
+        find_user_by_id, insert_session, revoke_session_by_token_hash,
     };
     use grass_worker_config::DatabaseConfig;
     use sea_orm::EntityName;
@@ -81,6 +81,11 @@ mod tests {
             project_host_binding::Entity.table_name(),
             "project_host_bindings"
         );
+    }
+
+    #[test]
+    fn host_policy_entity_uses_expected_table_name() {
+        assert_eq!(host_policy::Entity.table_name(), "host_policies");
     }
 
     #[test]
@@ -315,7 +320,11 @@ mod tests {
             .into_connection();
         let repository = SeaOrmProjectHostBindingRepository::new(database);
 
-        let binding = repository.set_primary(target.id, updated_at).await.unwrap().unwrap();
+        let binding = repository
+            .set_primary(target.id, updated_at)
+            .await
+            .unwrap()
+            .unwrap();
 
         assert_eq!(binding, promoted);
 
@@ -332,6 +341,35 @@ mod tests {
             statement.contains("update \"project_host_bindings\"")
                 && statement.contains("\"project_host_bindings\".\"id\"")
                 && statement.contains("set \"is_primary\" = true")
+        }));
+    }
+
+    #[tokio::test]
+    async fn host_policy_repository_returns_latest_policy() {
+        let created_at = created_at();
+        let updated_at = chrono::DateTime::parse_from_rfc3339("2026-04-18T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[host_policy::Model {
+                id: Uuid::parse_str("12121212-1212-1212-1212-121212121212").unwrap(),
+                max_hosts_per_project: 10,
+                max_hosts_per_owner_user: 50,
+                created_at,
+                updated_at,
+            }]])
+            .into_connection();
+        let repository = SeaOrmHostPolicyRepository::new(database);
+
+        let policy = repository.find_current().await.unwrap().unwrap();
+
+        assert_eq!(policy.max_hosts_per_project, 10);
+        assert_eq!(policy.max_hosts_per_owner_user, 50);
+
+        let statements = sql_statements(repository.into_connection());
+        assert!(statements.iter().any(|statement| {
+            statement.contains("ORDER BY \"host_policies\".\"updated_at\" DESC")
+                && statement.contains("\"host_policies\".\"id\" DESC")
         }));
     }
 
