@@ -3,16 +3,12 @@ use axum::{
     Extension, Json, Router,
     extract::{Path, rejection::JsonRejection},
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::IntoResponse,
     routing::{get, post},
 };
 use axum_extra::extract::CookieJar;
 use grass_worker_database::entities::deployment;
 use serde::{Deserialize, Serialize};
-use std::{
-    fs,
-    path::{Component, Path as FilePath},
-};
 use uuid::Uuid;
 
 #[derive(Debug, Serialize)]
@@ -56,7 +52,7 @@ impl From<deployment::Model> for DeploymentResponse {
 struct ReleaseResponse {
     project_id: Uuid,
     project_slug: String,
-    site_url: String,
+    primary_host: Option<String>,
     active_deployment_id: Option<Uuid>,
     active_deployment: Option<DeploymentResponse>,
     rollback_deployment_id: Option<Uuid>,
@@ -66,8 +62,8 @@ impl From<crate::domain::release::ReleaseState> for ReleaseResponse {
     fn from(value: crate::domain::release::ReleaseState) -> Self {
         Self {
             project_id: value.project_id,
-            site_url: format!("/sites/{}", value.project_slug),
             project_slug: value.project_slug,
+            primary_host: value.primary_host,
             active_deployment_id: value.active_deployment_id,
             active_deployment: value.active_deployment.map(DeploymentResponse::from),
             rollback_deployment_id: value.rollback_deployment_id,
@@ -91,8 +87,6 @@ pub fn install_release_routes(router: Router, state: AppState) -> Router {
             "/api/v1/projects/{id}/release/rollback",
             post(rollback_release),
         )
-        .route("/sites/{project_slug}", get(serve_site_root))
-        .route("/sites/{project_slug}/{*path}", get(serve_site_path))
         .layer(Extension(state));
 
     router.merge(release_router)
@@ -192,42 +186,6 @@ async fn rollback_release(
     }
 }
 
-async fn serve_site_root(
-    Extension(state): Extension<AppState>,
-    Path(project_slug): Path<String>,
-) -> axum::response::Response {
-    serve_site_response(state, project_slug, "").await
-}
-
-async fn serve_site_path(
-    Extension(state): Extension<AppState>,
-    Path((project_slug, path)): Path<(String, String)>,
-) -> axum::response::Response {
-    serve_site_response(state, project_slug, path.as_str()).await
-}
-
-async fn serve_site_response(
-    state: AppState,
-    project_slug: String,
-    request_path: &str,
-) -> axum::response::Response {
-    let release = match state
-        .releases
-        .resolve_active_site(state.database.as_ref(), &project_slug)
-        .await
-    {
-        Ok(Some(release)) => release,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(error) => return release_error_response(error),
-    };
-
-    match resolve_site_asset(FilePath::new(&release.root_dir), request_path) {
-        Ok(Some(asset)) => asset.into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(_error) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
-}
-
 async fn authenticated_user(
     state: &AppState,
     jar: CookieJar,
@@ -304,106 +262,4 @@ fn deployment_status_label(status: deployment::DeploymentStatus) -> &'static str
         deployment::DeploymentStatus::Failed => "failed",
         deployment::DeploymentStatus::Canceled => "canceled",
     }
-}
-
-#[derive(Debug)]
-struct AssetResponse {
-    bytes: Vec<u8>,
-    content_type: String,
-}
-
-impl IntoResponse for AssetResponse {
-    fn into_response(self) -> Response {
-        let mut response = Response::new(axum::body::Body::from(self.bytes));
-        response.headers_mut().insert(
-            axum::http::header::CONTENT_TYPE,
-            axum::http::HeaderValue::from_str(&self.content_type).unwrap(),
-        );
-
-        response
-    }
-}
-
-fn resolve_site_asset(
-    root_dir: &FilePath,
-    request_path: &str,
-) -> std::io::Result<Option<AssetResponse>> {
-    let requested_path = match normalize_requested_asset_path(request_path) {
-        Some(path) => path,
-        None => return Ok(None),
-    };
-
-    if let Some(asset) = load_site_asset(root_dir, &requested_path)? {
-        return Ok(Some(asset));
-    }
-
-    if requested_path != "index.html" && should_use_spa_fallback(request_path) {
-        if let Some(asset) = load_site_asset(root_dir, "index.html")? {
-            return Ok(Some(asset));
-        }
-    }
-
-    Ok(None)
-}
-
-fn load_site_asset(
-    root_dir: &FilePath,
-    requested_path: &str,
-) -> std::io::Result<Option<AssetResponse>> {
-    let asset_path = root_dir.join(requested_path);
-
-    if !asset_path.is_file() {
-        return Ok(None);
-    }
-
-    let bytes = fs::read(&asset_path)?;
-
-    Ok(Some(AssetResponse {
-        bytes,
-        content_type: mime_guess::from_path(requested_path)
-            .first_or_octet_stream()
-            .to_string(),
-    }))
-}
-
-fn normalize_requested_asset_path(request_path: &str) -> Option<String> {
-    let trimmed_path = request_path.trim_start_matches('/');
-
-    if trimmed_path.is_empty() {
-        return Some("index.html".to_owned());
-    }
-
-    let mut parts = Vec::new();
-
-    for component in FilePath::new(trimmed_path).components() {
-        match component {
-            Component::Normal(part) => parts.push(part.to_string_lossy().into_owned()),
-            Component::CurDir => {}
-            _ => return None,
-        }
-    }
-
-    if parts.is_empty() {
-        return Some("index.html".to_owned());
-    }
-
-    let joined = parts.join("/");
-
-    if request_path.ends_with('/') {
-        Some(format!("{joined}/index.html"))
-    } else {
-        Some(joined)
-    }
-}
-
-fn should_use_spa_fallback(request_path: &str) -> bool {
-    let path = request_path.trim_end_matches('/');
-
-    if path.is_empty() {
-        return false;
-    }
-
-    let last_segment = path.rsplit('/').next().unwrap_or_default();
-
-    !last_segment.contains('.')
 }

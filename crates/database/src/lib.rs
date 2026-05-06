@@ -6,17 +6,20 @@ pub mod repository;
 mod tests {
     use super::connection::{create_schema_sql, postgres_connection_string, set_search_path_sql};
     use super::entities::{
-        deployment, deployment_artifact, project, user, user_password_credential, user_session,
+        deployment, deployment_artifact, host_policy, platform_host_source, project,
+        project_host_binding, user, user_password_credential, user_session,
     };
     use super::repository::{
-        DeploymentArtifactRepository, DeploymentRepository, NewDeployment, NewDeploymentArtifact,
-        NewProject, NewUser, NewUserPasswordCredential, NewUserSession, ProjectListFilter,
+        DeploymentArtifactRepository, DeploymentRepository, HostPolicyRepository, NewDeployment,
+        NewDeploymentArtifact, NewProject, NewUser, NewUserPasswordCredential, NewUserSession,
+        PlatformHostSourceRepository, ProjectHostBindingRepository, ProjectListFilter,
         ProjectRepository, SeaOrmDeploymentArtifactRepository, SeaOrmDeploymentRepository,
-        SeaOrmProjectRepository, SeaOrmUserPasswordCredentialRepository, SeaOrmUserRepository,
-        SeaOrmUserSessionRepository, UpdateProject, UserPasswordCredentialRepository,
-        UserRepository, UserSessionRepository, find_password_credential_by_user_id,
-        find_session_by_token_hash, find_user_by_email, find_user_by_id, insert_session,
-        revoke_session_by_token_hash,
+        SeaOrmHostPolicyRepository, SeaOrmPlatformHostSourceRepository,
+        SeaOrmProjectHostBindingRepository, SeaOrmProjectRepository,
+        SeaOrmUserPasswordCredentialRepository, SeaOrmUserRepository, SeaOrmUserSessionRepository,
+        UpdateProject, UserPasswordCredentialRepository, UserRepository, UserSessionRepository,
+        find_password_credential_by_user_id, find_session_by_token_hash, find_user_by_email,
+        find_user_by_id, insert_session, revoke_session_by_token_hash,
     };
     use grass_worker_config::DatabaseConfig;
     use sea_orm::EntityName;
@@ -30,6 +33,20 @@ mod tests {
             .flat_map(|entry| entry.statements().iter())
             .map(std::string::ToString::to_string)
             .collect::<Vec<_>>()
+    }
+
+    fn project_id() -> Uuid {
+        Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap()
+    }
+
+    fn source_id() -> Uuid {
+        Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap()
+    }
+
+    fn created_at() -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339("2026-04-16T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc)
     }
 
     #[test]
@@ -48,6 +65,27 @@ mod tests {
             deployment_artifact::Entity.table_name(),
             "deployment_artifacts"
         );
+    }
+
+    #[test]
+    fn platform_host_source_entity_uses_expected_table_name() {
+        assert_eq!(
+            platform_host_source::Entity.table_name(),
+            "platform_host_sources"
+        );
+    }
+
+    #[test]
+    fn project_host_binding_entity_uses_expected_table_name() {
+        assert_eq!(
+            project_host_binding::Entity.table_name(),
+            "project_host_bindings"
+        );
+    }
+
+    #[test]
+    fn host_policy_entity_uses_expected_table_name() {
+        assert_eq!(host_policy::Entity.table_name(), "host_policies");
     }
 
     #[test]
@@ -102,6 +140,237 @@ mod tests {
         let error = create_schema_sql("control-plane").unwrap_err();
 
         assert!(error.to_string().contains("invalid postgres schema name"));
+    }
+
+    #[tokio::test]
+    async fn platform_host_source_repository_lists_sources_by_created_order() {
+        let first_created_at = created_at();
+        let second_created_at = chrono::DateTime::parse_from_rfc3339("2026-04-17T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([vec![
+                platform_host_source::Model {
+                    id: source_id(),
+                    kind: platform_host_source::PlatformHostSourceKind::WildcardStatic,
+                    label: "Apps".to_owned(),
+                    base_domain: "apps.example.com".to_owned(),
+                    enabled: true,
+                    allows_auto_assign: true,
+                    created_at: first_created_at,
+                    updated_at: first_created_at,
+                },
+                platform_host_source::Model {
+                    id: Uuid::parse_str("cccccccc-cccc-cccc-cccc-cccccccccccc").unwrap(),
+                    kind: platform_host_source::PlatformHostSourceKind::DnsManaged,
+                    label: "Docs".to_owned(),
+                    base_domain: "docs.example.com".to_owned(),
+                    enabled: true,
+                    allows_auto_assign: false,
+                    created_at: second_created_at,
+                    updated_at: second_created_at,
+                },
+            ]])
+            .into_connection();
+        let repository = SeaOrmPlatformHostSourceRepository::new(database);
+
+        let sources = repository.list_all().await.unwrap();
+
+        assert_eq!(sources.len(), 2);
+        assert_eq!(sources[0].base_domain, "apps.example.com");
+
+        let statements = sql_statements(repository.into_connection());
+        assert!(statements.iter().any(|statement| {
+            statement.contains("ORDER BY \"platform_host_sources\".\"created_at\" ASC")
+                && statement.contains("\"platform_host_sources\".\"id\" ASC")
+        }));
+    }
+
+    #[tokio::test]
+    async fn project_host_binding_repository_finds_binding_by_normalized_host() {
+        let created_at = created_at();
+        let binding = project_host_binding::Model {
+            id: Uuid::parse_str("dddddddd-dddd-dddd-dddd-dddddddddddd").unwrap(),
+            project_id: project_id(),
+            source_id: Some(source_id()),
+            host: "docs.example.com".to_owned(),
+            is_primary: true,
+            created_at,
+            updated_at: created_at,
+        };
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[binding.clone()]])
+            .into_connection();
+        let repository = SeaOrmProjectHostBindingRepository::new(database);
+
+        let binding = repository
+            .find_by_host("docs.example.com")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(binding.host, "docs.example.com");
+        assert!(binding.is_primary);
+
+        let statements = sql_statements(repository.into_connection());
+        assert!(statements.iter().any(|statement| {
+            statement.contains("\"project_host_bindings\".\"host\"")
+                && statement.contains("docs.example.com")
+        }));
+    }
+
+    #[tokio::test]
+    async fn project_host_binding_repository_lists_project_bindings_primary_first() {
+        let created_at = created_at();
+        let later_created_at = chrono::DateTime::parse_from_rfc3339("2026-04-17T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([vec![
+                project_host_binding::Model {
+                    id: Uuid::parse_str("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee").unwrap(),
+                    project_id: project_id(),
+                    source_id: Some(source_id()),
+                    host: "docs.example.com".to_owned(),
+                    is_primary: true,
+                    created_at,
+                    updated_at: created_at,
+                },
+                project_host_binding::Model {
+                    id: Uuid::parse_str("ffffffff-ffff-ffff-ffff-ffffffffffff").unwrap(),
+                    project_id: project_id(),
+                    source_id: Some(source_id()),
+                    host: "alt.example.com".to_owned(),
+                    is_primary: false,
+                    created_at: later_created_at,
+                    updated_at: later_created_at,
+                },
+            ]])
+            .into_connection();
+        let repository = SeaOrmProjectHostBindingRepository::new(database);
+
+        let bindings = repository.list_by_project(project_id()).await.unwrap();
+
+        assert!(bindings[0].is_primary);
+
+        let statements = sql_statements(repository.into_connection());
+        assert!(statements.iter().any(|statement| {
+            statement.contains("ORDER BY \"project_host_bindings\".\"is_primary\" DESC")
+                && statement.contains("\"project_host_bindings\".\"created_at\" ASC")
+                && statement.contains("\"project_host_bindings\".\"id\" ASC")
+        }));
+    }
+
+    #[tokio::test]
+    async fn project_host_binding_repository_clears_only_primary_bindings_for_project() {
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .into_connection();
+        let repository = SeaOrmProjectHostBindingRepository::new(database);
+
+        let cleared = repository
+            .clear_primary_for_project(project_id(), created_at())
+            .await
+            .unwrap();
+
+        assert_eq!(cleared, 1);
+
+        let statements = sql_statements(repository.into_connection());
+        assert!(statements.iter().any(|statement| {
+            let statement = statement.to_ascii_lowercase();
+            statement.contains("update \"project_host_bindings\"")
+                && statement.contains("\"project_host_bindings\".\"project_id\"")
+                && statement.contains("\"project_host_bindings\".\"is_primary\" = true")
+                && statement.contains("set \"is_primary\" = false")
+        }));
+    }
+
+    #[tokio::test]
+    async fn project_host_binding_repository_sets_primary_by_clearing_existing_primary_first() {
+        let updated_at = created_at();
+        let target = project_host_binding::Model {
+            id: Uuid::parse_str("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee").unwrap(),
+            project_id: project_id(),
+            source_id: Some(source_id()),
+            host: "docs.example.com".to_owned(),
+            is_primary: false,
+            created_at: updated_at,
+            updated_at,
+        };
+        let promoted = project_host_binding::Model {
+            is_primary: true,
+            updated_at,
+            ..target.clone()
+        };
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[target.clone()], [promoted.clone()]])
+            .append_exec_results([
+                MockExecResult {
+                    last_insert_id: 0,
+                    rows_affected: 1,
+                },
+                MockExecResult {
+                    last_insert_id: 0,
+                    rows_affected: 1,
+                },
+            ])
+            .into_connection();
+        let repository = SeaOrmProjectHostBindingRepository::new(database);
+
+        let binding = repository
+            .set_primary(target.id, updated_at)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(binding, promoted);
+
+        let statements = sql_statements(repository.into_connection());
+        assert!(statements.iter().any(|statement| {
+            let statement = statement.to_ascii_lowercase();
+            statement.contains("update \"project_host_bindings\"")
+                && statement.contains("\"project_host_bindings\".\"project_id\"")
+                && statement.contains("\"project_host_bindings\".\"is_primary\" = true")
+                && statement.contains("set \"is_primary\" = false")
+        }));
+        assert!(statements.iter().any(|statement| {
+            let statement = statement.to_ascii_lowercase();
+            statement.contains("update \"project_host_bindings\"")
+                && statement.contains("\"project_host_bindings\".\"id\"")
+                && statement.contains("set \"is_primary\" = true")
+        }));
+    }
+
+    #[tokio::test]
+    async fn host_policy_repository_returns_latest_policy() {
+        let created_at = created_at();
+        let updated_at = chrono::DateTime::parse_from_rfc3339("2026-04-18T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[host_policy::Model {
+                id: Uuid::parse_str("12121212-1212-1212-1212-121212121212").unwrap(),
+                max_hosts_per_project: 10,
+                max_hosts_per_owner_user: 50,
+                created_at,
+                updated_at,
+            }]])
+            .into_connection();
+        let repository = SeaOrmHostPolicyRepository::new(database);
+
+        let policy = repository.find_current().await.unwrap().unwrap();
+
+        assert_eq!(policy.max_hosts_per_project, 10);
+        assert_eq!(policy.max_hosts_per_owner_user, 50);
+
+        let statements = sql_statements(repository.into_connection());
+        assert!(statements.iter().any(|statement| {
+            statement.contains("ORDER BY \"host_policies\".\"updated_at\" DESC")
+                && statement.contains("\"host_policies\".\"id\" DESC")
+        }));
     }
 
     #[tokio::test]

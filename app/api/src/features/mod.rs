@@ -1,6 +1,9 @@
 pub mod auth;
 pub mod deployments;
+pub mod hosts;
+pub mod platform_host_sources;
 pub mod projects;
+pub mod public_sites;
 pub mod releases;
 pub mod setup;
 pub mod system;

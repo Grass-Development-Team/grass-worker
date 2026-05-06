@@ -19,6 +19,7 @@ import {
   activateProjectRelease,
   getProjectRelease,
   projectReleaseQueryKey,
+  releasePublicUrl,
 } from "@/api/releases";
 import { ConsolePageHeader } from "@/components/console/console-page-header";
 import { DeploymentOverviewCard } from "@/components/deployments/deployment-overview-card";
@@ -412,6 +413,7 @@ export function ProjectDeploymentDetailsPage() {
     (artifact) => artifact.kind === "static_site",
   );
   const isCurrentlyLive = releaseQuery.data?.active_deployment_id === deployment.id;
+  const liveSiteUrl = releasePublicUrl(releaseQuery.data?.primary_host ?? null);
   const activateReleaseDisabled =
     deployment.status !== "ready" || !hasStaticSiteArtifact || activateReleaseMutation.isPending;
   const activateReleaseDisabledReason =
@@ -466,7 +468,9 @@ export function ProjectDeploymentDetailsPage() {
             <Alert>
               <AlertTitle>Currently live</AlertTitle>
               <AlertDescription>
-                This deployment is serving traffic at {releaseQuery.data?.site_url}.
+                {liveSiteUrl
+                  ? `This deployment is serving traffic at ${liveSiteUrl}.`
+                  : "This deployment is live, but the project does not have a primary host yet."}
               </AlertDescription>
             </Alert>
           ) : null}
@@ -498,13 +502,17 @@ export function ProjectDeploymentDetailsPage() {
             >
               {activateReleaseMutation.isPending ? "Activating..." : "Activate release"}
             </Button>
-            {releaseQuery.data?.site_url ? (
+            {liveSiteUrl ? (
               <Button asChild type="button" variant="outline">
-                <a href={releaseQuery.data.site_url} rel="noreferrer" target="_blank">
+                <a href={liveSiteUrl} rel="noreferrer" target="_blank">
                   Open live site
                 </a>
               </Button>
-            ) : null}
+            ) : (
+              <Button disabled type="button" variant="outline">
+                Open live site
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>

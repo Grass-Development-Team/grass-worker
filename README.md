@@ -6,7 +6,7 @@ Control-plane workspace for a self-hosted static deployment platform.
 
 - `app/api`: control-plane API, setup/ready mode switching, frontend asset delivery
 - `app/node`: node-agent placeholder
-- `app/frontend`: React console for setup, sign-in, projects, and deployment records
+- `app/frontend`: React console for setup, sign-in, projects, deployments, and host management
 - `crates/config`: shared configuration loading and defaults
 
 ## Commands
@@ -33,11 +33,13 @@ The repository has moved beyond the initial scaffold and currently provides:
 - project management APIs and console flows for create/list/detail/update/archive/unarchive/soft-delete/restore/transfer owner/hard-delete
 - deployment record APIs and console flows for create/list/detail/status transitions under each project
 - deployment artifact registration/list APIs and deployment-detail console workflows
+- release activation and rollback flows for project deployments
+- host-based public delivery with platform host sources, project host bindings, primary-host canonical URLs, and automatic platform-host assignment when exactly one eligible source exists
+- host-aware static delivery rules for exact assets, `index.html`, SPA fallback, `404`, and cache-control behavior
 - frontend development proxy, runtime `./public` override, and embedded asset fallback
 
 Still intentionally missing at this stage:
 
-- artifact publication/activation and rollback
 - real `app/node` task execution
 - source-to-build automation
 
@@ -82,7 +84,7 @@ Rules:
   - `POST /api/v1/auth/login`
   - `GET /api/v1/me`
   - `POST /api/v1/auth/logout`
-- In ready mode, the control API also exposes project management and project-scoped deployment record routes under `/api/v1/*`.
+- In ready mode, the control API also exposes project management, deployment, release, host-binding, and admin platform-host-source routes under `/api/v1/*`.
 - In setup mode, `GET /api/v1/setup/state` reports the current setup stage.
 - In setup mode, `POST /api/v1/setup/database` accepts:
 
@@ -125,3 +127,13 @@ The frontend build output is routed into `crates/assets/assets/public/`.
 - `just frontend-dev`: run the frontend development server
 - `just frontend-build`: rebuild embedded frontend assets
 - `just build-release`: rebuild frontend assets, then build the release API binary
+
+## Public Delivery Model
+
+- Public requests resolve by HTTP `Host`, not by a project path prefix.
+- Platform-managed base domains are configured as `platform host sources`; project-visible hosts are stored as `project host bindings`.
+- If no eligible platform source exists, projects only use manually bound hosts.
+- If exactly one enabled source allows auto-assignment, new projects receive `<project-slug>.<base-domain>` automatically unless host policy limits block it.
+- If multiple eligible sources exist, auto-assignment is skipped and the project owner chooses the source and prefix manually.
+- Static-site delivery prefers exact files, then directory `index.html`, then SPA fallback to the root `index.html` for extensionless misses.
+- HTML responses use `Cache-Control: no-cache`; non-HTML assets use `Cache-Control: public, max-age=3600`.
