@@ -91,6 +91,27 @@ type TestRelease = {
   rollback_deployment_id?: string | null;
 };
 
+type TestPlatformHostSource = {
+  id: string;
+  kind: "wildcard_static" | "dns_managed";
+  label: string;
+  base_domain: string;
+  enabled: boolean;
+  allows_auto_assign: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+type TestProjectHostBinding = {
+  id: string;
+  project_id: string;
+  source_id?: string | null;
+  host: string;
+  is_primary: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
 type TestUser = {
   id: string;
   email: string;
@@ -207,6 +228,31 @@ function usersResponse(users: TestUser[]) {
   return jsonResponse(
     {
       users,
+    },
+    { status: 200 },
+  );
+}
+
+function platformHostSourcesResponse(sources: TestPlatformHostSource[]) {
+  return jsonResponse(
+    {
+      sources,
+    },
+    { status: 200 },
+  );
+}
+
+function normalizeProjectHostBinding(host: TestProjectHostBinding) {
+  return {
+    source_id: null,
+    ...host,
+  };
+}
+
+function projectHostsResponse(hosts: TestProjectHostBinding[]) {
+  return jsonResponse(
+    {
+      hosts: hosts.map(normalizeProjectHostBinding),
     },
     { status: 200 },
   );
@@ -461,6 +507,7 @@ describe("auth routing", () => {
     expect(screen.getByRole("link", { name: /^projects$/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /user settings/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /project management/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /platform host sources/i })).toBeInTheDocument();
   });
 
   test("non-admin users see workspace navigation without project management", async () => {
@@ -580,6 +627,141 @@ describe("auth routing", () => {
     expect(await screen.findByRole("heading", { name: /^users$/i })).toBeInTheDocument();
     expect(await screen.findByText("member@example.com")).toBeInTheDocument();
     expect(screen.getAllByText("admin@example.com").length).toBeGreaterThan(0);
+  });
+
+  test("admin platform host sources page loads inventory and can disable a source", async () => {
+    const sourceId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    let sources: TestPlatformHostSource[] = [
+      {
+        id: sourceId,
+        kind: "wildcard_static",
+        label: "Primary Sites",
+        base_domain: "apps.example.com",
+        enabled: true,
+        allows_auto_assign: true,
+        created_at: "2026-05-04T10:00:00Z",
+        updated_at: "2026-05-04T10:00:00Z",
+      },
+    ];
+    const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = requestPath(input);
+      const method =
+        input instanceof Request ? input.method : (init?.method ?? "GET");
+      const body = init?.body ? JSON.parse(init.body.toString()) : undefined;
+      requests.push({ path, method, body });
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse({ is_admin: true });
+      }
+
+      if (path === "/api/v1/admin/platform-host-sources" && method === "GET") {
+        return platformHostSourcesResponse(sources);
+      }
+
+      if (
+        path === `/api/v1/admin/platform-host-sources/${sourceId}/disable` &&
+        method === "POST"
+      ) {
+        sources = sources.map((source) =>
+          source.id === sourceId ? { ...source, enabled: false } : source,
+        );
+        return jsonResponse({ source: sources[0] }, { status: 200 });
+      }
+
+      throw new Error(`Unexpected request for ${method} ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter("/admin/platform-host-sources");
+
+    expect(
+      await screen.findByRole("heading", { name: /platform host sources/i }),
+    ).toBeInTheDocument();
+    expect(await screen.findByText("Primary Sites")).toBeInTheDocument();
+    expect(screen.getByText("apps.example.com")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /disable source/i }));
+
+    await waitFor(() => {
+      expect(requests).toContainEqual({
+        path: `/api/v1/admin/platform-host-sources/${sourceId}/disable`,
+        method: "POST",
+        body: undefined,
+      });
+    });
+  });
+
+  test("admin platform host sources page can create a source", async () => {
+    const sourceId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    let sources: TestPlatformHostSource[] = [];
+    const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = requestPath(input);
+      const method =
+        input instanceof Request ? input.method : (init?.method ?? "GET");
+      const body = init?.body ? JSON.parse(init.body.toString()) : undefined;
+      requests.push({ path, method, body });
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse({ is_admin: true });
+      }
+
+      if (path === "/api/v1/admin/platform-host-sources" && method === "GET") {
+        return platformHostSourcesResponse(sources);
+      }
+
+      if (path === "/api/v1/admin/platform-host-sources" && method === "POST") {
+        const createdSource: TestPlatformHostSource = {
+          id: sourceId,
+          kind: body?.kind ?? "wildcard_static",
+          label: body?.label ?? "Preview Hosts",
+          base_domain: body?.base_domain ?? "preview.example.com",
+          enabled: body?.enabled ?? true,
+          allows_auto_assign: body?.allows_auto_assign ?? true,
+          created_at: "2026-05-05T10:00:00Z",
+          updated_at: "2026-05-05T10:00:00Z",
+        };
+        sources = [createdSource, ...sources];
+        return jsonResponse({ source: createdSource }, { status: 201 });
+      }
+
+      throw new Error(`Unexpected request for ${method} ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter("/admin/platform-host-sources");
+
+    await userEvent.type(await screen.findByLabelText(/label/i), "Preview Hosts");
+    await userEvent.type(screen.getByLabelText(/base domain/i), "preview.example.com");
+    await userEvent.click(screen.getByRole("button", { name: /create source/i }));
+
+    await waitFor(() => {
+      expect(requests).toContainEqual({
+        path: "/api/v1/admin/platform-host-sources",
+        method: "POST",
+        body: {
+          kind: "wildcard_static",
+          label: "Preview Hosts",
+          base_domain: "preview.example.com",
+          enabled: true,
+          allows_auto_assign: true,
+        },
+      });
+    });
+
+    expect(await screen.findByText("Preview Hosts")).toBeInTheDocument();
+    expect(screen.getByText("preview.example.com")).toBeInTheDocument();
   });
 
   test("authenticated users can reach the settings placeholder inside the console", async () => {
@@ -1515,6 +1697,311 @@ describe("auth routing", () => {
     });
 
     expect((await screen.findAllByText("previous")).length).toBeGreaterThan(0);
+  });
+
+  test("project details can create a platform host binding and refresh the live site link", async () => {
+    const projectId = "11111111-1111-1111-1111-111111111111";
+    const sourceId = "44444444-4444-4444-4444-444444444444";
+    const now = "2026-05-05T12:00:00Z";
+    const activeDeployment: TestDeployment = {
+      id: "99999999-9999-9999-9999-999999999999",
+      project_id: projectId,
+      status: "ready",
+      source_branch: "main",
+      source_revision: "current",
+      created_at: now,
+      started_at: now,
+      finished_at: now,
+    };
+    const project = {
+      id: projectId,
+      slug: "docs-site",
+      name: "Docs Site",
+      status: "active" as const,
+      created_at: now,
+      updated_at: now,
+      archived_at: null,
+      soft_deleted_at: null,
+    };
+    let hosts: TestProjectHostBinding[] = [];
+    let release: TestRelease = {
+      project_id: projectId,
+      project_slug: "docs-site",
+      primary_host: null,
+      active_deployment_id: activeDeployment.id,
+      active_deployment: activeDeployment,
+      rollback_deployment_id: null,
+    };
+    const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = requestPath(input);
+      const method =
+        input instanceof Request ? input.method : (init?.method ?? "GET");
+      const body = init?.body ? JSON.parse(init.body.toString()) : undefined;
+      requests.push({ path, method, body });
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse({ is_admin: true });
+      }
+
+      if (path === `/api/v1/projects/${projectId}` && method === "GET") {
+        return projectResponse(project);
+      }
+
+      if (path === `/api/v1/projects/${projectId}/deployments` && method === "GET") {
+        return deploymentsResponse([activeDeployment]);
+      }
+
+      if (path === `/api/v1/projects/${projectId}/release` && method === "GET") {
+        return releaseResponse(release);
+      }
+
+      if (path === `/api/v1/projects/${projectId}/hosts` && method === "GET") {
+        return projectHostsResponse(hosts);
+      }
+
+      if (path === "/api/v1/admin/platform-host-sources" && method === "GET") {
+        return platformHostSourcesResponse([
+          {
+            id: sourceId,
+            kind: "wildcard_static",
+            label: "Primary Sites",
+            base_domain: "apps.example.com",
+            enabled: true,
+            allows_auto_assign: true,
+            created_at: now,
+            updated_at: now,
+          },
+          {
+            id: "55555555-5555-5555-5555-555555555555",
+            kind: "wildcard_static",
+            label: "Preview Sites",
+            base_domain: "preview.example.com",
+            enabled: true,
+            allows_auto_assign: false,
+            created_at: now,
+            updated_at: now,
+          },
+        ]);
+      }
+
+      if (path === `/api/v1/projects/${projectId}/hosts` && method === "POST") {
+        const createdHost: TestProjectHostBinding = {
+          id: "66666666-6666-6666-6666-666666666666",
+          project_id: projectId,
+          source_id: body?.source_id ?? null,
+          host: body?.host ?? "docs.apps.example.com",
+          is_primary: body?.is_primary ?? true,
+          created_at: now,
+          updated_at: now,
+        };
+        hosts = [createdHost];
+        release = {
+          ...release,
+          primary_host: createdHost.host,
+        };
+        return jsonResponse({ host: normalizeProjectHostBinding(createdHost) }, { status: 201 });
+      }
+
+      throw new Error(`Unexpected request for ${method} ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter(`/projects/${projectId}`);
+
+    expect(await screen.findByRole("heading", { name: /host bindings/i })).toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText(/host type/i), "platform_subdomain");
+    await userEvent.selectOptions(screen.getByLabelText(/platform source/i), sourceId);
+    await userEvent.type(screen.getByLabelText(/subdomain prefix/i), "docs");
+    await userEvent.click(screen.getByRole("button", { name: /add host/i }));
+
+    await waitFor(() => {
+      expect(requests).toContainEqual({
+        path: `/api/v1/projects/${projectId}/hosts`,
+        method: "POST",
+        body: {
+          host: "docs.apps.example.com",
+          source_id: sourceId,
+          is_primary: true,
+        },
+      });
+    });
+
+    expect(await screen.findByText("docs.apps.example.com")).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: /open live site/i })).toHaveAttribute(
+      "href",
+      "https://docs.apps.example.com",
+    );
+  });
+
+  test("project details can change the primary host and remove bindings", async () => {
+    const projectId = "11111111-1111-1111-1111-111111111111";
+    const primaryHostId = "77777777-7777-7777-7777-777777777777";
+    const secondaryHostId = "88888888-8888-8888-8888-888888888888";
+    const now = "2026-05-05T12:00:00Z";
+    const activeDeployment: TestDeployment = {
+      id: "99999999-9999-9999-9999-999999999999",
+      project_id: projectId,
+      status: "ready",
+      source_branch: "main",
+      source_revision: "current",
+      created_at: now,
+      started_at: now,
+      finished_at: now,
+    };
+    const project = {
+      id: projectId,
+      slug: "docs-site",
+      name: "Docs Site",
+      status: "active" as const,
+      created_at: now,
+      updated_at: now,
+      archived_at: null,
+      soft_deleted_at: null,
+    };
+    let hosts: TestProjectHostBinding[] = [
+      {
+        id: primaryHostId,
+        project_id: projectId,
+        source_id: null,
+        host: "docs.example.com",
+        is_primary: true,
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        id: secondaryHostId,
+        project_id: projectId,
+        source_id: null,
+        host: "preview.example.com",
+        is_primary: false,
+        created_at: now,
+        updated_at: now,
+      },
+    ];
+    let release: TestRelease = {
+      project_id: projectId,
+      project_slug: "docs-site",
+      primary_host: "docs.example.com",
+      active_deployment_id: activeDeployment.id,
+      active_deployment: activeDeployment,
+      rollback_deployment_id: null,
+    };
+    const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = requestPath(input);
+      const method =
+        input instanceof Request ? input.method : (init?.method ?? "GET");
+      const body = init?.body ? JSON.parse(init.body.toString()) : undefined;
+      requests.push({ path, method, body });
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse({ is_admin: true });
+      }
+
+      if (path === `/api/v1/projects/${projectId}` && method === "GET") {
+        return projectResponse(project);
+      }
+
+      if (path === `/api/v1/projects/${projectId}/deployments` && method === "GET") {
+        return deploymentsResponse([activeDeployment]);
+      }
+
+      if (path === `/api/v1/projects/${projectId}/release` && method === "GET") {
+        return releaseResponse(release);
+      }
+
+      if (path === `/api/v1/projects/${projectId}/hosts` && method === "GET") {
+        return projectHostsResponse(hosts);
+      }
+
+      if (
+        path === `/api/v1/projects/${projectId}/hosts/${secondaryHostId}/primary` &&
+        method === "POST"
+      ) {
+        hosts = hosts.map((host) => ({
+          ...host,
+          is_primary: host.id === secondaryHostId,
+        }));
+        release = {
+          ...release,
+          primary_host: "preview.example.com",
+        };
+        return jsonResponse(
+          { host: normalizeProjectHostBinding(hosts[1]) },
+          { status: 200 },
+        );
+      }
+
+      if (path === `/api/v1/projects/${projectId}/hosts/${secondaryHostId}` && method === "DELETE") {
+        hosts = hosts.filter((host) => host.id !== secondaryHostId);
+        release = {
+          ...release,
+          primary_host: "docs.example.com",
+        };
+        return new Response(null, { status: 204 });
+      }
+
+      throw new Error(`Unexpected request for ${method} ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter(`/projects/${projectId}`);
+
+    expect(await screen.findByText("docs.example.com")).toBeInTheDocument();
+    expect(await screen.findByText("preview.example.com")).toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: /set preview\.example\.com as primary/i,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(requests).toContainEqual({
+        path: `/api/v1/projects/${projectId}/hosts/${secondaryHostId}/primary`,
+        method: "POST",
+        body: undefined,
+      });
+    });
+
+    expect(await screen.findByRole("link", { name: /open live site/i })).toHaveAttribute(
+      "href",
+      "https://preview.example.com",
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: /remove preview\.example\.com/i,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(requests).toContainEqual({
+        path: `/api/v1/projects/${projectId}/hosts/${secondaryHostId}`,
+        method: "DELETE",
+        body: undefined,
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("preview.example.com")).not.toBeInTheDocument();
+    });
+    expect(await screen.findByRole("link", { name: /open live site/i })).toHaveAttribute(
+      "href",
+      "https://docs.example.com",
+    );
   });
 
   test("project details can create a deployment and prepend it to history", async () => {

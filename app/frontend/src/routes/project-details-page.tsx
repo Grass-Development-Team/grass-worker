@@ -34,6 +34,7 @@ import { DeploymentList } from "@/components/deployments/deployment-list";
 import { DangerZoneCard } from "@/components/projects/danger-zone-card";
 import { EditProjectForm } from "@/components/projects/edit-project-form";
 import { LifecycleActionsCard } from "@/components/projects/lifecycle-actions-card";
+import { ProjectHostBindingsCard } from "@/components/projects/project-host-bindings-card";
 import { ProjectOverviewCard } from "@/components/projects/project-overview-card";
 import { projectStatusLabel } from "@/components/projects/project-status-badge";
 import { TransferOwnerCard } from "@/components/projects/transfer-owner-card";
@@ -178,6 +179,10 @@ export function ProjectDetailsPage() {
     },
   });
 
+  const refreshProjectRelease = async () => {
+    await releaseQuery.refetch();
+  };
+
   if (!projectId) {
     return (
       <Card className="w-full max-w-lg">
@@ -268,6 +273,12 @@ export function ProjectDetailsPage() {
       />
 
       <ProjectOverviewCard project={project} />
+
+      <ProjectHostBindingsCard
+        currentUserIsAdmin={currentUser.is_admin}
+        onHostsChanged={refreshProjectRelease}
+        projectId={projectId}
+      />
 
       {releaseQuery.data ? (
         <Card>
