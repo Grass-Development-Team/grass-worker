@@ -63,8 +63,16 @@ export function ProjectsPage() {
     queryFn: getProjects,
   });
   const createProjectMutation = useMutation({
-    mutationFn: ({ name, slug }: { name: string; slug: string }) =>
-      createProject({ name, slug }),
+    mutationFn: (input: {
+      name: string;
+      slug: string;
+      repository_url: string;
+      production_branch: string;
+      root_directory?: string | null;
+      install_command?: string | null;
+      build_command?: string | null;
+      output_directory?: string | null;
+    }) => createProject(input),
     onSuccess: async (project) => {
       queryClient.setQueryData<Project[]>(projectsQueryKey, (current) =>
         mergeProjects(current ?? [], [project]),
@@ -76,7 +84,7 @@ export function ProjectsPage() {
 
   const projects = mergeProjects(projectsQuery.data ?? []);
   const createError = createProjectMutation.isError
-    ? errorMessage(createProjectMutation.error, "Unable to create project")
+    ? errorMessage(createProjectMutation.error, "Unable to import project")
     : null;
 
   return (

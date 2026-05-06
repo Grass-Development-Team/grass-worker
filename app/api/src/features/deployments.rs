@@ -1,7 +1,7 @@
 use crate::AppState;
 use axum::{
     Extension, Json, Router,
-    extract::{Path, rejection::JsonRejection},
+    extract::{Multipart, Path, rejection::JsonRejection},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
@@ -62,6 +62,8 @@ struct DeploymentResponse {
     status: &'static str,
     source_branch: Option<String>,
     source_revision: Option<String>,
+    last_stage: Option<String>,
+    failure_message: Option<String>,
     created_at: chrono::DateTime<chrono::Utc>,
     started_at: Option<chrono::DateTime<chrono::Utc>>,
     finished_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -75,6 +77,8 @@ impl From<deployment::Model> for DeploymentResponse {
             status: deployment_status_label(value.status),
             source_branch: value.source_branch,
             source_revision: value.source_revision,
+            last_stage: value.last_stage,
+            failure_message: value.failure_message,
             created_at: value.created_at,
             started_at: value.started_at,
             finished_at: value.finished_at,
@@ -127,6 +131,12 @@ struct DeploymentArtifactsEnvelope {
     artifacts: Vec<DeploymentArtifactResponse>,
 }
 
+#[derive(Debug, Serialize)]
+struct DeploymentUploadEnvelope {
+    deployment: DeploymentResponse,
+    artifact: DeploymentArtifactResponse,
+}
+
 pub fn install_deployment_routes(router: Router, state: AppState) -> Router {
     let deployment_router = Router::new()
         .route(
@@ -144,6 +154,10 @@ pub fn install_deployment_routes(router: Router, state: AppState) -> Router {
         .route(
             "/api/v1/projects/{id}/deployments/{deployment_id}/artifacts",
             post(create_deployment_artifact).get(list_deployment_artifacts),
+        )
+        .route(
+            "/api/v1/projects/{id}/deployments/{deployment_id}/upload-bundle",
+            post(upload_static_site_bundle),
         )
         .layer(Extension(state));
 
@@ -387,6 +401,107 @@ async fn list_deployment_artifacts(
     }
 }
 
+async fn upload_static_site_bundle(
+    Extension(state): Extension<AppState>,
+    jar: CookieJar,
+    Path((id, deployment_id)): Path<(String, String)>,
+    mut multipart: Multipart,
+) -> axum::response::Response {
+    let actor = match authenticated_user(&state, jar).await {
+        Ok(actor) => actor,
+        Err(response) => return response,
+    };
+    let project_id = match parse_project_id(&id) {
+        Ok(id) => id,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+    };
+    let deployment_id = match parse_deployment_id(&deployment_id) {
+        Ok(id) => id,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+    };
+
+    let mut bundle_name = None;
+    let mut bundle_bytes = None;
+    loop {
+        match multipart.next_field().await {
+            Ok(Some(field)) => {
+                if field.name() != Some("bundle") {
+                    continue;
+                }
+
+                bundle_name = field.file_name().map(ToOwned::to_owned);
+                match field.bytes().await {
+                    Ok(bytes) => {
+                        bundle_bytes = Some(bytes.to_vec());
+                        break;
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "read upload bundle field failed");
+                        return error_response(
+                            StatusCode::BAD_REQUEST,
+                            "unable to read uploaded bundle",
+                        );
+                    }
+                }
+            }
+            Ok(None) => break,
+            Err(error) => {
+                tracing::warn!(error = %error, "parse multipart upload failed");
+                return error_response(StatusCode::BAD_REQUEST, "invalid upload payload");
+            }
+        }
+    }
+
+    let Some(bundle_bytes) = bundle_bytes else {
+        return error_response(StatusCode::BAD_REQUEST, "bundle file is required");
+    };
+
+    let stored = match crate::adapters::static_site_storage::store_uploaded_zip(
+        project_id,
+        deployment_id,
+        bundle_name.as_deref(),
+        &bundle_bytes,
+    ) {
+        Ok(stored) => stored,
+        Err(crate::adapters::static_site_storage::StaticSiteStorageError::InvalidArchive(
+            message,
+        )) => return error_response(StatusCode::BAD_REQUEST, message),
+        Err(error) => {
+            tracing::error!(error = %error, "store static site bundle failed");
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal static site storage error",
+            );
+        }
+    };
+
+    let (deployment, artifact) = match state
+        .deployments
+        .store_static_site_artifact_for_project(
+            state.database.as_ref(),
+            &actor,
+            project_id,
+            deployment_id,
+            stored.root_dir.to_string_lossy().into_owned(),
+            Some(stored.checksum_sha256.clone()),
+            Some(stored.size_bytes),
+        )
+        .await
+    {
+        Ok(result) => result,
+        Err(error) => return deployment_error_response(error),
+    };
+
+    (
+        StatusCode::CREATED,
+        Json(DeploymentUploadEnvelope {
+            deployment: deployment.into(),
+            artifact: artifact.into(),
+        }),
+    )
+        .into_response()
+}
+
 async fn authenticated_user(
     state: &AppState,
     jar: CookieJar,
@@ -508,8 +623,11 @@ mod tests {
         deployment, deployment_artifact, project, user, user_session,
     };
     use sea_orm::{DatabaseBackend, MockDatabase, MockExecResult};
+    use std::io::Write;
+    use tempfile::tempdir;
     use tower::ServiceExt;
     use uuid::Uuid;
+    use zip::{CompressionMethod, ZipWriter, write::FileOptions};
 
     fn sample_user(id: Uuid, is_admin: bool) -> user::Model {
         let created_at = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 0).unwrap();
@@ -551,6 +669,12 @@ mod tests {
             active_deployment_id: None,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
+            repository_url: None,
+            production_branch: None,
+            root_directory: None,
+            install_command: None,
+            build_command: None,
+            output_directory: None,
             status: status.clone(),
             created_at,
             updated_at: created_at,
@@ -571,6 +695,8 @@ mod tests {
             status: deployment::DeploymentStatus::Pending,
             source_branch: Some("main".to_owned()),
             source_revision: Some("deadbeef".to_owned()),
+            last_stage: None,
+            failure_message: None,
             created_at,
             started_at: None,
             finished_at: None,
@@ -611,6 +737,8 @@ mod tests {
             status,
             source_branch: Some("main".to_owned()),
             source_revision: Some("deadbeef".to_owned()),
+            last_stage: None,
+            failure_message: None,
             created_at,
             started_at,
             finished_at,
@@ -635,6 +763,26 @@ mod tests {
 
     fn session_cookie(token: &str) -> String {
         format!("{}={token}", crate::domain::auth::SESSION_COOKIE_NAME)
+    }
+
+    fn static_site_zip_bytes() -> Vec<u8> {
+        let cursor = std::io::Cursor::new(Vec::new());
+        let mut writer = ZipWriter::new(cursor);
+        let options = FileOptions::default().compression_method(CompressionMethod::Stored);
+
+        writer.start_file("index.html", options).unwrap();
+        writer
+            .write_all(b"<html><body>Uploaded docs site</body></html>")
+            .unwrap();
+        writer.add_directory("guides/", options).unwrap();
+        writer
+            .start_file("guides/getting-started.html", options)
+            .unwrap();
+        writer
+            .write_all(b"<html><body>Getting started</body></html>")
+            .unwrap();
+
+        writer.finish().unwrap().into_inner()
     }
 
     #[tokio::test]
@@ -1048,5 +1196,116 @@ mod tests {
         assert_eq!(json["artifacts"].as_array().unwrap().len(), 1);
         assert_eq!(json["artifacts"][0]["id"], artifact.id.to_string());
         assert_eq!(json["artifacts"][0]["kind"], "build_log");
+    }
+
+    #[tokio::test]
+    async fn upload_bundle_creates_ready_static_site_artifact() {
+        let owner = sample_user(Uuid::new_v4(), false);
+        let token = "session-token";
+        let project_id = Uuid::new_v4();
+        let deployment_id = Uuid::new_v4();
+        let temp_dir = tempdir().unwrap();
+        let pending = sample_deployment(deployment_id, project_id);
+        let processing = sample_deployment_with_status(
+            deployment_id,
+            project_id,
+            deployment::DeploymentStatus::Processing,
+        );
+        let ready = sample_deployment_with_status(
+            deployment_id,
+            project_id,
+            deployment::DeploymentStatus::Ready,
+        );
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[sample_session(owner.id, token)]])
+            .append_query_results([[owner.clone()]])
+            .append_query_results([[sample_project(
+                project_id,
+                owner.id,
+                project::ProjectStatus::Active,
+            )]])
+            .append_query_results([[pending.clone()]])
+            .append_query_results([[sample_project(
+                project_id,
+                owner.id,
+                project::ProjectStatus::Active,
+            )]])
+            .append_query_results([[pending]])
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .append_query_results([[processing.clone()]])
+            .append_query_results([[sample_project(
+                project_id,
+                owner.id,
+                project::ProjectStatus::Active,
+            )]])
+            .append_query_results([[processing.clone()]])
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .append_query_results([[sample_project(
+                project_id,
+                owner.id,
+                project::ProjectStatus::Active,
+            )]])
+            .append_query_results([[processing]])
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .append_query_results([[ready.clone()]])
+            .into_connection();
+        let app = install_deployment_routes(Router::new(), AppState::new(database));
+
+        let boundary = "----grass-worker-boundary";
+        let bundle = static_site_zip_bytes();
+        let mut body = Vec::new();
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"bundle\"; filename=\"site.zip\"\r\nContent-Type: application/zip\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(&bundle);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/projects/{project_id}/deployments/{deployment_id}/upload-bundle"
+                    ))
+                    .header(
+                        header::CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .header(header::COOKIE, session_cookie(token))
+                    .header(
+                        "x-grass-worker-test-artifact-root",
+                        temp_dir.path().display().to_string(),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["deployment"]["id"], deployment_id.to_string());
+        assert_eq!(json["deployment"]["status"], "ready");
+        assert_eq!(json["artifact"]["kind"], "static_site");
+
+        let storage_path = json["artifact"]["storage_path"].as_str().unwrap();
+        let index = std::fs::read_to_string(format!("{storage_path}/index.html")).unwrap();
+        let guide =
+            std::fs::read_to_string(format!("{storage_path}/guides/getting-started.html")).unwrap();
+        assert!(index.contains("Uploaded docs site"));
+        assert!(guide.contains("Getting started"));
     }
 }

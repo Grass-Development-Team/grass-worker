@@ -19,6 +19,7 @@ use axum::{
 };
 use features::{
     auth::install_auth_routes, deployments::install_deployment_routes, hosts::install_host_routes,
+    node_deployments::install_node_deployment_routes,
     platform_host_sources::install_platform_host_source_routes, projects::install_project_routes,
     public_sites::install_public_site_frontend, releases::install_release_routes,
     setup::install_setup_routes, system::install_system_routes, users::install_user_routes,
@@ -380,8 +381,16 @@ fn build_app_router(
             let router = install_release_routes(router, context.state.clone());
             let router = install_host_routes(router, context.state.clone());
             let router = install_platform_host_source_routes(router, context.state.clone());
-            let router = install_user_routes(router, context.state.clone())
-                .route("/api/{*path}", any(api_not_found));
+            let router = install_user_routes(router, context.state.clone());
+            let router = match context.config.node.as_ref() {
+                Some(node) => install_node_deployment_routes(
+                    router,
+                    context.state.clone(),
+                    node.shared_token.clone(),
+                ),
+                None => router,
+            }
+            .route("/api/{*path}", any(api_not_found));
             let frontend_mode = resolve_frontend_mode(context.config.development.as_ref())?;
 
             match frontend_mode {
@@ -504,6 +513,12 @@ async fn create_binding_promotes_first_binding_to_primary() {
             active_deployment_id: None,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
+            repository_url: None,
+            production_branch: None,
+            root_directory: None,
+            install_command: None,
+            build_command: None,
+            output_directory: None,
             status: project::ProjectStatus::Active,
             created_at: now,
             updated_at: now,
@@ -561,6 +576,12 @@ async fn resolve_by_host_returns_active_ready_static_site() {
             active_deployment_id,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
+            repository_url: None,
+            production_branch: None,
+            root_directory: None,
+            install_command: None,
+            build_command: None,
+            output_directory: None,
             status: project::ProjectStatus::Active,
             created_at: now,
             updated_at: now,
@@ -590,6 +611,8 @@ async fn resolve_by_host_returns_active_ready_static_site() {
             status: deployment::DeploymentStatus::Ready,
             source_branch: Some("main".to_owned()),
             source_revision: Some("deadbeef".to_owned()),
+            last_stage: None,
+            failure_message: None,
             created_at: now,
             started_at: Some(now),
             finished_at: Some(now),
@@ -636,6 +659,7 @@ fn ready_mode_for_route_tests(database: sea_orm::DatabaseConnection) -> AppMode 
     AppMode::Normal(NormalContext::new(
         AppConfig {
             server: grass_worker_config::ServerConfig::default(),
+            node: None,
             database: Some(DatabaseConfig::default()),
             development: None,
         },
@@ -684,6 +708,12 @@ async fn create_project_host_returns_created_binding() {
             active_deployment_id: None,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
+            repository_url: None,
+            production_branch: None,
+            root_directory: None,
+            install_command: None,
+            build_command: None,
+            output_directory: None,
             status: project::ProjectStatus::Active,
             created_at: now,
             updated_at: now,
@@ -698,6 +728,12 @@ async fn create_project_host_returns_created_binding() {
             active_deployment_id: None,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
+            repository_url: None,
+            production_branch: None,
+            root_directory: None,
+            install_command: None,
+            build_command: None,
+            output_directory: None,
             status: project::ProjectStatus::Active,
             created_at: now,
             updated_at: now,
@@ -782,6 +818,12 @@ async fn ready_mode_serves_active_static_site_by_host() {
             active_deployment_id: Some(deployment_id),
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
+            repository_url: None,
+            production_branch: None,
+            root_directory: None,
+            install_command: None,
+            build_command: None,
+            output_directory: None,
             status: project::ProjectStatus::Active,
             created_at: now,
             updated_at: now,
@@ -794,6 +836,8 @@ async fn ready_mode_serves_active_static_site_by_host() {
             status: deployment::DeploymentStatus::Ready,
             source_branch: Some("main".to_owned()),
             source_revision: Some("deadbeef".to_owned()),
+            last_stage: None,
+            failure_message: None,
             created_at: now,
             started_at: Some(now),
             finished_at: Some(now),
@@ -868,7 +912,7 @@ mod tests {
         deployment, deployment_artifact, host_policy, platform_host_source, project,
         project_host_binding, user, user_session,
     };
-    use sea_orm::{DatabaseBackend, MockDatabase};
+    use sea_orm::{DatabaseBackend, MockDatabase, MockExecResult};
     use std::io::{self, Write};
     use std::path::PathBuf;
     use std::sync::Mutex;
@@ -881,6 +925,7 @@ mod tests {
         AppMode::Normal(NormalContext::new(
             AppConfig {
                 server: grass_worker_config::ServerConfig::default(),
+                node: None,
                 database: Some(DatabaseConfig::default()),
                 development: None,
             },
@@ -892,6 +937,28 @@ mod tests {
         AppMode::Normal(NormalContext::new(
             AppConfig {
                 server: grass_worker_config::ServerConfig::default(),
+                node: None,
+                database: Some(DatabaseConfig::default()),
+                development: None,
+            },
+            AppState::new(database),
+        ))
+    }
+
+    fn ready_mode_with_node_token(
+        database: sea_orm::DatabaseConnection,
+        shared_token: &str,
+    ) -> AppMode {
+        AppMode::Normal(NormalContext::new(
+            AppConfig {
+                server: grass_worker_config::ServerConfig::default(),
+                node: Some(grass_worker_config::NodeConfig {
+                    listen: "127.0.0.1:3001".parse().unwrap(),
+                    control_plane_url: "http://127.0.0.1:3000".to_owned(),
+                    shared_token: shared_token.to_owned(),
+                    poll_interval_seconds: 15,
+                    work_root: std::env::temp_dir().join("grass-worker-node-tests"),
+                }),
                 database: Some(DatabaseConfig::default()),
                 development: None,
             },
@@ -1142,7 +1209,14 @@ mod tests {
                             crate::domain::auth::SESSION_COOKIE_NAME
                         ),
                     )
-                    .body(Body::from(r#"{"name":"Docs Site","slug":"docs-site"}"#))
+                    .body(Body::from(
+                        r#"{
+                            "name":"Docs Site",
+                            "slug":"docs-site",
+                            "repository_url":"https://github.com/acme/docs-site",
+                            "production_branch":"main"
+                        }"#,
+                    ))
                     .unwrap(),
             )
             .await
@@ -1154,6 +1228,11 @@ mod tests {
 
         assert_eq!(json["project"]["slug"], "docs-site");
         assert_eq!(json["project"]["name"], "Docs Site");
+        assert_eq!(
+            json["project"]["repository_url"],
+            "https://github.com/acme/docs-site"
+        );
+        assert_eq!(json["project"]["production_branch"], "main");
         assert_eq!(json["project"]["status"], "active");
     }
 
@@ -1226,6 +1305,12 @@ mod tests {
                 active_deployment_id: None,
                 slug: "docs-site".to_owned(),
                 name: "Docs Site".to_owned(),
+                repository_url: None,
+                production_branch: None,
+                root_directory: None,
+                install_command: None,
+                build_command: None,
+                output_directory: None,
                 status: project::ProjectStatus::Active,
                 created_at: now,
                 updated_at: now,
@@ -1267,7 +1352,14 @@ mod tests {
                             crate::domain::auth::SESSION_COOKIE_NAME
                         ),
                     )
-                    .body(Body::from(r#"{"name":"Docs Site","slug":"docs-site"}"#))
+                    .body(Body::from(
+                        r#"{
+                            "name":"Docs Site",
+                            "slug":"docs-site",
+                            "repository_url":"https://github.com/acme/docs-site",
+                            "production_branch":"main"
+                        }"#,
+                    ))
                     .unwrap(),
             )
             .await
@@ -1308,6 +1400,215 @@ mod tests {
         assert_eq!(hosts_json["hosts"][0]["host"], "docs-site.apps.example.com");
         assert_eq!(hosts_json["hosts"][0]["source_id"], source_id.to_string());
         assert_eq!(hosts_json["hosts"][0]["is_primary"], true);
+    }
+
+    #[tokio::test]
+    async fn node_can_claim_pending_git_backed_deployment() {
+        let now = chrono::Utc::now();
+        let project_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
+        let deployment_id = Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap();
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[deployment::Model {
+                id: deployment_id,
+                project_id,
+                status: deployment::DeploymentStatus::Pending,
+                source_branch: Some("main".to_owned()),
+                source_revision: None,
+                last_stage: None,
+                failure_message: None,
+                created_at: now,
+                started_at: None,
+                finished_at: None,
+            }]])
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .append_query_results([[deployment::Model {
+                id: deployment_id,
+                project_id,
+                status: deployment::DeploymentStatus::Processing,
+                source_branch: Some("main".to_owned()),
+                source_revision: None,
+                last_stage: None,
+                failure_message: None,
+                created_at: now,
+                started_at: Some(now),
+                finished_at: None,
+            }]])
+            .append_query_results([[project::Model {
+                id: project_id,
+                owner_user_id: Uuid::new_v4(),
+                active_deployment_id: None,
+                slug: "docs-site".to_owned(),
+                name: "Docs Site".to_owned(),
+                repository_url: Some("https://github.com/acme/docs-site".to_owned()),
+                production_branch: Some("main".to_owned()),
+                root_directory: Some("apps/docs".to_owned()),
+                install_command: Some("bun install".to_owned()),
+                build_command: Some("bun run build".to_owned()),
+                output_directory: Some("dist".to_owned()),
+                status: project::ProjectStatus::Active,
+                created_at: now,
+                updated_at: now,
+                archived_at: None,
+                soft_deleted_at: None,
+            }]])
+            .into_connection();
+
+        let response = app_router(ready_mode_with_node_token(database, "node-secret"))
+            .unwrap()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/internal/deployments/claim")
+                    .header(header::AUTHORIZATION, "Bearer node-secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["deployment"]["id"], deployment_id.to_string());
+        assert_eq!(json["deployment"]["project_id"], project_id.to_string());
+        assert_eq!(json["deployment"]["status"], "processing");
+        assert_eq!(json["deployment"]["source_branch"], "main");
+        assert_eq!(
+            json["deployment"]["repository_url"],
+            "https://github.com/acme/docs-site"
+        );
+        assert_eq!(json["deployment"]["root_directory"], "apps/docs");
+        assert_eq!(json["deployment"]["build_command"], "bun run build");
+        assert_eq!(json["deployment"]["output_directory"], "dist");
+    }
+
+    #[tokio::test]
+    async fn node_can_update_deployment_stage_and_mark_failure() {
+        let now = chrono::Utc::now();
+        let deployment_id = Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap();
+        let project_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[deployment::Model {
+                id: deployment_id,
+                project_id,
+                status: deployment::DeploymentStatus::Processing,
+                source_branch: Some("main".to_owned()),
+                source_revision: None,
+                last_stage: Some("install".to_owned()),
+                failure_message: None,
+                created_at: now,
+                started_at: Some(now),
+                finished_at: None,
+            }]])
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .append_query_results([[deployment::Model {
+                id: deployment_id,
+                project_id,
+                status: deployment::DeploymentStatus::Failed,
+                source_branch: Some("main".to_owned()),
+                source_revision: None,
+                last_stage: Some("build".to_owned()),
+                failure_message: Some("bun run build exited with status 1".to_owned()),
+                created_at: now,
+                started_at: Some(now),
+                finished_at: Some(now),
+            }]])
+            .into_connection();
+
+        let response = app_router(ready_mode_with_node_token(database, "node-secret"))
+            .unwrap()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/internal/deployments/{deployment_id}/stage"
+                    ))
+                    .header(header::AUTHORIZATION, "Bearer node-secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{
+                            "stage":"build",
+                            "status":"failed",
+                            "failure_message":"bun run build exited with status 1"
+                        }"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["deployment"]["id"], deployment_id.to_string());
+        assert_eq!(json["deployment"]["status"], "failed");
+        assert_eq!(json["deployment"]["last_stage"], "build");
+        assert_eq!(
+            json["deployment"]["failure_message"],
+            "bun run build exited with status 1"
+        );
+    }
+
+    #[tokio::test]
+    async fn node_can_upload_build_log_artifact() {
+        let now = chrono::Utc::now();
+        let deployment_id = Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap();
+        let project_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[deployment::Model {
+                id: deployment_id,
+                project_id,
+                status: deployment::DeploymentStatus::Processing,
+                source_branch: Some("main".to_owned()),
+                source_revision: None,
+                last_stage: Some("build".to_owned()),
+                failure_message: None,
+                created_at: now,
+                started_at: Some(now),
+                finished_at: None,
+            }]])
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .into_connection();
+
+        let response = app_router(ready_mode_with_node_token(database, "node-secret"))
+            .unwrap()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!(
+                        "/api/v1/internal/deployments/{deployment_id}/build-log"
+                    ))
+                    .header(header::AUTHORIZATION, "Bearer node-secret")
+                    .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                    .body(Body::from("bun install\nbun run build\n"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["artifact"]["deployment_id"], deployment_id.to_string());
+        assert_eq!(json["artifact"]["kind"], "build_log");
+
+        let storage_path = json["artifact"]["storage_path"].as_str().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(storage_path).unwrap(),
+            "bun install\nbun run build\n"
+        );
     }
 
     #[tokio::test]
@@ -1380,6 +1681,12 @@ mod tests {
                 active_deployment_id: None,
                 slug: "docs-site".to_owned(),
                 name: "Docs Site".to_owned(),
+                repository_url: None,
+                production_branch: None,
+                root_directory: None,
+                install_command: None,
+                build_command: None,
+                output_directory: None,
                 status: project::ProjectStatus::Active,
                 created_at: now,
                 updated_at: now,
@@ -1404,7 +1711,14 @@ mod tests {
                             crate::domain::auth::SESSION_COOKIE_NAME
                         ),
                     )
-                    .body(Body::from(r#"{"name":"Docs Site","slug":"docs-site"}"#))
+                    .body(Body::from(
+                        r#"{
+                            "name":"Docs Site",
+                            "slug":"docs-site",
+                            "repository_url":"https://github.com/acme/docs-site",
+                            "production_branch":"main"
+                        }"#,
+                    ))
                     .unwrap(),
             )
             .await
@@ -1472,6 +1786,12 @@ mod tests {
                 active_deployment_id: None,
                 slug: "docs-site".to_owned(),
                 name: "Docs Site".to_owned(),
+                repository_url: None,
+                production_branch: None,
+                root_directory: None,
+                install_command: None,
+                build_command: None,
+                output_directory: None,
                 status: project::ProjectStatus::Active,
                 created_at: now,
                 updated_at: now,
@@ -1532,6 +1852,12 @@ mod tests {
                 active_deployment_id: None,
                 slug: "docs-site".to_owned(),
                 name: "Docs Site".to_owned(),
+                repository_url: None,
+                production_branch: None,
+                root_directory: None,
+                install_command: None,
+                build_command: None,
+                output_directory: None,
                 status: project::ProjectStatus::Active,
                 created_at: now,
                 updated_at: now,
@@ -1544,6 +1870,8 @@ mod tests {
                 status: deployment::DeploymentStatus::Ready,
                 source_branch: Some("main".to_owned()),
                 source_revision: Some("deadbeef".to_owned()),
+                last_stage: None,
+                failure_message: None,
                 created_at: now,
                 started_at: Some(now),
                 finished_at: Some(now),
@@ -1567,6 +1895,12 @@ mod tests {
                 active_deployment_id: Some(deployment_id),
                 slug: "docs-site".to_owned(),
                 name: "Docs Site".to_owned(),
+                repository_url: None,
+                production_branch: None,
+                root_directory: None,
+                install_command: None,
+                build_command: None,
+                output_directory: None,
                 status: project::ProjectStatus::Active,
                 created_at: now,
                 updated_at: now,
@@ -1580,6 +1914,8 @@ mod tests {
                 status: deployment::DeploymentStatus::Ready,
                 source_branch: Some("main".to_owned()),
                 source_revision: Some("deadbeef".to_owned()),
+                last_stage: None,
+                failure_message: None,
                 created_at: now,
                 started_at: Some(now),
                 finished_at: Some(now),
@@ -1658,6 +1994,12 @@ mod tests {
                 active_deployment_id: Some(current_deployment_id),
                 slug: "docs-site".to_owned(),
                 name: "Docs Site".to_owned(),
+                repository_url: None,
+                production_branch: None,
+                root_directory: None,
+                install_command: None,
+                build_command: None,
+                output_directory: None,
                 status: project::ProjectStatus::Active,
                 created_at: now,
                 updated_at: now,
@@ -1671,6 +2013,8 @@ mod tests {
                     status: deployment::DeploymentStatus::Ready,
                     source_branch: Some("main".to_owned()),
                     source_revision: Some("current".to_owned()),
+                    last_stage: None,
+                    failure_message: None,
                     created_at: now,
                     started_at: Some(now),
                     finished_at: Some(now),
@@ -1681,6 +2025,8 @@ mod tests {
                     status: deployment::DeploymentStatus::Ready,
                     source_branch: Some("main".to_owned()),
                     source_revision: Some("previous".to_owned()),
+                    last_stage: None,
+                    failure_message: None,
                     created_at: now - chrono::Duration::hours(1),
                     started_at: Some(now - chrono::Duration::hours(1)),
                     finished_at: Some(now - chrono::Duration::hours(1)),
@@ -1705,6 +2051,12 @@ mod tests {
                 active_deployment_id: Some(previous_deployment_id),
                 slug: "docs-site".to_owned(),
                 name: "Docs Site".to_owned(),
+                repository_url: None,
+                production_branch: None,
+                root_directory: None,
+                install_command: None,
+                build_command: None,
+                output_directory: None,
                 status: project::ProjectStatus::Active,
                 created_at: now,
                 updated_at: now,
@@ -1718,6 +2070,8 @@ mod tests {
                 status: deployment::DeploymentStatus::Ready,
                 source_branch: Some("main".to_owned()),
                 source_revision: Some("previous".to_owned()),
+                last_stage: None,
+                failure_message: None,
                 created_at: now - chrono::Duration::hours(1),
                 started_at: Some(now - chrono::Duration::hours(1)),
                 finished_at: Some(now - chrono::Duration::hours(1)),
@@ -1729,6 +2083,8 @@ mod tests {
                     status: deployment::DeploymentStatus::Ready,
                     source_branch: Some("main".to_owned()),
                     source_revision: Some("current".to_owned()),
+                    last_stage: None,
+                    failure_message: None,
                     created_at: now,
                     started_at: Some(now),
                     finished_at: Some(now),
@@ -1739,6 +2095,8 @@ mod tests {
                     status: deployment::DeploymentStatus::Ready,
                     source_branch: Some("main".to_owned()),
                     source_revision: Some("previous".to_owned()),
+                    last_stage: None,
+                    failure_message: None,
                     created_at: now - chrono::Duration::hours(1),
                     started_at: Some(now - chrono::Duration::hours(1)),
                     finished_at: Some(now - chrono::Duration::hours(1)),
@@ -1816,6 +2174,12 @@ mod tests {
                 active_deployment_id: None,
                 slug: "docs-site".to_owned(),
                 name: "Docs Site".to_owned(),
+                repository_url: None,
+                production_branch: None,
+                root_directory: None,
+                install_command: None,
+                build_command: None,
+                output_directory: None,
                 status: project::ProjectStatus::Active,
                 created_at: now,
                 updated_at: now,

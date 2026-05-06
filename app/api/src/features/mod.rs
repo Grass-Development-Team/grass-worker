@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod deployments;
 pub mod hosts;
+pub mod node_deployments;
 pub mod platform_host_sources;
 pub mod projects;
 pub mod public_sites;

@@ -24,6 +24,25 @@ pub struct RegisterDeploymentArtifactInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimedGitDeployment {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub status: deployment::DeploymentStatus,
+    pub source_branch: String,
+    pub source_revision: Option<String>,
+    pub last_stage: Option<String>,
+    pub failure_message: Option<String>,
+    pub repository_url: String,
+    pub production_branch: String,
+    pub root_directory: Option<String>,
+    pub install_command: String,
+    pub build_command: String,
+    pub output_directory: String,
+    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub finished_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeploymentErrorKind {
     Validation,
     NotFound,
@@ -139,6 +158,10 @@ fn deployment_artifact_repository(
     SeaOrmDeploymentArtifactRepository::new(clone_database_connection(database))
 }
 
+fn project_build_default(value: Option<String>, default: &str) -> String {
+    normalize_optional_field(value.as_deref()).unwrap_or_else(|| default.to_owned())
+}
+
 fn transition_plan(
     current_status: &deployment::DeploymentStatus,
     next_status: &deployment::DeploymentStatus,
@@ -189,6 +212,38 @@ fn deployment_status_label(status: &deployment::DeploymentStatus) -> &'static st
 }
 
 impl DeploymentService {
+    async fn create_artifact_record(
+        &self,
+        database: &DatabaseConnection,
+        deployment: &deployment::Model,
+        input: RegisterDeploymentArtifactInput,
+    ) -> Result<deployment_artifact::Model, DeploymentError> {
+        if deployment.status == deployment::DeploymentStatus::Pending {
+            return Err(DeploymentError::conflict("deployment has not started"));
+        }
+
+        let storage_path = normalize_optional_field(Some(input.storage_path.as_str()))
+            .ok_or_else(|| DeploymentError::validation("storage_path is required"))?;
+        if input.size_bytes.is_some_and(|value| value < 0) {
+            return Err(DeploymentError::validation(
+                "size_bytes must be greater than or equal to 0",
+            ));
+        }
+
+        deployment_artifact_repository(database)
+            .create(NewDeploymentArtifact {
+                id: Uuid::new_v4(),
+                deployment_id: deployment.id,
+                kind: input.kind,
+                storage_path,
+                checksum_sha256: normalize_optional_field(input.checksum_sha256.as_deref()),
+                size_bytes: input.size_bytes,
+                created_at: Utc::now(),
+            })
+            .await
+            .map_err(map_db_error)
+    }
+
     async fn load_visible_project(
         &self,
         database: &DatabaseConnection,
@@ -330,30 +385,217 @@ impl DeploymentService {
             .get_for_project(database, actor, project_id, deployment_id)
             .await?;
 
+        self.create_artifact_record(database, &deployment, input).await
+    }
+
+    pub async fn store_static_site_artifact_for_project(
+        &self,
+        database: &DatabaseConnection,
+        actor: &AuthenticatedUser,
+        project_id: Uuid,
+        deployment_id: Uuid,
+        storage_path: String,
+        checksum_sha256: Option<String>,
+        size_bytes: Option<i64>,
+    ) -> Result<(deployment::Model, deployment_artifact::Model), DeploymentError> {
+        let deployment = self
+            .get_for_project(database, actor, project_id, deployment_id)
+            .await?;
+
+        let current = match deployment.status {
+            deployment::DeploymentStatus::Pending => {
+                self.transition_for_project(
+                    database,
+                    actor,
+                    project_id,
+                    deployment_id,
+                    deployment::DeploymentStatus::Processing,
+                )
+                .await?
+            }
+            deployment::DeploymentStatus::Processing => deployment,
+            deployment::DeploymentStatus::Ready => {
+                return Err(DeploymentError::conflict("deployment is already ready"));
+            }
+            deployment::DeploymentStatus::Failed | deployment::DeploymentStatus::Canceled => {
+                return Err(DeploymentError::conflict("deployment is already finished"));
+            }
+        };
+
+        let artifact = self
+            .register_artifact_for_project(
+                database,
+                actor,
+                project_id,
+                deployment_id,
+                RegisterDeploymentArtifactInput {
+                    kind: deployment_artifact::ArtifactKind::StaticSite,
+                    storage_path,
+                    checksum_sha256,
+                    size_bytes,
+                },
+            )
+            .await?;
+
+        let deployment = self
+            .transition_for_project(
+                database,
+                actor,
+                project_id,
+                current.id,
+                deployment::DeploymentStatus::Ready,
+            )
+            .await?;
+
+        Ok((deployment, artifact))
+    }
+
+    pub async fn claim_next_git_backed_production_deployment(
+        &self,
+        database: &DatabaseConnection,
+    ) -> Result<Option<ClaimedGitDeployment>, DeploymentError> {
+        const DEFAULT_INSTALL_COMMAND: &str = "bun install";
+        const DEFAULT_BUILD_COMMAND: &str = "bun run build";
+        const DEFAULT_OUTPUT_DIRECTORY: &str = "dist";
+
+        let Some(deployment) = deployment_repository(database)
+            .claim_next_pending_git_backed_production(Utc::now())
+            .await
+            .map_err(map_db_error)?
+        else {
+            return Ok(None);
+        };
+
+        let project = project_repository(database)
+            .find_by_id(deployment.project_id)
+            .await
+            .map_err(map_db_error)?
+            .ok_or_else(|| DeploymentError::not_found("project not found"))?;
+
+        let repository_url = normalize_optional_field(project.repository_url.as_deref())
+            .ok_or_else(|| DeploymentError::conflict("project repository_url is not configured"))?;
+        let production_branch = normalize_optional_field(project.production_branch.as_deref())
+            .ok_or_else(|| {
+                DeploymentError::conflict("project production_branch is not configured")
+            })?;
+
+        Ok(Some(ClaimedGitDeployment {
+            id: deployment.id,
+            project_id: deployment.project_id,
+            status: deployment.status,
+            source_branch: deployment
+                .source_branch
+                .clone()
+                .unwrap_or_else(|| production_branch.clone()),
+            source_revision: deployment.source_revision,
+            last_stage: deployment.last_stage,
+            failure_message: deployment.failure_message,
+            repository_url,
+            production_branch,
+            root_directory: normalize_optional_field(project.root_directory.as_deref()),
+            install_command: project_build_default(
+                project.install_command,
+                DEFAULT_INSTALL_COMMAND,
+            ),
+            build_command: project_build_default(project.build_command, DEFAULT_BUILD_COMMAND),
+            output_directory: project_build_default(
+                project.output_directory,
+                DEFAULT_OUTPUT_DIRECTORY,
+            ),
+            started_at: deployment.started_at,
+            finished_at: deployment.finished_at,
+        }))
+    }
+
+    pub async fn get_for_node(
+        &self,
+        database: &DatabaseConnection,
+        deployment_id: Uuid,
+    ) -> Result<deployment::Model, DeploymentError> {
+        deployment_repository(database)
+            .find_by_id(deployment_id)
+            .await
+            .map_err(map_db_error)?
+            .ok_or_else(|| DeploymentError::not_found("deployment not found"))
+    }
+
+    pub async fn update_stage_for_node(
+        &self,
+        database: &DatabaseConnection,
+        deployment_id: Uuid,
+        stage: &str,
+        next_status: deployment::DeploymentStatus,
+        failure_message: Option<&str>,
+    ) -> Result<deployment::Model, DeploymentError> {
+        let deployment = self.get_for_node(database, deployment_id).await?;
+        let last_stage = normalize_optional_field(Some(stage))
+            .ok_or_else(|| DeploymentError::validation("stage is required"))?;
+
         if deployment.status == deployment::DeploymentStatus::Pending {
             return Err(DeploymentError::conflict("deployment has not started"));
         }
+        if matches!(
+            deployment.status,
+            deployment::DeploymentStatus::Ready
+                | deployment::DeploymentStatus::Failed
+                | deployment::DeploymentStatus::Canceled
+        ) {
+            return Err(DeploymentError::conflict("deployment is already finished"));
+        }
 
-        let storage_path = normalize_optional_field(Some(input.storage_path.as_str()))
-            .ok_or_else(|| DeploymentError::validation("storage_path is required"))?;
-        if input.size_bytes.is_some_and(|value| value < 0) {
+        let failure_message = normalize_optional_field(failure_message);
+        if next_status == deployment::DeploymentStatus::Failed && failure_message.is_none() {
             return Err(DeploymentError::validation(
-                "size_bytes must be greater than or equal to 0",
+                "failure_message is required when status is failed",
             ));
         }
 
-        deployment_artifact_repository(database)
-            .create(NewDeploymentArtifact {
-                id: Uuid::new_v4(),
+        let finished_at = matches!(
+            next_status,
+            deployment::DeploymentStatus::Ready
+                | deployment::DeploymentStatus::Failed
+                | deployment::DeploymentStatus::Canceled
+        )
+        .then(Utc::now);
+        let failure_message = if next_status == deployment::DeploymentStatus::Failed {
+            failure_message
+        } else {
+            None
+        };
+
+        deployment_repository(database)
+            .update_execution_if_current(
                 deployment_id,
-                kind: input.kind,
-                storage_path,
-                checksum_sha256: normalize_optional_field(input.checksum_sha256.as_deref()),
-                size_bytes: input.size_bytes,
-                created_at: Utc::now(),
-            })
+                deployment.status,
+                next_status,
+                Some(last_stage),
+                failure_message,
+                finished_at,
+            )
             .await
-            .map_err(map_db_error)
+            .map_err(map_db_error)?
+            .ok_or_else(|| {
+                DeploymentError::conflict("deployment status changed during stage update")
+            })
+    }
+
+    pub async fn register_artifact_for_deployment(
+        &self,
+        database: &DatabaseConnection,
+        deployment_id: Uuid,
+        input: RegisterDeploymentArtifactInput,
+    ) -> Result<deployment_artifact::Model, DeploymentError> {
+        let deployment = self.get_for_node(database, deployment_id).await?;
+        self.create_artifact_record(database, &deployment, input).await
+    }
+
+    pub async fn register_artifact_for_loaded_deployment(
+        &self,
+        database: &DatabaseConnection,
+        deployment: &deployment::Model,
+        input: RegisterDeploymentArtifactInput,
+    ) -> Result<deployment_artifact::Model, DeploymentError> {
+        self.create_artifact_record(database, deployment, input).await
     }
 }
 
@@ -390,6 +632,12 @@ mod tests {
             active_deployment_id: None,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
+            repository_url: None,
+            production_branch: None,
+            root_directory: None,
+            install_command: None,
+            build_command: None,
+            output_directory: None,
             status: status.clone(),
             created_at,
             updated_at: created_at,
@@ -414,6 +662,8 @@ mod tests {
             status: deployment::DeploymentStatus::Pending,
             source_branch: Some("main".to_owned()),
             source_revision: Some("deadbeef".to_owned()),
+            last_stage: None,
+            failure_message: None,
             created_at,
             started_at: None,
             finished_at: None,

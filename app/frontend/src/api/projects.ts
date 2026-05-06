@@ -18,6 +18,12 @@ export type Project = {
   owner_user_id: string;
   slug: string;
   name: string;
+  repository_url: string | null;
+  production_branch: string | null;
+  root_directory: string | null;
+  install_command: string | null;
+  build_command: string | null;
+  output_directory: string | null;
   status: ProjectStatus;
   created_at: string;
   updated_at: string;
@@ -51,6 +57,12 @@ export async function getProjects(query: ProjectsQuery = {}): Promise<Project[]>
 export async function createProject(input: {
   name: string;
   slug: string;
+  repository_url: string;
+  production_branch: string;
+  root_directory?: string | null;
+  install_command?: string | null;
+  build_command?: string | null;
+  output_directory?: string | null;
 }): Promise<Project> {
   const response = await request<ProjectRecordEnvelope>("/api/v1/projects", {
     method: "POST",
@@ -67,7 +79,16 @@ export async function getProject(projectId: string): Promise<Project> {
 
 export async function updateProject(
   projectId: string,
-  input: { name?: string; slug?: string },
+  input: {
+    name?: string;
+    slug?: string;
+    repository_url?: string | null;
+    production_branch?: string | null;
+    root_directory?: string | null;
+    install_command?: string | null;
+    build_command?: string | null;
+    output_directory?: string | null;
+  },
 ): Promise<Project> {
   const response = await request<ProjectRecordEnvelope>(`/api/v1/projects/${projectId}`, {
     method: "PATCH",

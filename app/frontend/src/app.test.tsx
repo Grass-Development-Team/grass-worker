@@ -203,6 +203,19 @@ function deploymentArtifactResponse(artifact: TestDeploymentArtifact) {
   );
 }
 
+function deploymentUploadResponse(
+  deployment: TestDeployment,
+  artifact: TestDeploymentArtifact,
+) {
+  return jsonResponse(
+    {
+      deployment: normalizeDeployment(deployment),
+      artifact: normalizeDeploymentArtifact(artifact),
+    },
+    { status: 201 },
+  );
+}
+
 function normalizeRelease(release: TestRelease) {
   return {
     active_deployment_id: null,
@@ -1076,11 +1089,13 @@ describe("auth routing", () => {
     ).not.toBeInTheDocument();
   });
 
-  test("projects page creates a project and refreshes the inventory", async () => {
+  test("projects page imports a git-backed project", async () => {
     let projects: Array<{
       id: string;
       slug: string;
       name: string;
+      repository_url?: string | null;
+      production_branch?: string | null;
       status: "active" | "archived";
       created_at: string;
       updated_at: string;
@@ -1110,6 +1125,8 @@ describe("auth routing", () => {
             id: "11111111-1111-1111-1111-111111111111",
             slug: "docs-site",
             name: "Docs Site",
+            repository_url: "https://github.com/acme/docs-site",
+            production_branch: "main",
             status: "active",
             created_at: "2026-04-19T10:00:00Z",
             updated_at: "2026-04-19T10:00:00Z",
@@ -1133,21 +1150,35 @@ describe("auth routing", () => {
     renderRouter("/projects");
 
     await userEvent.type(await screen.findByLabelText(/project name/i), "Docs Site");
+    await userEvent.type(
+      screen.getByLabelText(/git repository url/i),
+      "https://github.com/acme/docs-site",
+    );
+    await userEvent.clear(screen.getByLabelText(/production branch/i));
+    await userEvent.type(screen.getByLabelText(/production branch/i), "main");
     await waitFor(() => {
       expect(screen.getByLabelText(/project slug/i)).toHaveValue("docs-site");
     });
-    await userEvent.click(screen.getByRole("button", { name: /create project/i }));
+    await userEvent.click(screen.getByRole("button", { name: /import project/i }));
     await waitFor(() => {
-      expect(
-        fetchMock.mock.calls.some(([calledInput, calledInit]) => {
-          const method =
-            calledInput instanceof Request
-              ? calledInput.method
-              : ((calledInit as RequestInit | undefined)?.method ?? "GET");
-
-          return requestPath(calledInput) === "/api/v1/projects" && method === "POST";
-        }),
-      ).toBe(true);
+      const createCall = fetchMock.mock.calls.find(
+        ([calledInput, init]) =>
+          requestPath(calledInput) === "/api/v1/projects" &&
+          (calledInput instanceof Request
+            ? calledInput.method
+            : (init?.method ?? "GET")) === "POST",
+      );
+      expect(createCall).toBeDefined();
+      const [, init] = createCall!;
+      expect(JSON.parse(init?.body?.toString() ?? "{}")).toMatchObject({
+        name: "Docs Site",
+        slug: "docs-site",
+        repository_url: "https://github.com/acme/docs-site",
+        production_branch: "main",
+        install_command: "bun install",
+        build_command: "bun run build",
+        output_directory: "dist",
+      });
     });
     await waitFor(() => {
       expect(screen.getByLabelText(/project name/i)).toHaveValue("");
@@ -1276,11 +1307,35 @@ describe("auth routing", () => {
       finished_at: null,
     };
     const artifacts: TestDeploymentArtifact[] = [];
+    const release: TestRelease = {
+      project_id: projectId,
+      project_slug: "docs-site",
+      primary_host: "docs-site.grass.local",
+      active_deployment_id: null,
+      active_deployment: null,
+      rollback_deployment_id: null,
+    };
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const path = requestPath(input);
       const method =
         input instanceof Request ? input.method : (init?.method ?? "GET");
-      const body = init?.body ? JSON.parse(init.body.toString()) : undefined;
+      const body =
+        init?.body instanceof FormData
+          ? (() => {
+              const bundle = init.body.get("bundle");
+              if (!(bundle instanceof File)) {
+                return { bundle: null };
+              }
+
+              return {
+                bundle_name: bundle.name,
+                bundle_size: bundle.size,
+                bundle_type: bundle.type,
+              };
+            })()
+          : init?.body
+            ? JSON.parse(init.body.toString())
+            : undefined;
       requests.push({ path, method, body });
 
       if (path === "/api/v1/info") {
@@ -1289,6 +1344,10 @@ describe("auth routing", () => {
 
       if (path === "/api/v1/me") {
         return currentUserResponse();
+      }
+
+      if (path === `/api/v1/projects/${projectId}/release` && method === "GET") {
+        return releaseResponse(release);
       }
 
       if (path === `/api/v1/projects/${projectId}/deployments/${deploymentId}` && method === "GET") {
@@ -1315,20 +1374,36 @@ describe("auth routing", () => {
       }
 
       if (
-        path === `/api/v1/projects/${projectId}/deployments/${deploymentId}/artifacts` &&
+        path === `/api/v1/projects/${projectId}/deployments/${deploymentId}/upload-bundle` &&
         method === "POST"
       ) {
+        const formData = init?.body;
+        if (!(formData instanceof FormData)) {
+          throw new Error("Expected upload bundle request to use FormData");
+        }
+
+        const bundle = formData.get("bundle");
+        if (!(bundle instanceof File)) {
+          throw new Error("Expected upload bundle request to include a file");
+        }
+
+        deployment = {
+          ...deployment,
+          status: "ready",
+          started_at: deployment.started_at ?? "2026-04-28T12:05:00Z",
+          finished_at: "2026-04-28T12:10:00Z",
+        };
         const artifact: TestDeploymentArtifact = {
           id: "33333333-3333-3333-3333-333333333333",
           deployment_id: deploymentId,
-          kind: (body?.kind ?? "build_log") as TestDeploymentArtifactKind,
-          storage_path: body?.storage_path ?? "s3://artifacts/build.log",
-          checksum_sha256: body?.checksum_sha256 ?? null,
-          size_bytes: body?.size_bytes ?? null,
+          kind: "static_site",
+          storage_path: `/tmp/artifacts/${projectId}/${deploymentId}/${bundle.name}`,
+          checksum_sha256: "abc123",
+          size_bytes: bundle.size,
           created_at: "2026-04-28T12:10:00Z",
         };
         artifacts.unshift(artifact);
-        return deploymentArtifactResponse(artifact);
+        return deploymentUploadResponse(deployment, artifact);
       }
 
       throw new Error(`Unexpected request for ${method} ${path}`);
@@ -1353,29 +1428,36 @@ describe("auth routing", () => {
       });
     });
 
-    expect(await screen.findAllByText(/processing/i)).not.toHaveLength(0);
+    expect(await screen.findByRole("button", { name: /mark ready/i })).toBeInTheDocument();
 
-    await userEvent.selectOptions(screen.getByLabelText(/artifact kind/i), "build_log");
-    await userEvent.type(screen.getByLabelText(/storage path/i), "s3://artifacts/build.log");
-    await userEvent.type(screen.getByLabelText(/sha256 checksum/i), "abc123");
-    await userEvent.type(screen.getByLabelText(/size bytes/i), "1024");
-    await userEvent.click(screen.getByRole("button", { name: /register artifact/i }));
+    const bundle = new File(["<html>docs</html>"], "docs-site.zip", {
+      type: "application/zip",
+    });
+    await userEvent.upload(screen.getByLabelText(/bundle file/i), bundle);
+    expect(await screen.findByText("docs-site.zip")).toBeInTheDocument();
+    const uploadButton = screen.getByRole("button", { name: /upload bundle/i });
+    await waitFor(() => {
+      expect(uploadButton).toBeEnabled();
+    });
+    await userEvent.click(uploadButton);
 
     await waitFor(() => {
       expect(requests).toContainEqual({
-        path: `/api/v1/projects/${projectId}/deployments/${deploymentId}/artifacts`,
+        path: `/api/v1/projects/${projectId}/deployments/${deploymentId}/upload-bundle`,
         method: "POST",
         body: {
-          kind: "build_log",
-          storage_path: "s3://artifacts/build.log",
-          checksum_sha256: "abc123",
-          size_bytes: 1024,
+          bundle_name: "docs-site.zip",
+          bundle_size: bundle.size,
+          bundle_type: "application/zip",
         },
       });
     });
 
-    expect(await screen.findByText("s3://artifacts/build.log")).toBeInTheDocument();
-    expect(screen.getAllByText(/build_log/i).length).toBeGreaterThan(0);
+    expect(
+      await screen.findByText(`/tmp/artifacts/${projectId}/${deploymentId}/docs-site.zip`),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText(/static_site/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/ready/i).length).toBeGreaterThan(0);
   });
 
   test("project deployment detail route can activate the live release", async () => {

@@ -14,10 +14,24 @@ import { Label } from "@/components/ui/label";
 type CreateProjectCardProps = {
   error: string | null;
   isCreating: boolean;
-  onCreateProject: (input: { name: string; slug: string }) => void;
+  onCreateProject: (input: {
+    name: string;
+    slug: string;
+    repository_url: string;
+    production_branch: string;
+    root_directory?: string | null;
+    install_command?: string | null;
+    build_command?: string | null;
+    output_directory?: string | null;
+  }) => void;
   onResetError: () => void;
   resetToken: number;
 };
+
+function normalizeOptionalInput(value: string) {
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
 
 function deriveSlug(value: string) {
   return value
@@ -37,6 +51,12 @@ export function CreateProjectCard({
 }: CreateProjectCardProps) {
   const [projectName, setProjectName] = React.useState("");
   const [projectSlug, setProjectSlug] = React.useState("");
+  const [repositoryUrl, setRepositoryUrl] = React.useState("");
+  const [productionBranch, setProductionBranch] = React.useState("main");
+  const [rootDirectory, setRootDirectory] = React.useState("");
+  const [installCommand, setInstallCommand] = React.useState("bun install");
+  const [buildCommand, setBuildCommand] = React.useState("bun run build");
+  const [outputDirectory, setOutputDirectory] = React.useState("dist");
   const [slugTouched, setSlugTouched] = React.useState(false);
   const [validationError, setValidationError] = React.useState<string | null>(null);
   const createError = validationError ?? error;
@@ -44,6 +64,12 @@ export function CreateProjectCard({
   React.useEffect(() => {
     setProjectName("");
     setProjectSlug("");
+    setRepositoryUrl("");
+    setProductionBranch("main");
+    setRootDirectory("");
+    setInstallCommand("bun install");
+    setBuildCommand("bun run build");
+    setOutputDirectory("dist");
     setSlugTouched(false);
     setValidationError(null);
   }, [resetToken]);
@@ -52,10 +78,10 @@ export function CreateProjectCard({
     <Card>
       <CardHeader>
         <CardTitle>
-          <h2>Create project</h2>
+          <h2>Import project</h2>
         </CardTitle>
         <CardDescription>
-          Provision a deployment workspace and it will appear in the inventory immediately.
+          Import a public GitHub repository and save the production build settings used for deployments.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -77,8 +103,29 @@ export function CreateProjectCard({
               return;
             }
 
+            const normalizedRepositoryUrl = repositoryUrl.trim();
+            if (!normalizedRepositoryUrl) {
+              setValidationError("Git repository URL is required");
+              return;
+            }
+
+            const normalizedProductionBranch = productionBranch.trim();
+            if (!normalizedProductionBranch) {
+              setValidationError("Production branch is required");
+              return;
+            }
+
             setValidationError(null);
-            onCreateProject({ name, slug });
+            onCreateProject({
+              name,
+              slug,
+              repository_url: normalizedRepositoryUrl,
+              production_branch: normalizedProductionBranch,
+              root_directory: normalizeOptionalInput(rootDirectory),
+              install_command: normalizeOptionalInput(installCommand) ?? "bun install",
+              build_command: normalizeOptionalInput(buildCommand) ?? "bun run build",
+              output_directory: normalizeOptionalInput(outputDirectory) ?? "dist",
+            });
           }}
         >
           <div className="space-y-2">
@@ -112,14 +159,94 @@ export function CreateProjectCard({
               value={projectSlug}
             />
           </div>
+          <div className="space-y-2">
+            <Label htmlFor="project-repository-url">Git repository URL</Label>
+            <Input
+              id="project-repository-url"
+              onChange={(event) => {
+                setRepositoryUrl(event.target.value);
+                setValidationError(null);
+                onResetError();
+              }}
+              placeholder="https://github.com/acme/docs-site"
+              value={repositoryUrl}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="project-production-branch">Production branch</Label>
+            <Input
+              id="project-production-branch"
+              onChange={(event) => {
+                setProductionBranch(event.target.value);
+                setValidationError(null);
+                onResetError();
+              }}
+              placeholder="main"
+              value={productionBranch}
+            />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="project-root-directory">Root directory</Label>
+              <Input
+                id="project-root-directory"
+                onChange={(event) => {
+                  setRootDirectory(event.target.value);
+                  setValidationError(null);
+                  onResetError();
+                }}
+                placeholder="apps/docs"
+                value={rootDirectory}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="project-output-directory">Output directory</Label>
+              <Input
+                id="project-output-directory"
+                onChange={(event) => {
+                  setOutputDirectory(event.target.value);
+                  setValidationError(null);
+                  onResetError();
+                }}
+                placeholder="dist"
+                value={outputDirectory}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="project-install-command">Install command</Label>
+              <Input
+                id="project-install-command"
+                onChange={(event) => {
+                  setInstallCommand(event.target.value);
+                  setValidationError(null);
+                  onResetError();
+                }}
+                placeholder="bun install"
+                value={installCommand}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="project-build-command">Build command</Label>
+              <Input
+                id="project-build-command"
+                onChange={(event) => {
+                  setBuildCommand(event.target.value);
+                  setValidationError(null);
+                  onResetError();
+                }}
+                placeholder="bun run build"
+                value={buildCommand}
+              />
+            </div>
+          </div>
           {createError ? (
             <Alert variant="destructive">
-              <AlertTitle>Project creation failed</AlertTitle>
+              <AlertTitle>Project import failed</AlertTitle>
               <AlertDescription>{createError}</AlertDescription>
             </Alert>
           ) : null}
           <Button className="w-full" disabled={isCreating} type="submit">
-            {isCreating ? "Creating project..." : "Create project"}
+            {isCreating ? "Importing project..." : "Import project"}
           </Button>
         </form>
       </CardContent>

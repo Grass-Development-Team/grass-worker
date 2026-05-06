@@ -17,6 +17,12 @@ pub struct NewProject {
     pub owner_user_id: Uuid,
     pub slug: String,
     pub name: String,
+    pub repository_url: Option<String>,
+    pub production_branch: Option<String>,
+    pub root_directory: Option<String>,
+    pub install_command: Option<String>,
+    pub build_command: Option<String>,
+    pub output_directory: Option<String>,
     pub created_at: DateTimeUtc,
 }
 
@@ -33,6 +39,12 @@ pub enum ProjectListFilter {
 pub struct UpdateProject {
     pub name: String,
     pub slug: String,
+    pub repository_url: Option<String>,
+    pub production_branch: Option<String>,
+    pub root_directory: Option<String>,
+    pub install_command: Option<String>,
+    pub build_command: Option<String>,
+    pub output_directory: Option<String>,
     pub updated_at: DateTimeUtc,
 }
 
@@ -164,12 +176,25 @@ pub trait DeploymentRepository {
     async fn create(&self, new_deployment: NewDeployment) -> Result<deployment::Model, DbErr>;
     async fn find_by_id(&self, id: Uuid) -> Result<Option<deployment::Model>, DbErr>;
     async fn list_by_project(&self, project_id: Uuid) -> Result<Vec<deployment::Model>, DbErr>;
+    async fn claim_next_pending_git_backed_production(
+        &self,
+        started_at: DateTimeUtc,
+    ) -> Result<Option<deployment::Model>, DbErr>;
     async fn set_status_if_current(
         &self,
         id: Uuid,
         current_status: deployment::DeploymentStatus,
         next_status: deployment::DeploymentStatus,
         started_at: Option<DateTimeUtc>,
+        finished_at: Option<DateTimeUtc>,
+    ) -> Result<Option<deployment::Model>, DbErr>;
+    async fn update_execution_if_current(
+        &self,
+        id: Uuid,
+        current_status: deployment::DeploymentStatus,
+        next_status: deployment::DeploymentStatus,
+        last_stage: Option<String>,
+        failure_message: Option<String>,
         finished_at: Option<DateTimeUtc>,
     ) -> Result<Option<deployment::Model>, DbErr>;
 }
@@ -314,6 +339,12 @@ impl ProjectRepository for SeaOrmProjectRepository {
             active_deployment_id: None,
             slug: new_project.slug,
             name: new_project.name,
+            repository_url: new_project.repository_url,
+            production_branch: new_project.production_branch,
+            root_directory: new_project.root_directory,
+            install_command: new_project.install_command,
+            build_command: new_project.build_command,
+            output_directory: new_project.output_directory,
             status: project::ProjectStatus::Active,
             created_at: new_project.created_at,
             updated_at: new_project.created_at,
@@ -327,6 +358,12 @@ impl ProjectRepository for SeaOrmProjectRepository {
             active_deployment_id: Set(model.active_deployment_id),
             slug: Set(model.slug.clone()),
             name: Set(model.name.clone()),
+            repository_url: Set(model.repository_url.clone()),
+            production_branch: Set(model.production_branch.clone()),
+            root_directory: Set(model.root_directory.clone()),
+            install_command: Set(model.install_command.clone()),
+            build_command: Set(model.build_command.clone()),
+            output_directory: Set(model.output_directory.clone()),
             status: Set(model.status.clone()),
             created_at: Set(model.created_at),
             updated_at: Set(model.updated_at),
@@ -380,6 +417,12 @@ impl ProjectRepository for SeaOrmProjectRepository {
             .set(project::ActiveModel {
                 name: Set(update.name),
                 slug: Set(update.slug),
+                repository_url: Set(update.repository_url),
+                production_branch: Set(update.production_branch),
+                root_directory: Set(update.root_directory),
+                install_command: Set(update.install_command),
+                build_command: Set(update.build_command),
+                output_directory: Set(update.output_directory),
                 updated_at: Set(update.updated_at),
                 ..Default::default()
             })
@@ -544,6 +587,8 @@ impl DeploymentRepository for SeaOrmDeploymentRepository {
             status: deployment::DeploymentStatus::Pending,
             source_branch: new_deployment.source_branch,
             source_revision: new_deployment.source_revision,
+            last_stage: None,
+            failure_message: None,
             created_at: new_deployment.created_at,
             started_at: None,
             finished_at: None,
@@ -555,6 +600,8 @@ impl DeploymentRepository for SeaOrmDeploymentRepository {
             status: Set(model.status.clone()),
             source_branch: Set(model.source_branch.clone()),
             source_revision: Set(model.source_revision.clone()),
+            last_stage: Set(model.last_stage.clone()),
+            failure_message: Set(model.failure_message.clone()),
             created_at: Set(model.created_at),
             started_at: Set(model.started_at),
             finished_at: Set(model.finished_at),
@@ -578,6 +625,34 @@ impl DeploymentRepository for SeaOrmDeploymentRepository {
             .await
     }
 
+    async fn claim_next_pending_git_backed_production(
+        &self,
+        started_at: DateTimeUtc,
+    ) -> Result<Option<deployment::Model>, DbErr> {
+        let candidate = deployment::Entity::find()
+            .inner_join(project::Entity)
+            .filter(deployment::Column::Status.eq(deployment::DeploymentStatus::Pending))
+            .filter(project::Column::Status.eq(project::ProjectStatus::Active))
+            .filter(project::Column::RepositoryUrl.is_not_null())
+            .filter(project::Column::ProductionBranch.is_not_null())
+            .order_by_asc(deployment::Column::CreatedAt)
+            .order_by_asc(deployment::Column::Id)
+            .one(&self.database)
+            .await?;
+        let Some(candidate) = candidate else {
+            return Ok(None);
+        };
+
+        self.set_status_if_current(
+            candidate.id,
+            deployment::DeploymentStatus::Pending,
+            deployment::DeploymentStatus::Processing,
+            Some(started_at),
+            None,
+        )
+        .await
+    }
+
     async fn set_status_if_current(
         &self,
         id: Uuid,
@@ -593,6 +668,37 @@ impl DeploymentRepository for SeaOrmDeploymentRepository {
                     Some(value) => Set(Some(value)),
                     None => ActiveValue::NotSet,
                 },
+                finished_at: match finished_at {
+                    Some(value) => Set(Some(value)),
+                    None => ActiveValue::NotSet,
+                },
+                ..Default::default()
+            })
+            .filter(deployment::Column::Id.eq(id))
+            .filter(deployment::Column::Status.eq(current_status))
+            .exec(&self.database)
+            .await?;
+        if update_result.rows_affected == 0 {
+            return Ok(None);
+        }
+
+        deployment::Entity::find_by_id(id).one(&self.database).await
+    }
+
+    async fn update_execution_if_current(
+        &self,
+        id: Uuid,
+        current_status: deployment::DeploymentStatus,
+        next_status: deployment::DeploymentStatus,
+        last_stage: Option<String>,
+        failure_message: Option<String>,
+        finished_at: Option<DateTimeUtc>,
+    ) -> Result<Option<deployment::Model>, DbErr> {
+        let update_result = deployment::Entity::update_many()
+            .set(deployment::ActiveModel {
+                status: Set(next_status),
+                last_stage: Set(last_stage),
+                failure_message: Set(failure_message),
                 finished_at: match finished_at {
                     Some(value) => Set(Some(value)),
                     None => ActiveValue::NotSet,

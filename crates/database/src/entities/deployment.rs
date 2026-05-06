@@ -24,6 +24,8 @@ pub struct Model {
     pub status: DeploymentStatus,
     pub source_branch: Option<String>,
     pub source_revision: Option<String>,
+    pub last_stage: Option<String>,
+    pub failure_message: Option<String>,
     pub created_at: DateTimeUtc,
     pub started_at: Option<DateTimeUtc>,
     pub finished_at: Option<DateTimeUtc>,

@@ -4,6 +4,7 @@ mod m20260423_000003_expand_project_lifecycle;
 mod m20260501_000004_add_project_active_deployment;
 mod m20260503_000005_add_host_binding_models;
 mod m20260505_000006_add_host_policy_model;
+mod m20260506_000007_add_git_backed_deployment_fields;
 
 pub use sea_orm_migration::prelude::*;
 
@@ -19,6 +20,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260501_000004_add_project_active_deployment::Migration),
             Box::new(m20260503_000005_add_host_binding_models::Migration),
             Box::new(m20260505_000006_add_host_policy_model::Migration),
+            Box::new(m20260506_000007_add_git_backed_deployment_fields::Migration),
         ]
     }
 }
@@ -122,6 +124,18 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(names.contains(&"m20260505_000006_add_host_policy_model".to_owned()));
+    }
+
+    #[test]
+    fn migrator_registers_git_backed_deployment_fields_migration() {
+        let names = Migrator::migrations()
+            .into_iter()
+            .map(|migration| migration.name().to_owned())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(
+            &"m20260506_000007_add_git_backed_deployment_fields".to_owned()
+        ));
     }
 
     #[test]

@@ -102,7 +102,16 @@ export function ProjectDetailsPage() {
   };
 
   const updateMutation = useMutation({
-    mutationFn: (input: { name: string; slug: string }) =>
+    mutationFn: (input: {
+      name: string;
+      slug: string;
+      repository_url: string;
+      production_branch: string;
+      root_directory?: string | null;
+      install_command?: string | null;
+      build_command?: string | null;
+      output_directory?: string | null;
+    }) =>
       updateProject(projectId ?? "", input),
     onSuccess: async (project) => {
       setProjectData(project);

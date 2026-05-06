@@ -48,6 +48,12 @@ export function ProjectOverviewCard({ project }: { project: Project }) {
           <p>Slug</p>
           <p className="font-medium text-foreground">{project.slug}</p>
         </div>
+        <div className="space-y-1 sm:col-span-2">
+          <p>Repository</p>
+          <p className="font-medium text-foreground">
+            {project.repository_url ?? "Not configured"}
+          </p>
+        </div>
         <div className="space-y-1">
           <p>Status</p>
           <p className="font-medium text-foreground">{projectStatusLabel(project.status)}</p>
@@ -55,6 +61,36 @@ export function ProjectOverviewCard({ project }: { project: Project }) {
         <div className="space-y-1">
           <p>Created</p>
           <p className="font-medium text-foreground">{formatTimestamp(project.created_at)}</p>
+        </div>
+        <div className="space-y-1">
+          <p>Production branch</p>
+          <p className="font-medium text-foreground">
+            {project.production_branch ?? "Not configured"}
+          </p>
+        </div>
+        <div className="space-y-1">
+          <p>Root directory</p>
+          <p className="font-medium text-foreground">
+            {project.root_directory ?? "Repository root"}
+          </p>
+        </div>
+        <div className="space-y-1">
+          <p>Install command</p>
+          <p className="font-medium text-foreground">
+            {project.install_command ?? "Not configured"}
+          </p>
+        </div>
+        <div className="space-y-1">
+          <p>Build command</p>
+          <p className="font-medium text-foreground">
+            {project.build_command ?? "Not configured"}
+          </p>
+        </div>
+        <div className="space-y-1">
+          <p>Output directory</p>
+          <p className="font-medium text-foreground">
+            {project.output_directory ?? "Not configured"}
+          </p>
         </div>
         <div className="space-y-1 sm:col-span-3">
           <p>{latestEvent.label}</p>

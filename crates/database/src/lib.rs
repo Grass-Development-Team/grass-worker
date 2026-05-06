@@ -392,6 +392,12 @@ mod tests {
                 owner_user_id: Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap(),
                 slug: "docs-site".to_owned(),
                 name: "Docs Site".to_owned(),
+                repository_url: None,
+                production_branch: None,
+                root_directory: None,
+                install_command: None,
+                build_command: None,
+                output_directory: None,
                 created_at,
             })
             .await
@@ -408,6 +414,53 @@ mod tests {
         assert_eq!(project.updated_at, created_at);
         assert_eq!(project.archived_at, None);
         assert_eq!(project.soft_deleted_at, None);
+        assert_eq!(project.repository_url, None);
+        assert_eq!(project.production_branch, None);
+        assert_eq!(project.root_directory, None);
+        assert_eq!(project.install_command, None);
+        assert_eq!(project.build_command, None);
+        assert_eq!(project.output_directory, None);
+    }
+
+    #[tokio::test]
+    async fn project_repository_round_trips_git_source_fields() {
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .into_connection();
+        let repository = SeaOrmProjectRepository::new(database);
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-04-16T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+
+        let project = repository
+            .create(NewProject {
+                id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
+                owner_user_id: Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap(),
+                slug: "docs-site".to_owned(),
+                name: "Docs Site".to_owned(),
+                repository_url: Some("https://github.com/acme/docs-site".to_owned()),
+                production_branch: Some("main".to_owned()),
+                root_directory: Some("apps/docs".to_owned()),
+                install_command: Some("bun install".to_owned()),
+                build_command: Some("bun run build".to_owned()),
+                output_directory: Some("dist".to_owned()),
+                created_at,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            project.repository_url.as_deref(),
+            Some("https://github.com/acme/docs-site")
+        );
+        assert_eq!(project.production_branch.as_deref(), Some("main"));
+        assert_eq!(project.root_directory.as_deref(), Some("apps/docs"));
+        assert_eq!(project.install_command.as_deref(), Some("bun install"));
+        assert_eq!(project.build_command.as_deref(), Some("bun run build"));
+        assert_eq!(project.output_directory.as_deref(), Some("dist"));
     }
 
     #[tokio::test]
@@ -422,6 +475,12 @@ mod tests {
             active_deployment_id: None,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
+            repository_url: None,
+            production_branch: None,
+            root_directory: None,
+            install_command: None,
+            build_command: None,
+            output_directory: None,
             status: project::ProjectStatus::Active,
             created_at,
             updated_at: created_at,
@@ -472,6 +531,12 @@ mod tests {
             active_deployment_id: None,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
+            repository_url: None,
+            production_branch: None,
+            root_directory: None,
+            install_command: None,
+            build_command: None,
+            output_directory: None,
             status: project::ProjectStatus::SoftDeleted,
             created_at,
             updated_at: soft_deleted_at,
@@ -514,6 +579,12 @@ mod tests {
             active_deployment_id: None,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
+            repository_url: None,
+            production_branch: None,
+            root_directory: None,
+            install_command: None,
+            build_command: None,
+            output_directory: None,
             status: project::ProjectStatus::Active,
             created_at,
             updated_at: created_at,
@@ -694,6 +765,12 @@ mod tests {
             active_deployment_id: None,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
+            repository_url: None,
+            production_branch: None,
+            root_directory: None,
+            install_command: None,
+            build_command: None,
+            output_directory: None,
             status: project::ProjectStatus::SoftDeleted,
             created_at,
             updated_at: deleted_at,
@@ -744,6 +821,12 @@ mod tests {
             active_deployment_id: None,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
+            repository_url: None,
+            production_branch: None,
+            root_directory: None,
+            install_command: None,
+            build_command: None,
+            output_directory: None,
             status: project::ProjectStatus::Active,
             created_at,
             updated_at: created_at,
@@ -771,6 +854,12 @@ mod tests {
                 UpdateProject {
                     name: "Docs Site V2".to_owned(),
                     slug: "docs-v2".to_owned(),
+                    repository_url: None,
+                    production_branch: None,
+                    root_directory: None,
+                    install_command: None,
+                    build_command: None,
+                    output_directory: None,
                     updated_at,
                 },
             )
@@ -811,6 +900,12 @@ mod tests {
             active_deployment_id: None,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
+            repository_url: None,
+            production_branch: None,
+            root_directory: None,
+            install_command: None,
+            build_command: None,
+            output_directory: None,
             status: project::ProjectStatus::SoftDeleted,
             created_at,
             updated_at: soft_deleted_at,
@@ -832,6 +927,12 @@ mod tests {
                 UpdateProject {
                     name: "Docs Site V2".to_owned(),
                     slug: "docs-v2".to_owned(),
+                    repository_url: None,
+                    production_branch: None,
+                    root_directory: None,
+                    install_command: None,
+                    build_command: None,
+                    output_directory: None,
                     updated_at: chrono::DateTime::parse_from_rfc3339("2026-04-23T10:00:00Z")
                         .unwrap()
                         .with_timezone(&chrono::Utc),
@@ -929,6 +1030,8 @@ mod tests {
                 status: deployment::DeploymentStatus::Pending,
                 source_branch: None,
                 source_revision: None,
+                last_stage: None,
+                failure_message: None,
                 created_at,
                 started_at: None,
                 finished_at: None,
@@ -960,6 +1063,8 @@ mod tests {
             status: deployment::DeploymentStatus::Pending,
             source_branch: Some("main".to_owned()),
             source_revision: Some("deadbeef".to_owned()),
+            last_stage: None,
+            failure_message: None,
             created_at,
             started_at: None,
             finished_at: None,
@@ -990,6 +1095,8 @@ mod tests {
             status: deployment::DeploymentStatus::Pending,
             source_branch: Some("main".to_owned()),
             source_revision: Some("deadbeef".to_owned()),
+            last_stage: None,
+            failure_message: None,
             created_at,
             started_at: None,
             finished_at: None,
@@ -1063,6 +1170,8 @@ mod tests {
 
         assert_eq!(deployment.status, deployment::DeploymentStatus::Pending);
         assert_eq!(deployment.created_at, created_at);
+        assert_eq!(deployment.last_stage, None);
+        assert_eq!(deployment.failure_message, None);
         assert_eq!(deployment.started_at, None);
         assert_eq!(deployment.finished_at, None);
     }

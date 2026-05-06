@@ -88,6 +88,20 @@ pub enum RestoreProjectStatus {
     Archived,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ProjectSourceBuildConfigInput {
+    pub repository_url: Option<String>,
+    pub production_branch: Option<String>,
+    pub root_directory: Option<String>,
+    pub install_command: Option<String>,
+    pub build_command: Option<String>,
+    pub output_directory: Option<String>,
+}
+
+const DEFAULT_INSTALL_COMMAND: &str = "bun install";
+const DEFAULT_BUILD_COMMAND: &str = "bun run build";
+const DEFAULT_OUTPUT_DIRECTORY: &str = "dist";
+
 pub fn map_db_error(error: DbErr) -> ProjectError {
     tracing::error!(error = %error, "project database operation failed");
     ProjectError::internal(error.to_string())
@@ -132,6 +146,44 @@ pub fn normalize_slug(slug: &str) -> Result<String, ProjectError> {
     }
 
     Ok(normalized.to_owned())
+}
+
+fn normalize_optional_input(value: Option<&str>) -> Option<String> {
+    let normalized = value?.trim();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    Some(normalized.to_owned())
+}
+
+fn normalize_repository_url(value: Option<&str>) -> Result<String, ProjectError> {
+    let normalized = normalize_optional_input(value)
+        .ok_or_else(|| ProjectError::validation("repository_url is required"))?;
+    let stripped = normalized
+        .strip_prefix("https://github.com/")
+        .ok_or_else(|| {
+            ProjectError::validation("repository_url must be a public GitHub repository URL")
+        })?;
+    let stripped = stripped.trim_end_matches('/');
+    if normalized.contains('?') || normalized.contains('#') {
+        return Err(ProjectError::validation(
+            "repository_url must be a public GitHub repository URL",
+        ));
+    }
+    let segments = stripped.split('/').collect::<Vec<_>>();
+    if segments.len() != 2 || segments.iter().any(|segment| segment.is_empty()) {
+        return Err(ProjectError::validation(
+            "repository_url must be a public GitHub repository URL",
+        ));
+    }
+
+    Ok(normalized.trim_end_matches('/').to_owned())
+}
+
+fn normalize_production_branch(value: Option<&str>) -> Result<String, ProjectError> {
+    normalize_optional_input(value)
+        .ok_or_else(|| ProjectError::validation("production_branch is required"))
 }
 
 pub fn enforce_project_visibility(
@@ -300,6 +352,7 @@ impl ProjectService {
         actor: &AuthenticatedUser,
         name: &str,
         slug: &str,
+        config: ProjectSourceBuildConfigInput,
     ) -> Result<project::Model, ProjectError> {
         let name = normalize_name(name)?;
         let slug = normalize_slug(slug)?;
@@ -315,12 +368,34 @@ impl ProjectService {
         }
 
         let created_at = Utc::now();
+        let repository_url = Some(normalize_repository_url(config.repository_url.as_deref())?);
+        let production_branch =
+            Some(normalize_production_branch(config.production_branch.as_deref())?);
+        let root_directory = normalize_optional_input(config.root_directory.as_deref());
+        let install_command = Some(
+            normalize_optional_input(config.install_command.as_deref())
+                .unwrap_or_else(|| DEFAULT_INSTALL_COMMAND.to_owned()),
+        );
+        let build_command = Some(
+            normalize_optional_input(config.build_command.as_deref())
+                .unwrap_or_else(|| DEFAULT_BUILD_COMMAND.to_owned()),
+        );
+        let output_directory = Some(
+            normalize_optional_input(config.output_directory.as_deref())
+                .unwrap_or_else(|| DEFAULT_OUTPUT_DIRECTORY.to_owned()),
+        );
         repository
             .create(NewProject {
                 id: Uuid::new_v4(),
                 owner_user_id: actor.id,
                 slug,
                 name,
+                repository_url,
+                production_branch,
+                root_directory,
+                install_command,
+                build_command,
+                output_directory,
                 created_at,
             })
             .await
@@ -612,6 +687,7 @@ impl ProjectService {
         id: Uuid,
         name: Option<&str>,
         slug: Option<&str>,
+        config: ProjectSourceBuildConfigInput,
     ) -> Result<project::Model, ProjectError> {
         let existing = self.get(database, actor, id).await?;
         if existing.status == project::ProjectStatus::SoftDeleted {
@@ -619,7 +695,13 @@ impl ProjectService {
                 "soft deleted projects must be restored before editing",
             ));
         }
-        if name.is_none() && slug.is_none() {
+        let has_config_changes = config.repository_url.is_some()
+            || config.production_branch.is_some()
+            || config.root_directory.is_some()
+            || config.install_command.is_some()
+            || config.build_command.is_some()
+            || config.output_directory.is_some();
+        if name.is_none() && slug.is_none() && !has_config_changes {
             return Ok(existing);
         }
 
@@ -630,6 +712,39 @@ impl ProjectService {
         let slug = match slug {
             Some(value) => normalize_slug(value)?,
             None => existing.slug.clone(),
+        };
+        let repository_url = match config.repository_url {
+            Some(value) => Some(normalize_repository_url(Some(value.as_str()))?),
+            None => existing.repository_url.clone(),
+        };
+        let production_branch = match config.production_branch {
+            Some(value) => Some(normalize_production_branch(Some(value.as_str()))?),
+            None => existing.production_branch.clone(),
+        };
+        let root_directory = match config.root_directory {
+            Some(value) => normalize_optional_input(Some(value.as_str())),
+            None => existing.root_directory.clone(),
+        };
+        let install_command = match config.install_command {
+            Some(value) => Some(
+                normalize_optional_input(Some(value.as_str()))
+                    .unwrap_or_else(|| DEFAULT_INSTALL_COMMAND.to_owned()),
+            ),
+            None => existing.install_command.clone(),
+        };
+        let build_command = match config.build_command {
+            Some(value) => Some(
+                normalize_optional_input(Some(value.as_str()))
+                    .unwrap_or_else(|| DEFAULT_BUILD_COMMAND.to_owned()),
+            ),
+            None => existing.build_command.clone(),
+        };
+        let output_directory = match config.output_directory {
+            Some(value) => Some(
+                normalize_optional_input(Some(value.as_str()))
+                    .unwrap_or_else(|| DEFAULT_OUTPUT_DIRECTORY.to_owned()),
+            ),
+            None => existing.output_directory.clone(),
         };
         let repository = project_repository(database);
 
@@ -646,6 +761,12 @@ impl ProjectService {
                 UpdateProject {
                     name,
                     slug,
+                    repository_url,
+                    production_branch,
+                    root_directory,
+                    install_command,
+                    build_command,
+                    output_directory,
                     updated_at: Utc::now(),
                 },
             )
@@ -697,6 +818,12 @@ mod tests {
             active_deployment_id: None,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
+            repository_url: None,
+            production_branch: None,
+            root_directory: None,
+            install_command: None,
+            build_command: None,
+            output_directory: None,
             status,
             created_at,
             updated_at: created_at,
@@ -730,6 +857,12 @@ mod tests {
             active_deployment_id: None,
             slug: slug.to_owned(),
             name: name.to_owned(),
+            repository_url: None,
+            production_branch: None,
+            root_directory: None,
+            install_command: None,
+            build_command: None,
+            output_directory: None,
             status,
             created_at,
             updated_at: created_at,
@@ -789,7 +922,17 @@ mod tests {
         let service = ProjectService;
 
         let error = service
-            .create(&database, &actor, "Docs Site", "docs-site")
+            .create(
+                &database,
+                &actor,
+                "Docs Site",
+                "docs-site",
+                ProjectSourceBuildConfigInput {
+                    repository_url: Some("https://github.com/acme/docs-site".to_owned()),
+                    production_branch: Some("main".to_owned()),
+                    ..ProjectSourceBuildConfigInput::default()
+                },
+            )
             .await
             .unwrap_err();
 
@@ -861,6 +1004,7 @@ mod tests {
                 project_id,
                 Some("Docs Site V2"),
                 Some("docs-v2"),
+                ProjectSourceBuildConfigInput::default(),
             )
             .await
             .unwrap_err();
@@ -890,7 +1034,14 @@ mod tests {
         let service = ProjectService;
 
         let updated = service
-            .update(&database, &actor, project_id, None, None)
+            .update(
+                &database,
+                &actor,
+                project_id,
+                None,
+                None,
+                ProjectSourceBuildConfigInput::default(),
+            )
             .await
             .unwrap();
 
@@ -926,7 +1077,14 @@ mod tests {
         let service = ProjectService;
 
         let error = service
-            .update(&database, &actor, project_id, Some("Docs Site V2"), None)
+            .update(
+                &database,
+                &actor,
+                project_id,
+                Some("Docs Site V2"),
+                None,
+                ProjectSourceBuildConfigInput::default(),
+            )
             .await
             .unwrap_err();
 
@@ -1449,6 +1607,8 @@ mod tests {
                 status: grass_worker_database::entities::deployment::DeploymentStatus::Pending,
                 source_branch: None,
                 source_revision: None,
+                last_stage: None,
+                failure_message: None,
                 created_at: chrono::Utc::now(),
                 started_at: None,
                 finished_at: None,

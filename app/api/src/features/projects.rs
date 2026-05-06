@@ -20,6 +20,18 @@ struct ErrorResponse {
 struct CreateProjectRequest {
     name: String,
     slug: String,
+    #[serde(default)]
+    repository_url: Option<String>,
+    #[serde(default)]
+    production_branch: Option<String>,
+    #[serde(default)]
+    root_directory: Option<String>,
+    #[serde(default)]
+    install_command: Option<String>,
+    #[serde(default)]
+    build_command: Option<String>,
+    #[serde(default)]
+    output_directory: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -28,6 +40,18 @@ struct UpdateProjectRequest {
     name: Option<String>,
     #[serde(default)]
     slug: Option<String>,
+    #[serde(default)]
+    repository_url: Option<String>,
+    #[serde(default)]
+    production_branch: Option<String>,
+    #[serde(default)]
+    root_directory: Option<String>,
+    #[serde(default)]
+    install_command: Option<String>,
+    #[serde(default)]
+    build_command: Option<String>,
+    #[serde(default)]
+    output_directory: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -52,6 +76,12 @@ struct ProjectResponse {
     owner_user_id: Uuid,
     slug: String,
     name: String,
+    repository_url: Option<String>,
+    production_branch: Option<String>,
+    root_directory: Option<String>,
+    install_command: Option<String>,
+    build_command: Option<String>,
+    output_directory: Option<String>,
     status: &'static str,
     created_at: chrono::DateTime<chrono::Utc>,
     updated_at: chrono::DateTime<chrono::Utc>,
@@ -66,6 +96,12 @@ impl From<project::Model> for ProjectResponse {
             owner_user_id: value.owner_user_id,
             slug: value.slug,
             name: value.name,
+            repository_url: value.repository_url,
+            production_branch: value.production_branch,
+            root_directory: value.root_directory,
+            install_command: value.install_command,
+            build_command: value.build_command,
+            output_directory: value.output_directory,
             status: project_status_label(value.status),
             created_at: value.created_at,
             updated_at: value.updated_at,
@@ -136,6 +172,14 @@ async fn create_project(
             &actor,
             payload.name.as_str(),
             payload.slug.as_str(),
+            crate::domain::project::ProjectSourceBuildConfigInput {
+                repository_url: payload.repository_url,
+                production_branch: payload.production_branch,
+                root_directory: payload.root_directory,
+                install_command: payload.install_command,
+                build_command: payload.build_command,
+                output_directory: payload.output_directory,
+            },
         )
         .await
     {
@@ -261,6 +305,14 @@ async fn update_project(
             id,
             payload.name.as_deref(),
             payload.slug.as_deref(),
+            crate::domain::project::ProjectSourceBuildConfigInput {
+                repository_url: payload.repository_url,
+                production_branch: payload.production_branch,
+                root_directory: payload.root_directory,
+                install_command: payload.install_command,
+                build_command: payload.build_command,
+                output_directory: payload.output_directory,
+            },
         )
         .await
     {
@@ -594,6 +646,12 @@ mod tests {
             active_deployment_id: None,
             slug: slug.to_owned(),
             name: name.to_owned(),
+            repository_url: None,
+            production_branch: None,
+            root_directory: None,
+            install_command: None,
+            build_command: None,
+            output_directory: None,
             status: status.clone(),
             created_at,
             updated_at: created_at,
@@ -633,6 +691,30 @@ mod tests {
         assert_eq!(payload["owner_user_id"], expected.owner_user_id.to_string());
         assert_eq!(payload["slug"], expected.slug);
         assert_eq!(payload["name"], expected.name);
+        assert_eq!(
+            payload["repository_url"].as_str(),
+            expected.repository_url.as_deref()
+        );
+        assert_eq!(
+            payload["production_branch"].as_str(),
+            expected.production_branch.as_deref()
+        );
+        assert_eq!(
+            payload["root_directory"].as_str(),
+            expected.root_directory.as_deref()
+        );
+        assert_eq!(
+            payload["install_command"].as_str(),
+            expected.install_command.as_deref()
+        );
+        assert_eq!(
+            payload["build_command"].as_str(),
+            expected.build_command.as_deref()
+        );
+        assert_eq!(
+            payload["output_directory"].as_str(),
+            expected.output_directory.as_deref()
+        );
         assert_eq!(payload["status"], expected_status_label(&expected.status));
         assert_eq!(
             parse_utc_datetime(payload["created_at"].as_str().unwrap()),
@@ -694,7 +776,14 @@ mod tests {
                     .uri("/api/v1/projects")
                     .header(header::CONTENT_TYPE, "application/json")
                     .header(header::COOKIE, session_cookie(token))
-                    .body(Body::from(r#"{"name":"Docs Site","slug":"docs-site"}"#))
+                    .body(Body::from(
+                        r#"{
+                            "name":"Docs Site",
+                            "slug":"docs-site",
+                            "repository_url":"https://github.com/acme/docs-site",
+                            "production_branch":"main"
+                        }"#,
+                    ))
                     .unwrap(),
             )
             .await
@@ -708,12 +797,71 @@ mod tests {
         assert_eq!(payload["owner_user_id"], user.id.to_string());
         assert_eq!(payload["slug"], "docs-site");
         assert_eq!(payload["name"], "Docs Site");
+        assert_eq!(
+            payload["repository_url"],
+            "https://github.com/acme/docs-site"
+        );
+        assert_eq!(payload["production_branch"], "main");
+        assert_eq!(payload["install_command"], "bun install");
+        assert_eq!(payload["build_command"], "bun run build");
+        assert_eq!(payload["output_directory"], "dist");
         assert_eq!(payload["status"], "active");
         assert!(Uuid::parse_str(payload["id"].as_str().unwrap()).is_ok());
         assert!(payload["created_at"].as_str().is_some());
         assert!(payload["updated_at"].as_str().is_some());
         assert!(payload["archived_at"].is_null());
         assert!(payload["soft_deleted_at"].is_null());
+    }
+
+    #[tokio::test]
+    async fn create_project_persists_git_backed_import_fields() {
+        let user = sample_user(Uuid::new_v4(), false);
+        let token = "session-token";
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[sample_session(user.id, token)]])
+            .append_query_results([[user.clone()]])
+            .append_query_results([Vec::<project::Model>::new()])
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .into_connection();
+        let app = install_project_routes(Router::new(), AppState::new(database));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/projects")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::COOKIE, session_cookie(token))
+                    .body(Body::from(
+                        r#"{
+                            "name":"Docs Site",
+                            "slug":"docs-site",
+                            "repository_url":"https://github.com/acme/docs-site",
+                            "production_branch":"main",
+                            "build_command":"bun run build",
+                            "output_directory":"dist"
+                        }"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let payload = json.get("project").unwrap();
+
+        assert_eq!(
+            payload["repository_url"],
+            "https://github.com/acme/docs-site"
+        );
+        assert_eq!(payload["production_branch"], "main");
+        assert_eq!(payload["build_command"], "bun run build");
+        assert_eq!(payload["output_directory"], "dist");
     }
 
     #[tokio::test]
@@ -1857,6 +2005,8 @@ mod tests {
             status: grass_worker_database::entities::deployment::DeploymentStatus::Pending,
             source_branch: None,
             source_revision: None,
+            last_stage: None,
+            failure_message: None,
             created_at: project.created_at,
             started_at: None,
             finished_at: None,

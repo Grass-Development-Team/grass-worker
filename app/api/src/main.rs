@@ -224,6 +224,7 @@ mod tests {
                 path: PathBuf::from("config.toml"),
                 config: AppConfig {
                     server: grass_worker_config::ServerConfig::default(),
+                    node: None,
                     database: Some(DatabaseConfig::default()),
                     development: None,
                 },
@@ -259,6 +260,7 @@ mod tests {
                 path: PathBuf::from("config.toml"),
                 config: AppConfig {
                     server: grass_worker_config::ServerConfig::default(),
+                    node: None,
                     database: Some(DatabaseConfig::default()),
                     development: None,
                 },
@@ -294,6 +296,7 @@ mod tests {
                 path: PathBuf::from("config.toml"),
                 config: AppConfig {
                     server: grass_worker_config::ServerConfig::default(),
+                    node: None,
                     database: Some(DatabaseConfig::default()),
                     development: None,
                 },

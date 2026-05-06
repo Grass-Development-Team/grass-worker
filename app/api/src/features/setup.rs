@@ -172,6 +172,7 @@ async fn setup_database(
             Ok(true) => AppMode::Normal(NormalContext::new(
                 AppConfig {
                     server,
+                    node: None,
                     database: Some(database.clone()),
                     development: development.clone(),
                 },
@@ -236,6 +237,7 @@ async fn setup_admin(
                 *runtime_mode.write().await = AppMode::Normal(NormalContext::new(
                     AppConfig {
                         server: ServerConfig { listen },
+                        node: None,
                         database: Some(database.clone()),
                         development,
                     },

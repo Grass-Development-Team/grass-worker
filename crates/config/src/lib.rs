@@ -82,12 +82,24 @@ impl Default for ServerConfig {
 pub struct NodeConfig {
     #[serde(default = "default_node_listen")]
     pub listen: SocketAddr,
+    #[serde(default = "default_node_control_plane_url")]
+    pub control_plane_url: String,
+    #[serde(default = "default_node_shared_token")]
+    pub shared_token: String,
+    #[serde(default = "default_node_poll_interval_seconds")]
+    pub poll_interval_seconds: u64,
+    #[serde(default = "default_node_work_root")]
+    pub work_root: PathBuf,
 }
 
 impl Default for NodeConfig {
     fn default() -> Self {
         Self {
             listen: default_node_listen(),
+            control_plane_url: default_node_control_plane_url(),
+            shared_token: default_node_shared_token(),
+            poll_interval_seconds: default_node_poll_interval_seconds(),
+            work_root: default_node_work_root(),
         }
     }
 }
@@ -133,6 +145,7 @@ struct ConfigFile {
 pub struct AppConfig {
     #[serde(default)]
     pub server: ServerConfig,
+    pub node: Option<NodeConfig>,
     pub database: Option<DatabaseConfig>,
     pub development: Option<DevelopmentConfig>,
 }
@@ -177,6 +190,7 @@ impl AppConfig {
         let config_file = load_config_file(path)?;
         Ok(Self {
             server: config_file.server.unwrap_or_default(),
+            node: config_file.node,
             database: config_file.database,
             development: config_file.development,
         })
@@ -384,6 +398,22 @@ fn default_node_listen() -> SocketAddr {
     "127.0.0.1:3001".parse().unwrap()
 }
 
+fn default_node_control_plane_url() -> String {
+    "http://127.0.0.1:3000".to_owned()
+}
+
+fn default_node_shared_token() -> String {
+    "change-me".to_owned()
+}
+
+fn default_node_poll_interval_seconds() -> u64 {
+    15
+}
+
+fn default_node_work_root() -> PathBuf {
+    std::env::temp_dir().join("grass-worker-node")
+}
+
 fn default_database_host() -> String {
     "127.0.0.1".to_owned()
 }
@@ -420,6 +450,7 @@ mod tests {
         let config = AppConfig::defaults();
 
         assert_eq!(config.server.listen.to_string(), "127.0.0.1:3000");
+        assert!(config.node.is_none());
         assert!(config.database.is_none());
         assert!(config.development.is_none());
     }
