@@ -3,16 +3,17 @@ import * as React from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ApiError } from "@/api/client";
 import {
-  createProjectDeploymentArtifact,
   deploymentArtifactsQueryKey,
+  deploymentBuildLogQueryKey,
   deploymentQueryKey,
   deploymentsQueryKey,
   getProjectDeployment,
   getProjectDeploymentArtifacts,
+  getProjectDeploymentBuildLog,
   transitionProjectDeployment,
+  uploadProjectDeploymentBundle,
   type Deployment,
   type DeploymentArtifact,
-  type DeploymentArtifactKind,
   type DeploymentStatus,
 } from "@/api/deployments";
 import {
@@ -53,11 +54,6 @@ function formatTimestamp(value: string | null) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
-}
-
-function normalizeOptionalInput(value: string) {
-  const normalized = value.trim();
-  return normalized === "" ? undefined : normalized;
 }
 
 function availableTransitions(
@@ -131,36 +127,33 @@ function RegisterArtifactCard({
   disabledReason: string | null;
   error: string | null;
   isSubmitting: boolean;
-  onRegister: (input: {
-    kind: DeploymentArtifactKind;
-    storage_path: string;
-    checksum_sha256?: string;
-    size_bytes?: number;
-  }) => void;
+  onRegister: (bundle: File) => void;
   onResetError: () => void;
   resetToken: number;
 }) {
-  const [kind, setKind] = React.useState<DeploymentArtifactKind>("static_site");
-  const [storagePath, setStoragePath] = React.useState("");
-  const [checksum, setChecksum] = React.useState("");
-  const [sizeBytes, setSizeBytes] = React.useState("");
+  const [bundle, setBundle] = React.useState<File | null>(null);
 
   React.useEffect(() => {
-    setKind("static_site");
-    setStoragePath("");
-    setChecksum("");
-    setSizeBytes("");
+    setBundle(null);
   }, [resetToken]);
+
+  const submitBundle = () => {
+    if (!bundle) {
+      return;
+    }
+
+    onRegister(bundle);
+  };
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>
-          <h2>Register artifact</h2>
+          <h2>Upload static site bundle</h2>
         </CardTitle>
         <CardDescription>
-          Attach artifact metadata to this deployment record without waiting for the later node
-          pipeline phases.
+          Upload a `.zip` archive with a root `index.html`. The server will extract it, register
+          the `static_site` artifact, and move this deployment to `ready`.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -168,98 +161,61 @@ function RegisterArtifactCard({
           className="space-y-4"
           onSubmit={(event) => {
             event.preventDefault();
-
-            const normalizedStoragePath = normalizeOptionalInput(storagePath);
-            if (!normalizedStoragePath) {
-              return;
-            }
-
-            const normalizedSize = normalizeOptionalInput(sizeBytes);
-            onRegister({
-              kind,
-              storage_path: normalizedStoragePath,
-              checksum_sha256: normalizeOptionalInput(checksum),
-              size_bytes: normalizedSize ? Number.parseInt(normalizedSize, 10) : undefined,
-            });
+            submitBundle();
           }}
         >
           <div className="space-y-2">
-            <Label htmlFor="deployment-artifact-kind">Artifact kind</Label>
-            <select
-              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-              disabled={disabled || isSubmitting}
-              id="deployment-artifact-kind"
-              onChange={(event) => {
-                setKind(event.target.value as DeploymentArtifactKind);
-                onResetError();
-              }}
-              value={kind}
-            >
-              <option value="static_site">static_site</option>
-              <option value="build_log">build_log</option>
-            </select>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="deployment-artifact-storage-path">Storage path</Label>
+            <Label htmlFor="deployment-artifact-bundle">Bundle file</Label>
             <Input
+              accept=".zip,application/zip"
               disabled={disabled || isSubmitting}
-              id="deployment-artifact-storage-path"
+              id="deployment-artifact-bundle"
               onChange={(event) => {
-                setStoragePath(event.target.value);
+                setBundle(event.target.files?.[0] ?? null);
                 onResetError();
               }}
-              placeholder="s3://artifacts/docs-site"
               required
-              value={storagePath}
+              type="file"
             />
+            <p className="text-sm text-muted-foreground">
+              Include `index.html` at the archive root plus any nested assets your site needs.
+            </p>
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="deployment-artifact-checksum">SHA256 checksum</Label>
-            <Input
-              disabled={disabled || isSubmitting}
-              id="deployment-artifact-checksum"
-              onChange={(event) => {
-                setChecksum(event.target.value);
-                onResetError();
-              }}
-              placeholder="abc123"
-              value={checksum}
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="deployment-artifact-size-bytes">Size bytes</Label>
-            <Input
-              disabled={disabled || isSubmitting}
-              id="deployment-artifact-size-bytes"
-              inputMode="numeric"
-              onChange={(event) => {
-                setSizeBytes(event.target.value);
-                onResetError();
-              }}
-              placeholder="1024"
-              value={sizeBytes}
-            />
-          </div>
+          {bundle ? (
+            <div className="grid gap-4 text-sm text-muted-foreground sm:grid-cols-2">
+              <div className="space-y-1">
+                <p>Selected file</p>
+                <p className="font-medium text-foreground">{bundle.name}</p>
+              </div>
+              <div className="space-y-1">
+                <p>Size bytes</p>
+                <p className="font-medium text-foreground">{bundle.size}</p>
+              </div>
+            </div>
+          ) : null}
 
           {disabledReason ? (
             <Alert>
-              <AlertTitle>Artifact registration unavailable</AlertTitle>
+              <AlertTitle>Bundle upload unavailable</AlertTitle>
               <AlertDescription>{disabledReason}</AlertDescription>
             </Alert>
           ) : null}
 
           {error ? (
             <Alert variant="destructive">
-              <AlertTitle>Artifact registration failed</AlertTitle>
+              <AlertTitle>Bundle upload failed</AlertTitle>
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           ) : null}
 
-          <Button className="w-full" disabled={disabled || isSubmitting} type="submit">
-            {isSubmitting ? "Registering artifact..." : "Register artifact"}
+          <Button
+            className="w-full"
+            disabled={disabled || isSubmitting || !bundle}
+            onClick={submitBundle}
+            type="button"
+          >
+            {isSubmitting ? "Uploading bundle..." : "Upload bundle"}
           </Button>
         </form>
       </CardContent>
@@ -285,6 +241,15 @@ export function ProjectDeploymentDetailsPage() {
     queryFn: () => getProjectDeploymentArtifacts(projectId ?? "", deploymentId ?? ""),
     enabled: Boolean(projectId && deploymentId),
   });
+  const hasBuildLogArtifact = (artifactsQuery.data ?? []).some(
+    (artifact) => artifact.kind === "build_log",
+  );
+  const buildLogQuery = useQuery({
+    queryKey: deploymentBuildLogQueryKey(projectId ?? "", deploymentId ?? ""),
+    queryFn: () => getProjectDeploymentBuildLog(projectId ?? "", deploymentId ?? ""),
+    enabled: Boolean(projectId && deploymentId && hasBuildLogArtifact),
+    retry: false,
+  });
   const releaseQuery = useQuery({
     queryKey: projectReleaseQueryKey(projectId ?? ""),
     queryFn: () => getProjectRelease(projectId ?? ""),
@@ -309,15 +274,16 @@ export function ProjectDeploymentDetailsPage() {
     },
   });
   const registerArtifactMutation = useMutation({
-    mutationFn: (input: {
-      kind: DeploymentArtifactKind;
-      storage_path: string;
-      checksum_sha256?: string;
-      size_bytes?: number;
-    }) => createProjectDeploymentArtifact(projectId ?? "", deploymentId ?? "", input),
-    onSuccess: async (artifact) => {
+    mutationFn: (bundle: File) =>
+      uploadProjectDeploymentBundle(projectId ?? "", deploymentId ?? "", bundle),
+    onSuccess: async ({ deployment, artifact }) => {
       if (!projectId || !deploymentId) return;
 
+      queryClient.setQueryData(deploymentQueryKey(projectId, deploymentId), deployment);
+      queryClient.setQueryData<Deployment[]>(
+        deploymentsQueryKey(projectId),
+        (current) => updateDeploymentCollection(current, deployment),
+      );
       queryClient.setQueryData<DeploymentArtifact[]>(
         deploymentArtifactsQueryKey(projectId, deploymentId),
         (current) => [
@@ -326,9 +292,17 @@ export function ProjectDeploymentDetailsPage() {
         ],
       );
       setArtifactResetToken((current) => current + 1);
-      await queryClient.invalidateQueries({
-        queryKey: deploymentArtifactsQueryKey(projectId, deploymentId),
-      });
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: deploymentQueryKey(projectId, deploymentId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: deploymentsQueryKey(projectId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: deploymentArtifactsQueryKey(projectId, deploymentId),
+        }),
+      ]);
     },
   });
   const activateReleaseMutation = useMutation({
@@ -402,13 +376,19 @@ export function ProjectDeploymentDetailsPage() {
     ? errorMessage(transitionMutation.error, "Unable to update deployment status")
     : null;
   const registerArtifactError = registerArtifactMutation.isError
-    ? errorMessage(registerArtifactMutation.error, "Unable to register artifact")
+    ? errorMessage(registerArtifactMutation.error, "Unable to upload bundle")
     : null;
-  const artifactRegistrationDisabled = deployment.status === "pending";
-  const artifactRegistrationDisabledReason = artifactRegistrationDisabled
-    ? "Start processing before registering artifacts."
-    : null;
-  const isRefreshing = query.isFetching || artifactsQuery.isFetching;
+  const artifactRegistrationDisabled =
+    deployment.status === "ready" ||
+    deployment.status === "failed" ||
+    deployment.status === "canceled";
+  const artifactRegistrationDisabledReason =
+    deployment.status === "ready"
+      ? "This deployment already has a completed static site upload."
+      : deployment.status === "failed" || deployment.status === "canceled"
+        ? "Create a new deployment before uploading another bundle."
+        : null;
+  const isRefreshing = query.isFetching || artifactsQuery.isFetching || buildLogQuery.isFetching;
   const hasStaticSiteArtifact = (artifactsQuery.data ?? []).some(
     (artifact) => artifact.kind === "static_site",
   );
@@ -420,7 +400,7 @@ export function ProjectDeploymentDetailsPage() {
     deployment.status !== "ready"
       ? "Only ready deployments can be activated."
       : !hasStaticSiteArtifact
-        ? "Register a static_site artifact before activating the release."
+        ? "Upload a static site bundle before activating the release."
         : null;
 
   return (
@@ -438,7 +418,7 @@ export function ProjectDeploymentDetailsPage() {
             <Button
               disabled={isRefreshing}
               onClick={() => {
-                void Promise.all([query.refetch(), artifactsQuery.refetch()]);
+                void Promise.all([query.refetch(), artifactsQuery.refetch(), buildLogQuery.refetch()]);
               }}
               type="button"
               variant="outline"
@@ -453,6 +433,15 @@ export function ProjectDeploymentDetailsPage() {
       />
 
       <DeploymentOverviewCard deployment={deployment} />
+
+      {deployment.status === "failed" ? (
+        <Alert variant="destructive">
+          <AlertTitle>Deployment failed</AlertTitle>
+          <AlertDescription>
+            {deployment.failure_message ?? "The node worker reported a deployment failure."}
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       <Card>
         <CardHeader>
@@ -575,6 +564,52 @@ export function ProjectDeploymentDetailsPage() {
           </AlertDescription>
         </Alert>
       ) : null}
+
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="space-y-1">
+              <CardTitle>
+                <h2>Build log</h2>
+              </CardTitle>
+              <CardDescription>
+                Raw node-worker output for clone, install, build, and upload steps.
+              </CardDescription>
+            </div>
+            {deployment.last_stage ? <Badge variant="outline">{deployment.last_stage}</Badge> : null}
+          </div>
+        </CardHeader>
+        <CardContent>
+          {!hasBuildLogArtifact ? (
+            <Alert>
+              <AlertTitle>No build log uploaded</AlertTitle>
+              <AlertDescription>
+                The node worker has not attached build output to this deployment yet.
+              </AlertDescription>
+            </Alert>
+          ) : buildLogQuery.isPending ? (
+            <Skeleton className="h-40" />
+          ) : buildLogQuery.isError ? (
+            <Alert>
+              <AlertTitle>Build log unavailable</AlertTitle>
+              <AlertDescription>
+                {errorMessage(buildLogQuery.error, "No build log has been uploaded yet.")}
+              </AlertDescription>
+            </Alert>
+          ) : buildLogQuery.data.trim() === "" ? (
+            <Alert>
+              <AlertTitle>Build log is empty</AlertTitle>
+              <AlertDescription>
+                The node worker uploaded an empty build log for this deployment.
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <pre className="max-h-[32rem] overflow-auto rounded-lg border bg-muted/60 p-4 text-xs leading-relaxed text-foreground">
+              <code>{buildLogQuery.data}</code>
+            </pre>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
         <Card>

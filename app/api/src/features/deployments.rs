@@ -2,13 +2,14 @@ use crate::AppState;
 use axum::{
     Extension, Json, Router,
     extract::{Multipart, Path, rejection::JsonRejection},
-    http::StatusCode,
+    http::{StatusCode, header},
     response::IntoResponse,
     routing::{get, post},
 };
 use axum_extra::extract::CookieJar;
 use grass_worker_database::entities::{deployment, deployment_artifact};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize)]
@@ -154,6 +155,10 @@ pub fn install_deployment_routes(router: Router, state: AppState) -> Router {
         .route(
             "/api/v1/projects/{id}/deployments/{deployment_id}/artifacts",
             post(create_deployment_artifact).get(list_deployment_artifacts),
+        )
+        .route(
+            "/api/v1/projects/{id}/deployments/{deployment_id}/build-log",
+            get(get_deployment_build_log),
         )
         .route(
             "/api/v1/projects/{id}/deployments/{deployment_id}/upload-bundle",
@@ -401,6 +406,75 @@ async fn list_deployment_artifacts(
     }
 }
 
+async fn get_deployment_build_log(
+    Extension(state): Extension<AppState>,
+    jar: CookieJar,
+    Path((id, deployment_id)): Path<(String, String)>,
+) -> axum::response::Response {
+    let actor = match authenticated_user(&state, jar).await {
+        Ok(actor) => actor,
+        Err(response) => return response,
+    };
+    let project_id = match parse_project_id(&id) {
+        Ok(id) => id,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+    };
+    let deployment_id = match parse_deployment_id(&deployment_id) {
+        Ok(id) => id,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+    };
+
+    let artifacts = match state
+        .deployments
+        .list_artifacts_for_project(state.database.as_ref(), &actor, project_id, deployment_id)
+        .await
+    {
+        Ok(artifacts) => artifacts,
+        Err(error) => return deployment_error_response(error),
+    };
+    let Some(artifact) = artifacts
+        .into_iter()
+        .find(|artifact| artifact.kind == deployment_artifact::ArtifactKind::BuildLog)
+    else {
+        return error_response(StatusCode::NOT_FOUND, "build log not found");
+    };
+
+    let content = match read_build_log_content(project_id, deployment_id, &artifact.storage_path) {
+        Ok(content) => content,
+        Err(BuildLogReadError::NotFound) => {
+            return error_response(StatusCode::NOT_FOUND, "build log not found");
+        }
+        Err(BuildLogReadError::UnsafePath) => {
+            tracing::warn!(
+                project_id = %project_id,
+                deployment_id = %deployment_id,
+                storage_path = %artifact.storage_path,
+                "build log artifact path is outside the deployment build-log directory"
+            );
+            return error_response(StatusCode::NOT_FOUND, "build log not found");
+        }
+        Err(BuildLogReadError::Io(error)) => {
+            tracing::error!(
+                error = %error,
+                project_id = %project_id,
+                deployment_id = %deployment_id,
+                "read deployment build log failed"
+            );
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal build log error",
+            );
+        }
+    };
+
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        content,
+    )
+        .into_response()
+}
+
 async fn upload_static_site_bundle(
     Extension(state): Extension<AppState>,
     jar: CookieJar,
@@ -608,6 +682,55 @@ fn artifact_kind_label(kind: deployment_artifact::ArtifactKind) -> &'static str 
         deployment_artifact::ArtifactKind::StaticSite => "static_site",
         deployment_artifact::ArtifactKind::BuildLog => "build_log",
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BuildLogReadError {
+    NotFound,
+    UnsafePath,
+    Io(String),
+}
+
+fn artifact_root() -> PathBuf {
+    std::env::var_os("GRASS_WORKER_ARTIFACT_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("grass-worker-artifacts"))
+}
+
+fn build_log_root(project_id: Uuid, deployment_id: Uuid) -> PathBuf {
+    artifact_root()
+        .join(project_id.to_string())
+        .join(deployment_id.to_string())
+        .join("build-logs")
+}
+
+fn read_build_log_content(
+    project_id: Uuid,
+    deployment_id: Uuid,
+    storage_path: &str,
+) -> Result<String, BuildLogReadError> {
+    let root =
+        std::fs::canonicalize(build_log_root(project_id, deployment_id)).map_err(|error| {
+            match error.kind() {
+                std::io::ErrorKind::NotFound => BuildLogReadError::NotFound,
+                _ => BuildLogReadError::Io(error.to_string()),
+            }
+        })?;
+    let path = std::fs::canonicalize(storage_path).map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => BuildLogReadError::NotFound,
+        _ => BuildLogReadError::Io(error.to_string()),
+    })?;
+
+    if !path.starts_with(&root) {
+        return Err(BuildLogReadError::UnsafePath);
+    }
+
+    let bytes = std::fs::read(path).map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => BuildLogReadError::NotFound,
+        _ => BuildLogReadError::Io(error.to_string()),
+    })?;
+
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 #[cfg(test)]
@@ -1196,6 +1319,78 @@ mod tests {
         assert_eq!(json["artifacts"].as_array().unwrap().len(), 1);
         assert_eq!(json["artifacts"][0]["id"], artifact.id.to_string());
         assert_eq!(json["artifacts"][0]["kind"], "build_log");
+    }
+
+    #[tokio::test]
+    async fn get_deployment_build_log_returns_text_content() {
+        let owner = sample_user(Uuid::new_v4(), false);
+        let token = "session-token";
+        let project_id = Uuid::new_v4();
+        let deployment_id = Uuid::new_v4();
+        let artifact_id = Uuid::new_v4();
+        let log_root = artifact_root()
+            .join(project_id.to_string())
+            .join(deployment_id.to_string())
+            .join("build-logs");
+        std::fs::create_dir_all(&log_root).unwrap();
+        let log_path = log_root.join("build.log");
+        std::fs::write(
+            &log_path,
+            "$ git clone https://github.com/acme/docs-site\n$ bun run build\n",
+        )
+        .unwrap();
+        let artifact = deployment_artifact::Model {
+            storage_path: log_path.to_string_lossy().into_owned(),
+            ..sample_artifact(
+                artifact_id,
+                deployment_id,
+                deployment_artifact::ArtifactKind::BuildLog,
+            )
+        };
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[sample_session(owner.id, token)]])
+            .append_query_results([[owner.clone()]])
+            .append_query_results([[sample_project(
+                project_id,
+                owner.id,
+                project::ProjectStatus::Active,
+            )]])
+            .append_query_results([[sample_deployment_with_status(
+                deployment_id,
+                project_id,
+                deployment::DeploymentStatus::Failed,
+            )]])
+            .append_query_results([[artifact]])
+            .into_connection();
+        let app = install_deployment_routes(Router::new(), AppState::new(database));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/api/v1/projects/{project_id}/deployments/{deployment_id}/build-log"
+                    ))
+                    .header(header::COOKIE, session_cookie(token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/plain; charset=utf-8")
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(
+            std::str::from_utf8(&body).unwrap(),
+            "$ git clone https://github.com/acme/docs-site\n$ bun run build\n"
+        );
     }
 
     #[tokio::test]

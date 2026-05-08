@@ -29,7 +29,10 @@ import {
   rollbackProjectRelease,
 } from "@/api/releases";
 import { ConsolePageHeader } from "@/components/console/console-page-header";
-import { CreateDeploymentCard } from "@/components/deployments/create-deployment-card";
+import {
+  CreateDeploymentCard,
+  ProductionDeploymentCard,
+} from "@/components/deployments/create-deployment-card";
 import { DeploymentList } from "@/components/deployments/deployment-list";
 import { DangerZoneCard } from "@/components/projects/danger-zone-card";
 import { EditProjectForm } from "@/components/projects/edit-project-form";
@@ -254,6 +257,7 @@ export function ProjectDetailsPage() {
       : project.status === "soft_deleted"
         ? "Restore the project before creating deployments."
         : null;
+  const isGitBackedProject = Boolean(project.repository_url && project.production_branch);
   const liveRelease = releaseQuery.data?.active_deployment;
   const liveSiteUrl = releasePublicUrl(releaseQuery.data?.primary_host ?? null);
   const canRollbackRelease = Boolean(releaseQuery.data?.rollback_deployment_id);
@@ -415,15 +419,32 @@ export function ProjectDetailsPage() {
             void navigate(`/projects/${projectId}/deployments/${deploymentId}`)
           }
         />
-        <CreateDeploymentCard
-          disabled={deploymentCreateDisabled}
-          disabledReason={deploymentCreateDisabledReason}
-          error={deploymentCreateError}
-          isCreating={createDeploymentMutation.isPending}
-          onCreateDeployment={(input) => createDeploymentMutation.mutate(input)}
-          onResetError={() => createDeploymentMutation.reset()}
-          resetToken={deploymentResetToken}
-        />
+        {isGitBackedProject ? (
+          <ProductionDeploymentCard
+            disabled={deploymentCreateDisabled}
+            disabledReason={deploymentCreateDisabledReason}
+            error={deploymentCreateError}
+            isCreating={createDeploymentMutation.isPending}
+            onCreateDeployment={() =>
+              createDeploymentMutation.mutate({
+                source_branch: project.production_branch ?? undefined,
+              })
+            }
+            onResetError={() => createDeploymentMutation.reset()}
+            productionBranch={project.production_branch ?? ""}
+            repositoryUrl={project.repository_url ?? ""}
+          />
+        ) : (
+          <CreateDeploymentCard
+            disabled={deploymentCreateDisabled}
+            disabledReason={deploymentCreateDisabledReason}
+            error={deploymentCreateError}
+            isCreating={createDeploymentMutation.isPending}
+            onCreateDeployment={(input) => createDeploymentMutation.mutate(input)}
+            onResetError={() => createDeploymentMutation.reset()}
+            resetToken={deploymentResetToken}
+          />
+        )}
       </div>
 
       <DangerZoneCard

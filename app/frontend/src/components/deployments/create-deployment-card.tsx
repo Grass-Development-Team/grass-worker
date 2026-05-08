@@ -24,6 +24,17 @@ type CreateDeploymentCardProps = {
   resetToken: number;
 };
 
+type ProductionDeploymentCardProps = {
+  disabled: boolean;
+  disabledReason: string | null;
+  error: string | null;
+  isCreating: boolean;
+  productionBranch: string;
+  repositoryUrl: string;
+  onCreateDeployment: () => void;
+  onResetError: () => void;
+};
+
 function normalizeOptionalInput(value: string) {
   const normalized = value.trim();
 
@@ -110,6 +121,65 @@ export function CreateDeploymentCard({
             {isCreating ? "Creating deployment..." : "Create deployment"}
           </Button>
         </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function ProductionDeploymentCard({
+  disabled,
+  disabledReason,
+  error,
+  isCreating,
+  productionBranch,
+  repositoryUrl,
+  onCreateDeployment,
+  onResetError,
+}: ProductionDeploymentCardProps) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <h2>Deploy production branch</h2>
+        </CardTitle>
+        <CardDescription>
+          Queue a node-worker build from the configured production branch.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-4 text-sm text-muted-foreground">
+          <div className="space-y-1">
+            <p>Repository</p>
+            <p className="break-all font-medium text-foreground">{repositoryUrl}</p>
+          </div>
+          <div className="space-y-1">
+            <p>Production branch</p>
+            <p className="font-medium text-foreground">{productionBranch}</p>
+          </div>
+        </div>
+        {disabledReason ? (
+          <Alert>
+            <AlertTitle>Deployment creation unavailable</AlertTitle>
+            <AlertDescription>{disabledReason}</AlertDescription>
+          </Alert>
+        ) : null}
+        {error ? (
+          <Alert variant="destructive">
+            <AlertTitle>Deployment creation failed</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
+        <Button
+          className="w-full"
+          disabled={disabled || isCreating}
+          onClick={() => {
+            onResetError();
+            onCreateDeployment();
+          }}
+          type="button"
+        >
+          {isCreating ? "Queuing production deploy..." : "Deploy production branch"}
+        </Button>
       </CardContent>
     </Card>
   );

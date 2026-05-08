@@ -42,6 +42,10 @@ export function DeploymentOverviewCard({ deployment }: { deployment: Deployment 
           <p className="font-medium text-foreground">{deployment.source_revision ?? "Not set"}</p>
         </div>
         <div className="space-y-1">
+          <p>Last completed stage</p>
+          <p className="font-medium text-foreground">{deployment.last_stage ?? "Not started"}</p>
+        </div>
+        <div className="space-y-1">
           <p>Created</p>
           <p className="font-medium text-foreground">{formatTimestamp(deployment.created_at)}</p>
         </div>

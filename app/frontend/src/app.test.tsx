@@ -52,6 +52,12 @@ type TestProject = {
   owner_user_id?: string;
   slug: string;
   name: string;
+  repository_url?: string | null;
+  production_branch?: string | null;
+  root_directory?: string | null;
+  install_command?: string | null;
+  build_command?: string | null;
+  output_directory?: string | null;
   status: TestProjectStatus;
   created_at: string;
   updated_at: string;
@@ -65,6 +71,8 @@ type TestDeployment = {
   status: TestDeploymentStatus;
   source_branch?: string | null;
   source_revision?: string | null;
+  last_stage?: string | null;
+  failure_message?: string | null;
   created_at: string;
   started_at?: string | null;
   finished_at?: string | null;
@@ -124,6 +132,12 @@ type TestUser = {
 function normalizeProject(project: TestProject) {
   return {
     owner_user_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    repository_url: null,
+    production_branch: null,
+    root_directory: null,
+    install_command: null,
+    build_command: null,
+    output_directory: null,
     soft_deleted_at: null,
     ...project,
   };
@@ -153,6 +167,8 @@ function normalizeDeployment(deployment: TestDeployment) {
   return {
     source_branch: null,
     source_revision: null,
+    last_stage: null,
+    failure_message: null,
     started_at: null,
     finished_at: null,
     ...deployment,
@@ -1292,6 +1308,90 @@ describe("auth routing", () => {
     expect(screen.getAllByText(/pending/i).length).toBeGreaterThan(0);
   });
 
+  test("deployment details renders build log and failure stage", async () => {
+    const projectId = "11111111-1111-1111-1111-111111111111";
+    const deploymentId = "22222222-2222-2222-2222-222222222222";
+    const buildLog = [
+      "$ git clone https://github.com/acme/docs-site",
+      "$ bun run build",
+      "error: missing script: build",
+    ].join("\n");
+    const deployment: TestDeployment = {
+      id: deploymentId,
+      project_id: projectId,
+      status: "failed",
+      source_branch: "main",
+      source_revision: "deadbeef",
+      last_stage: "build",
+      failure_message: "bun run build exited with status 1",
+      created_at: "2026-04-28T12:00:00Z",
+      started_at: "2026-04-28T12:01:00Z",
+      finished_at: "2026-04-28T12:02:00Z",
+    };
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = requestPath(input);
+      const method =
+        input instanceof Request ? input.method : (init?.method ?? "GET");
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse();
+      }
+
+      if (path === `/api/v1/projects/${projectId}/release` && method === "GET") {
+        return jsonResponse({ error: "release not found" }, { status: 404 });
+      }
+
+      if (path === `/api/v1/projects/${projectId}/deployments/${deploymentId}` && method === "GET") {
+        return deploymentResponse(deployment);
+      }
+
+      if (
+        path === `/api/v1/projects/${projectId}/deployments/${deploymentId}/artifacts` &&
+        method === "GET"
+      ) {
+        return deploymentArtifactsResponse([
+          {
+            id: "33333333-3333-3333-3333-333333333333",
+            deployment_id: deploymentId,
+            kind: "build_log",
+            storage_path: `/tmp/artifacts/${projectId}/${deploymentId}/build-logs/build.log`,
+            checksum_sha256: "abc123",
+            size_bytes: buildLog.length,
+            created_at: "2026-04-28T12:02:00Z",
+          },
+        ]);
+      }
+
+      if (
+        path === `/api/v1/projects/${projectId}/deployments/${deploymentId}/build-log` &&
+        method === "GET"
+      ) {
+        return new Response(buildLog, {
+          status: 200,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        });
+      }
+
+      throw new Error(`Unexpected request for ${method} ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter(`/projects/${projectId}/deployments/${deploymentId}`);
+
+    expect(
+      await screen.findByText(/bun run build exited with status 1/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/last completed stage/i)).toBeInTheDocument();
+    expect(screen.getAllByText("build").length).toBeGreaterThan(0);
+    expect(await screen.findByText(/\$ bun run build/i)).toBeInTheDocument();
+    expect(screen.getByText(/missing script: build/i)).toBeInTheDocument();
+  });
+
   test("project deployment detail route manages lifecycle and deployment artifacts", async () => {
     const projectId = "11111111-1111-1111-1111-111111111111";
     const deploymentId = "22222222-2222-2222-2222-222222222222";
@@ -2162,6 +2262,93 @@ describe("auth routing", () => {
     });
 
     expect(await screen.findByText("deadbeef")).toBeInTheDocument();
+    expect(screen.getAllByText(/pending/i).length).toBeGreaterThan(0);
+  });
+
+  test("project details can trigger a production deploy for a git-backed project", async () => {
+    const projectId = "11111111-1111-1111-1111-111111111111";
+    const createdAt = "2026-04-28T12:10:00Z";
+    const project: TestProject = {
+      id: projectId,
+      slug: "docs-site",
+      name: "Docs Site",
+      repository_url: "https://github.com/acme/docs-site",
+      production_branch: "main",
+      root_directory: "apps/docs",
+      install_command: "bun install",
+      build_command: "bun run build",
+      output_directory: "dist",
+      status: "active",
+      created_at: "2026-04-28T12:00:00Z",
+      updated_at: "2026-04-28T12:00:00Z",
+      archived_at: null,
+      soft_deleted_at: null,
+    };
+    const deployments: TestDeployment[] = [];
+    const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = requestPath(input);
+      const method =
+        input instanceof Request ? input.method : (init?.method ?? "GET");
+      const body = init?.body ? JSON.parse(init.body.toString()) : undefined;
+      requests.push({ path, method, body });
+
+      if (path === "/api/v1/info") {
+        return readyInfoResponse();
+      }
+
+      if (path === "/api/v1/me") {
+        return currentUserResponse();
+      }
+
+      if (path === `/api/v1/projects/${projectId}` && method === "GET") {
+        return projectResponse(project);
+      }
+
+      if (path === `/api/v1/projects/${projectId}/deployments` && method === "GET") {
+        return deploymentsResponse(deployments);
+      }
+
+      if (path === `/api/v1/projects/${projectId}/deployments` && method === "POST") {
+        const created: TestDeployment = {
+          id: "22222222-2222-2222-2222-222222222222",
+          project_id: projectId,
+          status: "pending",
+          source_branch: body?.source_branch ?? null,
+          source_revision: body?.source_revision ?? null,
+          created_at: createdAt,
+          started_at: null,
+          finished_at: null,
+        };
+        deployments.unshift(created);
+        return deploymentResponse(created);
+      }
+
+      throw new Error(`Unexpected request for ${method} ${path}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRouter(`/projects/${projectId}`);
+
+    expect(
+      (await screen.findAllByText("https://github.com/acme/docs-site")).length,
+    ).toBeGreaterThan(0);
+    await userEvent.click(screen.getByRole("button", { name: /deploy production branch/i }));
+
+    await waitFor(() => {
+      expect(requests).toContainEqual({
+        path: `/api/v1/projects/${projectId}/deployments`,
+        method: "POST",
+        body: {
+          source_branch: "main",
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("main").length).toBeGreaterThan(0);
+    });
     expect(screen.getAllByText(/pending/i).length).toBeGreaterThan(0);
   });
 

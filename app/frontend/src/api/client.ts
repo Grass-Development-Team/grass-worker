@@ -17,7 +17,7 @@ export async function request<T>(
 ): Promise<T> {
   const headers = new Headers(init.headers);
 
-  if (init.body && !headers.has("content-type")) {
+  if (init.body && !(init.body instanceof FormData) && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
   }
 
@@ -42,4 +42,29 @@ export async function request<T>(
   }
 
   return json as T;
+}
+
+export async function requestText(
+  path: string,
+  init: RequestInit = {},
+): Promise<string> {
+  const response = await fetch(path, {
+    credentials: "same-origin",
+    ...init,
+  });
+
+  const text = await response.text();
+
+  if (!response.ok) {
+    let message = "Request failed";
+    try {
+      message = (JSON.parse(text) as ErrorEnvelope).error ?? message;
+    } catch (_error) {
+      message = text || message;
+    }
+
+    throw new ApiError(response.status, message);
+  }
+
+  return text;
 }
