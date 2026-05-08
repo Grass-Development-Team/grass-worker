@@ -1222,8 +1222,14 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::CREATED);
+        let status = response.status();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "{}",
+            String::from_utf8_lossy(&body)
+        );
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(json["project"]["slug"], "docs-site");
@@ -1597,8 +1603,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::CREATED);
+        let status = response.status();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        if status != StatusCode::CREATED {
+            panic!("{}", String::from_utf8_lossy(&body));
+        }
+
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(json["artifact"]["deployment_id"], deployment_id.to_string());
@@ -1608,6 +1618,121 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(storage_path).unwrap(),
             "bun install\nbun run build\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn node_can_upload_static_site_bundle_and_activate_release() {
+        let now = chrono::Utc::now();
+        let deployment_id = Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap();
+        let project_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        crate::adapters::static_site_storage::set_test_artifact_root(temp_dir.path().to_path_buf());
+
+        let processing = deployment::Model {
+            id: deployment_id,
+            project_id,
+            status: deployment::DeploymentStatus::Processing,
+            source_branch: Some("main".to_owned()),
+            source_revision: None,
+            last_stage: Some("build".to_owned()),
+            failure_message: None,
+            created_at: now,
+            started_at: Some(now),
+            finished_at: None,
+        };
+        let ready = deployment::Model {
+            status: deployment::DeploymentStatus::Ready,
+            finished_at: Some(now),
+            ..processing.clone()
+        };
+        let owner_id = Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap();
+        let project_model = project::Model {
+            id: project_id,
+            owner_user_id: owner_id,
+            active_deployment_id: None,
+            slug: "docs-site".to_owned(),
+            name: "Docs Site".to_owned(),
+            repository_url: Some("https://github.com/acme/docs-site".to_owned()),
+            production_branch: Some("main".to_owned()),
+            root_directory: Some("apps/docs".to_owned()),
+            install_command: Some("bun install".to_owned()),
+            build_command: Some("bun run build".to_owned()),
+            output_directory: Some("dist".to_owned()),
+            status: project::ProjectStatus::Active,
+            created_at: now,
+            updated_at: now,
+            archived_at: None,
+            soft_deleted_at: None,
+        };
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[processing.clone()]])
+            .append_query_results([[project_model.clone()]])
+            .append_query_results([[processing.clone()]])
+            .append_query_results([[project_model.clone()]])
+            .append_query_results([[processing.clone()]])
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .append_query_results([[project_model.clone()]])
+            .append_query_results([[processing.clone()]])
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .append_query_results([[ready.clone()]])
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .append_query_results([[project::Model {
+                owner_user_id: owner_id,
+                active_deployment_id: Some(deployment_id),
+                ..project_model.clone()
+            }]])
+            .into_connection();
+
+        let cursor = std::io::Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(cursor);
+        let options =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        writer.start_file("index.html", options).unwrap();
+        std::io::Write::write_all(&mut writer, b"<h1>docs</h1>").unwrap();
+        let bundle = writer.finish().unwrap().into_inner();
+
+        let response = app_router(ready_mode_with_node_token(database, "node-secret"))
+            .unwrap()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!(
+                        "/api/v1/internal/deployments/{deployment_id}/static-site"
+                    ))
+                    .header(header::AUTHORIZATION, "Bearer node-secret")
+                    .header(header::CONTENT_TYPE, "application/zip")
+                    .header(
+                        header::CONTENT_DISPOSITION,
+                        "attachment; filename=\"site.zip\"",
+                    )
+                    .body(Body::from(bundle))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["deployment"]["id"], deployment_id.to_string());
+        assert_eq!(json["deployment"]["status"], "ready");
+        assert_eq!(json["artifact"]["kind"], "static_site");
+
+        let storage_path = json["artifact"]["storage_path"].as_str().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(std::path::Path::new(storage_path).join("index.html")).unwrap(),
+            "<h1>docs</h1>"
         );
     }
 

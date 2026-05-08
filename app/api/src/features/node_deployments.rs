@@ -136,6 +136,12 @@ struct DeploymentArtifactEnvelope {
     artifact: DeploymentArtifactResponse,
 }
 
+#[derive(Debug, Serialize)]
+struct DeploymentUploadEnvelope {
+    deployment: DeploymentResponse,
+    artifact: DeploymentArtifactResponse,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum NodeDeploymentStatusRequest {
@@ -168,6 +174,10 @@ pub fn install_node_deployment_routes(
         .route(
             "/api/v1/internal/deployments/{deployment_id}/build-log",
             put(upload_build_log),
+        )
+        .route(
+            "/api/v1/internal/deployments/{deployment_id}/static-site",
+            put(upload_static_site),
         )
         .layer(Extension(NodeDeploymentRouteState {
             app: state,
@@ -306,6 +316,86 @@ async fn upload_build_log(
     }
 }
 
+async fn upload_static_site(
+    Extension(state): Extension<NodeDeploymentRouteState>,
+    headers: HeaderMap,
+    Path(deployment_id): Path<String>,
+    body: Bytes,
+) -> axum::response::Response {
+    if let Err(response) = require_bearer_token(&headers, &state.shared_token) {
+        return response;
+    }
+    if !content_type_is_application_zip(&headers) {
+        return error_response(StatusCode::BAD_REQUEST, "content type must be application/zip");
+    }
+
+    let deployment_id = match parse_deployment_id(&deployment_id) {
+        Ok(id) => id,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+    };
+    let deployment = match state
+        .app
+        .deployments
+        .get_for_node(state.app.database.as_ref(), deployment_id)
+        .await
+    {
+        Ok(deployment) => deployment,
+        Err(error) => return deployment_error_response(error),
+    };
+
+    let file_name = bundle_file_name(&headers).unwrap_or("site.zip");
+    let stored = match crate::adapters::static_site_storage::store_uploaded_zip(
+        deployment.project_id,
+        deployment.id,
+        Some(file_name),
+        &body,
+    ) {
+        Ok(stored) => stored,
+        Err(crate::adapters::static_site_storage::StaticSiteStorageError::InvalidArchive(
+            message,
+        )) => return error_response(StatusCode::BAD_REQUEST, message),
+        Err(error) => {
+            tracing::error!(error = %error, "store node static site bundle failed");
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal static site storage error",
+            );
+        }
+    };
+
+    let system_actor = crate::domain::auth::AuthenticatedUser {
+        id: Uuid::nil(),
+        email: "node@system.local".to_owned(),
+        is_admin: true,
+        is_initial_admin: false,
+    };
+
+    match state
+        .app
+        .deployments
+        .store_static_site_artifact_for_project(
+            state.app.database.as_ref(),
+            &system_actor,
+            deployment.project_id,
+            deployment.id,
+            stored.root_dir.to_string_lossy().into_owned(),
+            Some(stored.checksum_sha256),
+            Some(stored.size_bytes),
+        )
+        .await
+    {
+        Ok((deployment, artifact)) => (
+            StatusCode::CREATED,
+            Json(DeploymentUploadEnvelope {
+                deployment: deployment.into(),
+                artifact: artifact.into(),
+            }),
+        )
+            .into_response(),
+        Err(error) => deployment_error_response(error),
+    }
+}
+
 fn require_bearer_token(
     headers: &HeaderMap,
     shared_token: &str,
@@ -332,6 +422,23 @@ fn content_type_is_text_plain(headers: &HeaderMap) -> bool {
         .and_then(|value| value.to_str().ok())
         .map(|value| value.to_ascii_lowercase().starts_with("text/plain"))
         .unwrap_or(false)
+}
+
+fn content_type_is_application_zip(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_ascii_lowercase().starts_with("application/zip"))
+        .unwrap_or(false)
+}
+
+fn bundle_file_name<'a>(headers: &'a HeaderMap) -> Option<&'a str> {
+    let value = headers.get(header::CONTENT_DISPOSITION)?.to_str().ok()?;
+    value
+        .split(';')
+        .map(str::trim)
+        .find_map(|segment| segment.strip_prefix("filename=\""))
+        .and_then(|value| value.strip_suffix('"'))
 }
 
 fn parse_deployment_id(raw: &str) -> Result<Uuid, &'static str> {

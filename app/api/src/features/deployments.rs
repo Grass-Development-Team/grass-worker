@@ -1205,6 +1205,7 @@ mod tests {
         let project_id = Uuid::new_v4();
         let deployment_id = Uuid::new_v4();
         let temp_dir = tempdir().unwrap();
+        crate::adapters::static_site_storage::set_test_artifact_root(temp_dir.path().to_path_buf());
         let pending = sample_deployment(deployment_id, project_id);
         let processing = sample_deployment_with_status(
             deployment_id,
@@ -1257,6 +1258,14 @@ mod tests {
                 rows_affected: 1,
             }])
             .append_query_results([[ready.clone()]])
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .append_query_results([[project::Model {
+                active_deployment_id: Some(deployment_id),
+                ..sample_project(project_id, owner.id, project::ProjectStatus::Active)
+            }]])
             .into_connection();
         let app = install_deployment_routes(Router::new(), AppState::new(database));
 
@@ -1284,10 +1293,6 @@ mod tests {
                         format!("multipart/form-data; boundary={boundary}"),
                     )
                     .header(header::COOKIE, session_cookie(token))
-                    .header(
-                        "x-grass-worker-test-artifact-root",
-                        temp_dir.path().display().to_string(),
-                    )
                     .body(Body::from(body))
                     .unwrap(),
             )

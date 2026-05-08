@@ -447,6 +447,12 @@ impl DeploymentService {
             )
             .await?;
 
+        project_repository(database)
+            .set_active_deployment(project_id, Some(deployment.id), Utc::now())
+            .await
+            .map_err(map_db_error)?
+            .ok_or_else(|| DeploymentError::not_found("project not found"))?;
+
         Ok((deployment, artifact))
     }
 
@@ -625,11 +631,20 @@ mod tests {
         owner_user_id: Uuid,
         status: project::ProjectStatus,
     ) -> project::Model {
+        sample_project_with_active_deployment(id, owner_user_id, status, None)
+    }
+
+    fn sample_project_with_active_deployment(
+        id: Uuid,
+        owner_user_id: Uuid,
+        status: project::ProjectStatus,
+        active_deployment_id: Option<Uuid>,
+    ) -> project::Model {
         let created_at = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 0).unwrap();
         project::Model {
             id,
             owner_user_id,
-            active_deployment_id: None,
+            active_deployment_id,
             slug: "docs-site".to_owned(),
             name: "Docs Site".to_owned(),
             repository_url: None,
@@ -727,6 +742,93 @@ mod tests {
         assert_eq!(deployment.status, deployment::DeploymentStatus::Pending);
         assert_eq!(deployment.source_branch, None);
         assert_eq!(deployment.source_revision, None);
+    }
+
+    #[tokio::test]
+    async fn store_static_site_artifact_auto_activates_project_release() {
+        let owner_id = Uuid::new_v4();
+        let project_id = Uuid::new_v4();
+        let deployment_id = Uuid::new_v4();
+        let processing = deployment::Model {
+            id: deployment_id,
+            project_id,
+            status: deployment::DeploymentStatus::Processing,
+            source_branch: Some("main".to_owned()),
+            source_revision: Some("deadbeef".to_owned()),
+            last_stage: Some("build".to_owned()),
+            failure_message: None,
+            created_at: Utc.with_ymd_and_hms(2026, 4, 28, 9, 0, 0).unwrap(),
+            started_at: Some(Utc.with_ymd_and_hms(2026, 4, 28, 9, 5, 0).unwrap()),
+            finished_at: None,
+        };
+        let ready = deployment::Model {
+            status: deployment::DeploymentStatus::Ready,
+            finished_at: Some(Utc::now()),
+            ..processing.clone()
+        };
+        let database = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([[sample_project(
+                project_id,
+                owner_id,
+                project::ProjectStatus::Active,
+            )]])
+            .append_query_results([[processing.clone()]])
+            .append_query_results([[sample_project(
+                project_id,
+                owner_id,
+                project::ProjectStatus::Active,
+            )]])
+            .append_query_results([[processing.clone()]])
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .append_query_results([[sample_project(
+                project_id,
+                owner_id,
+                project::ProjectStatus::Active,
+            )]])
+            .append_query_results([[processing]])
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .append_query_results([[ready.clone()]])
+            .append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .append_query_results([[sample_project_with_active_deployment(
+                project_id,
+                owner_id,
+                project::ProjectStatus::Active,
+                Some(deployment_id),
+            )]])
+            .into_connection();
+
+        let (deployment, artifact) = DeploymentService
+            .store_static_site_artifact_for_project(
+                &database,
+                &actor(owner_id, false),
+                project_id,
+                deployment_id,
+                "/tmp/docs-site".to_owned(),
+                Some("abc123".to_owned()),
+                Some(1024),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(deployment.status, deployment::DeploymentStatus::Ready);
+        assert_eq!(artifact.kind, deployment_artifact::ArtifactKind::StaticSite);
+
+        let statements = database.into_transaction_log();
+        assert!(
+            statements
+                .iter()
+                .flat_map(|entry| entry.statements().iter())
+                .any(|statement| statement.sql.contains("UPDATE \"projects\""))
+        );
     }
 
     #[tokio::test]
