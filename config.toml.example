@@ -1,0 +1,32 @@
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[database]
+url = "postgres://postgres:postgres@127.0.0.1:5432/grass_worker"
+
+[redis]
+url = "redis://127.0.0.1:6379/0"
+
+[storage]
+root = "/data"
+
+[secrets]
+secret_key = "change-me"
+
+[session]
+cookie_secure = false
+session_ttl_seconds = 2592000
+
+[node_manager]
+auto_start_local_node = false
+local_node_binary = "grass-node"
+local_node_config = "./node.toml"
+restart_on_exit = true
+
+[migration]
+auto_migrate = false
+
+[log]
+level = "info"
+format = "pretty"

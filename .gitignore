@@ -1,0 +1,9 @@
+/target
+**/target
+.DS_Store
+.env
+.env.*
+!.env.example
+apps/console/node_modules
+apps/console/dist
+apps/console/.vite

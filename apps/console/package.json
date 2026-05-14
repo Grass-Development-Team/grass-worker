@@ -1,0 +1,36 @@
+{
+  "name": "@grass-worker/console",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "check": "vp check src index.html components.json package.json tsconfig.json vite.config.ts",
+    "test": "vp test",
+    "build": "vp build",
+    "fmt": "vp check --fix src index.html components.json package.json tsconfig.json vite.config.ts"
+  },
+  "dependencies": {
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-label": "^2.1.8",
+    "@radix-ui/react-separator": "^1.1.8",
+    "@radix-ui/react-slot": "^1.2.4",
+    "@radix-ui/react-tooltip": "^1.2.8",
+    "@tailwindcss/vite": "^4.1.17",
+    "@tanstack/react-query": "^5.90.10",
+    "@vitejs/plugin-react": "^5.1.1",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.14.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router": "^7.9.6",
+    "tailwind-merge": "^3.4.0",
+    "tailwindcss": "^4.1.17",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.4",
+    "vite-plus": "^0.1.21",
+    "vitest": "^3.2.4"
+  },
+  "devDependencies": {}
+}
