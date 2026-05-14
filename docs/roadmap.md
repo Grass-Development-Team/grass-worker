@@ -81,7 +81,8 @@
 - **M0.4 Node 空进程**：实现 Node 配置读取、日志初始化和空生命周期，可独立启动；
 - **M0.5 Console 工程初始化**：创建 Vite+ React 工程、Tailwind、shadcn/ui 和基础路由，可独立运行；
 - **M0.6 Console 质量命令**：接入 `vp check`、`vp test`、`vp build`，可独立验证前端工程；
-- **M0.7 统一开发入口**：补齐 Just 命令，把后端、Node、Console 的常用命令统一暴露。
+- **M0.7 统一开发入口**：补齐 Just 命令，把后端、Node、Console 的常用命令统一暴露；
+- **M0.8 基础 CI Workflow**：配置 GitHub Actions 在 PR 和 main push 上运行基础质量命令，确保工程骨架从一开始就能持续验证。
 
 ### 后端 Workspace
 
@@ -104,6 +105,15 @@
 - 引入 dashboard 和 login 相关官方 block 作为页面基线；
 - 通过 Just 暴露 `console-install`、`console-dev`、`console-check`、`console-test`、`console-build`，内部调用 `vp`。
 
+### CI Workflow
+
+- 在 `.github/workflows/` 下创建基础质量检查 workflow；
+- PR 和 main push 时运行；
+- 执行后端质量命令：`just check`、`just clippy`、`just test`；
+- 执行前端质量命令：`just console-check`、`just console-test`；
+- 安装并缓存 Rust、Bun、前端依赖和 Cargo 构建产物；
+- CI 不负责 Docker image、release binary 或 tag release，这些发布级能力在 Milestone 13 完成。
+
 ### 配置与日志
 
 - 实现 Control API bootstrap config；
@@ -119,6 +129,7 @@
 - `just run-api` 能启动空 Control API；
 - `just run-node` 能启动空 Node；
 - `just console-dev` 能启动 Console；
+- 基础 GitHub Actions 可以在 PR 和 main push 上运行质量命令；
 - `/health` 返回成功。
 
 ## Milestone 1：数据库、迁移、Seed 与 Setup Flow
@@ -963,7 +974,7 @@
 - **M13.4 Node Serve 测试**：覆盖 host resolve、static path、SPA fallback、unsafe path；
 - **M13.5 前端组件与页面测试**：覆盖 setup、login、team switcher、deployment list/detail、quota usage；
 - **M13.6 安全测试**：覆盖 path traversal、token 校验、CSRF、错误脱敏；
-- **M13.7 CI Workflow**：配置 GitHub Actions 运行 clippy、test、console-check、console-test；
+- **M13.7 发布 CI 增强**：在基础 CI 之上增加 Docker image、release binary、tag release、缓存优化和完整测试矩阵；
 - **M13.8 Docker 构建**：实现多阶段镜像、非 root 用户和必要 runtime 依赖；
 - **M13.9 Release 构建**：tag 构建 release binary 和 Docker image；
 - **M13.10 自托管文档与 Demo 脚本**：提供 README / 部署文档，确保第一目标全链路可复现。
@@ -1032,7 +1043,8 @@
 - Docker 多阶段构建；
 - runtime 镜像只包含必要二进制和运行依赖；
 - 非 root 用户运行；
-- GitHub Actions 跑 `just clippy`、`just test`、`just console-check`、`just console-test`；
+- 基础质量 CI 已在 Milestone 0 建立；
+- GitHub Actions 增强发布流程，复用质量命令并增加发布级检查；
 - main push 构建 Docker image；
 - tag push 构建 release binary 和 Docker image。
 
