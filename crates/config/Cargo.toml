@@ -1,0 +1,12 @@
+[package]
+name = "grass-config"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+config.workspace = true
+serde.workspace = true
+thiserror.workspace = true
