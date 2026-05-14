@@ -1,0 +1,31 @@
+[node]
+id = "local-node-1"
+control_api = "http://127.0.0.1:8080"
+node_token = "change-me"
+work_root = "/data/node"
+
+[node.capabilities]
+build = true
+serve = true
+
+[build]
+concurrency = 1
+command_timeout_seconds = 600
+retain_workspace_on_failure = true
+
+[serve]
+host = "0.0.0.0"
+port = 8080
+public_base_url = "http://127.0.0.1:8080"
+metadata_cache_ttl_seconds = 30
+artifact_cache_root = "/data/node/artifacts"
+
+[security]
+allow_private_repository = false
+
+[development]
+verbose_build_log = true
+
+[log]
+level = "info"
+format = "pretty"
