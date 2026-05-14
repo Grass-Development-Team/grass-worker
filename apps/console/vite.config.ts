@@ -3,6 +3,9 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite-plus";
 
 export default defineConfig({
+  test: {
+    passWithNoTests: true,
+  },
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

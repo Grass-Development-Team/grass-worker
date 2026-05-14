@@ -9,7 +9,7 @@ _default:
     just --list
 
 fmt target="all":
-    {{ if target == "rust" { "cargo fmt --all" } else if target == "console" { "cd " + console + " && vp check --fix src index.html components.json package.json tsconfig.json vite.config.ts" } else if target == "all" { "cargo fmt --all && cd " + console + " && vp check --fix src index.html components.json package.json tsconfig.json vite.config.ts" } else { error("unknown fmt target: " + target) } }}
+    {{ if target == "rust" { "cargo fmt --all" } else if target == "console" { "cd " + console + " && vp check --fix" } else if target == "all" { "cargo fmt --all && cd " + console + " && vp check --fix" } else { error("unknown fmt target: " + target) } }}
 
 clippy:
     cargo clippy --workspace --all-targets -- -D warnings
@@ -18,7 +18,7 @@ test target="all":
     {{ if target == "rust" { "cargo test --workspace" } else if target == "console" { "cd " + console + " && vp test" } else if target == "all" { "cargo test --workspace && cd " + console + " && vp test" } else { error("unknown test target: " + target) } }}
 
 check target="all":
-    {{ if target == "rust" { "cargo check --workspace" } else if target == "console" { "cd " + console + " && vp check src index.html components.json package.json tsconfig.json vite.config.ts" } else if target == "all" { "cargo check --workspace && cd " + console + " && vp check src index.html components.json package.json tsconfig.json vite.config.ts" } else { error("unknown check target: " + target) } }}
+    {{ if target == "rust" { "cargo check --workspace" } else if target == "console" { "cd " + console + " && vp check" } else if target == "all" { "cargo check --workspace && cd " + console + " && vp check" } else { error("unknown check target: " + target) } }}
 
 quality: fmt clippy test check build
 

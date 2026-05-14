@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vp dev",
-    "check": "vp check src index.html components.json package.json tsconfig.json vite.config.ts",
+    "check": "vp check",
     "test": "vp test",
     "build": "vp build",
-    "fmt": "vp check --fix src index.html components.json package.json tsconfig.json vite.config.ts"
+    "fmt": "vp check --fix"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",
@@ -26,12 +26,16 @@
     "react-dom": "^19.2.0",
     "react-router": "^7.9.6",
     "tailwind-merge": "^3.4.0",
-    "tailwindcss": "^4.1.17",
-    "typescript": "^5.9.3",
-    "vite": "^7.2.4",
-    "vite-plus": "^0.1.21",
-    "vitest": "^3.2.4"
+    "tailwindcss": "^4.1.17"
   },
-  "devDependencies": {},
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vite": "npm:@voidzero-dev/vite-plus-core@latest",
+    "vite-plus": "^0.1.21"
+  },
+  "overrides": {
+    "vite": "npm:@voidzero-dev/vite-plus-core@latest",
+    "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
+  },
   "packageManager": "bun@1.3.14"
 }
