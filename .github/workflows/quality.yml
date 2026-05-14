@@ -37,32 +37,30 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Set up Vite+
+        uses: voidzero-dev/setup-vp@v1.10.0
         with:
-          bun-version: latest
-
-      - name: Cache Console dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.bun/install/cache
-            apps/console/node_modules
-          key: ${{ runner.os }}-bun-${{ hashFiles('apps/console/bun.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-
+          working-directory: apps/console
+          node-version: "lts"
+          cache: true
+          run-install: |
+            - cwd: .
+              args: ["--frozen-lockfile"]
 
       - name: Install Just
         uses: extractions/setup-just@v4
 
-      - name: Install Console dependencies
-        run: bun install --cwd apps/console --frozen-lockfile
+      - name: Check Rust workspace
+        run: just check rust
 
-      - name: Check workspace
-        run: just check
+      - name: Check Console workspace
+        run: just check console
 
       - name: Lint Rust workspace
         run: just clippy
 
-      - name: Test workspace
-        run: just test
+      - name: Test Rust workspace
+        run: just test rust
+
+      - name: Test Console workspace
+        run: just test console

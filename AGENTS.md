@@ -376,3 +376,12 @@ Agents must keep implementation aligned with the current version.
 - The current version must be read from those files.
 - The preferred GitHub Project name is `<repository-name> <current-version>`.
 - Default assignee should be inferred from local git configuration when possible.
+
+## Repository Toolchain Notes
+
+- Frontend Console work under `apps/console` must use Vite+ `vp` as the primary project-management and command entrypoint.
+- Bun is the selected underlying package manager for Console, but agents should not use `bun run` as the normal frontend command path.
+- Use `vp install`, `vp add`, `vp remove`, `vp dev`, `vp check`, `vp test`, `vp build`, and `vp preview` for Console tasks.
+- Prefer repository Just targets such as `just install console`, `just run console`, `just check console`, `just test console`, and `just build console` when operating from the repository root.
+- If the agent runtime uses `sh` and cannot find a user-installed `vp`, verify with `fish -lc '<command>'` before concluding that Vite+ is unavailable.
+- CI should use the official Vite+ setup action and let Vite+ manage the underlying package manager and dependency cache.

@@ -94,7 +94,7 @@
 - 配置 workspace dependencies；
 - 配置 `rustfmt.toml`；
 - 配置 `Justfile`；
-- 提供统一命令：`just fmt`、`just clippy`、`just test`、`just check`、`just quality`、`just run-api`、`just run-node`、`just migrate`。
+- 提供统一命令：`just fmt`、`just fmt rust`、`just fmt console`、`just clippy`、`just test`、`just test rust`、`just test console`、`just check`、`just check rust`、`just check console`、`just build`、`just build rust`、`just build console`、`just run api`、`just run node`、`just run console`、`just install console`、`just quality`、`just migrate`。
 
 ### 前端 Workspace
 
@@ -103,15 +103,16 @@
 - 配置 `vite.config.ts`，通过 `vite-plus` 的 `defineConfig` 统一管理；
 - 初始化 shadcn/ui 官方默认风格；
 - 引入 dashboard 和 login 相关官方 block 作为页面基线；
-- 通过 Just 暴露 `console-install`、`console-dev`、`console-check`、`console-test`、`console-build`，内部调用 `vp`。
+- 通过 Just 的目标参数暴露 Console 命令，例如 `just install console`、`just run console`、`just check console`、`just test console`、`just build console`，内部调用 `vp`。
 
 ### CI Workflow
 
 - 在 `.github/workflows/` 下创建基础质量检查 workflow；
 - PR 和 main push 时运行；
 - 执行后端质量命令：`just check`、`just clippy`、`just test`；
-- 执行前端质量命令：`just console-check`、`just console-test`；
-- 安装并缓存 Rust、Bun、前端依赖和 Cargo 构建产物；
+- 执行前端质量命令：`just check console`、`just test console`；
+- 使用 Vite+ 官方 GitHub Action 设置 `vp`，并通过 `vp install --frozen-lockfile` 安装 Console 依赖；
+- 安装并缓存 Rust、通过 Vite+ 缓存前端依赖和 Bun cache、缓存 Cargo 构建产物；
 - CI 不负责 Docker image、release binary 或 tag release，这些发布级能力在 Milestone 13 完成。
 
 ### 配置与日志
@@ -126,9 +127,9 @@
 ### 验收标准
 
 - `just check` 可以运行；
-- `just run-api` 能启动空 Control API；
-- `just run-node` 能启动空 Node；
-- `just console-dev` 能启动 Console；
+- `just run api` 能启动空 Control API；
+- `just run node` 能启动空 Node；
+- `just run console` 能启动 Console；
 - 基础 GitHub Actions 可以在 PR 和 main push 上运行质量命令；
 - `/health` 返回成功。
 

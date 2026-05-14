@@ -784,7 +784,8 @@ TraceLayer → CORS → SessionExtractor → AuthGuard → RateLimit → Router
 - TanStack Query；
 - Tailwind CSS；
 - shadcn/ui；
-- Bun 可作为项目偏好的包管理器，但前端开发命令以 Vite+ 的 `vp` 为统一入口。
+- Bun 作为 Vite+ 选择的底层 package manager；
+- 前端开发、检查、测试、构建和依赖管理统一以 Vite+ 的 `vp` 为入口。
 
 ## 4.3 UI
 
@@ -807,6 +808,8 @@ UI 使用 `shadcn/ui`。
 
 Vite+ 是 Web 统一工具链，包含全局命令行工具 `vp` 和项目内依赖 `vite-plus`。工具链地址：https://viteplus.dev/
 
+本仓库约定：Console 的项目管理入口是 `vp`，Bun 只作为 `vp` 识别和调用的底层 package manager。文档、Just 命令和 CI 不直接把 `bun run`、`vite`、`vitest` 等作为标准入口。
+
 ### 5.1 Vite+ 的目的
 
 Vite+ 的目的不是替代业务框架，而是统一 Web 前端工具链入口。
@@ -820,7 +823,7 @@ Vite+ 解决的问题：
 - 使用 `vp check` 统一 format、lint 和 type-check；
 - 使用 `vp run` 管理 workspace task；
 - 使用 `vite.config.ts` 集中配置；
-- 使用 `vp install` 自动选择正确 package manager；
+- 使用 `vp install`、`vp add`、`vp remove` 让 Vite+ 选择正确 package manager；
 - 保留 Vite 生态开发体验，但项目工具链文档不按普通 Vite 项目来写。
 
 ### 5.2 安装
@@ -858,10 +861,12 @@ vp create vite:monorepo
 
 ### 5.4 日常命令
 
-前端开发统一使用：
+前端开发和依赖管理统一使用：
 
 ```viteplus-commands.sh
 vp install
+vp add <package>
+vp remove <package>
 vp dev
 vp check
 vp test
@@ -871,7 +876,8 @@ vp preview
 
 命令含义：
 
-- `vp install`：根据项目配置使用正确 package manager 安装依赖；
+- `vp install`：根据项目配置使用正确 package manager 安装依赖，本仓库 Console 由 Bun lockfile / `packageManager` 约束为 Bun；
+- `vp add` / `vp remove`：通过 Vite+ 修改依赖，底层由 Bun 执行；
 - `vp dev`：启动开发服务器；
 - `vp check`：格式化、lint 和类型检查；
 - `vp check --fix`：自动格式化并执行可修复 lint；
@@ -937,7 +943,7 @@ Control API 只关心 Vite+ 的构建产物，不耦合 Vite+ 内部实现。
 
 开发模式：
 
-- Web Console 通过 `vp dev` 启动；
+- `just run console` 通过 `vp dev` 启动；
 - Control API 将前端路由代理到 Vite+ dev server。
 
 生产模式：
@@ -2334,25 +2340,15 @@ just clippy
 just test
 just check
 just quality
-just run-api
-just run-node
-just console-install
-just console-dev
-just console-check
-just console-test
-just console-build
-just build-release
-just migrate
-just api-migrate
+just run api
+just run node
+just run console
+just install console
+just build console
+just build api
+just build node
+just build
 ```
-
-前端命令应调用 Vite+：
-
-- `console-install` 调用 `vp install`；
-- `console-dev` 调用 `vp dev`；
-- `console-check` 调用 `vp check`；
-- `console-test` 调用 `vp test`；
-- `console-build` 调用 `vp build`。
 
 ## 21. 设计约束
 
