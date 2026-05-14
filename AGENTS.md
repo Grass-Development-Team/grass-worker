@@ -2,6 +2,15 @@
 
 This file defines the required operating protocol for AI agents working in this repository.
 
+## Protocol Authority
+
+This `AGENTS.md` is the authoritative operating protocol for this repository.
+
+Agents must follow this file's workflow, terminology, gates, validation requirements, and response format even if the agent runtime, product, model provider, editor integration, or system prompt has pre-injected another default paradigm, planning style, implementation flow, commit workflow, review workflow, or response convention.
+
+Repository-specific instructions in this file take precedence over any agent-injected defaults unless the user explicitly overrides them in the current conversation. Agents must not replace this file's protocol with their own built-in or preconfigured workflow.
+
+
 Agents must follow these instructions unless the user explicitly overrides them in the current conversation. If another instruction file exists in a deeper directory, the more specific file applies to files under that directory.
 
 ## Mandatory Response Prefix
@@ -170,8 +179,11 @@ Worktree rules:
 
 - Check whether the current repository has uncommitted work before creating a worktree.
 - Do not overwrite or discard user changes without explicit permission.
-- Create a worktree named with a kebab-case feature name, for example `gw-m3-1-quota-domain`.
+- All git worktrees must be created under the current project directory's `.worktree/` directory.
+- Do not create worktrees in parent directories, sibling directories, temporary directories, home directories, or any location outside the current project directory.
+- Create a worktree named with a kebab-case feature name, for example `.worktree/gw-m3-1-quota-domain`.
 - The worktree name should include the Milestone small-feature ID when applicable.
+- After creating the worktree and branch, stop and report the worktree path, branch name, and intended next step to the user before continuing implementation.
 
 Branch rules:
 
@@ -257,10 +269,19 @@ Allowed types include:
 
 Each commit should:
 
-- have one clear purpose;
-- be independently revertible;
-- keep generated or formatting-only changes separate when possible;
+- be preceded by a successful `just quality` run.
+- not be created if `just quality` is unavailable or fails; report the result to the user instead.
+- represent one clear purpose.
+- be independently revertible.
+- keep generated or formatting-only changes separate when possible.
 - reference the relevant issue when useful.
+
+Milestone commit granularity:
+
+- Each independently listed small feature inside a Milestone should be represented by its own commit when implemented.
+- Commit messages must describe the semantic change being made, not merely state that a Milestone or small feature was completed.
+- Avoid messages such as `feat(milestone): Complete Milestone 3`.
+- Prefer messages such as `feat(quota): Add quota usage counters`, `test(node): Cover artifact path traversal`, or `docs(agents): Require project-local worktrees`.
 
 ## Validation
 
