@@ -1,11 +1,19 @@
-use std::{env, net::SocketAddr};
+use std::net::SocketAddr;
 
 use anyhow::Context;
 use axum::{Json, Router, routing::get};
-use grass_config::{ControlApiConfig, LogFormat};
+use clap::Parser;
 use serde::Serialize;
 use tracing::info;
-use tracing_subscriber::{EnvFilter, fmt};
+
+mod cli;
+mod infra;
+mod state;
+
+use crate::{
+    cli::{Cli, Command},
+    infra::{config::ControlApiConfig, database},
+};
 
 #[derive(Serialize)]
 struct HealthResponse {
@@ -15,14 +23,36 @@ struct HealthResponse {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let config_path = env::var("GWAPI_CONFIG").unwrap_or_else(|_| "config.toml".to_owned());
-    let config = ControlApiConfig::load(&config_path)
-        .with_context(|| format!("failed to load Control API config from {config_path}"))?;
+    let cli = Cli::parse();
 
-    init_tracing(&config.log.level, &config.log.format)?;
+    let config = ControlApiConfig::load(cli.config_path()).with_context(|| {
+        format!(
+            "failed to load Control API config from {}",
+            cli.config_path()
+        )
+    })?;
+    config.init_tracing()?;
 
-    let addr = SocketAddr::new(config.server.host, config.server.port);
-    let app = Router::new().route("/health", get(health));
+    let database = database::connect(&config.database.url).await?;
+
+    if matches!(cli.command, Some(Command::Migrate)) {
+        database::migrate::run(&database).await?;
+        info!(
+            operation = "control_api.migrate",
+            "database migrations completed"
+        );
+        return Ok(());
+    }
+
+    if config.migration.auto_migrate {
+        database::migrate::run(&database).await?;
+    }
+
+    let state = state::ControlApiState::new(config);
+    let addr = SocketAddr::new(state.config.server.host, state.config.server.port);
+    let app = Router::new()
+        .route("/health", get(health))
+        .with_state(state);
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("failed to bind Control API listener on {addr}"))?;
@@ -42,23 +72,6 @@ async fn health() -> Json<HealthResponse> {
         status: "ok",
         service: "control-api",
     })
-}
-
-fn init_tracing(level: &str, format: &LogFormat) -> anyhow::Result<()> {
-    let filter = EnvFilter::try_new(level).context("invalid tracing filter")?;
-    let subscriber = fmt().with_env_filter(filter);
-
-    match format {
-        LogFormat::Pretty => subscriber
-            .try_init()
-            .map_err(|error| anyhow::anyhow!("failed to initialize tracing: {error}"))?,
-        LogFormat::Json => subscriber
-            .json()
-            .try_init()
-            .map_err(|error| anyhow::anyhow!("failed to initialize tracing: {error}"))?,
-    }
-
-    Ok(())
 }
 
 async fn shutdown_signal() {
