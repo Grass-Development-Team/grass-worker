@@ -1,15 +1,18 @@
-use std::env;
-
 use anyhow::Context;
+use clap::Parser;
 use grass_config::{LogFormat, NodeConfig};
 use tracing::info;
-use tracing_subscriber::{EnvFilter, fmt};
+use tracing_subscriber::{fmt, EnvFilter};
+
+mod cli;
+
+use crate::cli::Cli;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let config_path = env::var("GWNODE_CONFIG").unwrap_or_else(|_| "config/node.toml".to_owned());
-    let config = NodeConfig::load(&config_path)
-        .with_context(|| format!("failed to load Node config from {config_path}"))?;
+    let cli = Cli::parse();
+    let config = NodeConfig::load(cli.config_path())
+        .with_context(|| format!("failed to load Node config from {}", cli.config_path()))?;
 
     init_tracing(&config.log.level, &config.log.format)?;
 
