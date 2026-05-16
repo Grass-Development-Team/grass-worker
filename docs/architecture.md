@@ -955,12 +955,12 @@ Control API 只关心 Vite+ 的构建产物，不耦合 Vite+ 内部实现。
 
 ## 6. 推荐目录结构
 
+目录结构以当前代码为基准逐步扩展，不为了预设分层一次性创建大量空目录。
+
 ```grass-worker-structure.txt
 grass-worker/
 ├── Cargo.toml
 ├── Cargo.lock
-├── README.md
-├── Dockerfile
 ├── Justfile
 ├── rustfmt.toml
 ├── config.toml.example
@@ -973,274 +973,79 @@ grass-worker/
 │   │       ├── state.rs
 │   │       ├── domain/
 │   │       │   ├── mod.rs
-│   │       │   ├── user.rs
-│   │       │   ├── team.rs
-│   │       │   ├── team_group.rs
-│   │       │   ├── quota.rs
-│   │       │   ├── auth.rs
-│   │       │   ├── project.rs
-│   │       │   ├── deployment.rs
-│   │       │   ├── deployment_event.rs
-│   │       │   ├── artifact.rs
-│   │       │   ├── release.rs
-│   │       │   ├── host.rs
-│   │       │   ├── host_source.rs
-│   │       │   ├── runtime.rs
-│   │       │   ├── node.rs
-│   │       │   ├── setup.rs
-│   │       │   └── system.rs
+│   │       │   ├── users.rs
+│   │       │   ├── teams.rs
+│   │       │   ├── projects.rs
+│   │       │   ├── deployments.rs
+│   │       │   ├── quotas.rs
+│   │       │   ├── hosts.rs
+│   │       │   ├── nodes.rs
+│   │       │   ├── audits.rs
+│   │       │   └── settings.rs
 │   │       ├── features/
 │   │       │   ├── mod.rs
 │   │       │   ├── router.rs
-│   │       │   ├── api/
-│   │       │   │   ├── mod.rs
-│   │       │   │   └── v1/
-│   │       │   │       ├── mod.rs
-│   │       │   │       ├── router.rs
-│   │       │   │       ├── auth/
-│   │       │   │       │   ├── mod.rs
-│   │       │   │       │   ├── route.rs
-│   │       │   │       │   ├── request.rs
-│   │       │   │       │   ├── response.rs
-│   │       │   │       │   ├── login.rs
-│   │       │   │       │   ├── logout.rs
-│   │       │   │       │   └── error.rs
-│   │       │   │       ├── me/
-│   │       │   │       │   ├── mod.rs
-│   │       │   │       │   ├── route.rs
-│   │       │   │       │   ├── response.rs
-│   │       │   │       │   └── get.rs
-│   │       │   │       ├── setup/
-│   │       │   │       │   ├── mod.rs
-│   │       │   │       │   ├── route.rs
-│   │       │   │       │   ├── request.rs
-│   │       │   │       │   ├── response.rs
-│   │       │   │       │   ├── state.rs
-│   │       │   │       │   ├── database.rs
-│   │       │   │       │   └── admin.rs
-│   │       │   │       ├── system/
-│   │       │   │       │   ├── mod.rs
-│   │       │   │       │   ├── route.rs
-│   │       │   │       │   ├── response.rs
-│   │       │   │       │   └── info.rs
-│   │       │   │       ├── users/
-│   │       │   │       │   ├── mod.rs
-│   │       │   │       │   ├── route.rs
-│   │       │   │       │   ├── request.rs
-│   │       │   │       │   ├── response.rs
-│   │       │   │       │   ├── list.rs
-│   │       │   │       │   ├── get.rs
-│   │       │   │       │   └── update.rs
-│   │       │   │       ├── teams/
-│   │       │   │       │   ├── mod.rs
-│   │       │   │       │   ├── route.rs
-│   │       │   │       │   ├── request.rs
-│   │       │   │       │   ├── response.rs
-│   │       │   │       │   ├── create.rs
-│   │       │   │       │   ├── list.rs
-│   │       │   │       │   ├── get.rs
-│   │       │   │       │   ├── update.rs
-│   │       │   │       │   ├── members.rs
-│   │       │   │       │   ├── invitations.rs
-│   │       │   │       │   └── group.rs
-│   │       │   │       ├── quotas/
-│   │       │   │       │   ├── mod.rs
-│   │       │   │       │   ├── route.rs
-│   │       │   │       │   ├── request.rs
-│   │       │   │       │   ├── response.rs
-│   │       │   │       │   ├── get.rs
-│   │       │   │       │   ├── usage.rs
-│   │       │   │       │   ├── plans.rs
-│   │       │   │       │   └── assign.rs
-│   │       │   │       ├── projects/
-│   │       │   │       │   ├── mod.rs
-│   │       │   │       │   ├── route.rs
-│   │       │   │       │   ├── request.rs
-│   │       │   │       │   ├── response.rs
-│   │       │   │       │   ├── create.rs
-│   │       │   │       │   ├── list.rs
-│   │       │   │       │   ├── get.rs
-│   │       │   │       │   ├── update.rs
-│   │       │   │       │   ├── archive.rs
-│   │       │   │       │   ├── unarchive.rs
-│   │       │   │       │   ├── delete.rs
-│   │       │   │       │   ├── restore.rs
-│   │       │   │       │   ├── transfer.rs
-│   │       │   │       │   └── error.rs
-│   │       │   │       ├── deployments/
-│   │       │   │       │   ├── mod.rs
-│   │       │   │       │   ├── route.rs
-│   │       │   │       │   ├── request.rs
-│   │       │   │       │   ├── response.rs
-│   │       │   │       │   ├── create.rs
-│   │       │   │       │   ├── list.rs
-│   │       │   │       │   ├── get.rs
-│   │       │   │       │   ├── cancel.rs
-│   │       │   │       │   ├── retry.rs
-│   │       │   │       │   ├── promote.rs
-│   │       │   │       │   ├── events.rs
-│   │       │   │       │   ├── artifacts.rs
-│   │       │   │       │   ├── build_log.rs
-│   │       │   │       │   ├── timeline.rs
-│   │       │   │       │   └── error.rs
-│   │       │   │       ├── hosts/
-│   │       │   │       │   ├── mod.rs
-│   │       │   │       │   ├── route.rs
-│   │       │   │       │   ├── request.rs
-│   │       │   │       │   ├── response.rs
-│   │       │   │       │   ├── list.rs
-│   │       │   │       │   ├── create.rs
-│   │       │   │       │   ├── delete.rs
-│   │       │   │       │   ├── primary.rs
-│   │       │   │       │   └── provision.rs
-│   │       │   │       ├── host_sources/
-│   │       │   │       │   ├── mod.rs
-│   │       │   │       │   ├── route.rs
-│   │       │   │       │   ├── request.rs
-│   │       │   │       │   ├── response.rs
-│   │       │   │       │   ├── create.rs
-│   │       │   │       │   ├── list.rs
-│   │       │   │       │   ├── update.rs
-│   │       │   │       │   └── delete.rs
-│   │       │   │       ├── nodes/
-│   │       │   │       │   ├── mod.rs
-│   │       │   │       │   ├── route.rs
-│   │       │   │       │   ├── response.rs
-│   │       │   │       │   ├── list.rs
-│   │       │   │       │   └── health.rs
-│   │       │   │       └── internal/
-│   │       │   │           ├── mod.rs
-│   │       │   │           ├── route.rs
-│   │       │   │           ├── auth.rs
-│   │       │   │           ├── request.rs
-│   │       │   │           ├── response.rs
-│   │       │   │           ├── error.rs
-│   │       │   │           └── deployments/
-│   │       │   │               ├── mod.rs
-│   │       │   │               ├── claim.rs
-│   │       │   │               ├── stage.rs
-│   │       │   │               ├── build_log.rs
-│   │       │   │               └── static_site.rs
 │   │       │   ├── frontend.rs
-│   │       │   └── actions/
+│   │       │   ├── actions/
+│   │       │   │   ├── mod.rs
+│   │       │   │   ├── reset_password.rs
+│   │       │   │   └── verify_email.rs
+│   │       │   └── api/
 │   │       │       ├── mod.rs
-│   │       │       └── invitation.rs
+│   │       │       ├── v1.rs
+│   │       │       └── v1/
+│   │       │           ├── auth.rs
+│   │       │           ├── auth/
+│   │       │           │   ├── login.rs
+│   │       │           │   ├── logout.rs
+│   │       │           │   └── register.rs
+│   │       │           ├── user.rs
+│   │       │           ├── user/
+│   │       │           │   ├── info.rs
+│   │       │           │   └── settings.rs
+│   │       │           ├── team.rs
+│   │       │           ├── team/
+│   │       │           │   ├── members.rs
+│   │       │           │   └── invitations.rs
+│   │       │           ├── project.rs
+│   │       │           ├── project/
+│   │       │           │   └── hosts.rs
+│   │       │           ├── deployment.rs
+│   │       │           ├── deployment/
+│   │       │           │   ├── logs.rs
+│   │       │           │   └── artifacts.rs
+│   │       │           ├── quota.rs
+│   │       │           ├── host.rs
+│   │       │           ├── node.rs
+│   │       │           └── internal.rs
 │   │       └── infra/
 │   │           ├── mod.rs
 │   │           ├── config/
-│   │           │   ├── mod.rs
-│   │           │   ├── env.rs
-│   │           │   ├── file.rs
-│   │           │   └── validation.rs
 │   │           ├── database/
 │   │           │   ├── mod.rs
 │   │           │   ├── connection.rs
 │   │           │   ├── migrate.rs
 │   │           │   ├── seed.rs
+│   │           │   ├── entity/
+│   │           │   │   ├── mod.rs
+│   │           │   │   ├── users.rs
+│   │           │   │   ├── teams.rs
+│   │           │   │   ├── projects.rs
+│   │           │   │   ├── deployments.rs
+│   │           │   │   ├── quotas.rs
+│   │           │   │   ├── hosts.rs
+│   │           │   │   ├── nodes.rs
+│   │           │   │   ├── audits.rs
+│   │           │   │   └── settings.rs
 │   │           │   └── migration/
-│   │           ├── redis/
-│   │           │   ├── mod.rs
-│   │           │   ├── connection.rs
-│   │           │   └── lock.rs
-│   │           ├── http/
-│   │           │   ├── mod.rs
-│   │           │   ├── extractor/
-│   │           │   ├── middleware/
-│   │           │   ├── response.rs
-│   │           │   └── cookie.rs
-│   │           ├── host_provision/
-│   │           │   ├── mod.rs
-│   │           │   ├── wildcard.rs
-│   │           │   ├── dns_provider.rs
-│   │           │   └── manual.rs
 │   │           ├── logger/
-│   │           │   ├── mod.rs
-│   │           │   └── init.rs
-│   │           ├── node_manager/
-│   │           │   ├── mod.rs
-│   │           │   ├── process.rs
-│   │           │   └── supervisor.rs
+│   │           ├── http/
+│   │           ├── redis/
 │   │           ├── storage/
-│   │           │   ├── mod.rs
-│   │           │   ├── local.rs
-│   │           │   └── path.rs
-│   │           ├── session.rs
-│   │           ├── error.rs
-│   │           └── utils/
+│   │           ├── host_provision/
+│   │           └── node_manager/
 │   ├── node/
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── main.rs
-│   │       ├── init.rs
-│   │       ├── state.rs
-│   │       ├── config.rs
-│   │       ├── client/
-│   │       │   ├── mod.rs
-│   │       │   ├── control_api.rs
-│   │       │   ├── request.rs
-│   │       │   └── response.rs
-│   │       ├── runtime/
-│   │       │   ├── mod.rs
-│   │       │   ├── container.rs
-│   │       │   ├── docker.rs
-│   │       │   ├── podman.rs
-│   │       │   ├── apple_container.rs
-│   │       │   └── jail.rs
-│   │       ├── output/
-│   │       │   ├── mod.rs
-│   │       │   ├── manifest.rs
-│   │       │   ├── detector/
-│   │       │   │   ├── mod.rs
-│   │       │   │   ├── package_json.rs
-│   │       │   │   ├── next.rs
-│   │       │   │   ├── nuxt.rs
-│   │       │   │   ├── sveltekit.rs
-│   │       │   │   ├── astro.rs
-│   │       │   │   └── vite.rs
-│   │       │   ├── adapter/
-│   │       │   │   ├── mod.rs
-│   │       │   │   ├── static_site.rs
-│   │       │   │   └── unsupported.rs
-│   │       │   ├── inspector/
-│   │       │   │   ├── mod.rs
-│   │       │   │   ├── static_site.rs
-│   │       │   │   ├── ssr.rs
-│   │       │   │   └── vercel_output.rs
-│   │       │   └── error.rs
-│   │       ├── build/
-│   │       │   ├── mod.rs
-│   │       │   ├── loop.rs
-│   │       │   ├── runner.rs
-│   │       │   ├── workspace.rs
-│   │       │   ├── command.rs
-│   │       │   └── archive.rs
-│   │       ├── serve/
-│   │       │   ├── mod.rs
-│   │       │   ├── router.rs
-│   │       │   ├── resolver.rs
-│   │       │   ├── cache.rs
-│   │       │   ├── static_site.rs
-│   │       │   ├── ssr.rs
-│   │       │   ├── process.rs
-│   │       │   └── response.rs
-│   │       └── error.rs
 │   └── console/
-│       ├── package.json
-│       ├── vite.config.ts
-│       ├── tsconfig.json
-│       ├── components.json
-│       ├── index.html
-│       └── src/
-│           ├── main.tsx
-│           ├── app.tsx
-│           ├── router.tsx
-│           ├── api/
-│           ├── routes/
-│           ├── components/
-│           ├── components/ui/
-│           ├── blocks/
-│           ├── lib/
-│           └── test/
 ├── crates/
 │   ├── assets/
 │   ├── config/
@@ -1250,67 +1055,112 @@ grass-worker/
 │   ├── archive/
 │   ├── node-protocol/
 │   └── validator/
-├── docs/
-└── project/
+└── docs/
 ```
+
+`features/api/` 下的文件路径必须直接镜像 API path。也就是说，去掉 `/api/` 前缀后，剩余 path 用 Rust module path 表达：
+
+- `/api/v1` 的聚合 router 写在 `features/api/v1.rs`；
+- `/api/v1/user` 对应 `features/api/v1/user.rs`；
+- `/api/v1/user/info` 对应 `features/api/v1/user/info.rs`；
+- `/api/v1/team` 对应 `features/api/v1/team.rs`；
+- `/api/v1/team/members` 对应 `features/api/v1/team/members.rs`；
+- `/api/v1/deployment/logs` 对应 `features/api/v1/deployment/logs.rs`。
+
+Router 写在当前目录的最顶层 path 文件里。例如 `features/api/v1/user.rs` 负责 `/api/v1/user` 以及合并或挂载 `user/info.rs`、`user/settings.rs`；`features/api/v1.rs` 负责合并 `v1/auth.rs`、`v1/user.rs`、`v1/team.rs` 等模块，并 nest 到 `/v1`。`features/api/mod.rs` 再合并版本级 router，并 nest 到 `/api` 或交给上层统一挂载。
+
+`features/router.rs` 和 `features/frontend.rs` 结构应保留。新增 API 时不要按资源预先创建 `team/route.rs`、`team/request.rs`、`team/response.rs` 这类分层目录；应按 URL path 创建对应 `.rs` 文件。单个 path 文件内部可以包含 controller、请求结构、响应结构、service struct、service method、校验和错误映射。
 
 ## 7. 后端架构
 
-整体采用主服务、Node、内部库和分层模块架构。
+Control API 采用 VSA（Vertical Slice Architecture）为主、少量横向模块辅助的结构。请求入口按 router/path 组织，通用数据库业务能力按 domain 模块组织，框架和外部系统细节放在 infra。
 
 ```backend-flow.txt
 Client / Node / Public Visitor
   ↓
 HTTP Router / Middleware / Extractor
   ↓
-Feature Controller
+features/api/v1/<path>.rs controller
   ↓
-Feature Use Case
+Service method on request/service struct
   ↓
-Domain Model / Domain Query
+domain::<module> database-backed business functions
   ↓
-Infrastructure Adapter
-  ↓
-PostgreSQL / Redis / Storage / DNS Provider / Embedded Assets
+infra::database::entity + PostgreSQL / Redis / Storage / DNS Provider
 ```
 
-### 7.1 API 层
+### 7.1 Features / API Slice
 
-API 层只负责协议适配：
+`features` 是主要请求组织方式，当前目录结构以 router 为中心：
 
-- 路由统一从 `features::router` 聚合；
-- 对外 API 使用版本化路径，例如 `/api/v1/...`；
-- controller 负责提取请求、调用业务流程、设置 cookie/header、转换响应；
-- request 和 response DTO 可以放在对应 feature 文件中，保持接口语义就近可读；
-- 认证、权限、JSON 解析等横切逻辑优先通过 extractor 或 middleware 实现。
+- `features/router.rs` 聚合 Control API 的所有 HTTP 路由，包括 API 和 Console 静态资源；
+- `features/api/v1.rs` 聚合 `/api/v1/...` 路由，合并 `features/api/v1/<path>.rs` 提供的 router；
+- `features/api/v1/<path>.rs` 或 `features/api/v1/<path>/<subpath>.rs` 直接对应 API path，例如 `/api/v1/user` → `v1/user.rs`，`/api/v1/user/info` → `v1/user/info.rs`；
+- router 写在当前 path 的顶层文件中，例如 `v1/user.rs` 合并或挂载 `v1/user/info.rs`；
+- `features/frontend.rs` 负责 Console 资源分发；
+- `features/actions/<action>.rs` 对应 action path，例如 `/actions/reset-password` → `features/actions/reset_password.rs`。Action 也是前端入口，但通常服务于邮件链接、一次性 token、验证/重置等需要页面承载的 API 调用流程。
 
-API 层不直接写复杂业务逻辑，不直接散落数据库访问。
+单个 API slice 文件可以同时包含：
 
-### 7.2 Feature 层
+- Axum controller / handler；
+- 请求结构；
+- 响应结构；
+- service struct；
+- service method，例如 `RegisterService::register`；
+- 当前 API flow 的校验、事务编排、错误映射和测试。
 
-Feature 层是业务用例编排层，负责把一次用户操作串起来。
+本项目不设置全局 DTO 层。请求和响应结构应就近定义在对应 API slice 文件或模块中。命名上不强调 DTO，可按语义使用 `RegisterService`、`SetupStateResponse`、`CreateProjectService` 等名称。
 
-- 一个文件对应一个明确动作，例如 `login.rs`、`create.rs`、`promote.rs`；
-- 业务流程可以调用多个 domain 函数、Redis token 服务、storage、host provisioner 和配置；
-- Feature 层应返回统一错误类型，避免把底层库错误直接暴露给 HTTP 响应；
-- 业务动作的边界应按用例划分，不按数据库表机械划分。
+API slice 可以调用多个 domain 函数、Redis token 服务、storage、host provisioner、mailer 和配置对象完成一次请求。完整 HTTP flow 不应下沉到 domain。
 
-### 7.3 Domain 层
+### 7.2 Domain 模块
 
-Domain 层负责领域数据结构、数据库实体关系和领域级数据访问。
+本项目的 `domain` 不是纯 DDD 领域模型层，而是 database-backed business modules。
 
-- SeaORM entity、relation、active enum 放在 `domain/`；
-- 查询函数按领域聚合，例如 user、team、project、deployment、quota；
-- 领域函数接受 `ConnectionTrait`，便于复用数据库连接和事务；
-- 领域层可以表达领域状态，例如 deployment status、project status、team kind；
-- 领域层不要依赖 HTTP 请求、cookie、router、middleware 等协议概念。
+`domain` 可以直接依赖 SeaORM、`infra/database/entity` 和数据库连接 trait，用于封装跨 API slice 复用的数据库业务函数，例如：
+
+- `users::get_user_by_id`；
+- `users::get_user_by_email`；
+- `users::create_user`；
+- `teams::create_team`；
+- `teams::add_team_member`；
+- `projects::get_project_by_id`；
+- `deployments::append_deployment_event`；
+- `quotas::consume_quota`；
+- `audits::create_audit_event`。
+
+`domain` 模块可以包含：
+
+- 查询函数；
+- 基础写入函数；
+- 与数据库模型紧密相关的参数结构，例如 `CreateUserParams`；
+- 数据库错误转换；
+- 业务状态 helper，例如账号状态、部署状态、团队角色判断；
+- 接受 `ConnectionTrait` 的函数，以便同时支持普通连接和事务。
+
+`domain` 不负责：
+
+- Axum handler；
+- router；
+- HTTP extractor；
+- cookie/header 写入；
+- 完整 API flow，例如 login、register、finish setup、retry deployment；
+- Console 页面逻辑。
+
+### 7.3 Infra / Database Entity
+
+SeaORM entity 放在 `infra/database/entity/`，不放在 `domain/`。
+
+`infra/database/entity` 只负责表映射、relation 和 SeaORM 需要的 active model 定义。entity 不承载完整业务流程，也不负责 HTTP 响应。
+
+`infra/database/migration/` 继续负责 schema migration。migration 与 entity 需要保持一致，但不要求每次迁移都立即生成额外抽象层。
 
 ### 7.4 Infra 层
 
 Infra 层封装外部系统和框架细节。
 
 - `config/`：配置结构、默认值、文件读写、ENV override、配置检查；
-- `database/`：连接初始化、迁移、数据库错误类型、系统初始化数据；
+- `database/`：连接初始化、迁移、entity、数据库错误类型、系统初始化数据；
 - `redis/`：Redis client、lock、短期状态；
 - `http/`：extractor、middleware、response serializer、CORS、cookie 工具；
 - `host_provision/`：泛域名、DNS Provider、手动模式等 host provisioner；
@@ -1396,7 +1246,7 @@ Infra 层封装外部系统和框架细节。
 ### 9.1 基线要求
 
 - PostgreSQL 作为主持久化数据库；
-- SeaORM entity 放在 `domain/`；
+- SeaORM entity 放在 `infra/database/entity/`；
 - migration 放在 `infra/database/migration/`；
 - 系统内置数据初始化必须幂等；
 - 写操作需要跨表一致性时使用事务；
