@@ -289,6 +289,24 @@ Before asking the user to review implementation, agents should run relevant vali
 
 Use the narrowest useful checks first, then broader checks when appropriate.
 
+### Database Migration Validation
+
+When changing database migrations, schema definitions, or ORM entities, agents must validate the database shape, not only that the migration command exits successfully.
+
+Database validation should follow these rules:
+
+- Do not write real database hosts, usernames, passwords, database names, connection strings, tokens, or environment-specific infrastructure details into repository files, issues, commits, PR descriptions, or logs.
+- Do not include secrets in final responses. If a command requires credentials, use environment variables or user-provided runtime configuration and redact sensitive values in summaries.
+- Prefer PostgreSQL client-only tooling for schema inspection when available, such as `psql` from a client package. Do not install, start, stop, initialize, or manage a local PostgreSQL server unless the user explicitly asks for that.
+- Verify applied migrations by checking the migration tracking table and confirming whether pending migrations remain.
+- Verify schema results directly after migration, including relevant tables, columns, column types, nullability, defaults, native enum types and values, indexes, partial unique indexes, and foreign keys.
+- For migrations that use database-native enum types, verify the created enum values match the architecture and roadmap state models.
+- For migrations that add nullable lifecycle timestamp fields, verify nullable fields do not accidentally receive default timestamps unless the data model explicitly requires that behavior.
+- Do not assume a migration is correct just because rerunning the migrator reports no pending migrations. If a migration was already applied before code changed, the existing database may still reflect the older schema.
+- For fresh-schema validation, prefer a disposable database or schema provided or approved by the user.
+- If the current database user cannot create a disposable database or schema, report that limitation and validate what can be checked non-destructively.
+- Destructive validation, including dropping tables, dropping enum types, clearing migration records, or recreating schemas, requires explicit user approval immediately before the destructive operation.
+
 Examples:
 
 - diagnostics for changed files;
