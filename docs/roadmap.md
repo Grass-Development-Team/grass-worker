@@ -146,9 +146,10 @@
 - **M1.5 配额与 Host 表**：创建 quota、host source、host binding、provision event 等表；
 - **M1.6 Node、审计与设置表**：创建 nodes、audit events、system settings；
 - **M1.7 幂等 Seed**：初始化默认团队分组、配额计划、角色、Host Policy 和审核策略；
-- **M1.8 Setup API**：实现 setup state、database、admin、site、node、storage、finish 接口；
-- **M1.9 Setup Console**：实现 setup 页面和流程状态管理；
-- **M1.10 Ready Mode 切换**：setup 完成后从 setup mode 切换到 ready mode。
+- **M1.8 数据库生命周期自动化**：使用 PostgreSQL trigger 自动维护 `updated_at`，为需要生命周期删除的主业务表设计 `deleted_at` 软删除语义、partial unique indexes 和查询约定；
+- **M1.9 Setup API**：实现 setup state、database、admin、site、node、storage、finish 接口；
+- **M1.10 Setup Console**：实现 setup 页面和流程状态管理；
+- **M1.11 Ready Mode 切换**：setup 完成后从 setup mode 切换到 ready mode。
 
 ### 数据库与迁移
 
@@ -158,7 +159,13 @@
 - 支持 `database.auto_migrate`；
 - 实现 `gworker migrate` 或等价统一迁移命令；
 - migration 失败时服务启动失败并输出明确错误；
-- 实现幂等 seed。
+- 实现幂等 seed；
+- `created_at` 使用 PostgreSQL 默认值维护；
+- `updated_at` 使用 PostgreSQL `BEFORE UPDATE` trigger 自动维护，业务代码不应手动刷新；
+- 对需要生命周期删除的主业务表添加 nullable `deleted_at` 字段；
+- 软删除表的唯一索引应使用 `deleted_at IS NULL` partial unique index，避免已删除记录占用唯一键；
+- 事件、审计和不可变历史表默认保持 append-only，不做通用软删除；
+- 删除行为优先由 service/repository 显式软删除；如添加数据库 `BEFORE DELETE` 兜底 trigger，必须同时设计级联软删除和 ORM 查询过滤约定。
 
 ### 核心数据表
 
@@ -185,6 +192,18 @@
 - `host_provision_events`；
 - `nodes`；
 - `system_settings`。
+
+### 数据库生命周期自动化
+
+- 建立通用 `set_updated_at()` PostgreSQL trigger function；
+- 为所有包含 `updated_at` 的表创建 `BEFORE UPDATE` trigger；
+- Rust/SeaORM 业务代码不应为了普通更新显式设置 `updated_at`；
+- `created_at` / `updated_at` 初始值由数据库 default 生成；
+- 为主业务表评估并添加 `deleted_at TIMESTAMPTZ NULL`；
+- 软删除表查询默认过滤 `deleted_at IS NULL`；
+- 软删除表的唯一约束改为 partial unique index，例如 `WHERE deleted_at IS NULL`；
+- 不对 `audit_events`、`deployment_events`、`quota_events`、`host_provision_events`、`releases` 等事件/审计/历史表启用通用软删除；
+- 不使用全表一刀切的 delete trigger 覆盖业务语义；如需要 DB 层防误删，应作为兜底能力逐表启用，并明确级联软删除策略。
 
 ### Setup API
 
@@ -223,7 +242,9 @@
 - setup 完成后进入 ready mode；
 - 管理员可以登录；
 - 管理员拥有个人团队；
-- seed 重复运行不产生重复数据。
+- seed 重复运行不产生重复数据；
+- 普通更新会由数据库自动刷新 `updated_at`；
+- 软删除表的删除语义不会物理移除主业务记录，并且默认查询不返回 `deleted_at IS NOT NULL` 的记录。
 
 ## Milestone 2：认证、团队、权限与基础 Console
 
