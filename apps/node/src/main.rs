@@ -2,7 +2,7 @@ use anyhow::Context;
 use clap::Parser;
 use grass_config::{LogFormat, NodeConfig};
 use tracing::info;
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt};
 
 mod cli;
 

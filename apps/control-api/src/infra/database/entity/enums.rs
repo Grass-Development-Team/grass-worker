@@ -1,0 +1,158 @@
+use sea_orm::entity::prelude::*;
+
+macro_rules! string_active_enum {
+    ($name:ident, $enum_name:literal, { $($variant:ident => $value:literal),+ $(,)? }) => {
+        #[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
+        #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = $enum_name)]
+        pub enum $name {
+            $(#[sea_orm(string_value = $value)] $variant,)+
+        }
+    };
+}
+
+string_active_enum!(UserStatus, "user_status", {
+    Active => "active",
+    Disabled => "disabled",
+});
+
+string_active_enum!(TeamKind, "team_kind", {
+    Personal => "personal",
+    Team => "team",
+});
+
+string_active_enum!(TeamMemberRole, "team_member_role", {
+    Owner => "owner",
+    Admin => "admin",
+    Member => "member",
+    Viewer => "viewer",
+});
+
+string_active_enum!(TeamInvitationStatus, "team_invitation_status", {
+    Pending => "pending",
+    Accepted => "accepted",
+    Expired => "expired",
+    Revoked => "revoked",
+});
+
+string_active_enum!(ProjectRuntime, "project_runtime", {
+    Static => "static",
+    Ssr => "ssr",
+    Hybrid => "hybrid",
+    Serverless => "serverless",
+    Edge => "edge",
+});
+
+string_active_enum!(DeploymentEnvironment, "deployment_environment", {
+    Production => "production",
+    Preview => "preview",
+});
+
+string_active_enum!(DeploymentBuildStatus, "deployment_build_status", {
+    Pending => "pending",
+    Claimed => "claimed",
+    Queued => "queued",
+    Building => "building",
+    Ready => "ready",
+    Failed => "failed",
+    Canceled => "canceled",
+});
+
+string_active_enum!(DeploymentReleaseStatus, "deployment_release_status", {
+    Draft => "draft",
+    PendingReview => "pending_review",
+    Approved => "approved",
+    Rejected => "rejected",
+    Active => "active",
+});
+
+string_active_enum!(DeploymentEventKind, "deployment_event_kind", {
+    System => "system",
+    Build => "build",
+    Release => "release",
+    Review => "review",
+    Host => "host",
+});
+
+string_active_enum!(DeploymentArtifactKind, "deployment_artifact_kind", {
+    GrassOutput => "grass_output",
+    BuildLog => "build_log",
+    StaticSite => "static_site",
+});
+
+string_active_enum!(DeploymentReviewStatus, "deployment_review_status", {
+    Pending => "pending",
+    Approved => "approved",
+    Rejected => "rejected",
+});
+
+string_active_enum!(ReleaseReason, "release_reason", {
+    Auto => "auto",
+    Promote => "promote",
+    Rollback => "rollback",
+});
+
+string_active_enum!(QuotaEventKind, "quota_event_kind", {
+    Reserve => "reserve",
+    Consume => "consume",
+    Release => "release",
+    Deny => "deny",
+    Adjust => "adjust",
+});
+
+string_active_enum!(QuotaPeriod, "quota_period", {
+    None => "none",
+    Monthly => "monthly",
+});
+
+string_active_enum!(HostSourceKind, "host_source_kind", {
+    Wildcard => "wildcard",
+    DnsProvider => "dns_provider",
+    Manual => "manual",
+});
+
+string_active_enum!(HostBindingKind, "host_binding_kind", {
+    Platform => "platform",
+    Custom => "custom",
+});
+
+string_active_enum!(HostBindingEnvironment, "host_binding_environment", {
+    Production => "production",
+    Preview => "preview",
+    All => "all",
+});
+
+string_active_enum!(HostBindingStatus, "host_binding_status", {
+    Pending => "pending",
+    Active => "active",
+    Failed => "failed",
+    Disabled => "disabled",
+});
+
+string_active_enum!(HostProvisionEventStatus, "host_provision_event_status", {
+    Success => "success",
+    Pending => "pending",
+    Failed => "failed",
+});
+
+string_active_enum!(NodeStatus, "node_status", {
+    Pending => "pending",
+    Active => "active",
+    Draining => "draining",
+    Offline => "offline",
+    Disabled => "disabled",
+});
+
+string_active_enum!(SystemSettingValueKind, "system_setting_value_kind", {
+    String => "string",
+    Number => "number",
+    Boolean => "boolean",
+    Json => "json",
+    SecretRef => "secret_ref",
+});
+
+string_active_enum!(AuditEventResult, "audit_event_result", {
+    Success => "success",
+    Failure => "failure",
+    Denied => "denied",
+});
