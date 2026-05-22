@@ -37,15 +37,17 @@ async fn main() -> anyhow::Result<()> {
 
     if matches!(cli.command, Some(Command::Migrate)) {
         database::migrate::run(&database).await?;
+        database::seed::run(&database).await?;
         info!(
             operation = "control_api.migrate",
-            "database migrations completed"
+            "database migrations and seed completed"
         );
         return Ok(());
     }
 
     if config.migration.auto_migrate {
         database::migrate::run(&database).await?;
+        database::seed::run(&database).await?;
     }
 
     let state = state::ControlApiState::new(config);
