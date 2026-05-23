@@ -1193,7 +1193,7 @@ Infra 层封装外部系统和框架细节。
 5. 判断 setup mode 或 ready mode；
 6. 初始化数据库连接；
 7. 根据配置决定是否自动执行 migration；
-8. 初始化基础数据，例如系统权限、默认团队分组、默认配额计划、默认管理员；
+8. 初始化基础数据，例如系统权限、默认团队分组、默认个人团队、默认配额计划；
 9. 初始化 Redis client；
 10. 初始化 storage；
 11. 初始化 HostProvisioner；
@@ -1281,9 +1281,11 @@ auto_migrate = true
 - 默认团队分组；
 - 默认配额计划；
 - 默认权限或角色；
-- 默认管理员；
+- 默认个人团队；
 - 默认 Host Source，若配置存在；
 - 默认 Host Policy。
+
+Seed 不创建默认管理员。初始管理员必须由 setup flow 注册；注册完成后，该管理员默认归属 seed 初始化的默认个人团队。
 
 ## 10. 数据模型
 
@@ -1386,7 +1388,7 @@ Node 主要用于观测和任务分配，不直接作为业务 owner。
 - `POST /api/v1/setup/storage`，默认使用 `/data`，通常无需用户修改；
 - `POST /api/v1/setup/finish`
 
-Setup flow 必须覆盖基础系统配置：database、initial admin、site config、first node、secret key。storage root 在 `config.toml` 中配置，默认值为 `/data`，setup 页面默认填入 `/data`。非关键 Runtime Settings 可以在 setup 中跳过，之后通过 Console 配置。
+Setup flow 必须覆盖基础系统配置：database、initial admin、site config、first node、secret key。`POST /api/v1/setup/admin` 负责注册初始管理员，seed 不创建默认管理员；管理员注册完成后默认归属 seed 初始化的默认个人团队。storage root 在 `config.toml` 中配置，默认值为 `/data`，setup 页面默认填入 `/data`。非关键 Runtime Settings 可以在 setup 中跳过，之后通过 Console 配置。
 
 ### 11.3 Auth API
 
