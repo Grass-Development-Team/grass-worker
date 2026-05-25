@@ -1,8 +1,8 @@
 //! Idempotent database seed entrypoint.
 //!
 //! The first-stage setup flow expects the database to contain baseline plans,
-//! team groups, host policies, and review policy defaults immediately after
-//! migrations finish.
+//! team groups, personal-team defaults, host policies, and review policy
+//! defaults immediately after migrations finish.
 
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
@@ -222,6 +222,14 @@ fn default_system_settings() -> Vec<SystemSettingSeed> {
             key: "team_roles.default",
             value_kind: SystemSettingValueKind::Json,
             value_json: json!(["owner", "admin", "member", "viewer"]),
+        },
+        SystemSettingSeed {
+            key: "personal_team.default",
+            value_kind: SystemSettingValueKind::Json,
+            value_json: json!({
+                "team_group": DEFAULT_TEAM_GROUP_CODE,
+                "owner_role": "owner",
+            }),
         },
     ]
 }
@@ -547,6 +555,37 @@ mod tests {
                 setting.key
             );
         }
+    }
+
+    #[test]
+    fn personal_team_defaults_reference_seed_baseline() {
+        let personal_team_defaults = default_system_settings()
+            .into_iter()
+            .find(|setting| setting.key == "personal_team.default")
+            .expect("missing personal team defaults");
+
+        assert_eq!(
+            personal_team_defaults.value_json["team_group"],
+            DEFAULT_TEAM_GROUP_CODE
+        );
+        assert_eq!(personal_team_defaults.value_json["owner_role"], "owner");
+    }
+
+    #[test]
+    fn seed_settings_do_not_create_admin_or_host_source() {
+        let keys = default_system_settings()
+            .iter()
+            .map(|setting| setting.key)
+            .collect::<Vec<_>>();
+
+        assert!(
+            keys.iter().all(|key| !key.contains("admin")),
+            "admin setup must not be represented as seed data"
+        );
+        assert!(
+            keys.iter().all(|key| !key.contains("host_source")),
+            "host sources must be created by setup or admin configuration"
+        );
     }
 
     fn assert_unique<'a>(values: impl Iterator<Item = &'a str>) {

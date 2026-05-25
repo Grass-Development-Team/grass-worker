@@ -11,7 +11,7 @@
 第一阶段完成后，用户应能从零开始完成以下完整流程：
 
 1. 启动 Control API、Node 和 Web Console；
-2. 通过 setup flow 初始化系统、管理员、存储、首个 Node、默认团队分组、默认配额计划和 Host Source；
+2. 通过 setup flow 初始化系统、注册管理员、存储、首个 Node、默认团队分组、默认个人团队、默认配额计划和 Host Source；
 3. 登录 Console，进入个人团队或普通团队；
 4. 创建项目并配置源码、构建命令、输出规则和部署环境；
 5. 自动分配平台域名或绑定项目 Host；
@@ -145,7 +145,7 @@
 - **M1.4 项目部署相关表**：创建 projects、deployments、artifacts、events、reviews、releases；
 - **M1.5 配额与 Host 表**：创建 quota、host source、host binding、provision event 等表；
 - **M1.6 Node、审计与设置表**：创建 nodes、audit events、system settings；
-- **M1.7 幂等 Seed**：初始化默认团队分组、配额计划、角色、Host Policy 和审核策略；
+- **M1.7 幂等 Seed**：初始化默认团队分组、默认个人团队基线、配额计划、角色、Host Policy 和审核策略；
 - **M1.8 数据库生命周期自动化**：使用 PostgreSQL trigger 自动维护 `updated_at`，为需要生命周期删除的主业务表设计 `deleted_at` 软删除语义、partial unique indexes 和查询约定；
 - **M1.9 Setup API**：实现 setup state、database、admin、site、node、storage、finish 接口；
 - **M1.10 Setup Console**：实现 setup 页面和流程状态管理；
@@ -209,7 +209,7 @@
 
 - `GET /api/v1/setup/state`；
 - `POST /api/v1/setup/database`；
-- `POST /api/v1/setup/admin`；
+- `POST /api/v1/setup/admin`：注册初始管理员，并创建管理员的个人团队；
 - `POST /api/v1/setup/site`；
 - `POST /api/v1/setup/node`；
 - `POST /api/v1/setup/storage`；
@@ -230,18 +230,22 @@
 - 默认团队分组：`free`、`student`、`plus`、`pro`、`ultra`；
 - 默认配额计划；
 - 默认角色；
-- 默认管理员；
-- 默认个人团队；
-- 默认 Host Source（如果配置存在）；
+- 默认个人团队基线：默认团队分组、配额计划和 owner 角色语义；
 - 默认 Host Policy；
 - 默认 release review policy。
+
+Seed 不创建默认管理员，也不创建无 owner 的个人团队。初始管理员必须由 setup flow 的 `POST /api/v1/setup/admin` 注册；注册完成后，setup/admin 应创建该管理员的个人团队，并将管理员加入为 owner。
+
+Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Runtime Setting，应由 setup flow 或后续 Host Source 管理能力创建；如果没有可用 Host Source，项目创建不失败，但不自动分配平台域名。
 
 ### 验收标准
 
 - 空数据库启动后进入 setup mode；
 - setup 完成后进入 ready mode；
 - 管理员可以登录；
-- 管理员拥有个人团队；
+- 管理员由 setup 注册，不由 seed 创建；
+- 管理员的个人团队由 setup/admin 创建，并使用 seed 初始化的默认团队分组、配额计划和 owner 角色语义；
+- Host Source 由 setup 或后续管理能力创建，不由 seed 创建；
 - seed 重复运行不产生重复数据；
 - 普通更新会由数据库自动刷新 `updated_at`；
 - 软删除表的删除语义不会物理移除主业务记录，并且默认查询不返回 `deleted_at IS NOT NULL` 的记录。
