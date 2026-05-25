@@ -32,6 +32,45 @@ const DELETED_AT_TABLES: &[(&str, &str, &str)] = &[
         "ux_project_host_bindings_host",
         "host",
     ),
+    (
+        "team_members",
+        "ux_team_members_team_user",
+        "team_id, user_id",
+    ),
+    ("team_groups", "ux_team_groups_code", "code"),
+];
+
+const DELETED_AT_CONDITIONAL_INDEXES: &[(&str, &str, &str, &str)] = &[
+    (
+        "team_groups",
+        "ux_team_groups_single_default",
+        "is_default",
+        "is_default = true",
+    ),
+    (
+        "deployments",
+        "ux_deployments_one_active_per_project_environment",
+        "project_id, environment",
+        "release_status = 'active'",
+    ),
+    (
+        "host_sources",
+        "ux_host_sources_single_enabled_default",
+        "is_default",
+        "enabled = true AND is_default = true",
+    ),
+];
+
+const DELETED_AT_ALL_TABLES: &[&str] = &[
+    "users",
+    "teams",
+    "projects",
+    "nodes",
+    "project_host_bindings",
+    "team_members",
+    "team_groups",
+    "deployments",
+    "host_sources",
 ];
 
 #[async_trait::async_trait]
@@ -80,24 +119,16 @@ BEFORE UPDATE ON {table}
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();"#
         );
-        manager
-            .get_connection()
-            .execute_unprepared(&sql)
-            .await?;
+        manager.get_connection().execute_unprepared(&sql).await?;
     }
 
     Ok(())
 }
 
 async fn add_deleted_at_columns(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
-    for &(table, _, _) in DELETED_AT_TABLES {
-        let sql = format!(
-            "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ"
-        );
-        manager
-            .get_connection()
-            .execute_unprepared(&sql)
-            .await?;
+    for table in DELETED_AT_ALL_TABLES {
+        let sql = format!("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
+        manager.get_connection().execute_unprepared(&sql).await?;
     }
 
     Ok(())
@@ -120,6 +151,22 @@ async fn convert_to_partial_unique_indexes(manager: &SchemaManager<'_>) -> Resul
             .await?;
     }
 
+    for &(table, index_name, columns, where_suffix) in DELETED_AT_CONDITIONAL_INDEXES {
+        let drop_sql = format!("DROP INDEX IF EXISTS {index_name}");
+        manager
+            .get_connection()
+            .execute_unprepared(&drop_sql)
+            .await?;
+
+        let create_sql = format!(
+            "CREATE UNIQUE INDEX {index_name} ON {table} ({columns}) WHERE deleted_at IS NULL AND {where_suffix}"
+        );
+        manager
+            .get_connection()
+            .execute_unprepared(&create_sql)
+            .await?;
+    }
+
     Ok(())
 }
 
@@ -131,9 +178,22 @@ async fn restore_full_unique_indexes(manager: &SchemaManager<'_>) -> Result<(), 
             .execute_unprepared(&drop_sql)
             .await?;
 
-        let create_sql = format!(
-            "CREATE UNIQUE INDEX {index_name} ON {table} ({columns})"
-        );
+        let create_sql = format!("CREATE UNIQUE INDEX {index_name} ON {table} ({columns})");
+        manager
+            .get_connection()
+            .execute_unprepared(&create_sql)
+            .await?;
+    }
+
+    for &(table, index_name, columns, where_suffix) in DELETED_AT_CONDITIONAL_INDEXES {
+        let drop_sql = format!("DROP INDEX IF EXISTS {index_name}");
+        manager
+            .get_connection()
+            .execute_unprepared(&drop_sql)
+            .await?;
+
+        let create_sql =
+            format!("CREATE UNIQUE INDEX {index_name} ON {table} ({columns}) WHERE {where_suffix}");
         manager
             .get_connection()
             .execute_unprepared(&create_sql)
@@ -144,14 +204,9 @@ async fn restore_full_unique_indexes(manager: &SchemaManager<'_>) -> Result<(), 
 }
 
 async fn remove_deleted_at_columns(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
-    for &(table, _, _) in DELETED_AT_TABLES {
-        let sql = format!(
-            "ALTER TABLE {table} DROP COLUMN IF EXISTS deleted_at"
-        );
-        manager
-            .get_connection()
-            .execute_unprepared(&sql)
-            .await?;
+    for table in DELETED_AT_ALL_TABLES {
+        let sql = format!("ALTER TABLE {table} DROP COLUMN IF EXISTS deleted_at");
+        manager.get_connection().execute_unprepared(&sql).await?;
     }
 
     Ok(())
@@ -160,10 +215,7 @@ async fn remove_deleted_at_columns(manager: &SchemaManager<'_>) -> Result<(), Db
 async fn remove_before_update_triggers(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
     for table in TRIGGER_TABLES {
         let sql = format!("DROP TRIGGER IF EXISTS trg_{table}_updated_at ON {table}");
-        manager
-            .get_connection()
-            .execute_unprepared(&sql)
-            .await?;
+        manager.get_connection().execute_unprepared(&sql).await?;
     }
 
     Ok(())

@@ -334,6 +334,7 @@ async fn upsert_team_group(
                     quota_plan_id_by_code(database, seed.quota_plan_code).await?,
                 )),
                 is_default: Set(is_default),
+                deleted_at: Set(None),
                 created_at: Set(now),
                 updated_at: Set(now),
             }
