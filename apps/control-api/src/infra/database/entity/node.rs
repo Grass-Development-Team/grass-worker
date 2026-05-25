@@ -18,6 +18,7 @@ pub struct Model {
     pub work_root: Option<String>,
     pub metadata: Json,
     pub last_heartbeat_at: Option<TimeDateTimeWithTimeZone>,
+    pub deleted_at: Option<TimeDateTimeWithTimeZone>,
     pub created_at: TimeDateTimeWithTimeZone,
     pub updated_at: TimeDateTimeWithTimeZone,
 }

@@ -8,12 +8,14 @@ use super::enums::TeamKind;
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
+    #[sea_orm(unique)]
     pub slug: String,
     pub name: String,
     pub kind: TeamKind,
     pub group_id: Option<Uuid>,
     pub explicit_quota_plan_id: Option<Uuid>,
     pub owner_user_id: Option<Uuid>,
+    pub deleted_at: Option<TimeDateTimeWithTimeZone>,
     pub created_at: TimeDateTimeWithTimeZone,
     pub updated_at: TimeDateTimeWithTimeZone,
 }
