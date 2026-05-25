@@ -28,6 +28,7 @@ pub struct Model {
     pub claimed_at: Option<TimeDateTimeWithTimeZone>,
     pub build_started_at: Option<TimeDateTimeWithTimeZone>,
     pub build_finished_at: Option<TimeDateTimeWithTimeZone>,
+    pub deleted_at: Option<TimeDateTimeWithTimeZone>,
     pub created_at: TimeDateTimeWithTimeZone,
     pub updated_at: TimeDateTimeWithTimeZone,
 }

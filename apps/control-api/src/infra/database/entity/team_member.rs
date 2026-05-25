@@ -13,6 +13,7 @@ pub struct Model {
     pub role: TeamMemberRole,
     pub invited_by_user_id: Option<Uuid>,
     pub joined_at: TimeDateTimeWithTimeZone,
+    pub deleted_at: Option<TimeDateTimeWithTimeZone>,
     pub created_at: TimeDateTimeWithTimeZone,
     pub updated_at: TimeDateTimeWithTimeZone,
 }

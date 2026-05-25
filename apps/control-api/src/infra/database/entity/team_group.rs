@@ -11,6 +11,7 @@ pub struct Model {
     pub description: Option<String>,
     pub quota_plan_id: Option<Uuid>,
     pub is_default: bool,
+    pub deleted_at: Option<TimeDateTimeWithTimeZone>,
     pub created_at: TimeDateTimeWithTimeZone,
     pub updated_at: TimeDateTimeWithTimeZone,
 }

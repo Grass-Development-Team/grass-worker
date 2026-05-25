@@ -16,6 +16,7 @@ pub struct Model {
     pub is_default: bool,
     pub provider: Option<String>,
     pub config: Json,
+    pub deleted_at: Option<TimeDateTimeWithTimeZone>,
     pub created_at: TimeDateTimeWithTimeZone,
     pub updated_at: TimeDateTimeWithTimeZone,
 }
