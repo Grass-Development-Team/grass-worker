@@ -19,6 +19,7 @@ pub struct Model {
     pub output_directory: Option<String>,
     pub source_config: Json,
     pub build_config: Json,
+    pub deleted_at: Option<TimeDateTimeWithTimeZone>,
     pub created_at: TimeDateTimeWithTimeZone,
     pub updated_at: TimeDateTimeWithTimeZone,
 }

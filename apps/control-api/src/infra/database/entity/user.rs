@@ -13,6 +13,7 @@ pub struct Model {
     pub display_name: Option<String>,
     pub status: UserStatus,
     pub last_login_at: Option<TimeDateTimeWithTimeZone>,
+    pub deleted_at: Option<TimeDateTimeWithTimeZone>,
     pub created_at: TimeDateTimeWithTimeZone,
     pub updated_at: TimeDateTimeWithTimeZone,
 }

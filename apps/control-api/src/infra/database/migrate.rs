@@ -8,7 +8,10 @@ pub struct Migrator;
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(migration::m20260515_000001_bootstrap::Migration)]
+        vec![
+            Box::new(migration::m20260515_000001_bootstrap::Migration),
+            Box::new(migration::m20260525_000002_lifecycle::Migration),
+        ]
     }
 }
 

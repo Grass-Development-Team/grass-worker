@@ -321,7 +321,6 @@ async fn upsert_team_group(
                 active.quota_plan_id = Set(Some(
                     quota_plan_id_by_code(database, seed.quota_plan_code).await?,
                 ));
-                active.updated_at = Set(now);
                 active.update(database).await?;
             }
         }
@@ -425,7 +424,6 @@ async fn upsert_host_policy(
             if model.quota_plan_id.is_none() {
                 let mut active: host_policy::ActiveModel = model.into();
                 active.quota_plan_id = Set(Some(quota_plan_id));
-                active.updated_at = Set(now);
                 active.update(database).await?;
             }
         }
