@@ -4,8 +4,12 @@ interface ApiResponse<T> {
   data: T;
 }
 
+function baseUrl(): string {
+  return import.meta.env.VITE_API_BASE_URL ?? "";
+}
+
 export async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
+  const response = await fetch(`${baseUrl()}${url}`, {
     headers: { "Content-Type": "application/json" },
     ...options,
   });

@@ -24,5 +24,5 @@ fn default_host() -> IpAddr {
 }
 
 const fn default_api_port() -> u16 {
-    8080
+    7817
 }
