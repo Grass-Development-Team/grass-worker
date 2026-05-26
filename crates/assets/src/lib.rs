@@ -6,7 +6,7 @@
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
-#[folder = "public/"]
+#[folder = "assets/public/"]
 pub struct ConsoleAssets;
 
 pub fn get(path: &str) -> Option<rust_embed::EmbeddedFile> {

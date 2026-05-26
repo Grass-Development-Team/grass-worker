@@ -7,5 +7,5 @@
 apps/console/node_modules
 apps/console/dist
 apps/console/.vite
-crates/assets/public/
+crates/assets/assets/public/
 public/
