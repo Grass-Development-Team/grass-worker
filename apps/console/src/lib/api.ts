@@ -1,3 +1,5 @@
+import { getCsrfToken } from "@/lib/csrf";
+
 interface ApiResponse<T> {
   code: number;
   message: string;
@@ -9,9 +11,23 @@ function baseUrl(): string {
 }
 
 export async function request<T>(url: string, options?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+
+  if (options?.method && !["GET", "HEAD", "OPTIONS"].includes(options.method)) {
+    const csrf = getCsrfToken();
+    if (csrf) {
+      headers["x-csrf-token"] = csrf;
+    }
+  }
+
   const response = await fetch(`${baseUrl()}${url}`, {
-    headers: { "Content-Type": "application/json" },
     ...options,
+    headers: {
+      ...headers,
+      ...(options?.headers as Record<string, string> | undefined),
+    },
   });
   const json: ApiResponse<T> = await response.json();
   if (response.ok && json.code === 200) {
