@@ -9,7 +9,8 @@ rust-version.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-grass-config = { path = "../../crates/config" }
+grass-config.workspace = true
+serde.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
