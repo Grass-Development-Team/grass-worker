@@ -1,24 +1,42 @@
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router";
-import { setupApi } from "@/features/setup/setup.api";
+import { useNavigate, useLocation } from "react-router";
 import { Router } from "./router";
+
+interface HealthResponse {
+  status: string;
+  service: string;
+  version: string;
+  setup?: boolean;
+}
+
+async function fetchHealth(): Promise<HealthResponse> {
+  const res = await fetch("/health");
+  if (!res.ok) throw new Error("health check failed");
+  return res.json();
+}
 
 export function App() {
   const navigate = useNavigate();
+  const location = useLocation();
 
-  const { data: setupState } = useQuery({
-    queryKey: ["setup-state-bootstrap"],
-    queryFn: setupApi.getSetupState,
+  const { data: health } = useQuery({
+    queryKey: ["health"],
+    queryFn: fetchHealth,
     retry: true,
     retryDelay: 2000,
+    refetchInterval: 3000,
   });
 
-  if (setupState && setupState.stage !== "complete" && window.location.pathname !== "/setup") {
+  if (!health) return null;
+
+  const isSetupMode = health.setup === true;
+
+  if (isSetupMode && location.pathname !== "/setup") {
     navigate("/setup", { replace: true });
     return null;
   }
 
-  if (setupState?.stage === "complete" && ["/setup", "/"].includes(window.location.pathname)) {
+  if (!isSetupMode && location.pathname === "/setup") {
     navigate("/login", { replace: true });
     return null;
   }

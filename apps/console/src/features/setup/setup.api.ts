@@ -10,11 +10,19 @@ export interface SetupState {
 export const setupApi = {
   getSetupState: () => request<SetupState>("/api/v1/setup/state"),
 
-  configureDatabase: (url: string) =>
-    request<{ connected: boolean; migrations_applied: boolean; seed_completed: boolean }>(
+  configureDatabase: (
+    host: string,
+    port: string,
+    username: string,
+    password: string,
+    database: string,
+  ) => {
+    const url = `postgres://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}/${database}`;
+    return request<{ connected: boolean; migrations_applied: boolean; seed_completed: boolean }>(
       "/api/v1/setup/database",
       { method: "POST", body: JSON.stringify({ url }) },
-    ),
+    );
+  },
 
   createAdmin: (email: string, password: string, display_name?: string) =>
     request<{

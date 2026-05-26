@@ -18,7 +18,7 @@ export function FinishStep({ onSuccess }: { onSuccess: () => void }) {
   const mutation = useMutation({
     mutationFn: setupApi.finishSetup,
     onSuccess: () => {
-      setTimeout(onSuccess, 1500);
+      onSuccess();
     },
     onError: (err: Error) => setError(err.message),
   });
