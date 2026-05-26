@@ -22,17 +22,32 @@ version = "0.1.0"
 
 [workspace.dependencies]
 anyhow = "1.0.100"
+argon2 = { version = "0.5", features = ["std"] }
 axum = "0.8.7"
+axum-extra = { version = "0.10", features = ["cookie"] }
+base64 = "0.22"
 clap = { version = "4.5.50", features = ["derive", "env"] }
 config = { version = "0.15.19", default-features = false, features = ["toml"] }
+hex = "0.4"
+mime_guess = "2"
+rand = "0.8"
+rust-embed = "8"
 sea-orm = { version = "2.0.0-rc.38", default-features = false, features = ["macros", "sqlx-postgres", "runtime-tokio-rustls", "with-json", "with-time", "with-uuid"] }
 sea-orm-migration = { version = "2.0.0-rc.38", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "with-json", "with-time", "with-uuid"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
+sha2 = "0.10"
 thiserror = "2.0.17"
 time = { version = "0.3.44", features = ["serde"] }
 tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "signal", "net"] }
+toml = { version = "0.8" }
+tower-http = { version = "0.6", features = ["cors", "compression-full", "trace"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "json"] }
 url = "2.5.4"
 uuid = { version = "1.18.1", features = ["serde", "v7"] }
+
+grass-assets = { path = "crates/assets" }
+grass-config = { path = "crates/config" }
+grass-crypto = { path = "crates/crypto" }
+grass-token = { path = "crates/token" }

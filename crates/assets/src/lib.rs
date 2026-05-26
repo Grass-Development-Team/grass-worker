@@ -1,17 +1,14 @@
-//! grass-assets internal crate.
+//! grass-assets — embedded Console build assets.
+//!
+//! Embeds `public/` at compile time via `rust-embed`.
+//! The build pipeline copies `apps/console/dist/` here before compilation.
 
-/// Returns the crate identifier for diagnostics and smoke tests.
-#[must_use]
-pub const fn crate_name() -> &'static str {
-    "assets"
-}
+use rust_embed::RustEmbed;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[derive(RustEmbed)]
+#[folder = "assets/public/"]
+pub struct ConsoleAssets;
 
-    #[test]
-    fn exposes_crate_name() {
-        assert_eq!(crate_name(), "assets");
-    }
+pub fn get(path: &str) -> Option<rust_embed::EmbeddedFile> {
+    ConsoleAssets::get(path)
 }

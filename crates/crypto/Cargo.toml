@@ -6,5 +6,6 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-[lib]
-path = "src/lib.rs"
+[dependencies]
+argon2.workspace = true
+thiserror.workspace = true

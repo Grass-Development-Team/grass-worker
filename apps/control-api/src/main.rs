@@ -1,60 +1,35 @@
-use std::net::SocketAddr;
-
 use anyhow::Context;
-use axum::{Json, Router, routing::get};
 use clap::Parser;
-use serde::Serialize;
 use tracing::info;
 
 mod cli;
+mod domain;
+mod features;
 mod infra;
+mod init;
 mod state;
 
 use crate::{
     cli::{Cli, Command},
-    infra::{config::ControlApiConfig, database},
+    state::ControlApiState,
 };
-
-#[derive(Serialize)]
-struct HealthResponse {
-    status: &'static str,
-    service: &'static str,
-}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-
-    let config = ControlApiConfig::load(cli.config_path()).with_context(|| {
-        format!(
-            "failed to load Control API config from {}",
-            cli.config_path()
-        )
-    })?;
+    let config = init::config(cli.config_path())?;
     config.init_tracing()?;
 
-    let database = database::connect(&config.database.url).await?;
+    let state = ControlApiState::new(config, cli.config_path());
 
     if matches!(cli.command, Some(Command::Migrate)) {
-        database::migrate::run(&database).await?;
-        database::seed::run(&database).await?;
-        info!(
-            operation = "control_api.migrate",
-            "database migrations and seed completed"
-        );
+        init::migrate(&state).await?;
         return Ok(());
     }
 
-    if config.migration.auto_migrate {
-        database::migrate::run(&database).await?;
-        database::seed::run(&database).await?;
-    }
-
-    let state = state::ControlApiState::new(config);
-    let addr = SocketAddr::new(state.config.server.host, state.config.server.port);
-    let app = Router::new()
-        .route("/health", get(health))
-        .with_state(state);
+    let is_setup_mode = init::database(&state).await?;
+    let addr = init::address(&state);
+    let app = features::router::router(is_setup_mode).with_state(state);
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("failed to bind Control API listener on {addr}"))?;
@@ -67,13 +42,6 @@ async fn main() -> anyhow::Result<()> {
     info!(operation = "control_api.stop", "Control API stopped");
 
     Ok(())
-}
-
-async fn health() -> Json<HealthResponse> {
-    Json(HealthResponse {
-        status: "ok",
-        service: "control-api",
-    })
 }
 
 async fn shutdown_signal() {

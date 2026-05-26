@@ -1046,6 +1046,62 @@ grass-worker/
 │   │           └── node_manager/
 │   ├── node/
 │   └── console/
+│       ├── index.html
+│       ├── package.json
+│       ├── tsconfig.json
+│       ├── vite.config.ts
+│       ├── components.json
+│       └── src/
+│           ├── main.tsx
+│           ├── App.tsx
+│           ├── router.tsx
+│           ├── styles.css
+│           ├── vite-env.d.ts
+│           ├── lib/
+│           │   ├── api.ts
+│           │   ├── utils.ts
+│           │   └── constants.ts
+│           ├── components/
+│           │   └── ui/
+│           │       ├── button.tsx
+│           │       ├── card.tsx
+│           │       ├── field.tsx
+│           │       ├── input.tsx
+│           │       ├── label.tsx
+│           │       ├── separator.tsx
+│           │       ├── sheet.tsx
+│           │       ├── sidebar.tsx
+│           │       ├── skeleton.tsx
+│           │       └── tooltip.tsx
+│           ├── hooks/
+│           │   └── use-mobile.tsx
+│           ├── layouts/
+│           │   ├── auth-layout.tsx
+│           │   └── app-layout.tsx
+│           └── features/
+│               ├── setup/
+│               │   ├── setup-route.tsx
+│               │   ├── setup.api.ts
+│               │   └── components/
+│               │       ├── step-indicator.tsx
+│               │       ├── database-step.tsx
+│               │       ├── admin-step.tsx
+│               │       ├── site-step.tsx
+│               │       ├── node-step.tsx
+│               │       ├── storage-step.tsx
+│               │       └── finish-step.tsx
+│               ├── auth/
+│               │   ├── login-route.tsx
+│               │   ├── login-form.tsx
+│               │   └── auth.api.ts
+│               ├── dashboard/
+│               │   └── dashboard-route.tsx
+│               ├── teams/
+│               ├── projects/
+│               ├── deployments/
+│               ├── hosts/
+│               ├── quota/
+│               └── admin/
 ├── crates/
 │   ├── assets/
 │   ├── config/
@@ -1070,6 +1126,77 @@ grass-worker/
 Router 写在当前目录的最顶层 path 文件里。例如 `features/api/v1/user.rs` 负责 `/api/v1/user` 以及合并或挂载 `user/info.rs`、`user/settings.rs`；`features/api/v1.rs` 负责合并 `v1/auth.rs`、`v1/user.rs`、`v1/team.rs` 等模块，并 nest 到 `/v1`。`features/api/mod.rs` 再合并版本级 router，并 nest 到 `/api` 或交给上层统一挂载。
 
 `features/router.rs` 和 `features/frontend.rs` 结构应保留。新增 API 时不要按资源预先创建 `team/route.rs`、`team/request.rs`、`team/response.rs` 这类分层目录；应按 URL path 创建对应 `.rs` 文件。单个 path 文件内部可以包含 controller、请求结构、响应结构、service struct、service method、校验和错误映射。
+
+### 6.1 Console 目录架构
+
+Console 采用与后端 VSA 一致的 feature-based 垂直切片组织方式。每个 feature 目录内聚该业务域的路由、组件和 API 调用。
+
+**分层约定**：
+
+| 层级 | 目录 | 职责 | 能否包含业务逻辑 |
+|------|------|------|:---:|
+| UI 原语 | `components/ui/` | shadcn/ui 复制过来的组件模板，纯展示 | 否 |
+| 共享工具 | `lib/` | 通用 API helper、`cn()`、常量 | 否（不耦合具体 API endpoint） |
+| 共享 hook | `hooks/` | 跨 feature 复用的 hook | 否（不耦合具体 feature 类型） |
+| 布局 | `layouts/` | 页面级布局壳（sidebar、header），渲染 `<Outlet />` | 仅布局逻辑 |
+| Feature | `features/<name>/` | 业务 feature 的完整闭环 | 是 |
+
+**Feature 内部结构**：
+
+```
+features/<name>/
+├── <name>-route.tsx          # 路由入口组件（必需）
+├── <name>.api.ts             # 该 feature 专用的 API 调用封装（可选）
+└── components/               # 该 feature 专用的 UI 组件（可选）
+```
+
+**规则**：
+
+- 路由文件命名 `<feature>-route.tsx`，放在 feature 目录顶层。
+- API 文件命名 `<feature>.api.ts`，与 `lib/api.ts`（通用 helper）区分。
+
+  **API 去中心化**：`lib/api.ts` **仅**包含通用 `request()` 函数和 `ApiResponse<T>` 类型，**不得**包含任何 feature-specific 的 API 方法或业务类型。每个 feature 的 API 调用封装在其自身的 `<feature>.api.ts` 中（例如 `features/setup/setup.api.ts` 包含 `setupApi.getSetupState`、`setupApi.configureDatabase` 等）。所有调用方必须从所属 feature 的 `.api.ts` 导入，不得从 `lib/api.ts` 导入业务 API。
+
+  若 API 调用简单可直接写在 route 中，不必强制创建 `.api.ts` 文件。
+
+- Feature 内组件放在 `components/` 子目录下，不跨 feature 共享。需要共享时提升到 `components/`（非 `ui/`）或 `lib/`。
+- 类型定义就近放在使用它们的文件中，不建全局 DTO 目录。
+- 后续 feature 按需创建目录，不预建空壳。
+
+**布局与路由**：
+
+布局组件使用 `<Outlet />` 渲染子路由：
+- `auth-layout.tsx`：公开路由壳（setup、login 等未认证页面）。
+- `app-layout.tsx`：认证后路由壳（sidebar 导航 + team switcher + 内容区）。
+
+`router.tsx` 按布局分组：
+
+```tsx
+<Routes>
+  <Route element={<AuthLayout />}>
+    <Route path="/setup" element={<SetupRoute />} />
+    <Route path="/login" element={<LoginRoute />} />
+  </Route>
+  <Route element={<AppLayout />}>
+    <Route path="/" element={<DashboardRoute />} />
+    {/* 后续 feature 路由在此嵌套 */}
+  </Route>
+</Routes>
+```
+
+**与后端的对应关系**：
+
+| Console Feature | 后端 API Slice | 后端 Domain |
+|-----------------|---------------|-------------|
+| `features/setup/` | `features/api/v1/setup.rs` | — |
+| `features/auth/` | `features/api/v1/auth.rs` | `domain::users` |
+| `features/dashboard/` | — | — |
+| `features/teams/` | `features/api/v1/team.rs` | `domain::teams` |
+| `features/projects/` | `features/api/v1/project.rs` | `domain::projects` |
+| `features/deployments/` | `features/api/v1/deployment.rs` | `domain::deployments` |
+| `features/hosts/` | `features/api/v1/host.rs` | `domain::hosts` |
+| `features/quota/` | `features/api/v1/quota.rs` | `domain::quotas` |
+| `features/admin/` | 跨多个 admin API | 跨多个 domain |
 
 ## 7. 后端架构
 
