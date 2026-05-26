@@ -2,7 +2,7 @@ use std::path::Path;
 
 use axum::{
     body::Body,
-    http::{header, StatusCode, Uri},
+    http::{StatusCode, Uri, header},
     response::{IntoResponse, Response},
 };
 
@@ -22,8 +22,7 @@ pub async fn frontend_fallback(uri: Uri) -> Response {
     let public_path = Path::new(PUBLIC_DIR).join(path);
     if public_path.is_file() {
         if let Ok(content) = tokio::fs::read(&public_path).await {
-            let mime = mime_guess::from_path(&public_path)
-                .first_or_octet_stream();
+            let mime = mime_guess::from_path(&public_path).first_or_octet_stream();
             return Response::builder()
                 .header(header::CONTENT_TYPE, mime.as_ref())
                 .header(header::CACHE_CONTROL, "public, max-age=0")
@@ -63,10 +62,9 @@ pub async fn frontend_fallback(uri: Uri) -> Response {
 fn has_asset_hash(path: &str) -> bool {
     path.rsplit('/')
         .next()
-        .and_then(|name| name.strip_suffix(".js").or_else(|| name.strip_suffix(".css")))
-        .is_some_and(|base| {
-            base.rsplit('-')
-                .next()
-                .is_some_and(|h| h.len() >= 6)
+        .and_then(|name| {
+            name.strip_suffix(".js")
+                .or_else(|| name.strip_suffix(".css"))
         })
+        .is_some_and(|base| base.rsplit('-').next().is_some_and(|h| h.len() >= 6))
 }

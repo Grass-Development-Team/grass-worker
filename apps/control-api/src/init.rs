@@ -9,6 +9,20 @@ use crate::{
     state::ControlApiState,
 };
 
+pub async fn redis(state: &ControlApiState) -> anyhow::Result<()> {
+    let redis_url = state.config.read().unwrap().redis.url.clone();
+    if redis_url.trim().is_empty() {
+        tracing::warn!(
+            operation = "control_api.redis_not_configured",
+            "Redis URL is not configured; session management will not be available"
+        );
+        return Ok(());
+    }
+    let conn = crate::infra::redis::connect(&redis_url).await?;
+    state.redis.set(conn).ok();
+    Ok(())
+}
+
 pub fn config(path: &str) -> anyhow::Result<ControlApiConfig> {
     ControlApiConfig::load(path)
         .with_context(|| format!("failed to load Control API config from {path}"))

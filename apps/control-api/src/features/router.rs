@@ -1,8 +1,8 @@
-use axum::{Json, Router, extract::State, routing::get};
+use axum::{Json, Router, extract::State, middleware, routing::get};
 use serde::Serialize;
 use tracing::info;
 
-use crate::{features::api, features::frontend, init, state::ControlApiState};
+use crate::{features::api, features::frontend, infra::http, init, state::ControlApiState};
 
 #[derive(Serialize)]
 struct HealthResponse {
@@ -13,7 +13,7 @@ struct HealthResponse {
     setup: Option<bool>,
 }
 
-pub fn router(is_setup_mode: bool) -> Router<ControlApiState> {
+pub fn router(state: ControlApiState, is_setup_mode: bool) -> Router<ControlApiState> {
     if is_setup_mode {
         info!(
             operation = "control_api.mode",
@@ -28,9 +28,15 @@ pub fn router(is_setup_mode: bool) -> Router<ControlApiState> {
         );
     }
 
+    let session_layer =
+        middleware::from_fn_with_state(state.clone(), http::session::session_middleware);
+
     Router::new()
         .route("/health", get(health))
-        .nest("/api", api::router(is_setup_mode))
+        .nest(
+            "/api",
+            api::router(state.clone(), is_setup_mode).layer(session_layer),
+        )
         .fallback(frontend::frontend_fallback)
 }
 

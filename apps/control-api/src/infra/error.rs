@@ -11,7 +11,16 @@ pub enum AppError {
     #[error("{message}")]
     Validation { op: &'static str, message: String },
     #[error("{message}")]
+    Unauthorized { op: &'static str, message: String },
+    #[error("{message}")]
+    Forbidden { op: &'static str, message: String },
+    #[error("{message}")]
+    NotFound { op: &'static str, message: String },
+    #[error("{message}")]
     Conflict { op: &'static str, message: String },
+    #[allow(dead_code)]
+    #[error("{message}")]
+    TooManyRequests { op: &'static str, message: String },
     #[error("{source}")]
     Infrastructure {
         op: &'static str,
@@ -42,7 +51,11 @@ impl AppError {
     fn status_code(&self) -> StatusCode {
         match self {
             Self::Validation { .. } => StatusCode::BAD_REQUEST,
+            Self::Unauthorized { .. } => StatusCode::UNAUTHORIZED,
+            Self::Forbidden { .. } => StatusCode::FORBIDDEN,
+            Self::NotFound { .. } => StatusCode::NOT_FOUND,
             Self::Conflict { .. } => StatusCode::CONFLICT,
+            Self::TooManyRequests { .. } => StatusCode::TOO_MANY_REQUESTS,
             Self::Infrastructure { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             Self::Internal { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             Self::SetupNotAllowed { .. } => StatusCode::FORBIDDEN,
@@ -52,7 +65,11 @@ impl AppError {
     fn op(&self) -> &'static str {
         match self {
             Self::Validation { op, .. } => op,
+            Self::Unauthorized { op, .. } => op,
+            Self::Forbidden { op, .. } => op,
+            Self::NotFound { op, .. } => op,
             Self::Conflict { op, .. } => op,
+            Self::TooManyRequests { op, .. } => op,
             Self::Infrastructure { op, .. } => op,
             Self::Internal { op, .. } => op,
             Self::SetupNotAllowed { op, .. } => op,
@@ -66,10 +83,14 @@ impl AppError {
     fn error_code(&self) -> u16 {
         match self {
             Self::Validation { .. } => 40001,
+            Self::Unauthorized { .. } => 40101,
+            Self::Forbidden { .. } => 40301,
+            Self::NotFound { .. } => 40401,
             Self::Conflict { .. } => 40901,
+            Self::TooManyRequests { .. } => 42901,
             Self::Infrastructure { .. } => 50001,
             Self::Internal { .. } => 50099,
-            Self::SetupNotAllowed { .. } => 40301,
+            Self::SetupNotAllowed { .. } => 40302,
         }
     }
 }
