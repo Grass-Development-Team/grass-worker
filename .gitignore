@@ -7,3 +7,4 @@
 apps/console/node_modules
 apps/console/dist
 apps/console/.vite
+public/

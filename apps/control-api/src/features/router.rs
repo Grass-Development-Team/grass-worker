@@ -2,7 +2,7 @@ use axum::{Json, Router, routing::get};
 use serde::Serialize;
 use tracing::info;
 
-use crate::{features::api, state::ControlApiState};
+use crate::{features::api, features::frontend, state::ControlApiState};
 
 #[derive(Serialize)]
 struct HealthResponse {
@@ -29,6 +29,7 @@ pub fn router(is_setup_mode: bool) -> Router<ControlApiState> {
     Router::new()
         .route("/health", get(health))
         .nest("/api", api::router(is_setup_mode))
+        .fallback(frontend::frontend_fallback)
 }
 
 async fn health() -> Json<HealthResponse> {
