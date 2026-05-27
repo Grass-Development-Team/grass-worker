@@ -1249,7 +1249,7 @@ dependencies = [
  "redis",
  "serde",
  "time",
- "tracing",
+ "tokio",
 ]
 
 [[package]]
