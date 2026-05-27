@@ -56,7 +56,7 @@ pub async fn csrf_middleware(
     }
 
     let path = request.uri().path().to_owned();
-    if path.starts_with("/api/v1/auth/") || path.starts_with("/api/v1/setup/") {
+    if path.starts_with("/auth/") || path.starts_with("/setup/") {
         return next.run(request).await;
     }
 
