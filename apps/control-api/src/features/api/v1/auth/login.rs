@@ -8,7 +8,7 @@ use crate::{
     domain::users,
     infra::{
         error::{AppError, ok_response},
-        http::csrf,
+        http::middlewares::csrf,
     },
     state::ControlApiState,
 };

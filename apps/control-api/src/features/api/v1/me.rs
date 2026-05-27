@@ -5,7 +5,7 @@ use crate::{
     domain::users,
     infra::{
         error::{AppError, ok_response},
-        http::session::Session,
+        http::extractors::Session,
     },
     state::ControlApiState,
 };

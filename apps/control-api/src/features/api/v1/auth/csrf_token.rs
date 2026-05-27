@@ -4,7 +4,7 @@ use serde_json::json;
 use crate::{
     infra::{
         error::{AppError, ok_response},
-        http::{csrf, session::Session},
+        http::{extractors::Session, middlewares::csrf},
     },
     state::ControlApiState,
 };

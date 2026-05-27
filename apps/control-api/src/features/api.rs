@@ -1,6 +1,6 @@
 use axum::{Router, middleware};
 
-use crate::{infra::http::csrf, state::ControlApiState};
+use crate::{infra::http::middlewares::csrf, state::ControlApiState};
 
 pub mod v1;
 

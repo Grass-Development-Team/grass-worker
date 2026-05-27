@@ -2,7 +2,10 @@ use axum::{Json, Router, extract::State, middleware, routing::get};
 use serde::Serialize;
 use tracing::info;
 
-use crate::{features::api, features::frontend, infra::http, init, state::ControlApiState};
+use crate::{
+    features::api, features::frontend, infra::http::middlewares::session as session_mw, init,
+    state::ControlApiState,
+};
 
 #[derive(Serialize)]
 struct HealthResponse {
@@ -29,7 +32,7 @@ pub fn router(state: ControlApiState, is_setup_mode: bool) -> Router<ControlApiS
     }
 
     let session_layer =
-        middleware::from_fn_with_state(state.clone(), http::session::session_middleware);
+        middleware::from_fn_with_state(state.clone(), session_mw::session_middleware);
 
     Router::new()
         .route("/health", get(health))
