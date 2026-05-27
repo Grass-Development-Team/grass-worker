@@ -1,8 +1,8 @@
+pub mod cache;
 pub mod database;
 pub mod log;
 pub mod migration;
 pub mod node_manager;
-pub mod redis;
 pub mod secrets;
 pub mod server;
 pub mod session;
@@ -16,9 +16,9 @@ use serde::{Deserialize, Serialize};
 use tracing_subscriber::{EnvFilter, fmt};
 
 use self::{
-    database::DatabaseConfig, log::LogConfig, migration::MigrationConfig,
-    node_manager::NodeManagerConfig, redis::RedisConfig, secrets::SecretsConfig,
-    server::ServerConfig, session::SessionConfig, storage::StorageConfig,
+    cache::CacheConfig, database::DatabaseConfig, log::LogConfig, migration::MigrationConfig,
+    node_manager::NodeManagerConfig, secrets::SecretsConfig, server::ServerConfig,
+    session::SessionConfig, storage::StorageConfig,
 };
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -28,7 +28,7 @@ pub struct ControlApiConfig {
     #[serde(default)]
     pub database: DatabaseConfig,
     #[serde(default)]
-    pub redis: RedisConfig,
+    pub cache: CacheConfig,
     #[serde(default)]
     pub storage: StorageConfig,
     #[serde(default)]
@@ -74,7 +74,7 @@ impl ControlApiConfig {
 
 fn apply_env(config: &mut ControlApiConfig) -> Result<(), ConfigError> {
     overlay_string("GWAPI_DATABASE_URL", &mut config.database.url);
-    overlay_string("GWAPI_REDIS_URL", &mut config.redis.url);
+    overlay_string("GWAPI_CACHE_REDIS_URL", &mut config.cache.redis_url);
     overlay_string("GWAPI_STORAGE_ROOT", &mut config.storage.root);
     overlay_string("GWAPI_SECRET_KEY", &mut config.secrets.secret_key);
     overlay_bool(

@@ -1,15 +1,20 @@
 use serde::{Deserialize, Serialize};
 
+use grass_cache::CacheBackend;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RedisConfig {
+pub struct CacheConfig {
+    #[serde(default)]
+    pub backend: CacheBackend,
     #[serde(default = "default_redis_url")]
-    pub url: String,
+    pub redis_url: String,
 }
 
-impl Default for RedisConfig {
+impl Default for CacheConfig {
     fn default() -> Self {
         Self {
-            url: default_redis_url(),
+            backend: CacheBackend::default(),
+            redis_url: default_redis_url(),
         }
     }
 }

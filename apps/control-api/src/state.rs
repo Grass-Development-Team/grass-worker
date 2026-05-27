@@ -1,6 +1,5 @@
 use std::sync::{Arc, OnceLock, RwLock};
 
-use redis::aio::MultiplexedConnection;
 use sea_orm::DatabaseConnection;
 
 use crate::infra::config::ControlApiConfig;
@@ -10,7 +9,7 @@ pub struct ControlApiState {
     pub config: Arc<RwLock<ControlApiConfig>>,
     config_path: Arc<String>,
     pub database: Arc<OnceLock<DatabaseConnection>>,
-    pub redis: Arc<OnceLock<MultiplexedConnection>>,
+    pub cache: Arc<OnceLock<grass_cache::CacheStore>>,
 }
 
 impl ControlApiState {
@@ -19,7 +18,7 @@ impl ControlApiState {
             config: Arc::new(RwLock::new(config)),
             config_path: Arc::new(config_path.into()),
             database: Arc::new(OnceLock::new()),
-            redis: Arc::new(OnceLock::new()),
+            cache: Arc::new(OnceLock::new()),
         }
     }
 
@@ -31,7 +30,7 @@ impl ControlApiState {
         self.database.get()
     }
 
-    pub fn try_redis(&self) -> Option<&MultiplexedConnection> {
-        self.redis.get()
+    pub fn try_cache(&self) -> Option<&grass_cache::CacheStore> {
+        self.cache.get()
     }
 }

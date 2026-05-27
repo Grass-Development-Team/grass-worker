@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 
 use anyhow::Context;
+use grass_cache::{CacheBackend, CacheStore, MokaCache, RedisCache, redis_backend};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use tracing::info;
 
@@ -9,18 +10,38 @@ use crate::{
     state::ControlApiState,
 };
 
-pub async fn redis(state: &ControlApiState) -> anyhow::Result<()> {
-    let redis_url = state.config.read().unwrap().redis.url.clone();
-    if redis_url.trim().is_empty() {
-        tracing::warn!(
-            operation = "control_api.redis_not_configured",
-            "Redis URL is not configured; session management will not be available"
-        );
-        return Ok(());
-    }
-    let conn = crate::infra::redis::connect(&redis_url).await?;
-    state.redis.set(conn).ok();
-    Ok(())
+pub async fn cache(state: &ControlApiState) {
+    let (backend, redis_url) = {
+        let config = state.config.read().unwrap();
+        (config.cache.backend, config.cache.redis_url.clone())
+    };
+
+    let store = match backend {
+        CacheBackend::Redis => {
+            if redis_url.trim().is_empty() {
+                tracing::warn!(
+                    operation = "control_api.cache.redis_url_empty",
+                    "Redis URL is empty; falling back to moka"
+                );
+                CacheStore::Moka(MokaCache::new(10_000))
+            } else {
+                match redis_backend::connect(&redis_url).await {
+                    Ok(conn) => CacheStore::Redis(RedisCache::new(conn)),
+                    Err(error) => {
+                        tracing::warn!(
+                            operation = "control_api.cache.redis_failed",
+                            %error,
+                            "Redis unavailable; falling back to moka"
+                        );
+                        CacheStore::Moka(MokaCache::new(10_000))
+                    }
+                }
+            }
+        }
+        CacheBackend::Moka => CacheStore::Moka(MokaCache::new(10_000)),
+    };
+
+    state.cache.set(store).ok();
 }
 
 pub fn config(path: &str) -> anyhow::Result<ControlApiConfig> {

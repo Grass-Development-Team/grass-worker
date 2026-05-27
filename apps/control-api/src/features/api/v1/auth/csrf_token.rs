@@ -13,13 +13,12 @@ pub async fn handler(
     State(state): State<ControlApiState>,
     session: Session,
 ) -> Result<impl IntoResponse, AppError> {
-    let redis_conn = state.try_redis().ok_or_else(|| AppError::Internal {
-        op: "csrf.no_redis",
-        message: "session service not available".to_owned(),
+    let cache = state.try_cache().ok_or_else(|| AppError::Internal {
+        op: "csrf.no_cache",
+        message: "cache service not available".to_owned(),
     })?;
 
-    let mut conn = redis_conn.clone();
-    let token = csrf::generate_csrf_token(&mut conn, &session.session_id)
+    let token = csrf::generate_csrf_token(cache, &session.session_id)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: "csrf.generate",

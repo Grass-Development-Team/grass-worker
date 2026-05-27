@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use axum::{
     body::Body,
     http::{HeaderMap, Request},
@@ -8,7 +10,8 @@ use axum::{
 use crate::state::ControlApiState;
 
 const SESSION_COOKIE: &str = "session_id";
-const IDLE_TTL_SECONDS: u64 = 900;
+const IDLE_TTL: Duration = Duration::from_secs(900);
+const ABSOLUTE_TTL: Duration = Duration::from_secs(2_592_000);
 
 pub async fn session_middleware(
     state: axum::extract::State<ControlApiState>,
@@ -17,10 +20,9 @@ pub async fn session_middleware(
 ) -> Response {
     let session_id = extract_session_cookie(request.headers());
 
-    match (session_id, state.try_redis().cloned()) {
-        (Some(sid), Some(conn)) => {
-            let mut conn = conn;
-            let session_data = grass_session::validate_session(&mut conn, &sid, IDLE_TTL_SECONDS)
+    match (session_id, state.try_cache()) {
+        (Some(sid), Some(cache)) => {
+            let session_data = grass_session::validate_session(cache, &sid, IDLE_TTL, ABSOLUTE_TTL)
                 .await
                 .ok()
                 .flatten();

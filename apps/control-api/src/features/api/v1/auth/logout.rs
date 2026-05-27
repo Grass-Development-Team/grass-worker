@@ -12,9 +12,8 @@ pub async fn handler(
     jar: CookieJar,
 ) -> Result<impl IntoResponse, AppError> {
     if let Some(session_id) = jar.get("session_id").map(|c| c.value().to_owned()) {
-        if let Some(conn) = state.try_redis() {
-            let mut conn = conn.clone();
-            let _ = grass_session::revoke_session(&mut conn, &session_id).await;
+        if let Some(cache) = state.try_cache() {
+            let _ = grass_session::revoke_session(cache, &session_id).await;
         }
     }
 
