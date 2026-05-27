@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { authApi } from "./auth.api";
 
 export function LoginForm({ className, ...props }: React.ComponentPropsWithoutRef<"div">) {
   const navigate = useNavigate();
@@ -14,7 +15,7 @@ export function LoginForm({ className, ...props }: React.ComponentPropsWithoutRe
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -24,7 +25,13 @@ export function LoginForm({ className, ...props }: React.ComponentPropsWithoutRe
     }
 
     setIsSubmitting(true);
-    navigate("/", { replace: true });
+    try {
+      await authApi.login(email.trim(), password);
+      navigate("/", { replace: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Login failed");
+      setIsSubmitting(false);
+    }
   };
 
   return (

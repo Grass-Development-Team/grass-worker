@@ -31,6 +31,7 @@ config = { version = "0.15.19", default-features = false, features = ["toml"] }
 hex = "0.4"
 mime_guess = "2"
 rand = "0.8"
+redis = { version = "0.31.0", default-features = false, features = ["tokio-comp", "aio"] }
 rust-embed = "8"
 sea-orm = { version = "2.0.0-rc.38", default-features = false, features = ["macros", "sqlx-postgres", "runtime-tokio-rustls", "with-json", "with-time", "with-uuid"] }
 sea-orm-migration = { version = "2.0.0-rc.38", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "with-json", "with-time", "with-uuid"] }
@@ -50,4 +51,5 @@ uuid = { version = "1.18.1", features = ["serde", "v7"] }
 grass-assets = { path = "crates/assets" }
 grass-config = { path = "crates/config" }
 grass-crypto = { path = "crates/crypto" }
+grass-session = { path = "crates/session" }
 grass-token = { path = "crates/token" }

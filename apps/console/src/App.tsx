@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useLocation } from "react-router";
 import { Router } from "./router";
+import { AuthProvider } from "@/features/auth/auth-context";
 
 interface HealthResponse {
   status: string;
@@ -36,10 +37,13 @@ export function App() {
     return null;
   }
 
-  if (!isSetupMode && location.pathname === "/setup") {
-    navigate("/login", { replace: true });
-    return null;
+  if (isSetupMode) {
+    return <Router />;
   }
 
-  return <Router />;
+  return (
+    <AuthProvider>
+      <Router />
+    </AuthProvider>
+  );
 }
