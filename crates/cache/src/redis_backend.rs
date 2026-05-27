@@ -2,23 +2,20 @@ use std::time::Duration;
 
 use redis::aio::MultiplexedConnection;
 
-pub async fn connect(url: &str) -> anyhow::Result<MultiplexedConnection> {
-    let client = redis::Client::open(url).map_err(|e| anyhow::anyhow!("invalid Redis URL: {e}"))?;
-    let conn = client
-        .get_multiplexed_async_connection()
-        .await
-        .map_err(|e| anyhow::anyhow!("Redis connection failed: {e}"))?;
-    Ok(conn)
-}
-
 #[derive(Clone)]
 pub struct RedisCache {
     conn: MultiplexedConnection,
 }
 
 impl RedisCache {
-    pub fn new(conn: MultiplexedConnection) -> Self {
-        Self { conn }
+    pub async fn connect(url: &str) -> anyhow::Result<Self> {
+        let client =
+            redis::Client::open(url).map_err(|e| anyhow::anyhow!("invalid Redis URL: {e}"))?;
+        let conn = client
+            .get_multiplexed_async_connection()
+            .await
+            .map_err(|e| anyhow::anyhow!("Redis connection failed: {e}"))?;
+        Ok(Self { conn })
     }
 }
 

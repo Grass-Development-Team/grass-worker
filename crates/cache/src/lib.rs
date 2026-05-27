@@ -40,6 +40,15 @@ pub enum CacheStore {
     Redis(RedisCache),
 }
 
+impl CacheStore {
+    pub async fn connect_cache(backend: CacheBackend, url: &str) -> anyhow::Result<Self> {
+        match backend {
+            CacheBackend::Moka => Ok(Self::Moka(MokaCache::connect())),
+            CacheBackend::Redis => Ok(Self::Redis(RedisCache::connect(url).await?)),
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl Cache for CacheStore {
     async fn get(&self, key: &str) -> anyhow::Result<Option<String>> {

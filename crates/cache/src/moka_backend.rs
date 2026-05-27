@@ -63,6 +63,10 @@ impl MokaCache {
             incr_mutex: Arc::new(Mutex::new(())),
         }
     }
+
+    pub fn connect() -> Self {
+        Self::new(10_000)
+    }
 }
 
 fn extract_value(raw: &str) -> Option<(i64, &str)> {

@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use anyhow::Context;
-use grass_cache::{CacheBackend, CacheStore, MokaCache, RedisCache, redis_backend};
+use grass_cache::{CacheBackend, CacheStore};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use tracing::info;
 
@@ -23,25 +23,29 @@ pub async fn cache(state: &ControlApiState) {
                     operation = "control_api.cache.redis_url_empty",
                     "Redis URL is empty; falling back to moka"
                 );
-                CacheStore::Moka(MokaCache::new(10_000))
+                CacheStore::connect_cache(CacheBackend::Moka, "").await
             } else {
-                match redis_backend::connect(&redis_url).await {
-                    Ok(conn) => CacheStore::Redis(RedisCache::new(conn)),
-                    Err(error) => {
-                        tracing::warn!(
-                            operation = "control_api.cache.redis_failed",
-                            %error,
-                            "Redis unavailable; falling back to moka"
-                        );
-                        CacheStore::Moka(MokaCache::new(10_000))
-                    }
-                }
+                CacheStore::connect_cache(CacheBackend::Redis, &redis_url).await
             }
         }
-        CacheBackend::Moka => CacheStore::Moka(MokaCache::new(10_000)),
+        CacheBackend::Moka => CacheStore::connect_cache(CacheBackend::Moka, "").await,
     };
 
-    state.cache.set(store).ok();
+    match store {
+        Ok(store) => {
+            state.cache.set(store).ok();
+        }
+        Err(error) => {
+            tracing::warn!(
+                operation = "control_api.cache.failed",
+                %error,
+                "Cache unavailable; falling back to moka"
+            );
+            if let Ok(fallback) = CacheStore::connect_cache(CacheBackend::Moka, "").await {
+                state.cache.set(fallback).ok();
+            }
+        }
+    }
 }
 
 pub fn config(path: &str) -> anyhow::Result<ControlApiConfig> {
