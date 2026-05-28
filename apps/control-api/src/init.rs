@@ -53,7 +53,7 @@ pub fn config(path: &str) -> anyhow::Result<ControlApiConfig> {
         .with_context(|| format!("failed to load Control API config from {path}"))
 }
 
-pub async fn database(state: &ControlApiState) -> anyhow::Result<bool> {
+pub async fn database(state: &ControlApiState) -> anyhow::Result<()> {
     let (db_url, auto_migrate) = {
         let config = state.config.read().unwrap();
         (config.database.url.clone(), config.migration.auto_migrate)
@@ -64,7 +64,7 @@ pub async fn database(state: &ControlApiState) -> anyhow::Result<bool> {
             operation = "control_api.database_not_configured",
             "database URL is not configured; entering setup mode"
         );
-        return Ok(true);
+        return Ok(());
     }
 
     match database::connect(&db_url).await {
@@ -73,13 +73,12 @@ pub async fn database(state: &ControlApiState) -> anyhow::Result<bool> {
                 migrate_and_seed(&db).await?;
             }
 
-            let is_setup_mode = !is_setup_finished(&db).await.unwrap_or(false);
             state.database.set(db).ok();
-            Ok(is_setup_mode)
+            Ok(())
         }
         Err(error) => {
             tracing::warn!(operation = "control_api.db_failed", %error, "database unavailable; entering setup mode");
-            Ok(true)
+            Ok(())
         }
     }
 }

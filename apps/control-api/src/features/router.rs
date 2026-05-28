@@ -16,30 +16,15 @@ struct HealthResponse {
     setup: Option<bool>,
 }
 
-pub fn router(state: ControlApiState, is_setup_mode: bool) -> Router<ControlApiState> {
-    if is_setup_mode {
-        info!(
-            operation = "control_api.mode",
-            mode = "setup",
-            "Control API starting in setup mode"
-        );
-    } else {
-        info!(
-            operation = "control_api.mode",
-            mode = "ready",
-            "Control API starting in ready mode"
-        );
-    }
+pub fn router(state: ControlApiState) -> Router<ControlApiState> {
+    info!(operation = "control_api.start", "Control API starting");
 
     let session_layer =
         middleware::from_fn_with_state(state.clone(), session_mw::session_middleware);
 
     Router::new()
         .route("/health", get(health))
-        .nest(
-            "/api",
-            api::router(state.clone(), is_setup_mode).layer(session_layer),
-        )
+        .nest("/api", api::router(state.clone()).layer(session_layer))
         .fallback(frontend::frontend_fallback)
 }
 

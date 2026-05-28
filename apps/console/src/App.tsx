@@ -37,6 +37,11 @@ export function App() {
     return null;
   }
 
+  if (!isSetupMode && location.pathname === "/setup") {
+    navigate("/login", { replace: true });
+    return null;
+  }
+
   if (isSetupMode) {
     return <Router />;
   }

@@ -27,10 +27,10 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let is_setup_mode = init::database(&state).await?;
+    init::database(&state).await?;
     init::cache(&state).await;
     let addr = init::address(&state);
-    let app = features::router::router(state.clone(), is_setup_mode).with_state(state);
+    let app = features::router::router(state.clone()).with_state(state);
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("failed to bind Control API listener on {addr}"))?;
