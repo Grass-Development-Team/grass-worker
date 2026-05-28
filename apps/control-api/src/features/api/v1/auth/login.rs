@@ -1,8 +1,9 @@
+use std::time::Duration;
+
 use axum::{Json, extract::State, response::IntoResponse};
 use axum_extra::extract::cookie::{Cookie, CookieJar};
 use serde::Deserialize;
 use serde_json::json;
-use time::Duration;
 
 use crate::{
     domain::users,
@@ -13,7 +14,7 @@ use crate::{
     state::ControlApiState,
 };
 
-const SESSION_TTL_SECONDS: u64 = 2_592_000;
+const SESSION_TTL: Duration = Duration::from_secs(2_592_000);
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
@@ -31,9 +32,9 @@ pub async fn handler(
         message: "database not available".to_owned(),
     })?;
 
-    let redis_conn = state.try_redis().ok_or_else(|| AppError::Internal {
-        op: "auth.login.no_redis",
-        message: "session service not available".to_owned(),
+    let cache = state.try_cache().ok_or_else(|| AppError::Internal {
+        op: "auth.login.no_cache",
+        message: "cache service not available".to_owned(),
     })?;
 
     let email = body.email.trim().to_lowercase();
@@ -65,15 +66,14 @@ pub async fn handler(
         });
     }
 
-    let mut conn = redis_conn.clone();
-    let session_id = grass_session::create_session(&mut conn, result.user.id, SESSION_TTL_SECONDS)
+    let session_id = grass_session::create_session(cache, result.user.id, SESSION_TTL)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: "auth.login.create_session",
             source,
         })?;
 
-    let csrf_token = csrf::generate_csrf_token(&mut conn, &session_id)
+    let csrf_token = csrf::generate_csrf_token(cache, &session_id)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: "auth.login.csrf_token",
@@ -88,7 +88,7 @@ pub async fn handler(
         cookie.set_secure(true);
     }
     cookie.set_same_site(axum_extra::extract::cookie::SameSite::Strict);
-    cookie.set_max_age(Duration::seconds(SESSION_TTL_SECONDS as i64));
+    cookie.set_max_age(time::Duration::seconds(SESSION_TTL.as_secs() as i64));
 
     let session_jar = jar.add(cookie);
 

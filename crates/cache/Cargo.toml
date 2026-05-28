@@ -1,5 +1,5 @@
 [package]
-name = "grass-session"
+name = "grass-cache"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
@@ -11,9 +11,9 @@ path = "src/lib.rs"
 
 [dependencies]
 anyhow.workspace = true
-grass-cache.workspace = true
-grass-token.workspace = true
+async-trait.workspace = true
+moka.workspace = true
+redis.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 time.workspace = true
-uuid.workspace = true
+tokio.workspace = true

@@ -1,42 +1,39 @@
+use std::time::Duration;
+
 use axum::{
     body::Body,
     http::{Method, Request},
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use redis::aio::MultiplexedConnection;
 
 use crate::{infra::error::AppError, state::ControlApiState};
 
 const CSRF_KEY_PREFIX: &str = "csrf";
 const CSRF_TOKEN_HEADER: &str = "x-csrf-token";
-const CSRF_TTL_SECONDS: u64 = 2_592_000;
+const CSRF_TTL: Duration = Duration::from_secs(2_592_000);
 
 pub fn csrf_key(session_id: &str) -> String {
     format!("{CSRF_KEY_PREFIX}:{session_id}")
 }
 
 pub async fn generate_csrf_token(
-    conn: &mut MultiplexedConnection,
+    cache: &impl grass_cache::Cache,
     session_id: &str,
 ) -> anyhow::Result<String> {
     let token = grass_token::generate_token();
     let key = csrf_key(session_id);
-    let _: () = redis::AsyncCommands::set_ex(conn, &key, &token, CSRF_TTL_SECONDS)
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to store CSRF token: {e}"))?;
+    cache.set(&key, &token, CSRF_TTL).await?;
     Ok(token)
 }
 
 pub async fn validate_csrf_token(
-    conn: &mut MultiplexedConnection,
+    cache: &impl grass_cache::Cache,
     session_id: &str,
     token: &str,
 ) -> anyhow::Result<bool> {
     let key = csrf_key(session_id);
-    let stored: Option<String> = redis::AsyncCommands::get(conn, &key)
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to read CSRF token: {e}"))?;
+    let stored = cache.get(&key).await?;
 
     match stored {
         Some(stored_token) => {
@@ -59,7 +56,7 @@ pub async fn csrf_middleware(
     }
 
     let path = request.uri().path().to_owned();
-    if path.starts_with("/api/v1/auth/") || path.starts_with("/api/v1/setup/") {
+    if path.starts_with("/auth/") || path.starts_with("/setup/") {
         return next.run(request).await;
     }
 
@@ -74,10 +71,9 @@ pub async fn csrf_middleware(
         .get::<Option<(String, grass_session::SessionData)>>()
         .and_then(|o| o.as_ref().map(|(sid, _)| sid.clone()));
 
-    match (csrf_token, session_id, state.try_redis().cloned()) {
-        (Some(token), Some(sid), Some(conn)) => {
-            let mut conn = conn;
-            match validate_csrf_token(&mut conn, &sid, &token).await {
+    match (csrf_token, session_id, state.try_cache()) {
+        (Some(token), Some(sid), Some(cache)) => {
+            match validate_csrf_token(cache, &sid, &token).await {
                 Ok(true) => next.run(request).await,
                 _ => AppError::Forbidden {
                     op: "csrf.invalid_token",

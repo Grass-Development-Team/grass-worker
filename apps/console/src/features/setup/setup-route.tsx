@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router";
 import { CheckCircle, Package } from "lucide-react";
 
 import { setupApi } from "@/features/setup/setup.api";
@@ -13,6 +14,7 @@ import { FinishStep } from "@/features/setup/components/finish-step";
 
 export function SetupRoute() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [nodeToken, setNodeToken] = useState<string | null>(null);
 
   const {
@@ -27,6 +29,12 @@ export function SetupRoute() {
   });
 
   const currentStage = isError ? "complete" : (setupState?.stage ?? "database");
+
+  useEffect(() => {
+    if (currentStage === "complete") {
+      navigate("/login", { replace: true });
+    }
+  }, [currentStage, navigate]);
 
   if (isLoading) {
     return <div className="text-muted-foreground">Loading setup state...</div>;

@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 
 use anyhow::Context;
+use grass_cache::{CacheBackend, CacheStore};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use tracing::info;
 
@@ -9,18 +10,42 @@ use crate::{
     state::ControlApiState,
 };
 
-pub async fn redis(state: &ControlApiState) -> anyhow::Result<()> {
-    let redis_url = state.config.read().unwrap().redis.url.clone();
-    if redis_url.trim().is_empty() {
-        tracing::warn!(
-            operation = "control_api.redis_not_configured",
-            "Redis URL is not configured; session management will not be available"
-        );
-        return Ok(());
+pub async fn cache(state: &ControlApiState) {
+    let (backend, redis_url) = {
+        let config = state.config.read().unwrap();
+        (config.cache.backend, config.cache.redis_url.clone())
+    };
+
+    let store = match backend {
+        CacheBackend::Redis => {
+            if redis_url.trim().is_empty() {
+                tracing::warn!(
+                    operation = "control_api.cache.redis_url_empty",
+                    "Redis URL is empty; falling back to moka"
+                );
+                CacheStore::connect_cache(CacheBackend::Moka, "").await
+            } else {
+                CacheStore::connect_cache(CacheBackend::Redis, &redis_url).await
+            }
+        }
+        CacheBackend::Moka => CacheStore::connect_cache(CacheBackend::Moka, "").await,
+    };
+
+    match store {
+        Ok(store) => {
+            state.cache.set(store).ok();
+        }
+        Err(error) => {
+            tracing::warn!(
+                operation = "control_api.cache.failed",
+                %error,
+                "Cache unavailable; falling back to moka"
+            );
+            if let Ok(fallback) = CacheStore::connect_cache(CacheBackend::Moka, "").await {
+                state.cache.set(fallback).ok();
+            }
+        }
     }
-    let conn = crate::infra::redis::connect(&redis_url).await?;
-    state.redis.set(conn).ok();
-    Ok(())
 }
 
 pub fn config(path: &str) -> anyhow::Result<ControlApiConfig> {
@@ -28,7 +53,7 @@ pub fn config(path: &str) -> anyhow::Result<ControlApiConfig> {
         .with_context(|| format!("failed to load Control API config from {path}"))
 }
 
-pub async fn database(state: &ControlApiState) -> anyhow::Result<bool> {
+pub async fn database(state: &ControlApiState) -> anyhow::Result<()> {
     let (db_url, auto_migrate) = {
         let config = state.config.read().unwrap();
         (config.database.url.clone(), config.migration.auto_migrate)
@@ -39,7 +64,7 @@ pub async fn database(state: &ControlApiState) -> anyhow::Result<bool> {
             operation = "control_api.database_not_configured",
             "database URL is not configured; entering setup mode"
         );
-        return Ok(true);
+        return Ok(());
     }
 
     match database::connect(&db_url).await {
@@ -48,13 +73,12 @@ pub async fn database(state: &ControlApiState) -> anyhow::Result<bool> {
                 migrate_and_seed(&db).await?;
             }
 
-            let is_setup_mode = !is_setup_finished(&db).await.unwrap_or(false);
             state.database.set(db).ok();
-            Ok(is_setup_mode)
+            Ok(())
         }
         Err(error) => {
             tracing::warn!(operation = "control_api.db_failed", %error, "database unavailable; entering setup mode");
-            Ok(true)
+            Ok(())
         }
     }
 }
