@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod me;
 pub mod setup;
+pub mod teams;
 
 use axum::{Router, middleware, routing::get};
 
@@ -32,4 +33,8 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
                 require_ready_mode,
             )),
         )
+        .merge(teams::router().layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_ready_mode,
+        )))
 }
