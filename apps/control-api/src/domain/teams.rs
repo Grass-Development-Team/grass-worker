@@ -1,10 +1,14 @@
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
+    PaginatorTrait, QueryFilter,
 };
-use time::OffsetDateTime;
+use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
-use crate::infra::database::entity::{TeamKind, TeamMemberRole, team, team_group, team_member};
+use crate::infra::database::entity::{
+    TeamInvitationStatus, TeamKind, TeamMemberRole, team, team_group, team_invitation, team_member,
+    user,
+};
 
 pub struct CreateTeamParams {
     pub slug: String,
@@ -17,6 +21,13 @@ pub struct CreateTeamParams {
 pub struct UpdateTeamParams {
     pub slug: Option<String>,
     pub name: Option<String>,
+}
+
+pub struct CreateInvitationParams {
+    pub team_id: Uuid,
+    pub email: String,
+    pub role: TeamMemberRole,
+    pub invited_by_user_id: Uuid,
 }
 
 pub async fn create_team(
@@ -153,6 +164,38 @@ pub async fn add_team_member(
     Ok(())
 }
 
+pub async fn list_members(
+    db: &DatabaseConnection,
+    team_id: Uuid,
+) -> anyhow::Result<Vec<(team_member::Model, user::Model)>> {
+    let members = team_member::Entity::find()
+        .filter(team_member::Column::TeamId.eq(team_id))
+        .filter(team_member::Column::DeletedAt.is_null())
+        .all(db)
+        .await?;
+
+    if members.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let user_ids = members.iter().map(|m| m.user_id).collect::<Vec<_>>();
+    let users = user::Entity::find()
+        .filter(user::Column::Id.is_in(user_ids))
+        .filter(user::Column::DeletedAt.is_null())
+        .all(db)
+        .await?;
+
+    Ok(members
+        .into_iter()
+        .filter_map(|member| {
+            users
+                .iter()
+                .find(|user| user.id == member.user_id)
+                .map(|user| (member, user.clone()))
+        })
+        .collect())
+}
+
 pub async fn member_role(
     db: &DatabaseConnection,
     team_id: Uuid,
@@ -166,6 +209,76 @@ pub async fn member_role(
         .await
         .map(|member| member.map(|m| m.role))
         .map_err(Into::into)
+}
+
+pub async fn update_member_role(
+    db: &DatabaseConnection,
+    team_id: Uuid,
+    user_id: Uuid,
+    role: TeamMemberRole,
+) -> anyhow::Result<team_member::Model> {
+    let member = active_member(db, team_id, user_id).await?;
+    let mut active: team_member::ActiveModel = member.into();
+    active.role = Set(role);
+    active.update(db).await.map_err(Into::into)
+}
+
+pub async fn remove_member(
+    db: &DatabaseConnection,
+    team_id: Uuid,
+    user_id: Uuid,
+) -> anyhow::Result<()> {
+    let member = active_member(db, team_id, user_id).await?;
+    let mut active: team_member::ActiveModel = member.into();
+    active.deleted_at = Set(Some(OffsetDateTime::now_utc()));
+    active.update(db).await?;
+    Ok(())
+}
+
+pub async fn create_invitation(
+    db: &DatabaseConnection,
+    params: CreateInvitationParams,
+) -> anyhow::Result<team_invitation::Model> {
+    let now = OffsetDateTime::now_utc();
+    team_invitation::ActiveModel {
+        id: Set(Uuid::now_v7()),
+        team_id: Set(params.team_id),
+        email: Set(params.email),
+        role: Set(params.role),
+        status: Set(TeamInvitationStatus::Pending),
+        invited_by_user_id: Set(Some(params.invited_by_user_id)),
+        expires_at: Set(now + Duration::days(7)),
+        accepted_at: Set(None),
+        created_at: Set(now),
+        updated_at: Set(now),
+    }
+    .insert(db)
+    .await
+    .map_err(Into::into)
+}
+
+pub async fn active_owner_count(db: &DatabaseConnection, team_id: Uuid) -> anyhow::Result<u64> {
+    team_member::Entity::find()
+        .filter(team_member::Column::TeamId.eq(team_id))
+        .filter(team_member::Column::Role.eq(TeamMemberRole::Owner))
+        .filter(team_member::Column::DeletedAt.is_null())
+        .count(db)
+        .await
+        .map_err(Into::into)
+}
+
+async fn active_member(
+    db: &DatabaseConnection,
+    team_id: Uuid,
+    user_id: Uuid,
+) -> anyhow::Result<team_member::Model> {
+    team_member::Entity::find()
+        .filter(team_member::Column::TeamId.eq(team_id))
+        .filter(team_member::Column::UserId.eq(user_id))
+        .filter(team_member::Column::DeletedAt.is_null())
+        .one(db)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("team member not found"))
 }
 
 async fn get_default_team_group_id(db: &DatabaseConnection) -> anyhow::Result<Option<Uuid>> {
