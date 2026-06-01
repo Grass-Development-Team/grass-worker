@@ -45,3 +45,14 @@ pub(crate) fn kind_value(kind: &crate::infra::database::entity::TeamKind) -> &'s
         TeamKind::Team => "team",
     }
 }
+
+pub(crate) fn role_value(role: &crate::infra::database::entity::TeamMemberRole) -> &'static str {
+    use crate::infra::database::entity::TeamMemberRole;
+
+    match role {
+        TeamMemberRole::Owner => "owner",
+        TeamMemberRole::Admin => "admin",
+        TeamMemberRole::Member => "member",
+        TeamMemberRole::Viewer => "viewer",
+    }
+}

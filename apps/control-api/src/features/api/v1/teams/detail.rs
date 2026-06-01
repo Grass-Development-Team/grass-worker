@@ -1,26 +1,21 @@
-use axum::{
-    extract::{Path, State},
-    response::IntoResponse,
-};
+use axum::{extract::State, response::IntoResponse};
 use serde_json::json;
-use uuid::Uuid;
 
 use crate::{
     domain::teams,
     infra::{
         error::{AppError, ok_response},
-        http::extractors::Session,
+        http::extractors::TeamRole,
     },
     state::ControlApiState,
 };
 
 pub async fn handler(
     State(state): State<ControlApiState>,
-    _session: Session,
-    Path(team_id): Path<Uuid>,
+    team_role: TeamRole,
 ) -> Result<impl IntoResponse, AppError> {
     let db = super::database(&state, "teams.detail.no_database")?;
-    let team = teams::get_by_id(db, team_id)
+    let team = teams::get_by_id(db, team_role.team_id)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: "teams.detail",
@@ -39,6 +34,7 @@ pub async fn handler(
             "kind": super::kind_value(&team.kind),
             "owner_user_id": team.owner_user_id,
             "group_id": team.group_id,
+            "role": super::role_value(&team_role.role),
         }
     })))
 }

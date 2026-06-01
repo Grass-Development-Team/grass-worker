@@ -1,17 +1,12 @@
-use axum::{
-    Json,
-    extract::{Path, State},
-    response::IntoResponse,
-};
+use axum::{Json, extract::State, response::IntoResponse};
 use serde::Deserialize;
 use serde_json::json;
-use uuid::Uuid;
 
 use crate::{
     domain::teams::{self, UpdateTeamParams},
     infra::{
         error::{AppError, ok_response},
-        http::extractors::Session,
+        http::extractors::TeamRole,
     },
     state::ControlApiState,
 };
@@ -24,10 +19,11 @@ pub struct UpdateTeamRequest {
 
 pub async fn handler(
     State(state): State<ControlApiState>,
-    _session: Session,
-    Path(team_id): Path<Uuid>,
+    team_role: TeamRole,
     Json(body): Json<UpdateTeamRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    team_role.require_owner("teams.update.owner_required")?;
+
     if let Some(name) = &body.name {
         super::validate_required(name, "teams.update.invalid_name", "name")?;
     }
@@ -39,7 +35,7 @@ pub async fn handler(
     let db = super::database(&state, "teams.update.no_database")?;
     let team = teams::update(
         db,
-        team_id,
+        team_role.team_id,
         UpdateTeamParams {
             slug: body.slug.map(|slug| slug.trim().to_owned()),
             name: body.name.map(|name| name.trim().to_owned()),

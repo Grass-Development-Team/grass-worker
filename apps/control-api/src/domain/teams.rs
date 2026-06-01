@@ -153,6 +153,21 @@ pub async fn add_team_member(
     Ok(())
 }
 
+pub async fn member_role(
+    db: &DatabaseConnection,
+    team_id: Uuid,
+    user_id: Uuid,
+) -> anyhow::Result<Option<TeamMemberRole>> {
+    team_member::Entity::find()
+        .filter(team_member::Column::TeamId.eq(team_id))
+        .filter(team_member::Column::UserId.eq(user_id))
+        .filter(team_member::Column::DeletedAt.is_null())
+        .one(db)
+        .await
+        .map(|member| member.map(|m| m.role))
+        .map_err(Into::into)
+}
+
 async fn get_default_team_group_id(db: &DatabaseConnection) -> anyhow::Result<Option<Uuid>> {
     team_group::Entity::find()
         .filter(team_group::Column::IsDefault.eq(true))
