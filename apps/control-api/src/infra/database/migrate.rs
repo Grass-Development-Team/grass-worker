@@ -11,6 +11,7 @@ impl MigratorTrait for Migrator {
         vec![
             Box::new(migration::m20260515_000001_bootstrap::Migration),
             Box::new(migration::m20260525_000002_lifecycle::Migration),
+            Box::new(migration::m20260710_000003_team_invitation_tokens::Migration),
         ]
     }
 }
