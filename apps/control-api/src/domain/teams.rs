@@ -1,6 +1,6 @@
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryFilter,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
+    EntityTrait, QueryFilter, QuerySelect, TransactionTrait,
 };
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
@@ -28,6 +28,40 @@ pub struct CreateInvitationParams {
     pub email: String,
     pub role: TeamMemberRole,
     pub invited_by_user_id: Uuid,
+    pub token_hash: String,
+}
+
+pub struct AcceptInvitationParams {
+    pub token_hash: String,
+    pub user_id: Uuid,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum InvitationError {
+    #[error("invitation not found")]
+    NotFound,
+    #[error("invitation is not pending")]
+    NotPending,
+    #[error("invitation has expired")]
+    Expired,
+    #[error("invitation email does not match current user")]
+    EmailMismatch,
+    #[error("owner role can only be assigned through ownership transfer")]
+    OwnerRole,
+    #[error("user is already a team member")]
+    AlreadyMember,
+    #[error(transparent)]
+    Database(#[from] sea_orm::DbErr),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum MemberMutationError {
+    #[error("team member not found")]
+    NotFound,
+    #[error("{0}")]
+    OwnerConflict(String),
+    #[error(transparent)]
+    Database(#[from] sea_orm::DbErr),
 }
 
 pub async fn create_team(
@@ -42,6 +76,7 @@ pub async fn create_team(
         None => get_default_team_group_id(db).await?,
     };
 
+    let transaction = db.begin().await?;
     let team_model = team::ActiveModel {
         id: Set(team_id),
         slug: Set(params.slug.clone()),
@@ -54,17 +89,18 @@ pub async fn create_team(
         created_at: Set(now),
         updated_at: Set(now),
     }
-    .insert(db)
+    .insert(&transaction)
     .await?;
 
-    add_team_member(
-        db,
+    insert_team_member(
+        &transaction,
         team_id,
         params.owner_user_id,
         TeamMemberRole::Owner,
         None,
     )
     .await?;
+    transaction.commit().await?;
 
     Ok(team_model)
 }
@@ -140,13 +176,13 @@ pub async fn soft_delete(db: &DatabaseConnection, team_id: Uuid) -> anyhow::Resu
     Ok(())
 }
 
-pub async fn add_team_member(
-    db: &DatabaseConnection,
+async fn insert_team_member<C: ConnectionTrait>(
+    db: &C,
     team_id: Uuid,
     user_id: Uuid,
     role: TeamMemberRole,
     invited_by: Option<Uuid>,
-) -> anyhow::Result<()> {
+) -> Result<(), sea_orm::DbErr> {
     let now = OffsetDateTime::now_utc();
     team_member::ActiveModel {
         id: Set(Uuid::now_v7()),
@@ -211,74 +247,219 @@ pub async fn member_role(
         .map_err(Into::into)
 }
 
+pub fn invitation_token_hash(token: &str) -> String {
+    grass_token::hash_token(token)
+}
+
+pub fn validate_invitation_acceptance(
+    status: &TeamInvitationStatus,
+    expires_at: OffsetDateTime,
+    invitation_email: &str,
+    user_email: &str,
+    now: OffsetDateTime,
+) -> Result<(), InvitationError> {
+    if !matches!(status, TeamInvitationStatus::Pending) {
+        return Err(InvitationError::NotPending);
+    }
+    if expires_at <= now {
+        return Err(InvitationError::Expired);
+    }
+    if !invitation_email.eq_ignore_ascii_case(user_email) {
+        return Err(InvitationError::EmailMismatch);
+    }
+    Ok(())
+}
+
+pub fn validate_managed_member_role(role: &TeamMemberRole) -> anyhow::Result<()> {
+    if matches!(role, TeamMemberRole::Owner) {
+        anyhow::bail!("owner role can only be assigned through ownership transfer");
+    }
+    Ok(())
+}
+
+pub fn validate_member_change(
+    current_role: &TeamMemberRole,
+    requested_role: Option<&TeamMemberRole>,
+) -> anyhow::Result<()> {
+    if matches!(current_role, TeamMemberRole::Owner) {
+        anyhow::bail!("team owner cannot be changed through member management");
+    }
+    if let Some(role) = requested_role {
+        validate_managed_member_role(role)?;
+    }
+    Ok(())
+}
+
 pub async fn update_member_role(
     db: &DatabaseConnection,
     team_id: Uuid,
     user_id: Uuid,
     role: TeamMemberRole,
-) -> anyhow::Result<team_member::Model> {
-    let member = active_member(db, team_id, user_id).await?;
+) -> Result<team_member::Model, MemberMutationError> {
+    let transaction = db.begin().await?;
+    let member = active_member_for_update(&transaction, team_id, user_id).await?;
+    validate_member_change(&member.role, Some(&role))
+        .map_err(|error| MemberMutationError::OwnerConflict(error.to_string()))?;
     let mut active: team_member::ActiveModel = member.into();
     active.role = Set(role);
-    active.update(db).await.map_err(Into::into)
+    let member = active.update(&transaction).await?;
+    transaction.commit().await?;
+    Ok(member)
 }
 
 pub async fn remove_member(
     db: &DatabaseConnection,
     team_id: Uuid,
     user_id: Uuid,
-) -> anyhow::Result<()> {
-    let member = active_member(db, team_id, user_id).await?;
+) -> Result<(), MemberMutationError> {
+    let transaction = db.begin().await?;
+    let member = active_member_for_update(&transaction, team_id, user_id).await?;
+    validate_member_change(&member.role, None)
+        .map_err(|error| MemberMutationError::OwnerConflict(error.to_string()))?;
     let mut active: team_member::ActiveModel = member.into();
     active.deleted_at = Set(Some(OffsetDateTime::now_utc()));
-    active.update(db).await?;
+    active.update(&transaction).await?;
+    transaction.commit().await?;
     Ok(())
 }
 
 pub async fn create_invitation(
     db: &DatabaseConnection,
     params: CreateInvitationParams,
-) -> anyhow::Result<team_invitation::Model> {
+) -> Result<team_invitation::Model, InvitationError> {
+    validate_managed_member_role(&params.role).map_err(|_| InvitationError::OwnerRole)?;
+    let transaction = db.begin().await?;
+    let invited_user = user::Entity::find()
+        .filter(user::Column::Email.eq(&params.email))
+        .filter(user::Column::DeletedAt.is_null())
+        .one(&transaction)
+        .await?;
+
+    if let Some(invited_user) = invited_user
+        && team_member::Entity::find()
+            .filter(team_member::Column::TeamId.eq(params.team_id))
+            .filter(team_member::Column::UserId.eq(invited_user.id))
+            .filter(team_member::Column::DeletedAt.is_null())
+            .one(&transaction)
+            .await?
+            .is_some()
+    {
+        return Err(InvitationError::AlreadyMember);
+    }
+
     let now = OffsetDateTime::now_utc();
-    team_invitation::ActiveModel {
+    let existing = team_invitation::Entity::find()
+        .filter(team_invitation::Column::TeamId.eq(params.team_id))
+        .filter(team_invitation::Column::Email.eq(&params.email))
+        .one(&transaction)
+        .await?;
+
+    let invitation = if let Some(existing) = existing {
+        let mut active: team_invitation::ActiveModel = existing.into();
+        active.role = Set(params.role);
+        active.status = Set(TeamInvitationStatus::Pending);
+        active.invited_by_user_id = Set(Some(params.invited_by_user_id));
+        active.token_hash = Set(Some(params.token_hash));
+        active.expires_at = Set(now + Duration::days(7));
+        active.accepted_at = Set(None);
+        active.update(&transaction).await?
+    } else {
+        team_invitation::ActiveModel {
+            id: Set(Uuid::now_v7()),
+            team_id: Set(params.team_id),
+            email: Set(params.email),
+            role: Set(params.role),
+            status: Set(TeamInvitationStatus::Pending),
+            invited_by_user_id: Set(Some(params.invited_by_user_id)),
+            token_hash: Set(Some(params.token_hash)),
+            expires_at: Set(now + Duration::days(7)),
+            accepted_at: Set(None),
+            created_at: Set(now),
+            updated_at: Set(now),
+        }
+        .insert(&transaction)
+        .await?
+    };
+
+    transaction.commit().await?;
+    Ok(invitation)
+}
+
+pub async fn accept_invitation(
+    db: &DatabaseConnection,
+    params: AcceptInvitationParams,
+) -> Result<team_member::Model, InvitationError> {
+    let transaction = db.begin().await?;
+    let invitation = team_invitation::Entity::find()
+        .filter(team_invitation::Column::TokenHash.eq(&params.token_hash))
+        .lock_exclusive()
+        .one(&transaction)
+        .await?
+        .ok_or(InvitationError::NotFound)?;
+    let accepting_user = user::Entity::find()
+        .filter(user::Column::Id.eq(params.user_id))
+        .filter(user::Column::DeletedAt.is_null())
+        .one(&transaction)
+        .await?
+        .ok_or(InvitationError::NotFound)?;
+
+    validate_invitation_acceptance(
+        &invitation.status,
+        invitation.expires_at,
+        &invitation.email,
+        &accepting_user.email,
+        OffsetDateTime::now_utc(),
+    )?;
+
+    if team_member::Entity::find()
+        .filter(team_member::Column::TeamId.eq(invitation.team_id))
+        .filter(team_member::Column::UserId.eq(params.user_id))
+        .filter(team_member::Column::DeletedAt.is_null())
+        .one(&transaction)
+        .await?
+        .is_some()
+    {
+        return Err(InvitationError::AlreadyMember);
+    }
+
+    let now = OffsetDateTime::now_utc();
+    let member = team_member::ActiveModel {
         id: Set(Uuid::now_v7()),
-        team_id: Set(params.team_id),
-        email: Set(params.email),
-        role: Set(params.role),
-        status: Set(TeamInvitationStatus::Pending),
-        invited_by_user_id: Set(Some(params.invited_by_user_id)),
-        expires_at: Set(now + Duration::days(7)),
-        accepted_at: Set(None),
+        team_id: Set(invitation.team_id),
+        user_id: Set(params.user_id),
+        role: Set(invitation.role.clone()),
+        invited_by_user_id: Set(invitation.invited_by_user_id),
+        joined_at: Set(now),
+        deleted_at: Set(None),
         created_at: Set(now),
         updated_at: Set(now),
     }
-    .insert(db)
-    .await
-    .map_err(Into::into)
+    .insert(&transaction)
+    .await?;
+
+    let mut active: team_invitation::ActiveModel = invitation.into();
+    active.status = Set(TeamInvitationStatus::Accepted);
+    active.accepted_at = Set(Some(now));
+    active.token_hash = Set(None);
+    active.update(&transaction).await?;
+    transaction.commit().await?;
+
+    Ok(member)
 }
 
-pub async fn active_owner_count(db: &DatabaseConnection, team_id: Uuid) -> anyhow::Result<u64> {
-    team_member::Entity::find()
-        .filter(team_member::Column::TeamId.eq(team_id))
-        .filter(team_member::Column::Role.eq(TeamMemberRole::Owner))
-        .filter(team_member::Column::DeletedAt.is_null())
-        .count(db)
-        .await
-        .map_err(Into::into)
-}
-
-async fn active_member(
-    db: &DatabaseConnection,
+async fn active_member_for_update<C: ConnectionTrait>(
+    db: &C,
     team_id: Uuid,
     user_id: Uuid,
-) -> anyhow::Result<team_member::Model> {
+) -> Result<team_member::Model, MemberMutationError> {
     team_member::Entity::find()
         .filter(team_member::Column::TeamId.eq(team_id))
         .filter(team_member::Column::UserId.eq(user_id))
         .filter(team_member::Column::DeletedAt.is_null())
+        .lock_exclusive()
         .one(db)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("team member not found"))
+        .ok_or(MemberMutationError::NotFound)
 }
 
 async fn get_default_team_group_id(db: &DatabaseConnection) -> anyhow::Result<Option<Uuid>> {
@@ -289,4 +470,85 @@ async fn get_default_team_group_id(db: &DatabaseConnection) -> anyhow::Result<Op
         .await
         .map(|g| g.map(|m| m.id))
         .map_err(|e| anyhow::anyhow!("failed to find default team group: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invitation_role_rejects_owner() {
+        assert!(validate_managed_member_role(&TeamMemberRole::Owner).is_err());
+        assert!(validate_managed_member_role(&TeamMemberRole::Admin).is_ok());
+        assert!(validate_managed_member_role(&TeamMemberRole::Member).is_ok());
+        assert!(validate_managed_member_role(&TeamMemberRole::Viewer).is_ok());
+    }
+
+    #[test]
+    fn owner_member_cannot_be_changed_by_member_management() {
+        assert!(validate_member_change(&TeamMemberRole::Owner, None).is_err());
+        assert!(
+            validate_member_change(&TeamMemberRole::Owner, Some(&TeamMemberRole::Admin)).is_err()
+        );
+        assert!(
+            validate_member_change(&TeamMemberRole::Member, Some(&TeamMemberRole::Owner)).is_err()
+        );
+        assert!(
+            validate_member_change(&TeamMemberRole::Member, Some(&TeamMemberRole::Admin)).is_ok()
+        );
+        assert!(validate_member_change(&TeamMemberRole::Member, None).is_ok());
+    }
+
+    #[test]
+    fn invitation_acceptance_requires_pending_unexpired_matching_email() {
+        let now = OffsetDateTime::now_utc();
+        assert!(
+            validate_invitation_acceptance(
+                &TeamInvitationStatus::Pending,
+                now + Duration::minutes(1),
+                "invited@example.com",
+                "INVITED@example.com",
+                now,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_invitation_acceptance(
+                &TeamInvitationStatus::Accepted,
+                now + Duration::minutes(1),
+                "invited@example.com",
+                "invited@example.com",
+                now,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_invitation_acceptance(
+                &TeamInvitationStatus::Pending,
+                now,
+                "invited@example.com",
+                "invited@example.com",
+                now,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_invitation_acceptance(
+                &TeamInvitationStatus::Pending,
+                now + Duration::minutes(1),
+                "invited@example.com",
+                "other@example.com",
+                now,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn invitation_token_is_hashed_before_storage() {
+        let token = "invitation-secret";
+        let hash = invitation_token_hash(token);
+        assert_ne!(hash, token);
+        assert_eq!(hash, grass_token::hash_token(token));
+    }
 }

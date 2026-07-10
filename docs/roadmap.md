@@ -261,7 +261,7 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 - **M2.3 Auth API**：实现 login、logout、me 和登录限流；
 - **M2.4 CSRF 防护**：为 mutation 请求接入 `X-CSRF-Token` 校验；
 - **M2.5 Team API 基础 CRUD**：创建、列表、查看、更新团队；
-- **M2.6 Team Member API**：成员列表、邀请、改角色、移除成员；
+- **M2.6 Team Member API**：成员列表、邀请、接受邀请、改角色、移除成员；
 - **M2.7 权限 Guard**：实现 owner/admin/member/viewer 的权限判断；
 - **M2.8 Login Console**：实现登录页、登录态恢复和错误展示；
 - **M2.9 App Shell 与 Team Switcher**：实现受保护布局、团队切换和基础导航；
@@ -286,7 +286,8 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 - 查看团队；
 - 更新团队；
 - 查看成员；
-- 邀请成员；
+- 邀请成员，并生成只返回一次、数据库仅保存 hash 的单次邀请 token；
+- 已登录用户可以在邮箱匹配时接受未过期邀请；
 - 修改成员角色；
 - 移除成员；
 - 个人团队作为特殊团队处理；

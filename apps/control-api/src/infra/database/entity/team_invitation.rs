@@ -13,6 +13,7 @@ pub struct Model {
     pub role: TeamMemberRole,
     pub status: TeamInvitationStatus,
     pub invited_by_user_id: Option<Uuid>,
+    pub token_hash: Option<String>,
     pub expires_at: TimeDateTimeWithTimeZone,
     pub accepted_at: Option<TimeDateTimeWithTimeZone>,
     pub created_at: TimeDateTimeWithTimeZone,

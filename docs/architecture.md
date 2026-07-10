@@ -1532,7 +1532,8 @@ Setup flow 必须覆盖基础系统配置：database、initial admin、site conf
 - `PATCH /api/v1/teams/{team_id}`
 - `GET /api/v1/teams/{team_id}/members`
 - `POST /api/v1/teams/{team_id}/invitations`
-- `POST /api/v1/teams/{team_id}/members/{user_id}/role`
+- `POST /api/v1/team-invitations/accept`
+- `PATCH /api/v1/teams/{team_id}/members/{user_id}`
 - `DELETE /api/v1/teams/{team_id}/members/{user_id}`
 
 ### 11.5 Team Group API

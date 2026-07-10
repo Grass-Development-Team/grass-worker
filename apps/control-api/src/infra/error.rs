@@ -17,6 +17,8 @@ pub enum AppError {
     #[error("{message}")]
     NotFound { op: &'static str, message: String },
     #[error("{message}")]
+    Gone { op: &'static str, message: String },
+    #[error("{message}")]
     Conflict { op: &'static str, message: String },
     #[allow(dead_code)]
     #[error("{message}")]
@@ -54,6 +56,7 @@ impl AppError {
             Self::Unauthorized { .. } => StatusCode::UNAUTHORIZED,
             Self::Forbidden { .. } => StatusCode::FORBIDDEN,
             Self::NotFound { .. } => StatusCode::NOT_FOUND,
+            Self::Gone { .. } => StatusCode::GONE,
             Self::Conflict { .. } => StatusCode::CONFLICT,
             Self::TooManyRequests { .. } => StatusCode::TOO_MANY_REQUESTS,
             Self::Infrastructure { .. } => StatusCode::INTERNAL_SERVER_ERROR,
@@ -68,6 +71,7 @@ impl AppError {
             Self::Unauthorized { op, .. } => op,
             Self::Forbidden { op, .. } => op,
             Self::NotFound { op, .. } => op,
+            Self::Gone { op, .. } => op,
             Self::Conflict { op, .. } => op,
             Self::TooManyRequests { op, .. } => op,
             Self::Infrastructure { op, .. } => op,
@@ -86,6 +90,7 @@ impl AppError {
             Self::Unauthorized { .. } => 40101,
             Self::Forbidden { .. } => 40301,
             Self::NotFound { .. } => 40401,
+            Self::Gone { .. } => 41001,
             Self::Conflict { .. } => 40901,
             Self::TooManyRequests { .. } => 42901,
             Self::Infrastructure { .. } => 50001,

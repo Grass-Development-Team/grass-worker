@@ -92,3 +92,39 @@ impl FromRequestParts<ControlApiState> for TeamRole {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn team_role(role: TeamMemberRole) -> TeamRole {
+        TeamRole {
+            team_id: Uuid::nil(),
+            user_id: Uuid::nil(),
+            role,
+        }
+    }
+
+    #[test]
+    fn owner_satisfies_owner_and_admin_guards() {
+        let role = team_role(TeamMemberRole::Owner);
+        assert!(role.require_owner("test.owner").is_ok());
+        assert!(role.require_admin("test.admin").is_ok());
+    }
+
+    #[test]
+    fn admin_only_satisfies_admin_guard() {
+        let role = team_role(TeamMemberRole::Admin);
+        assert!(role.require_owner("test.owner").is_err());
+        assert!(role.require_admin("test.admin").is_ok());
+    }
+
+    #[test]
+    fn member_and_viewer_fail_write_guards() {
+        for role in [TeamMemberRole::Member, TeamMemberRole::Viewer] {
+            let role = team_role(role);
+            assert!(role.require_owner("test.owner").is_err());
+            assert!(role.require_admin("test.admin").is_err());
+        }
+    }
+}
