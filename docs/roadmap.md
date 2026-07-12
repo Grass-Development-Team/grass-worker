@@ -265,12 +265,17 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 - **M2.7 权限 Guard**：实现 owner/admin/member/viewer 的权限判断；
 - **M2.8 Login Console**：实现登录页、登录态恢复和错误展示；
 - **M2.9 App Shell 与 Team Switcher**：实现受保护布局、团队切换和基础导航；
-- **M2.10 Team Settings 页面**：实现成员和团队基础设置页面。
+- **M2.10 Team Settings 页面**：实现成员和团队基础设置页面；
+- **M2.11 用户注册与 Signup Console**：实现注册 API、注册页面、个人团队初始化、signup policy 和邀请注册闭环。
 
 ### Auth
 
 - Argon2id 密码哈希；
 - 登录；
+- 注册：创建用户、密码凭据、个人团队和 owner 成员关系；
+- 注册成功后直接创建 session；
+- signup policy 支持 `open`、`invite_only`、`closed`，默认 seed 为 `open`；
+- 邀请注册要求注册邮箱匹配邀请邮箱，并在同一事务中接受邀请；
 - 登出；
 - `GET /api/v1/me`；
 - Session ID 使用安全随机值；
@@ -303,6 +308,8 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 ### Console
 
 - login 页面；
+- signup 页面；
+- 登录和注册之间保留 invitation token，并在认证后继续接受邀请；
 - protected route；
 - app shell；
 - team switcher；
@@ -315,7 +322,9 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 - 未登录访问受保护 API 返回 `401`；
 - 非团队成员访问团队资源返回 `403`；
 - 不同角色权限符合设计；
-- Console 可以登录、切换团队、查看成员。
+- Console 可以注册、登录、切换团队、查看成员；
+- 新注册用户自动获得个人团队；
+- `invite_only` 和 `closed` 策略能稳定拒绝不符合条件的注册。
 
 ## Milestone 3：配额系统
 

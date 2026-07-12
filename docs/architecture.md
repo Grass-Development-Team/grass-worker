@@ -1520,9 +1520,12 @@ Setup flow 必须覆盖基础系统配置：database、initial admin、site conf
 
 ### 11.3 Auth API
 
+- `POST /api/v1/auth/register`
 - `POST /api/v1/auth/login`
 - `POST /api/v1/auth/logout`
 - `GET /api/v1/me`
+
+注册必须在单一数据库事务中创建用户、密码凭据、个人团队和 owner 成员关系。`signup.policy` 支持 `open`、`invite_only` 和 `closed`；默认 seed 使用 `open`。携带 invitation token 注册时，注册邮箱必须匹配邀请邮箱，并在同一事务中接受邀请。注册成功后直接创建 session。
 
 ### 11.4 Team API
 
@@ -1880,7 +1883,7 @@ Runtime Settings 示例：
 - 是否启用上线审核；
 - artifact retention；
 - deployment retention；
-- signup policy；
+- signup policy：`open`、`invite_only` 或 `closed`，默认 seed 为 `open`；
 - site name / site url。
 
 ## 15. Grass Output API
