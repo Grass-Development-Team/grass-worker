@@ -1,6 +1,10 @@
 use std::time::Duration;
 
-use axum::{Json, extract::State, response::IntoResponse};
+use axum::{
+    Json,
+    extract::State,
+    response::{IntoResponse, Response},
+};
 use axum_extra::extract::cookie::{Cookie, CookieJar};
 use serde::Deserialize;
 use serde_json::json;
@@ -14,7 +18,7 @@ use crate::{
     state::ControlApiState,
 };
 
-const SESSION_TTL: Duration = Duration::from_secs(2_592_000);
+pub(crate) const SESSION_TTL: Duration = Duration::from_secs(2_592_000);
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
@@ -66,7 +70,16 @@ pub async fn handler(
         });
     }
 
-    let session_id = grass_session::create_session(cache, result.user.id, SESSION_TTL)
+    authenticated_response(&state, cache, jar, result.user).await
+}
+
+pub(crate) async fn authenticated_response(
+    state: &ControlApiState,
+    cache: &grass_cache::CacheStore,
+    jar: CookieJar,
+    user: crate::infra::database::entity::user::Model,
+) -> Result<Response, AppError> {
+    let session_id = grass_session::create_session(cache, user.id, SESSION_TTL)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: "auth.login.create_session",
@@ -96,11 +109,12 @@ pub async fn handler(
         session_jar,
         ok_response(json!({
             "user": {
-                "id": result.user.id,
-                "email": result.user.email,
-                "display_name": result.user.display_name,
+                "id": user.id,
+                "email": user.email,
+                "display_name": user.display_name,
             },
             "csrf_token": csrf_token,
         })),
-    ))
+    )
+        .into_response())
 }
