@@ -224,6 +224,11 @@ fn default_system_settings() -> Vec<SystemSettingSeed> {
             value_json: json!(["owner", "admin", "member", "viewer"]),
         },
         SystemSettingSeed {
+            key: "signup.policy",
+            value_kind: SystemSettingValueKind::Json,
+            value_json: json!("open"),
+        },
+        SystemSettingSeed {
             key: "personal_team.default",
             value_kind: SystemSettingValueKind::Json,
             value_json: json!({
@@ -568,6 +573,16 @@ mod tests {
             DEFAULT_TEAM_GROUP_CODE
         );
         assert_eq!(personal_team_defaults.value_json["owner_role"], "owner");
+    }
+
+    #[test]
+    fn signup_policy_defaults_to_open() {
+        let signup_policy = default_system_settings()
+            .into_iter()
+            .find(|setting| setting.key == "signup.policy")
+            .expect("missing signup policy");
+
+        assert_eq!(signup_policy.value_json, json!("open"));
     }
 
     #[test]
