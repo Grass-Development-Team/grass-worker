@@ -1,9 +1,16 @@
 import { request } from "@/lib/api";
 import { setCsrfToken } from "@/lib/csrf";
 
-interface LoginResponse {
+interface AuthResponse {
   user: { id: string; email: string; display_name: string | null };
   csrf_token: string;
+}
+
+export interface RegisterInput {
+  email: string;
+  display_name: string;
+  password: string;
+  invitation_token?: string;
 }
 
 interface MeResponse {
@@ -12,9 +19,18 @@ interface MeResponse {
 
 export const authApi = {
   login: async (email: string, password: string) => {
-    const data = await request<LoginResponse>("/api/v1/auth/login", {
+    const data = await request<AuthResponse>("/api/v1/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password }),
+      credentials: "include" as RequestCredentials,
+    });
+    setCsrfToken(data.csrf_token);
+    return data;
+  },
+  register: async (input: RegisterInput) => {
+    const data = await request<AuthResponse>("/api/v1/auth/register", {
+      method: "POST",
+      body: JSON.stringify(input),
       credentials: "include" as RequestCredentials,
     });
     setCsrfToken(data.csrf_token);
