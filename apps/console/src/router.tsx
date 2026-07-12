@@ -4,6 +4,7 @@ import { AuthLayout } from "@/layouts/auth-layout";
 import { AppLayout } from "@/layouts/app-layout";
 import { SetupRoute } from "@/features/setup/setup-route";
 import { LoginRoute } from "@/features/auth/login-route";
+import { SignupRoute } from "@/features/auth/signup-route";
 import { DashboardRoute } from "@/features/dashboard/dashboard-route";
 import { useAuth } from "@/features/auth/auth-context";
 import { TeamProvider } from "@/features/teams/team-context";
@@ -35,6 +36,7 @@ export function Router() {
       <Route element={<AuthLayout />}>
         <Route path="/setup" element={<SetupRoute />} />
         <Route path="/login" element={<LoginRoute />} />
+        <Route path="/signup" element={<SignupRoute />} />
       </Route>
       <Route
         element={

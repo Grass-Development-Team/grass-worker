@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { useLocation, useNavigate } from "react-router";
 import { GalleryVerticalEnd } from "lucide-react";
+import { Link, useLocation, useNavigate } from "react-router";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,10 @@ import { useAuth } from "./auth-context";
 export function LoginForm({ className, ...props }: React.ComponentPropsWithoutRef<"div">) {
   const navigate = useNavigate();
   const location = useLocation();
+  const invitationToken = new URLSearchParams(location.search).get("invitation_token");
+  const signupHref = invitationToken
+    ? `/signup?${new URLSearchParams({ invitation_token: invitationToken })}`
+    : "/signup";
   const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -29,7 +33,12 @@ export function LoginForm({ className, ...props }: React.ComponentPropsWithoutRe
     setIsSubmitting(true);
     try {
       await login(email.trim(), password);
-      const destination = (location.state as { from?: string } | null)?.from ?? "/";
+      const from = (location.state as { from?: string } | null)?.from;
+      const destination =
+        from ??
+        (invitationToken
+          ? `/invitations/accept?${new URLSearchParams({ token: invitationToken })}`
+          : "/");
       navigate(destination, { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
@@ -51,9 +60,9 @@ export function LoginForm({ className, ...props }: React.ComponentPropsWithoutRe
             <h1 className="text-xl font-bold">Welcome to Grass Worker</h1>
             <div className="text-center text-sm">
               Don&apos;t have an account?{" "}
-              <a href="#" className="underline underline-offset-4">
+              <Link to={signupHref} className="underline underline-offset-4">
                 Sign up
-              </a>
+              </Link>
             </div>
           </div>
           <div className="flex flex-col gap-6">
