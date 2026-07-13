@@ -64,8 +64,8 @@ pub enum MemberMutationError {
     Database(#[from] sea_orm::DbErr),
 }
 
-pub async fn create_team(
-    db: &DatabaseConnection,
+pub async fn create_team_with_connection<C: ConnectionTrait>(
+    db: &C,
     params: CreateTeamParams,
 ) -> anyhow::Result<team::Model> {
     let now = OffsetDateTime::now_utc();
@@ -76,7 +76,6 @@ pub async fn create_team(
         None => get_default_team_group_id(db).await?,
     };
 
-    let transaction = db.begin().await?;
     let team_model = team::ActiveModel {
         id: Set(team_id),
         slug: Set(params.slug.clone()),
@@ -89,20 +88,29 @@ pub async fn create_team(
         created_at: Set(now),
         updated_at: Set(now),
     }
-    .insert(&transaction)
+    .insert(db)
     .await?;
 
     insert_team_member(
-        &transaction,
+        db,
         team_id,
         params.owner_user_id,
         TeamMemberRole::Owner,
         None,
     )
     .await?;
-    transaction.commit().await?;
 
     Ok(team_model)
+}
+
+pub async fn create_team(
+    db: &DatabaseConnection,
+    params: CreateTeamParams,
+) -> anyhow::Result<team::Model> {
+    let transaction = db.begin().await?;
+    let team = create_team_with_connection(&transaction, params).await?;
+    transaction.commit().await?;
+    Ok(team)
 }
 
 pub async fn list_for_user(
@@ -385,21 +393,20 @@ pub async fn create_invitation(
     Ok(invitation)
 }
 
-pub async fn accept_invitation(
-    db: &DatabaseConnection,
+pub async fn accept_invitation_with_connection<C: ConnectionTrait>(
+    db: &C,
     params: AcceptInvitationParams,
 ) -> Result<team_member::Model, InvitationError> {
-    let transaction = db.begin().await?;
     let invitation = team_invitation::Entity::find()
         .filter(team_invitation::Column::TokenHash.eq(&params.token_hash))
         .lock_exclusive()
-        .one(&transaction)
+        .one(db)
         .await?
         .ok_or(InvitationError::NotFound)?;
     let accepting_user = user::Entity::find()
         .filter(user::Column::Id.eq(params.user_id))
         .filter(user::Column::DeletedAt.is_null())
-        .one(&transaction)
+        .one(db)
         .await?
         .ok_or(InvitationError::NotFound)?;
 
@@ -415,7 +422,7 @@ pub async fn accept_invitation(
         .filter(team_member::Column::TeamId.eq(invitation.team_id))
         .filter(team_member::Column::UserId.eq(params.user_id))
         .filter(team_member::Column::DeletedAt.is_null())
-        .one(&transaction)
+        .one(db)
         .await?
         .is_some()
     {
@@ -434,16 +441,25 @@ pub async fn accept_invitation(
         created_at: Set(now),
         updated_at: Set(now),
     }
-    .insert(&transaction)
+    .insert(db)
     .await?;
 
     let mut active: team_invitation::ActiveModel = invitation.into();
     active.status = Set(TeamInvitationStatus::Accepted);
     active.accepted_at = Set(Some(now));
     active.token_hash = Set(None);
-    active.update(&transaction).await?;
-    transaction.commit().await?;
+    active.update(db).await?;
 
+    Ok(member)
+}
+
+pub async fn accept_invitation(
+    db: &DatabaseConnection,
+    params: AcceptInvitationParams,
+) -> Result<team_member::Model, InvitationError> {
+    let transaction = db.begin().await?;
+    let member = accept_invitation_with_connection(&transaction, params).await?;
+    transaction.commit().await?;
     Ok(member)
 }
 
@@ -462,7 +478,7 @@ async fn active_member_for_update<C: ConnectionTrait>(
         .ok_or(MemberMutationError::NotFound)
 }
 
-async fn get_default_team_group_id(db: &DatabaseConnection) -> anyhow::Result<Option<Uuid>> {
+async fn get_default_team_group_id<C: ConnectionTrait>(db: &C) -> anyhow::Result<Option<Uuid>> {
     team_group::Entity::find()
         .filter(team_group::Column::IsDefault.eq(true))
         .filter(team_group::Column::DeletedAt.is_null())

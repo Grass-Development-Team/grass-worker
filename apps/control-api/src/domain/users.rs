@@ -1,5 +1,6 @@
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
+    EntityTrait, QueryFilter,
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -17,8 +18,8 @@ pub struct VerifyPasswordResult {
     pub password_ok: bool,
 }
 
-pub async fn create_user(
-    db: &DatabaseConnection,
+pub async fn create_user<C: ConnectionTrait>(
+    db: &C,
     params: CreateUserParams,
 ) -> anyhow::Result<user::Model> {
     let now = OffsetDateTime::now_utc();
@@ -60,8 +61,8 @@ pub async fn any_user_exists(db: &DatabaseConnection) -> anyhow::Result<bool> {
         .map_err(|e| anyhow::anyhow!("failed to check users existence: {e}"))
 }
 
-pub async fn get_user_by_email(
-    db: &DatabaseConnection,
+pub async fn get_user_by_email<C: ConnectionTrait>(
+    db: &C,
     email: &str,
 ) -> anyhow::Result<Option<user::Model>> {
     user::Entity::find()

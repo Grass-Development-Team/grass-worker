@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { authApi } from "./auth.api";
+import { authApi, type RegisterInput } from "./auth.api";
 import { setCsrfToken } from "@/lib/csrf";
 
 interface User {
@@ -12,6 +12,7 @@ interface AuthState {
   user: User | null;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
+  register: (input: RegisterInput) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -39,14 +40,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(data.user);
   }, []);
 
+  const register = useCallback(async (input: RegisterInput) => {
+    const data = await authApi.register(input);
+    setUser(data.user);
+  }, []);
+
   const logout = useCallback(async () => {
     await authApi.logout();
     setUser(null);
   }, []);
 
   const value = useMemo(
-    () => ({ user, isLoading, login, logout }),
-    [user, isLoading, login, logout],
+    () => ({ user, isLoading, login, register, logout }),
+    [user, isLoading, login, register, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
