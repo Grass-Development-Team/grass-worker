@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from "react-router";
+import { Navigate, Route, Routes, useLocation } from "react-router";
 
 import { AuthLayout } from "@/layouts/auth-layout";
 import { AppLayout } from "@/layouts/app-layout";
@@ -6,16 +6,24 @@ import { SetupRoute } from "@/features/setup/setup-route";
 import { LoginRoute } from "@/features/auth/login-route";
 import { DashboardRoute } from "@/features/dashboard/dashboard-route";
 import { useAuth } from "@/features/auth/auth-context";
+import { TeamProvider } from "@/features/teams/team-context";
+import { TeamSettingsGuard } from "@/features/teams/team-settings-guard";
+import { TeamSettingsRoute } from "@/features/teams/team-settings-route";
+import { TeamMembersRoute } from "@/features/teams/team-members-route";
+import { AcceptInvitationRoute } from "@/features/teams/accept-invitation-route";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
+  const location = useLocation();
 
   if (isLoading) {
     return null;
   }
 
   if (!user) {
-    return <Navigate to="/login" replace />;
+    return (
+      <Navigate to="/login" replace state={{ from: `${location.pathname}${location.search}` }} />
+    );
   }
 
   return <>{children}</>;
@@ -31,12 +39,19 @@ export function Router() {
       <Route
         element={
           <ProtectedRoute>
-            <AppLayout />
+            <TeamProvider>
+              <AppLayout />
+            </TeamProvider>
           </ProtectedRoute>
         }
       >
         <Route path="/" element={<DashboardRoute />} />
         <Route path="/dashboard" element={<DashboardRoute />} />
+        <Route path="/invitations/accept" element={<AcceptInvitationRoute />} />
+        <Route element={<TeamSettingsGuard />}>
+          <Route path="/settings/team" element={<TeamSettingsRoute />} />
+          <Route path="/settings/members" element={<TeamMembersRoute />} />
+        </Route>
       </Route>
     </Routes>
   );

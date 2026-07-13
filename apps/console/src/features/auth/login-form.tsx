@@ -1,15 +1,17 @@
 import { useState } from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { GalleryVerticalEnd } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { authApi } from "./auth.api";
+import { useAuth } from "./auth-context";
 
 export function LoginForm({ className, ...props }: React.ComponentPropsWithoutRef<"div">) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -26,8 +28,9 @@ export function LoginForm({ className, ...props }: React.ComponentPropsWithoutRe
 
     setIsSubmitting(true);
     try {
-      await authApi.login(email.trim(), password);
-      navigate("/", { replace: true });
+      await login(email.trim(), password);
+      const destination = (location.state as { from?: string } | null)?.from ?? "/";
+      navigate(destination, { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
       setIsSubmitting(false);

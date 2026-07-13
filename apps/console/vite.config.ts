@@ -9,7 +9,10 @@ export default defineConfig(({ mode }) => {
 
   return {
     test: {
+      environment: "jsdom",
+      globals: true,
       passWithNoTests: true,
+      setupFiles: ["./src/test/setup.ts"],
     },
     plugins: [react(), tailwindcss()],
     resolve: {
