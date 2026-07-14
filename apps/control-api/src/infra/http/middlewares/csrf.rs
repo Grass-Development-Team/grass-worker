@@ -56,7 +56,7 @@ pub async fn csrf_middleware(
     }
 
     let path = request.uri().path().to_owned();
-    if path.starts_with("/auth/") || path.starts_with("/setup/") {
+    if csrf_exempt_path(&path) {
         return next.run(request).await;
     }
 
@@ -71,13 +71,22 @@ pub async fn csrf_middleware(
         .get::<Option<(String, grass_session::SessionData)>>()
         .and_then(|o| o.as_ref().map(|(sid, _)| sid.clone()));
 
+    if session_id.is_none() {
+        return next.run(request).await;
+    }
+
     match (csrf_token, session_id, state.try_cache()) {
         (Some(token), Some(sid), Some(cache)) => {
             match validate_csrf_token(cache, &sid, &token).await {
                 Ok(true) => next.run(request).await,
-                _ => AppError::Forbidden {
+                Ok(false) => AppError::Forbidden {
                     op: "csrf.invalid_token",
                     message: "invalid or missing CSRF token".to_owned(),
+                }
+                .into_response(),
+                Err(source) => AppError::Infrastructure {
+                    op: "csrf.validate",
+                    source,
                 }
                 .into_response(),
             }
@@ -90,9 +99,142 @@ pub async fn csrf_middleware(
     }
 }
 
+fn csrf_exempt_path(path: &str) -> bool {
+    matches!(path, "/auth/login" | "/auth/register") || path.starts_with("/setup/")
+}
+
 fn requires_csrf(method: &Method) -> bool {
     matches!(
         *method,
         Method::POST | Method::PUT | Method::PATCH | Method::DELETE
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{Router, middleware, routing::post};
+    use grass_cache::{CacheBackend, CacheStore};
+    use std::time::Duration;
+    use tower::ServiceExt;
+    use uuid::Uuid;
+
+    use crate::{
+        features::api::v1::auth::logout,
+        infra::{
+            config::ControlApiConfig,
+            http::{
+                extractors::Session,
+                middlewares::{csrf, session},
+            },
+        },
+        state::ControlApiState,
+    };
+
+    use super::*;
+
+    #[test]
+    fn only_pre_auth_and_setup_paths_are_exempt() {
+        assert!(csrf_exempt_path("/auth/login"));
+        assert!(csrf_exempt_path("/auth/register"));
+        assert!(csrf_exempt_path("/setup/database"));
+        assert!(!csrf_exempt_path("/auth/logout"));
+        assert!(!csrf_exempt_path("/teams"));
+    }
+
+    async fn authenticated_app() -> (Router, CacheStore, String) {
+        let cache = CacheStore::connect_cache(CacheBackend::Moka, "")
+            .await
+            .unwrap();
+        let session_id =
+            grass_session::create_session(&cache, Uuid::now_v7(), Duration::from_secs(300))
+                .await
+                .unwrap();
+        let state = ControlApiState::new(ControlApiConfig::default(), "unused.toml");
+        assert!(state.cache.set(cache.clone()).is_ok());
+
+        async fn protected(_session: Session) -> &'static str {
+            "ok"
+        }
+
+        let app = Router::new()
+            .route("/teams", post(protected))
+            .route("/auth/logout", post(logout::handler))
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                csrf::csrf_middleware,
+            ))
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                session::session_middleware,
+            ))
+            .with_state(state);
+
+        (app, cache, session_id)
+    }
+
+    #[tokio::test]
+    async fn unauthenticated_mutation_reaches_session_guard() {
+        let (app, _, _) = authenticated_app().await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/teams")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn authenticated_logout_requires_csrf_token() {
+        let (app, _, session_id) = authenticated_app().await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/auth/logout")
+                    .header("cookie", format!("session_id={session_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn csrf_protected_logout_revokes_session() {
+        let (app, cache, session_id) = authenticated_app().await;
+        let token = generate_csrf_token(&cache, &session_id).await.unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/auth/logout")
+                    .header("cookie", format!("session_id={session_id}"))
+                    .header(CSRF_TOKEN_HEADER, token)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert!(
+            grass_session::validate_session(
+                &cache,
+                &session_id,
+                Duration::from_secs(60),
+                Duration::from_secs(300),
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+    }
 }

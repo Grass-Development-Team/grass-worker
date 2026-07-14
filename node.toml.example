@@ -1,6 +1,6 @@
 [node]
 id = "local-node-1"
-control_api = "http://127.0.0.1:8080"
+control_api = "http://127.0.0.1:7817"
 node_token = "change-me"
 work_root = "/data/node"
 

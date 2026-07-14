@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
-import { CheckCircle, Package } from "lucide-react";
+import { AlertCircleIcon, CheckCircle, Package, RefreshCwIcon } from "lucide-react";
 
 import { setupApi } from "@/features/setup/setup.api";
 import { StepIndicator } from "@/features/setup/components/step-indicator";
@@ -11,6 +11,7 @@ import { SiteStep } from "@/features/setup/components/site-step";
 import { NodeStep } from "@/features/setup/components/node-step";
 import { StorageStep } from "@/features/setup/components/storage-step";
 import { FinishStep } from "@/features/setup/components/finish-step";
+import { Button } from "@/components/ui/button";
 
 export function SetupRoute() {
   const queryClient = useQueryClient();
@@ -21,23 +22,40 @@ export function SetupRoute() {
     data: setupState,
     isLoading,
     isError,
+    refetch,
   } = useQuery({
     queryKey: ["setup-state"],
     queryFn: setupApi.getSetupState,
-    refetchInterval: 3000,
+    refetchInterval: nodeToken ? false : 3000,
     retry: false,
   });
 
-  const currentStage = isError ? "complete" : (setupState?.stage ?? "database");
+  const currentStage = setupState?.stage ?? "database";
 
   useEffect(() => {
-    if (currentStage === "complete") {
+    if (!isError && currentStage === "complete") {
       navigate("/login", { replace: true });
     }
-  }, [currentStage, navigate]);
+  }, [currentStage, isError, navigate]);
 
   if (isLoading) {
     return <div className="text-muted-foreground">Loading setup state...</div>;
+  }
+
+  if (isError) {
+    return (
+      <div
+        role="alert"
+        className="flex flex-col items-center gap-4 rounded-md border border-destructive/40 p-6 text-center"
+      >
+        <AlertCircleIcon className="size-8 text-destructive" />
+        <p className="text-sm text-destructive">Unable to load setup state.</p>
+        <Button variant="outline" onClick={() => refetch()}>
+          <RefreshCwIcon data-icon="inline-start" />
+          Retry
+        </Button>
+      </div>
+    );
   }
 
   const handleStepSuccess = () => {
@@ -67,13 +85,7 @@ export function SetupRoute() {
       {currentStage === "admin" && <AdminStep onSuccess={handleStepSuccess} />}
       {currentStage === "site" && <SiteStep onSuccess={handleStepSuccess} />}
       {currentStage === "node" && (
-        <NodeStep
-          onSuccess={(token) => {
-            setNodeToken(token);
-            handleStepSuccess();
-          }}
-          token={nodeToken}
-        />
+        <NodeStep onCreated={setNodeToken} onContinue={handleStepSuccess} token={nodeToken} />
       )}
       {currentStage === "storage" && <StorageStep onSuccess={handleStepSuccess} />}
       {currentStage === "finish" && <FinishStep onSuccess={handleFinishSuccess} />}

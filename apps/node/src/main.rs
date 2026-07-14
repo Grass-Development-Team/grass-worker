@@ -27,7 +27,19 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn wait_for_shutdown() {
-    if let Err(error) = tokio::signal::ctrl_c().await {
+    #[cfg(unix)]
+    let signal = async {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result,
+            _ = terminate.recv() => Ok(()),
+        }
+    };
+    #[cfg(not(unix))]
+    let signal = tokio::signal::ctrl_c();
+
+    if let Err(error) = signal.await {
         tracing::warn!(operation = "node.shutdown_signal", %error, "failed to listen for shutdown signal");
     }
 }

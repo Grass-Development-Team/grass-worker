@@ -23,7 +23,7 @@ pub enum AppError {
     #[allow(dead_code)]
     #[error("{message}")]
     TooManyRequests { op: &'static str, message: String },
-    #[error("{source}")]
+    #[error("infrastructure service unavailable")]
     Infrastructure {
         op: &'static str,
         source: anyhow::Error,
@@ -102,6 +102,9 @@ impl AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
+        if let Self::Infrastructure { op, source } = &self {
+            tracing::error!(operation = *op, error = %source, "infrastructure request failed");
+        }
         let status = self.status_code();
         let body = ErrorBody {
             code: self.error_code(),
@@ -128,4 +131,19 @@ pub fn ok_response<T: Serialize>(data: T) -> impl IntoResponse {
         message: "OK".to_string(),
         data,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn infrastructure_errors_do_not_display_their_source() {
+        let error = AppError::Infrastructure {
+            op: "test.infrastructure",
+            source: anyhow::anyhow!("database password and schema details"),
+        };
+
+        assert_eq!(error.to_string(), "infrastructure service unavailable");
+    }
 }

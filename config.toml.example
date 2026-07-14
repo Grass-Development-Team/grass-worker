@@ -16,6 +16,7 @@ secret_key = "change-me"
 
 [session]
 cookie_secure = false
+idle_ttl_seconds = 900
 session_ttl_seconds = 2592000
 
 [node_manager]

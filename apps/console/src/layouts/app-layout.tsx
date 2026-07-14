@@ -1,4 +1,11 @@
-import { ActivityIcon, HomeIcon, LogOutIcon, SettingsIcon, UsersIcon } from "lucide-react";
+import {
+  ActivityIcon,
+  HomeIcon,
+  LogOutIcon,
+  SettingsIcon,
+  ShieldCheckIcon,
+  UsersIcon,
+} from "lucide-react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -23,7 +30,10 @@ import { canViewTeamSettings } from "@/features/teams/team-permissions";
 import { TeamSwitcher } from "@/features/teams/team-switcher";
 import { useTeam } from "@/features/teams/team-context";
 
-const primaryNavigation = [{ title: "Overview", url: "/", icon: HomeIcon }];
+const primaryNavigation = [
+  { title: "Overview", url: "/", icon: HomeIcon },
+  { title: "Administration", url: "/admin", icon: ShieldCheckIcon },
+];
 const settingsNavigation = [
   { title: "General", url: "/settings/team", icon: SettingsIcon },
   { title: "Members", url: "/settings/members", icon: UsersIcon },

@@ -15,7 +15,7 @@ pub struct SetupStateResponse {
 }
 
 pub async fn handler(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
-    let stage = determine_stage(&state).await;
+    let stage = determine_stage(&state).await?;
     let is_setup_mode = stage != SetupStage::Complete;
 
     Ok(ok_response(SetupStateResponse {

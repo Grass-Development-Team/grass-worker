@@ -44,40 +44,53 @@ pub enum SetupStage {
     Complete,
 }
 
-pub(crate) async fn determine_stage(state: &ControlApiState) -> SetupStage {
+pub(crate) async fn determine_stage(state: &ControlApiState) -> Result<SetupStage, AppError> {
     let Some(db) = state.try_database() else {
-        return SetupStage::Database;
+        return Ok(SetupStage::Database);
     };
 
-    if init::is_setup_finished(db).await.unwrap_or(false) {
-        return SetupStage::Complete;
-    }
-
-    if !users::any_user_exists(db).await.unwrap_or(false) {
-        return SetupStage::Admin;
-    }
-
-    if !settings::get_setting(db, "site.name")
+    if init::is_setup_finished(db)
         .await
-        .map(|s| s.is_some())
-        .unwrap_or(false)
+        .map_err(|source| setup_state_error("setup.state.finished", source))?
     {
-        return SetupStage::Site;
+        return Ok(SetupStage::Complete);
     }
 
-    if !nodes::any_node_exists(db).await.unwrap_or(false) {
-        return SetupStage::Node;
-    }
-
-    if !settings::get_setting(db, "storage.root")
+    if !users::any_user_exists(db)
         .await
-        .map(|s| s.is_some())
-        .unwrap_or(false)
+        .map_err(|source| setup_state_error("setup.state.admin", source))?
     {
-        return SetupStage::Storage;
+        return Ok(SetupStage::Admin);
     }
 
-    SetupStage::Finish
+    if settings::get_setting(db, "site.name")
+        .await
+        .map_err(|source| setup_state_error("setup.state.site", source))?
+        .is_none()
+    {
+        return Ok(SetupStage::Site);
+    }
+
+    if !nodes::any_node_exists(db)
+        .await
+        .map_err(|source| setup_state_error("setup.state.node", source))?
+    {
+        return Ok(SetupStage::Node);
+    }
+
+    if settings::get_setting(db, "storage.root")
+        .await
+        .map_err(|source| setup_state_error("setup.state.storage", source))?
+        .is_none()
+    {
+        return Ok(SetupStage::Storage);
+    }
+
+    Ok(SetupStage::Finish)
+}
+
+fn setup_state_error(op: &'static str, source: anyhow::Error) -> AppError {
+    AppError::Infrastructure { op, source }
 }
 
 pub(crate) fn setup_database<'a>(
@@ -94,7 +107,10 @@ pub(crate) async fn ensure_setup_mutation_allowed(
     db: &DatabaseConnection,
     op: &'static str,
 ) -> Result<(), AppError> {
-    if init::is_setup_finished(db).await.unwrap_or(false) {
+    if init::is_setup_finished(db)
+        .await
+        .map_err(|source| AppError::Infrastructure { op, source })?
+    {
         return Err(AppError::SetupNotAllowed {
             op,
             message: "setup has already finished".to_owned(),

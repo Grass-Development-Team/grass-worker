@@ -29,9 +29,21 @@ impl std::fmt::Display for CacheBackend {
 pub trait Cache: Send + Sync + Clone + 'static {
     async fn get(&self, key: &str) -> anyhow::Result<Option<String>>;
     async fn set(&self, key: &str, value: &str, ttl: Duration) -> anyhow::Result<()>;
+    async fn update_if_present(
+        &self,
+        key: &str,
+        value: &str,
+        ttl: Duration,
+    ) -> anyhow::Result<bool>;
     async fn delete(&self, key: &str) -> anyhow::Result<()>;
     async fn incr(&self, key: &str) -> anyhow::Result<i64>;
     async fn decr(&self, key: &str) -> anyhow::Result<i64>;
+    async fn consume_rate_limit(
+        &self,
+        key: &str,
+        capacity: u32,
+        refill_period: Duration,
+    ) -> anyhow::Result<bool>;
 }
 
 #[derive(Clone)]
@@ -65,6 +77,18 @@ impl Cache for CacheStore {
         }
     }
 
+    async fn update_if_present(
+        &self,
+        key: &str,
+        value: &str,
+        ttl: Duration,
+    ) -> anyhow::Result<bool> {
+        match self {
+            Self::Moka(c) => c.update_if_present(key, value, ttl).await,
+            Self::Redis(c) => c.update_if_present(key, value, ttl).await,
+        }
+    }
+
     async fn delete(&self, key: &str) -> anyhow::Result<()> {
         match self {
             Self::Moka(c) => c.delete(key).await,
@@ -83,6 +107,18 @@ impl Cache for CacheStore {
         match self {
             Self::Moka(c) => c.decr(key).await,
             Self::Redis(c) => c.decr(key).await,
+        }
+    }
+
+    async fn consume_rate_limit(
+        &self,
+        key: &str,
+        capacity: u32,
+        refill_period: Duration,
+    ) -> anyhow::Result<bool> {
+        match self {
+            Self::Moka(c) => c.consume_rate_limit(key, capacity, refill_period).await,
+            Self::Redis(c) => c.consume_rate_limit(key, capacity, refill_period).await,
         }
     }
 }

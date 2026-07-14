@@ -16,7 +16,7 @@ resolver = "3"
 
 [workspace.package]
 edition = "2024"
-license = "MIT"
+license = "BSD-3-Clause"
 repository = "https://github.com/yuanzui-cf/grass-worker"
 rust-version = "1.85"
 version = "0.1.0"
@@ -34,7 +34,7 @@ hex = "0.4"
 mime_guess = "2"
 moka = { version = "0.12", features = ["future"] }
 rand = "0.8"
-redis = { version = "0.31.0", default-features = false, features = ["tokio-comp", "aio"] }
+redis = { version = "0.31.0", default-features = false, features = ["tokio-comp", "aio", "script"] }
 rust-embed = "8"
 sea-orm = { version = "2.0.0-rc.38", default-features = false, features = ["macros", "sqlx-postgres", "runtime-tokio-rustls", "with-json", "with-time", "with-uuid"] }
 sea-orm-migration = { version = "2.0.0-rc.38", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "with-json", "with-time", "with-uuid"] }
@@ -57,3 +57,4 @@ grass-config = { path = "crates/config" }
 grass-crypto = { path = "crates/crypto" }
 grass-session = { path = "crates/session" }
 grass-token = { path = "crates/token" }
+grass-validator = { path = "crates/validator" }

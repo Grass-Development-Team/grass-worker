@@ -4,19 +4,23 @@ use grass_cache::CacheBackend;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CacheConfig {
-    #[serde(default)]
+    #[serde(default = "default_cache_backend")]
     pub backend: CacheBackend,
-    #[serde(default = "default_redis_url")]
-    pub redis_url: String,
+    #[serde(default = "default_redis_url", alias = "redis_url")]
+    pub url: String,
 }
 
 impl Default for CacheConfig {
     fn default() -> Self {
         Self {
-            backend: CacheBackend::default(),
-            redis_url: default_redis_url(),
+            backend: default_cache_backend(),
+            url: default_redis_url(),
         }
     }
+}
+
+const fn default_cache_backend() -> CacheBackend {
+    CacheBackend::Redis
 }
 
 fn default_redis_url() -> String {

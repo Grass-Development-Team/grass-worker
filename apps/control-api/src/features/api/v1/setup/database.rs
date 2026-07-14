@@ -22,6 +22,7 @@ pub async fn handler(
     State(state): State<ControlApiState>,
     Json(body): Json<DatabaseSetupRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    let _setup_guard = state.lock_setup().await;
     if let Some(db) = state.try_database() {
         super::ensure_setup_mutation_allowed(db, "setup.database.ready_mode").await?;
         return Err(AppError::Conflict {
@@ -47,13 +48,22 @@ pub async fn handler(
 
     {
         let mut config = state.config.write().unwrap();
-        config.database.url = body.url;
-        config
+        let mut persisted = crate::infra::config::ControlApiConfig::load_persisted(
+            state.config_path(),
+        )
+        .map_err(|error| AppError::Infrastructure {
+            op: "setup.database.load_config",
+            source: anyhow::anyhow!(error),
+        })?;
+        persisted.database.url = body.url.clone();
+        persisted.ensure_secret_key();
+        persisted
             .save(state.config_path())
             .map_err(|error| AppError::Infrastructure {
                 op: "setup.database.save_config",
                 source: anyhow::anyhow!(error),
             })?;
+        config.database.url = body.url;
     }
 
     state.database.set(db).map_err(|_| AppError::Internal {

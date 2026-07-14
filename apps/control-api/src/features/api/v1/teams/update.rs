@@ -26,26 +26,31 @@ pub async fn handler(
 
     if let Some(name) = &body.name {
         super::validate_required(name, "teams.update.invalid_name", "name")?;
+        if name.trim().chars().count() > 160 {
+            return Err(AppError::Validation {
+                op: "teams.update.invalid_name",
+                message: "team name must not exceed 160 characters".to_owned(),
+            });
+        }
     }
 
-    if let Some(slug) = &body.slug {
-        super::validate_required(slug, "teams.update.invalid_slug", "slug")?;
-    }
+    let slug = body
+        .slug
+        .as_deref()
+        .map(|slug| super::normalize_slug(slug, "teams.update.invalid_slug"))
+        .transpose()?;
 
     let db = super::database(&state, "teams.update.no_database")?;
     let team = teams::update(
         db,
         team_role.team_id,
         UpdateTeamParams {
-            slug: body.slug.map(|slug| slug.trim().to_owned()),
+            slug,
             name: body.name.map(|name| name.trim().to_owned()),
         },
     )
     .await
-    .map_err(|source| AppError::Infrastructure {
-        op: "teams.update",
-        source,
-    })?;
+    .map_err(|source| super::map_team_write_error(source, "teams.update"))?;
 
     Ok(ok_response(json!({
         "team": {

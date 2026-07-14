@@ -1,4 +1,7 @@
-use std::{net::IpAddr, path::Path};
+use std::{
+    net::{IpAddr, SocketAddr},
+    path::Path,
+};
 
 use anyhow::Context;
 use grass_config::{ConfigError, load_toml_or_default, overlay_string, overlay_u16, overlay_u64};
@@ -182,6 +185,11 @@ fn apply_env(config: &mut NodeConfig) -> Result<(), ConfigError> {
         "GWNODE_BUILD_COMMAND_TIMEOUT_SECONDS",
         &mut config.build.command_timeout_seconds,
     )?;
+    if let Ok(value) = std::env::var("GWNODE_SERVE_LISTEN") {
+        let listen = parse_listen("GWNODE_SERVE_LISTEN", &value)?;
+        config.serve.host = listen.ip();
+        config.serve.port = listen.port();
+    }
     overlay_string(
         "GWNODE_SERVE_PUBLIC_BASE_URL",
         &mut config.serve.public_base_url,
@@ -189,6 +197,13 @@ fn apply_env(config: &mut NodeConfig) -> Result<(), ConfigError> {
     overlay_string("GWNODE_LOG_LEVEL", &mut config.log.level);
     overlay_string("LOG_LEVEL", &mut config.log.level);
     Ok(())
+}
+
+fn parse_listen(name: &'static str, value: &str) -> Result<SocketAddr, ConfigError> {
+    value.parse().map_err(|source| ConfigError::Env {
+        name,
+        source: Box::new(source),
+    })
 }
 
 fn default_log_level() -> String {
@@ -200,7 +215,7 @@ fn default_node_id() -> String {
 }
 
 fn default_control_api() -> String {
-    "http://127.0.0.1:8080".to_owned()
+    "http://127.0.0.1:7817".to_owned()
 }
 
 fn default_node_token() -> String {
@@ -241,4 +256,25 @@ const fn default_metadata_cache_ttl_seconds() -> u64 {
 
 fn default_artifact_cache_root() -> String {
     "/data/node/artifacts".to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_control_api_uses_control_plane_port() {
+        assert_eq!(
+            NodeConfig::default().node.control_api,
+            "http://127.0.0.1:7817"
+        );
+    }
+
+    #[test]
+    fn serve_listen_uses_socket_address_format() {
+        let listen = parse_listen("GWNODE_SERVE_LISTEN", "0.0.0.0:8080").unwrap();
+        assert_eq!(listen.ip().to_string(), "0.0.0.0");
+        assert_eq!(listen.port(), 8080);
+        assert!(parse_listen("GWNODE_SERVE_LISTEN", "localhost").is_err());
+    }
 }

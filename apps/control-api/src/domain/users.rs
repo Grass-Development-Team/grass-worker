@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
     EntityTrait, QueryFilter,
@@ -13,10 +15,10 @@ pub struct CreateUserParams {
     pub password_hash: String,
 }
 
-pub struct VerifyPasswordResult {
-    pub user: user::Model,
-    pub password_ok: bool,
-}
+static DUMMY_PASSWORD_HASH: LazyLock<String> = LazyLock::new(|| {
+    grass_crypto::hash_password("grass-worker-invalid-credential-placeholder")
+        .expect("dummy password hash must be constructible")
+});
 
 pub async fn create_user<C: ConnectionTrait>(
     db: &C,
@@ -52,7 +54,7 @@ pub async fn create_user<C: ConnectionTrait>(
     Ok(user_model)
 }
 
-pub async fn any_user_exists(db: &DatabaseConnection) -> anyhow::Result<bool> {
+pub async fn any_user_exists<C: ConnectionTrait>(db: &C) -> anyhow::Result<bool> {
     user::Entity::find()
         .filter(user::Column::DeletedAt.is_null())
         .one(db)
@@ -101,34 +103,45 @@ pub async fn verify_user_password(
     db: &DatabaseConnection,
     email: &str,
     password: &str,
-) -> anyhow::Result<VerifyPasswordResult> {
-    let user_model = get_user_by_email(db, email)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("user not found"))?;
+) -> anyhow::Result<Option<user::Model>> {
+    let user_model = get_user_by_email(db, email).await?;
+    let credential = match &user_model {
+        Some(user) => user_password_credential::Entity::find()
+            .filter(user_password_credential::Column::UserId.eq(user.id))
+            .one(db)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to query password credential: {e}"))?,
+        None => None,
+    };
+    let password_hash = credential
+        .as_ref()
+        .map(|credential| credential.password_hash.as_str())
+        .unwrap_or(DUMMY_PASSWORD_HASH.as_str());
+    let password_ok = grass_crypto::verify_password(password, password_hash).unwrap_or(false);
+    let status = user_model.as_ref().map(|user| &user.status);
 
-    let credential = user_password_credential::Entity::find()
-        .filter(user_password_credential::Column::UserId.eq(user_model.id))
-        .one(db)
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to query password credential: {e}"))?
-        .ok_or_else(|| anyhow::anyhow!("password credential not found"))?;
-
-    let password_ok =
-        grass_crypto::verify_password(password, &credential.password_hash).unwrap_or(false);
-
-    if password_ok {
-        update_last_login(db, user_model.id).await?;
+    if !credentials_are_valid(status, password_ok) || credential.is_none() {
+        return Ok(None);
     }
 
-    Ok(VerifyPasswordResult {
-        password_ok,
-        user: if password_ok {
-            user_model
-        } else {
-            // re-fetch to get the updated last_login_at
-            get_user_by_id(db, user_model.id)
-                .await?
-                .unwrap_or(user_model)
-        },
-    })
+    let user_model = user_model.expect("valid credentials require an existing user");
+    update_last_login(db, user_model.id).await?;
+    Ok(Some(user_model))
+}
+
+fn credentials_are_valid(status: Option<&UserStatus>, password_ok: bool) -> bool {
+    matches!(status, Some(UserStatus::Active)) && password_ok
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_active_users_with_valid_passwords_can_authenticate() {
+        assert!(credentials_are_valid(Some(&UserStatus::Active), true));
+        assert!(!credentials_are_valid(Some(&UserStatus::Active), false));
+        assert!(!credentials_are_valid(Some(&UserStatus::Disabled), true));
+        assert!(!credentials_are_valid(None, true));
+    }
 }

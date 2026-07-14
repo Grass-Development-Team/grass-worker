@@ -24,7 +24,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     authApi
-      .me()
+      .restore()
       .then((data) => {
         setUser(data.user);
       })

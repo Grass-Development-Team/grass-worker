@@ -1,5 +1,5 @@
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter,
 };
 use serde_json::json;
 use time::OffsetDateTime;
@@ -7,8 +7,8 @@ use uuid::Uuid;
 
 use crate::infra::database::entity::{SystemSettingValueKind, system_setting};
 
-pub async fn get_setting(
-    db: &DatabaseConnection,
+pub async fn get_setting<C: ConnectionTrait>(
+    db: &C,
     key: &str,
 ) -> anyhow::Result<Option<system_setting::Model>> {
     system_setting::Entity::find()
@@ -18,8 +18,8 @@ pub async fn get_setting(
         .map_err(|e| anyhow::anyhow!("failed to read system setting {key}: {e}"))
 }
 
-pub async fn set_setting(
-    db: &DatabaseConnection,
+pub async fn set_setting<C: ConnectionTrait>(
+    db: &C,
     key: &str,
     value_kind: SystemSettingValueKind,
     value: serde_json::Value,
@@ -49,6 +49,6 @@ pub async fn set_setting(
     Ok(())
 }
 
-pub async fn set_string(db: &DatabaseConnection, key: &str, value: &str) -> anyhow::Result<()> {
+pub async fn set_string<C: ConnectionTrait>(db: &C, key: &str, value: &str) -> anyhow::Result<()> {
     set_setting(db, key, SystemSettingValueKind::String, json!(value)).await
 }

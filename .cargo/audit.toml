@@ -1,0 +1,4 @@
+[advisories]
+# SQLx records its optional MySQL macro driver in Cargo.lock even though this
+# PostgreSQL-only workspace does not enable or compile that dependency.
+ignore = ["RUSTSEC-2023-0071"]

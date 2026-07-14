@@ -49,6 +49,24 @@ pub(crate) fn validate_required(value: &str, op: &'static str, name: &str) -> Re
     Ok(())
 }
 
+pub(crate) fn normalize_slug(value: &str, op: &'static str) -> Result<String, AppError> {
+    grass_validator::normalize_slug(value).map_err(|error| AppError::Validation {
+        op,
+        message: error.to_string(),
+    })
+}
+
+pub(crate) fn map_team_write_error(source: anyhow::Error, op: &'static str) -> AppError {
+    if crate::infra::database::is_unique_violation(&source) {
+        AppError::Conflict {
+            op,
+            message: "team slug is already in use".to_owned(),
+        }
+    } else {
+        AppError::Infrastructure { op, source }
+    }
+}
+
 pub(crate) fn parse_role(
     role: &str,
     op: &'static str,
