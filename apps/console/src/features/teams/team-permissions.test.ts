@@ -3,13 +3,12 @@ import { describe, expect, it } from "vite-plus/test";
 import { canEditTeam, canManageMembers, canViewTeamSettings } from "./team-permissions";
 
 describe("team permissions", () => {
-  it.each(["owner", "admin"] as const)("allows %s to view team settings", (role) => {
-    expect(canViewTeamSettings(role)).toBe(true);
-  });
-
-  it.each(["member", "viewer"] as const)("hides team settings from %s", (role) => {
-    expect(canViewTeamSettings(role)).toBe(false);
-  });
+  it.each(["owner", "admin", "member", "viewer"] as const)(
+    "allows %s to view team settings",
+    (role) => {
+      expect(canViewTeamSettings(role)).toBe(true);
+    },
+  );
 
   it("only allows owners to edit the team", () => {
     expect(canEditTeam("owner")).toBe(true);

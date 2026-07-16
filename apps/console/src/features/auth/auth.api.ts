@@ -17,6 +17,10 @@ interface MeResponse {
   user: { id: string; email: string; display_name: string | null };
 }
 
+interface CsrfResponse {
+  csrf_token: string;
+}
+
 export const authApi = {
   login: async (email: string, password: string) => {
     const data = await request<AuthResponse>("/api/v1/auth/login", {
@@ -48,4 +52,16 @@ export const authApi = {
     request<MeResponse>("/api/v1/me", {
       credentials: "include" as RequestCredentials,
     }),
+  csrf: async () => {
+    const data = await request<CsrfResponse>("/api/v1/auth/csrf", {
+      credentials: "include" as RequestCredentials,
+    });
+    setCsrfToken(data.csrf_token);
+    return data;
+  },
+  restore: async () => {
+    const data = await authApi.me();
+    await authApi.csrf();
+    return data;
+  },
 };

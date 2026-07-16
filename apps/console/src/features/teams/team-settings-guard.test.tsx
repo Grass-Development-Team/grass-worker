@@ -24,12 +24,8 @@ function renderGuard(role: "owner" | "admin" | "member" | "viewer") {
 }
 
 describe("TeamSettingsGuard", () => {
-  it.each(["owner", "admin"] as const)("allows %s", (role) => {
+  it.each(["owner", "admin", "member", "viewer"] as const)("allows %s", (role) => {
     renderGuard(role);
     expect(screen.getByText("settings")).toBeInTheDocument();
-  });
-  it.each(["member", "viewer"] as const)("redirects %s", (role) => {
-    renderGuard(role);
-    expect(screen.getByText("overview")).toBeInTheDocument();
   });
 });

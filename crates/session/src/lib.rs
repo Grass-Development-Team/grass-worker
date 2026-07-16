@@ -78,10 +78,13 @@ pub async fn validate_session(
 
     data.last_accessed_at = now;
     let json = serde_json::to_string(&data).context("failed to serialize refreshed session")?;
-    cache
-        .set(&key, &json, Duration::from_secs(remaining as u64))
+    let refreshed = cache
+        .update_if_present(&key, &json, Duration::from_secs(remaining as u64))
         .await
         .context("failed to refresh session")?;
+    if !refreshed {
+        return Ok(None);
+    }
 
     Ok(Some(data))
 }
@@ -96,4 +99,118 @@ pub async fn revoke_session(
         .await
         .context("failed to revoke session")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use grass_cache::{Cache, MokaCache};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn session_can_be_created_validated_and_revoked() {
+        let cache = MokaCache::connect();
+        let session_id = create_session(&cache, Uuid::now_v7(), Duration::from_secs(60))
+            .await
+            .unwrap();
+
+        assert!(
+            validate_session(
+                &cache,
+                &session_id,
+                Duration::from_secs(30),
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap()
+            .is_some()
+        );
+        revoke_session(&cache, &session_id).await.unwrap();
+        assert!(
+            validate_session(
+                &cache,
+                &session_id,
+                Duration::from_secs(30),
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_does_not_recreate_a_concurrently_revoked_session() {
+        let cache = DeleteAfterReadCache::default();
+        let session_id = create_session(&cache, Uuid::now_v7(), Duration::from_secs(60))
+            .await
+            .unwrap();
+
+        let session = validate_session(
+            &cache,
+            &session_id,
+            Duration::from_secs(30),
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+        assert!(session.is_none());
+        assert!(cache.value.lock().unwrap().is_none());
+    }
+
+    #[derive(Clone, Default)]
+    struct DeleteAfterReadCache {
+        value: Arc<Mutex<Option<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Cache for DeleteAfterReadCache {
+        async fn get(&self, _key: &str) -> anyhow::Result<Option<String>> {
+            Ok(self.value.lock().unwrap().take())
+        }
+
+        async fn set(&self, _key: &str, value: &str, _ttl: Duration) -> anyhow::Result<()> {
+            *self.value.lock().unwrap() = Some(value.to_owned());
+            Ok(())
+        }
+
+        async fn update_if_present(
+            &self,
+            _key: &str,
+            value: &str,
+            _ttl: Duration,
+        ) -> anyhow::Result<bool> {
+            let mut stored = self.value.lock().unwrap();
+            if stored.is_none() {
+                return Ok(false);
+            }
+            *stored = Some(value.to_owned());
+            Ok(true)
+        }
+
+        async fn delete(&self, _key: &str) -> anyhow::Result<()> {
+            *self.value.lock().unwrap() = None;
+            Ok(())
+        }
+
+        async fn incr(&self, _key: &str) -> anyhow::Result<i64> {
+            unreachable!()
+        }
+
+        async fn decr(&self, _key: &str) -> anyhow::Result<i64> {
+            unreachable!()
+        }
+
+        async fn consume_rate_limit(
+            &self,
+            _key: &str,
+            _capacity: u32,
+            _refill_period: Duration,
+        ) -> anyhow::Result<bool> {
+            unreachable!()
+        }
+    }
 }

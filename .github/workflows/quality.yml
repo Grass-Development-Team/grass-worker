@@ -50,8 +50,16 @@ jobs:
       - name: Install Just
         uses: extractions/setup-just@v4
 
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
       - name: Check Rust workspace
         run: just check rust
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
 
       - name: Check Console workspace
         run: just check console
@@ -64,3 +72,12 @@ jobs:
 
       - name: Test Console workspace
         run: just test console
+
+      - name: Check project license metadata
+        run: just license-check
+
+      - name: Audit Rust dependencies
+        run: cargo audit
+
+      - name: Audit Console dependencies
+        run: cd apps/console && vp pm audit

@@ -1,5 +1,6 @@
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
+    EntityTrait, QueryFilter,
 };
 use serde_json::json;
 use time::OffsetDateTime;
@@ -48,4 +49,17 @@ pub async fn any_node_exists(db: &DatabaseConnection) -> anyhow::Result<bool> {
         .await
         .map(|o| o.is_some())
         .map_err(|e| anyhow::anyhow!("failed to check nodes existence: {e}"))
+}
+
+pub async fn update_work_roots<C: ConnectionTrait>(db: &C, work_root: &str) -> anyhow::Result<()> {
+    node::Entity::update_many()
+        .col_expr(
+            node::Column::WorkRoot,
+            sea_orm::sea_query::Expr::value(work_root),
+        )
+        .filter(node::Column::DeletedAt.is_null())
+        .exec(db)
+        .await
+        .map(|_| ())
+        .map_err(|e| anyhow::anyhow!("failed to update node work roots: {e}"))
 }

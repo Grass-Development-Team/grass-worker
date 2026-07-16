@@ -33,11 +33,14 @@ export const setupApi = {
       body: JSON.stringify({ email, password, display_name }),
     }),
 
-  configureSite: (name: string) =>
-    request<{ configured: boolean; name: string }>("/api/v1/setup/site", {
-      method: "POST",
-      body: JSON.stringify({ name }),
-    }),
+  configureSite: (name: string, site_url: string, public_base_url: string) =>
+    request<{ configured: boolean; name: string; site_url: string; public_base_url: string }>(
+      "/api/v1/setup/site",
+      {
+        method: "POST",
+        body: JSON.stringify({ name, site_url, public_base_url }),
+      },
+    ),
 
   createNode: (name?: string) =>
     request<{ node: { id: string; name: string }; token: string }>("/api/v1/setup/node", {

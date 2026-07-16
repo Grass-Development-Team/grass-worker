@@ -24,13 +24,19 @@ pub async fn handler(
     Json(body): Json<CreateTeamRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     super::validate_required(&body.name, "teams.create.invalid_name", "name")?;
-    super::validate_required(&body.slug, "teams.create.invalid_slug", "slug")?;
+    if body.name.trim().chars().count() > 160 {
+        return Err(AppError::Validation {
+            op: "teams.create.invalid_name",
+            message: "team name must not exceed 160 characters".to_owned(),
+        });
+    }
+    let slug = super::normalize_slug(&body.slug, "teams.create.invalid_slug")?;
 
     let db = super::database(&state, "teams.create.no_database")?;
     let team = teams::create_team(
         db,
         CreateTeamParams {
-            slug: body.slug.trim().to_owned(),
+            slug,
             name: body.name.trim().to_owned(),
             kind: TeamKind::Team,
             owner_user_id: session.data.user_id,
@@ -38,10 +44,7 @@ pub async fn handler(
         },
     )
     .await
-    .map_err(|source| AppError::Infrastructure {
-        op: "teams.create",
-        source,
-    })?;
+    .map_err(|source| super::map_team_write_error(source, "teams.create"))?;
 
     Ok(ok_response(json!({
         "team": {

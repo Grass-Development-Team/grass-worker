@@ -1,6 +1,8 @@
 use sea_orm::entity::prelude::*;
 
-use super::enums::{DeploymentBuildStatus, DeploymentEnvironment, DeploymentReleaseStatus};
+use super::enums::{
+    DeploymentBuildStatus, DeploymentEnvironment, DeploymentReleaseStatus, ProjectRuntime,
+};
 
 #[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
@@ -12,6 +14,7 @@ pub struct Model {
     pub team_id: Uuid,
     pub node_id: Option<Uuid>,
     pub environment: DeploymentEnvironment,
+    pub runtime_kind: ProjectRuntime,
     pub build_status: DeploymentBuildStatus,
     pub release_status: DeploymentReleaseStatus,
     pub source_repository_url: Option<String>,

@@ -1,6 +1,12 @@
 //! Shared configuration helpers.
 
-use std::{env, path::Path};
+use std::{
+    env,
+    fs::OpenOptions,
+    io::Write,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use config::{Config, File};
 use serde::{Serialize, de::DeserializeOwned};
@@ -36,9 +42,43 @@ pub fn save_toml<T>(path: impl AsRef<Path>, value: &T) -> Result<(), ConfigError
 where
     T: Serialize,
 {
+    let path = path.as_ref();
     let content = toml::to_string_pretty(value)?;
-    std::fs::write(path, content)?;
+    let temporary_path = temporary_path(path);
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let write_result = (|| -> std::io::Result<()> {
+        let mut file = options.open(&temporary_path)?;
+        file.write_all(content.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&temporary_path, path)
+    })();
+    if write_result.is_err() {
+        let _ = std::fs::remove_file(&temporary_path);
+    }
+    write_result?;
     Ok(())
+}
+
+fn temporary_path(path: &Path) -> PathBuf {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("config.toml");
+    path.with_file_name(format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        unique
+    ))
 }
 
 pub fn overlay_string(name: &'static str, target: &mut String) {

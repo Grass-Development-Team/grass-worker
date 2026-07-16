@@ -4,28 +4,39 @@ use axum::{
     body::Body,
     http::{HeaderMap, Request},
     middleware::Next,
-    response::Response,
+    response::{IntoResponse, Response},
 };
 
-use crate::state::ControlApiState;
+use crate::{infra::error::AppError, state::ControlApiState};
 
 const SESSION_COOKIE: &str = "session_id";
-const IDLE_TTL: Duration = Duration::from_secs(900);
-const ABSOLUTE_TTL: Duration = Duration::from_secs(2_592_000);
-
 pub async fn session_middleware(
     state: axum::extract::State<ControlApiState>,
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
     let session_id = extract_session_cookie(request.headers());
+    let (idle_ttl, absolute_ttl) = {
+        let config = state.config.read().unwrap();
+        (
+            Duration::from_secs(config.session.idle_ttl_seconds),
+            Duration::from_secs(config.session.session_ttl_seconds),
+        )
+    };
 
     match (session_id, state.try_cache()) {
         (Some(sid), Some(cache)) => {
-            let session_data = grass_session::validate_session(cache, &sid, IDLE_TTL, ABSOLUTE_TTL)
-                .await
-                .ok()
-                .flatten();
+            let session_data =
+                match grass_session::validate_session(cache, &sid, idle_ttl, absolute_ttl).await {
+                    Ok(session_data) => session_data,
+                    Err(source) => {
+                        return AppError::Infrastructure {
+                            op: "auth.session.validate",
+                            source,
+                        }
+                        .into_response();
+                    }
+                };
             request
                 .extensions_mut()
                 .insert::<Option<(String, grass_session::SessionData)>>(

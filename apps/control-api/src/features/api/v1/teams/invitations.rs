@@ -29,12 +29,11 @@ pub async fn create(
 ) -> Result<impl IntoResponse, AppError> {
     team_role.require_admin("teams.invitations.create.admin_required")?;
 
-    if body.email.trim().is_empty() || !body.email.contains('@') {
-        return Err(AppError::Validation {
+    let email =
+        grass_validator::normalize_email(&body.email).map_err(|error| AppError::Validation {
             op: "teams.invitations.create.invalid_email",
-            message: "invalid email address".to_owned(),
-        });
-    }
+            message: error.to_string(),
+        })?;
 
     let role = super::parse_role(&body.role, "teams.invitations.create.invalid_role")?;
     teams::validate_managed_member_role(&role).map_err(|error| AppError::Validation {
@@ -48,7 +47,7 @@ pub async fn create(
         db,
         CreateInvitationParams {
             team_id: team_role.team_id,
-            email: body.email.trim().to_lowercase(),
+            email,
             role,
             invited_by_user_id: team_role.user_id,
             token_hash: teams::invitation_token_hash(&token),

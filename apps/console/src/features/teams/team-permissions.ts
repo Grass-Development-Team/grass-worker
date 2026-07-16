@@ -1,5 +1,5 @@
 import type { TeamRole } from "./teams.api";
 
-export const canViewTeamSettings = (role: TeamRole) => role === "owner" || role === "admin";
+export const canViewTeamSettings = (_role: TeamRole) => true;
 export const canEditTeam = (role: TeamRole) => role === "owner";
-export const canManageMembers = canViewTeamSettings;
+export const canManageMembers = (role: TeamRole) => role === "owner" || role === "admin";

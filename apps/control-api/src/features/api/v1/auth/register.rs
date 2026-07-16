@@ -51,6 +51,20 @@ pub async fn handler(
         message: "cache service not available".to_owned(),
     })?;
     let input = validate_registration_input(&body.email, &body.password)?;
+    let display_name = body
+        .display_name
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .or_else(|| input.email.split('@').next().map(str::to_owned));
+    if display_name
+        .as_ref()
+        .is_some_and(|display_name| display_name.chars().count() > 120)
+    {
+        return Err(AppError::Validation {
+            op: "auth.register.display_name_too_long",
+            message: "display name must not exceed 120 characters".to_owned(),
+        });
+    }
     let policy_setting = settings::get_setting(db, SIGNUP_POLICY_KEY)
         .await
         .map_err(|source| AppError::Infrastructure {
@@ -111,11 +125,6 @@ pub async fn handler(
         validate_invitation(&transaction, token, &input.email).await?;
     }
 
-    let display_name = body
-        .display_name
-        .map(|name| name.trim().to_owned())
-        .filter(|name| !name.is_empty())
-        .or_else(|| input.email.split('@').next().map(str::to_owned));
     let user = users::create_user(
         &transaction,
         CreateUserParams {
@@ -125,9 +134,18 @@ pub async fn handler(
         },
     )
     .await
-    .map_err(|source| AppError::Infrastructure {
-        op: "auth.register.create_user",
-        source,
+    .map_err(|source| {
+        if crate::infra::database::is_unique_violation(&source) {
+            AppError::Conflict {
+                op: "auth.register.email_exists",
+                message: "an account with this email already exists".to_owned(),
+            }
+        } else {
+            AppError::Infrastructure {
+                op: "auth.register.create_user",
+                source,
+            }
+        }
     })?;
 
     let slug = format!(
@@ -187,17 +205,14 @@ fn signup_policy(value: Option<&str>) -> Result<SignupPolicy, AppError> {
 }
 
 fn validate_registration_input(email: &str, password: &str) -> Result<RegistrationInput, AppError> {
-    let email = email.trim().to_lowercase();
-    if email.is_empty() || !email.contains('@') {
+    let email = grass_validator::normalize_email(email).map_err(|error| AppError::Validation {
+        op: "auth.register.invalid_email",
+        message: error.to_string(),
+    })?;
+    if !(8..=1024).contains(&password.len()) {
         return Err(AppError::Validation {
-            op: "auth.register.invalid_email",
-            message: "invalid email address".to_owned(),
-        });
-    }
-    if password.len() < 8 {
-        return Err(AppError::Validation {
-            op: "auth.register.password_too_short",
-            message: "password must be at least 8 characters".to_owned(),
+            op: "auth.register.invalid_password_length",
+            message: "password must contain between 8 and 1024 bytes".to_owned(),
         });
     }
     Ok(RegistrationInput { email })

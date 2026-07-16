@@ -1,4 +1,11 @@
-use axum::{Json, Router, extract::State, middleware, routing::get};
+use axum::{
+    Json, Router,
+    extract::State,
+    http::StatusCode,
+    middleware,
+    response::{IntoResponse, Response},
+    routing::get,
+};
 use serde::Serialize;
 use tracing::info;
 
@@ -28,10 +35,41 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
         .fallback(frontend::frontend_fallback)
 }
 
-async fn health(State(state): State<ControlApiState>) -> Json<HealthResponse> {
+async fn health(State(state): State<ControlApiState>) -> Response {
     let in_setup_mode = match state.try_database() {
-        Some(db) => !init::is_setup_finished(db).await.unwrap_or(true),
-        None => true,
+        Some(db) => match init::is_setup_finished(db).await {
+            Ok(finished) => !finished,
+            Err(error) => {
+                tracing::error!(
+                    operation = "control_api.health.database",
+                    %error,
+                    "health check could not read database state"
+                );
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(HealthResponse {
+                        status: "unavailable",
+                        service: "Grass Worker API",
+                        version: env!("CARGO_PKG_VERSION"),
+                        setup: None,
+                    }),
+                )
+                    .into_response();
+            }
+        },
+        None if state.config.read().unwrap().database.url.trim().is_empty() => true,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(HealthResponse {
+                    status: "unavailable",
+                    service: "Grass Worker API",
+                    version: env!("CARGO_PKG_VERSION"),
+                    setup: None,
+                }),
+            )
+                .into_response();
+        }
     };
 
     Json(HealthResponse {
@@ -40,4 +78,5 @@ async fn health(State(state): State<ControlApiState>) -> Json<HealthResponse> {
         version: env!("CARGO_PKG_VERSION"),
         setup: in_setup_mode.then_some(true),
     })
+    .into_response()
 }

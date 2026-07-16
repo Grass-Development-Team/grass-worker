@@ -39,18 +39,20 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { teamKeys, useTeam } from "./team-context";
+import { canManageMembers } from "./team-permissions";
 import { teamsApi, type ManagedTeamRole, type TeamInvitation, type TeamMember } from "./teams.api";
 
 const roles: ManagedTeamRole[] = ["admin", "member", "viewer"];
 
 export function TeamMembersRoute() {
-  const { activeTeam } = useTeam();
+  const { activeTeam, activeRole } = useTeam();
   const queryClient = useQueryClient();
   const [inviteOpen, setInviteOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<ManagedTeamRole>("member");
   const [invitation, setInvitation] = useState<TeamInvitation | null>(null);
   const [removeTarget, setRemoveTarget] = useState<TeamMember | null>(null);
+  const manageable = activeRole ? canManageMembers(activeRole) : false;
   const members = useQuery({
     queryKey: activeTeam ? teamKeys.members(activeTeam.id) : ["teams", "none", "members"],
     queryFn: () => teamsApi.listMembers(activeTeam!.id),
@@ -85,15 +87,17 @@ export function TeamMembersRoute() {
           <h1 className="text-2xl font-semibold">Members</h1>
           <p className="text-sm text-muted-foreground">Manage access to {activeTeam?.name}.</p>
         </div>
-        <Button
-          onClick={() => {
-            setInvitation(null);
-            setInviteOpen(true);
-          }}
-        >
-          <PlusIcon data-icon="inline-start" />
-          Invite member
-        </Button>
+        {manageable && (
+          <Button
+            onClick={() => {
+              setInvitation(null);
+              setInviteOpen(true);
+            }}
+          >
+            <PlusIcon data-icon="inline-start" />
+            Invite member
+          </Button>
+        )}
       </div>
       <Card>
         <CardHeader>
@@ -129,8 +133,8 @@ export function TeamMembersRoute() {
                       <div className="text-xs text-muted-foreground">{member.email}</div>
                     </TableCell>
                     <TableCell>
-                      {member.role === "owner" ? (
-                        "Owner"
+                      {member.role === "owner" || !manageable ? (
+                        <span className="capitalize">{member.role}</span>
                       ) : (
                         <Select
                           value={member.role}
@@ -158,7 +162,7 @@ export function TeamMembersRoute() {
                     </TableCell>
                     <TableCell>{new Date(member.joined_at).toLocaleDateString()}</TableCell>
                     <TableCell>
-                      {member.role !== "owner" && (
+                      {manageable && member.role !== "owner" && (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button

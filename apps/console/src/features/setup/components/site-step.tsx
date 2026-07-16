@@ -17,9 +17,11 @@ import { Label } from "@/components/ui/label";
 
 export function SiteStep({ onSuccess }: { onSuccess: () => void }) {
   const [name, setName] = useState("Grass Worker");
+  const [siteUrl, setSiteUrl] = useState(window.location.origin);
+  const [publicBaseUrl, setPublicBaseUrl] = useState(window.location.origin);
   const [error, setError] = useState<string | null>(null);
   const mutation = useMutation({
-    mutationFn: () => setupApi.configureSite(name),
+    mutationFn: () => setupApi.configureSite(name, siteUrl, publicBaseUrl),
     onSuccess,
     onError: (err: Error) => setError(err.message),
   });
@@ -29,7 +31,7 @@ export function SiteStep({ onSuccess }: { onSuccess: () => void }) {
         <CardTitle className="flex items-center gap-2">
           <Globe className="size-5" /> Configure Site
         </CardTitle>
-        <CardDescription>Give your platform instance a name.</CardDescription>
+        <CardDescription>Set the instance identity and public URLs.</CardDescription>
       </CardHeader>
       <form
         onSubmit={(e) => {
@@ -48,6 +50,24 @@ export function SiteStep({ onSuccess }: { onSuccess: () => void }) {
               placeholder="Grass Worker"
               required
             />
+            <Label htmlFor="site-url">Site URL</Label>
+            <Input
+              id="site-url"
+              type="url"
+              value={siteUrl}
+              onChange={(e) => setSiteUrl(e.target.value)}
+              placeholder="https://console.example.com"
+              required
+            />
+            <Label htmlFor="public-base-url">Public Base URL</Label>
+            <Input
+              id="public-base-url"
+              type="url"
+              value={publicBaseUrl}
+              onChange={(e) => setPublicBaseUrl(e.target.value)}
+              placeholder="https://sites.example.com"
+              required
+            />
             {error && (
               <div className="flex items-center gap-2 text-sm text-destructive">
                 <AlertCircle className="size-4" />
@@ -58,7 +78,7 @@ export function SiteStep({ onSuccess }: { onSuccess: () => void }) {
         </CardContent>
         <CardFooter>
           <Button type="submit" className="w-full" disabled={mutation.isPending}>
-            {mutation.isPending ? "Saving..." : "Save Site Name"}
+            {mutation.isPending ? "Saving..." : "Save Site Configuration"}
             {!mutation.isPending && <ArrowRight className="ml-2 size-4" />}
           </Button>
         </CardFooter>

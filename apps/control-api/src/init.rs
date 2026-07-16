@@ -10,42 +10,24 @@ use crate::{
     state::ControlApiState,
 };
 
-pub async fn cache(state: &ControlApiState) {
+pub async fn cache(state: &ControlApiState) -> anyhow::Result<()> {
     let (backend, redis_url) = {
         let config = state.config.read().unwrap();
-        (config.cache.backend, config.cache.redis_url.clone())
+        (config.redis.backend, config.redis.url.clone())
     };
 
     let store = match backend {
-        CacheBackend::Redis => {
-            if redis_url.trim().is_empty() {
-                tracing::warn!(
-                    operation = "control_api.cache.redis_url_empty",
-                    "Redis URL is empty; falling back to moka"
-                );
-                CacheStore::connect_cache(CacheBackend::Moka, "").await
-            } else {
-                CacheStore::connect_cache(CacheBackend::Redis, &redis_url).await
-            }
+        CacheBackend::Redis if redis_url.trim().is_empty() => {
+            anyhow::bail!("Redis URL is required when the Redis cache backend is selected")
         }
+        CacheBackend::Redis => CacheStore::connect_cache(CacheBackend::Redis, &redis_url).await,
         CacheBackend::Moka => CacheStore::connect_cache(CacheBackend::Moka, "").await,
-    };
+    }?;
 
-    match store {
-        Ok(store) => {
-            state.cache.set(store).ok();
-        }
-        Err(error) => {
-            tracing::warn!(
-                operation = "control_api.cache.failed",
-                %error,
-                "Cache unavailable; falling back to moka"
-            );
-            if let Ok(fallback) = CacheStore::connect_cache(CacheBackend::Moka, "").await {
-                state.cache.set(fallback).ok();
-            }
-        }
-    }
+    state.cache.set(store).map_err(|_| {
+        anyhow::anyhow!("cache store was already initialized before startup completed")
+    })?;
+    Ok(())
 }
 
 pub fn config(path: &str) -> anyhow::Result<ControlApiConfig> {
@@ -67,20 +49,15 @@ pub async fn database(state: &ControlApiState) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    match database::connect(&db_url).await {
-        Ok(db) => {
-            if auto_migrate {
-                migrate_and_seed(&db).await?;
-            }
-
-            state.database.set(db).ok();
-            Ok(())
-        }
-        Err(error) => {
-            tracing::warn!(operation = "control_api.db_failed", %error, "database unavailable; entering setup mode");
-            Ok(())
-        }
+    let db = database::connect(&db_url).await?;
+    if auto_migrate {
+        migrate_and_seed(&db).await?;
     }
+
+    state.database.set(db).map_err(|_| {
+        anyhow::anyhow!("database connection was already initialized before startup completed")
+    })?;
+    Ok(())
 }
 
 pub async fn migrate(state: &ControlApiState) -> anyhow::Result<()> {
@@ -112,4 +89,39 @@ pub async fn is_setup_finished(db: &DatabaseConnection) -> anyhow::Result<bool> 
         .await?;
 
     Ok(setting.and_then(|s| s.value.as_bool()).unwrap_or(false))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn configured_database_connection_failure_is_fatal() {
+        let mut config = ControlApiConfig::default();
+        config.database.url = "postgres://audit:audit@127.0.0.1:1/audit".to_owned();
+        let state = ControlApiState::new(config, "unused.toml");
+
+        assert!(database(&state).await.is_err());
+        assert!(state.try_database().is_none());
+    }
+
+    #[tokio::test]
+    async fn configured_redis_connection_failure_is_fatal() {
+        let mut config = ControlApiConfig::default();
+        config.redis.url = "redis://127.0.0.1:1/0".to_owned();
+        let state = ControlApiState::new(config, "unused.toml");
+
+        assert!(cache(&state).await.is_err());
+        assert!(state.try_cache().is_none());
+    }
+
+    #[tokio::test]
+    async fn explicit_moka_backend_initializes_without_redis() {
+        let mut config = ControlApiConfig::default();
+        config.redis.backend = CacheBackend::Moka;
+        let state = ControlApiState::new(config, "unused.toml");
+
+        cache(&state).await.unwrap();
+        assert!(state.try_cache().is_some());
+    }
 }

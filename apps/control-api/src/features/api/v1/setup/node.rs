@@ -20,6 +20,7 @@ pub async fn handler(
     State(state): State<ControlApiState>,
     Json(body): Json<NodeSetupRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    let _setup_guard = state.lock_setup().await;
     let db = super::setup_database(&state, "setup.node.database")?;
     super::ensure_setup_mutation_allowed(db, "setup.node.ready_mode").await?;
 
@@ -40,14 +41,29 @@ pub async fn handler(
     let token_hash = grass_token::hash_token(&token);
     let storage_root = settings::get_setting(db, "storage.root")
         .await
-        .ok()
-        .flatten()
-        .and_then(|setting| setting.value.as_str().map(str::to_owned));
+        .map_err(|source| AppError::Infrastructure {
+            op: "setup.node.read_storage",
+            source,
+        })?
+        .and_then(|setting| setting.value.as_str().map(node_work_root))
+        .or_else(|| {
+            let config = state.config.read().unwrap();
+            Some(node_work_root(&config.storage.root))
+        });
+
+    let name = body.name.unwrap_or_else(|| "local-node".to_owned());
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 120 {
+        return Err(AppError::Validation {
+            op: "setup.node.invalid_name",
+            message: "node name must contain between 1 and 120 characters".to_owned(),
+        });
+    }
 
     let node = nodes::create_node(
         db,
         CreateNodeParams {
-            name: body.name.unwrap_or_else(|| "local-node".to_owned()),
+            name: name.to_owned(),
             token_hash,
             storage_root,
         },
@@ -62,4 +78,19 @@ pub async fn handler(
         "node": { "id": node.id, "name": node.name },
         "token": token,
     })))
+}
+
+pub(super) fn node_work_root(storage_root: &str) -> String {
+    format!("{}/node", storage_root.trim_end_matches('/'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn node_work_root_is_derived_from_storage_root() {
+        assert_eq!(node_work_root("/data"), "/data/node");
+        assert_eq!(node_work_root("/srv/grass/"), "/srv/grass/node");
+    }
 }

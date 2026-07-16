@@ -10,6 +10,7 @@ pub struct ControlApiState {
     config_path: Arc<String>,
     pub database: Arc<OnceLock<DatabaseConnection>>,
     pub cache: Arc<OnceLock<grass_cache::CacheStore>>,
+    setup_mutex: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl ControlApiState {
@@ -19,6 +20,7 @@ impl ControlApiState {
             config_path: Arc::new(config_path.into()),
             database: Arc::new(OnceLock::new()),
             cache: Arc::new(OnceLock::new()),
+            setup_mutex: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -32,5 +34,9 @@ impl ControlApiState {
 
     pub fn try_cache(&self) -> Option<&grass_cache::CacheStore> {
         self.cache.get()
+    }
+
+    pub async fn lock_setup(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.setup_mutex.lock().await
     }
 }

@@ -16,10 +16,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 export function NodeStep({
-  onSuccess,
+  onCreated,
+  onContinue,
   token,
 }: {
-  onSuccess: (token: string) => void;
+  onCreated: (token: string) => void;
+  onContinue: () => void;
   token: string | null;
 }) {
   const [name, setName] = useState("local-node");
@@ -27,7 +29,7 @@ export function NodeStep({
   const mutation = useMutation({
     mutationFn: () => setupApi.createNode(name || undefined),
     onSuccess: (data) => {
-      onSuccess(data.token);
+      onCreated(data.token);
     },
     onError: (err: Error) => setError(err.message),
   });
@@ -53,7 +55,7 @@ export function NodeStep({
           </div>
         </CardContent>
         <CardFooter>
-          <Button className="w-full" variant="outline" onClick={() => onSuccess(token)}>
+          <Button className="w-full" variant="outline" onClick={onContinue}>
             Continue <ArrowRight className="ml-2 size-4" />
           </Button>
         </CardFooter>

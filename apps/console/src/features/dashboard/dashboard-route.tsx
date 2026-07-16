@@ -1,63 +1,59 @@
-import { ActivityIcon, CpuIcon, RocketIcon, ServerIcon } from "lucide-react";
+import { SettingsIcon, ShieldCheckIcon, UsersIcon } from "lucide-react";
+import { Link } from "react-router";
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-
-const cards = [
-  {
-    title: "Control API",
-    description: "Bootstrap config, tracing, and /health are ready.",
-    icon: ServerIcon,
-  },
-  {
-    title: "Node",
-    description: "Empty lifecycle process with architecture-aligned config.",
-    icon: CpuIcon,
-  },
-  {
-    title: "Deployments Page",
-    description: "Placeholder shell for the first-stage deployment workflow.",
-    icon: RocketIcon,
-  },
-];
+import { Button } from "@/components/ui/button";
+import { useTeam } from "@/features/teams/team-context";
 
 export function DashboardRoute() {
+  const { activeTeam, activeRole } = useTeam();
+
   return (
-    <>
-      <section className="grid gap-4 md:grid-cols-3">
-        {cards.map(({ title, description, icon: Icon }) => (
-          <Card key={title}>
-            <CardHeader>
-              <div className="flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                <Icon className="size-5" />
-              </div>
-              <CardTitle>{title}</CardTitle>
-              <CardDescription>{description}</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="h-2 rounded-full bg-muted">
-                <div className="h-2 w-2/3 rounded-full bg-primary" />
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-8">
+      <div>
+        <h1 className="text-2xl font-semibold">{activeTeam?.name ?? "Workspace"}</h1>
+        <p className="text-sm text-muted-foreground">
+          Team identity, membership, and access controls.
+        </p>
+      </div>
+
+      <div className="grid border-y md:grid-cols-3">
+        <div className="flex min-h-28 flex-col justify-center gap-1 border-b py-5 md:border-b-0 md:border-r md:px-5">
+          <span className="text-xs font-medium uppercase text-muted-foreground">Team slug</span>
+          <span className="font-medium">{activeTeam?.slug ?? "Unavailable"}</span>
+        </div>
+        <div className="flex min-h-28 flex-col justify-center gap-1 border-b py-5 md:border-b-0 md:border-r md:px-5">
+          <span className="text-xs font-medium uppercase text-muted-foreground">Team type</span>
+          <span className="font-medium capitalize">{activeTeam?.kind ?? "Unavailable"}</span>
+        </div>
+        <div className="flex min-h-28 flex-col justify-center gap-1 py-5 md:px-5">
+          <span className="text-xs font-medium uppercase text-muted-foreground">Your access</span>
+          <span className="font-medium capitalize">{activeRole ?? "Unavailable"}</span>
+        </div>
+      </div>
+
+      <section className="space-y-3">
+        <h2 className="text-base font-semibold">Workspace controls</h2>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <Button asChild variant="outline" className="h-12 justify-start">
+            <Link to="/settings/team">
+              <SettingsIcon data-icon="inline-start" />
+              Team settings
+            </Link>
+          </Button>
+          <Button asChild variant="outline" className="h-12 justify-start">
+            <Link to="/settings/members">
+              <UsersIcon data-icon="inline-start" />
+              Members
+            </Link>
+          </Button>
+          <Button asChild variant="outline" className="h-12 justify-start">
+            <Link to="/admin">
+              <ShieldCheckIcon data-icon="inline-start" />
+              Administration
+            </Link>
+          </Button>
+        </div>
       </section>
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <ActivityIcon className="size-5" /> Next milestone preview
-          </CardTitle>
-          <CardDescription>
-            Database, migration, seed, and setup flow will attach real system state to this shell.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-3 text-sm md:grid-cols-3">
-            <div className="rounded-lg border p-4">Setup mode detection</div>
-            <div className="rounded-lg border p-4">Initial admin creation</div>
-            <div className="rounded-lg border p-4">Ready mode transition</div>
-          </div>
-        </CardContent>
-      </Card>
-    </>
+    </div>
   );
 }

@@ -20,7 +20,16 @@ test target="all":
 check target="all":
     {{ if target == "rust" { "cargo check --workspace" } else if target == "console" { "cd " + console + " && vp check" } else if target == "all" { "cargo check --workspace && cd " + console + " && vp check" } else { error("unknown check target: " + target) } }}
 
-quality: fmt clippy test check build
+quality: fmt clippy test check build license-check
+
+license-check:
+    test -f LICENSE
+    grep -q 'license = "BSD-3-Clause"' Cargo.toml
+    grep -q '"license": "BSD-3-Clause"' apps/console/package.json
+
+audit:
+    cargo audit
+    cd {{ console }} && vp pm audit
 
 run target:
     {{ if target == "api" { "cargo run -p grass-control-api" } else if target == "node" { "cargo run -p grass-node" } else if target == "console" { "cd " + console + " && vp dev" } else { error("unknown run target: " + target) } }}
