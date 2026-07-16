@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { authApi, type RegisterInput } from "./auth.api";
+import { API_UNAUTHORIZED_EVENT } from "@/lib/api";
 import { setCsrfToken } from "@/lib/csrf";
 
 interface User {
@@ -23,16 +24,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    let active = true;
+    const clearAuthentication = () => {
+      setUser(null);
+      setCsrfToken(null);
+    };
+    window.addEventListener(API_UNAUTHORIZED_EVENT, clearAuthentication);
+
     authApi
       .restore()
       .then((data) => {
-        setUser(data.user);
+        if (active) setUser(data.user);
       })
       .catch(() => {
-        setUser(null);
-        setCsrfToken(null);
+        if (active) clearAuthentication();
       })
-      .finally(() => setIsLoading(false));
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
+
+    return () => {
+      active = false;
+      window.removeEventListener(API_UNAUTHORIZED_EVENT, clearAuthentication);
+    };
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {

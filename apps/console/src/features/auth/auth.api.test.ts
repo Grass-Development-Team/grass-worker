@@ -75,4 +75,23 @@ describe("authApi.register", () => {
       }),
     );
   });
+
+  it("shares concurrent session restoration to avoid replacing the csrf token", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        response({ user: { id: "user-1", email: "leo@example.com", display_name: "Leo" } }),
+      )
+      .mockResolvedValueOnce(response({ csrf_token: "restored-token" }))
+      .mockResolvedValueOnce(
+        response({ user: { id: "user-1", email: "leo@example.com", display_name: "Leo" } }),
+      )
+      .mockResolvedValueOnce(response({ csrf_token: "stale-token" }));
+
+    const [first, second] = await Promise.all([authApi.restore(), authApi.restore()]);
+
+    expect(first).toEqual(second);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(getCsrfToken()).toBe("restored-token");
+  });
 });

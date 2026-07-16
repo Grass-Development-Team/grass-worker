@@ -21,6 +21,23 @@ interface CsrfResponse {
   csrf_token: string;
 }
 
+let restorePromise: Promise<MeResponse> | null = null;
+
+function restoreSession(): Promise<MeResponse> {
+  if (!restorePromise) {
+    const pending = (async () => {
+      const data = await authApi.me();
+      await authApi.csrf();
+      return data;
+    })();
+    const shared = pending.finally(() => {
+      if (restorePromise === shared) restorePromise = null;
+    });
+    restorePromise = shared;
+  }
+  return restorePromise;
+}
+
 export const authApi = {
   login: async (email: string, password: string) => {
     const data = await request<AuthResponse>("/api/v1/auth/login", {
@@ -59,9 +76,5 @@ export const authApi = {
     setCsrfToken(data.csrf_token);
     return data;
   },
-  restore: async () => {
-    const data = await authApi.me();
-    await authApi.csrf();
-    return data;
-  },
+  restore: restoreSession,
 };

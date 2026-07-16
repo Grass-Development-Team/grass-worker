@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CopyIcon, MoreHorizontalIcon, PlusIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, MoreHorizontalIcon, PlusIcon } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -52,6 +52,8 @@ export function TeamMembersRoute() {
   const [role, setRole] = useState<ManagedTeamRole>("member");
   const [invitation, setInvitation] = useState<TeamInvitation | null>(null);
   const [removeTarget, setRemoveTarget] = useState<TeamMember | null>(null);
+  const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
+  const [copyError, setCopyError] = useState<string | null>(null);
   const manageable = activeRole ? canManageMembers(activeRole) : false;
   const members = useQuery({
     queryKey: activeTeam ? teamKeys.members(activeTeam.id) : ["teams", "none", "members"],
@@ -62,7 +64,11 @@ export function TeamMembersRoute() {
     queryClient.invalidateQueries({ queryKey: teamKeys.members(activeTeam!.id) });
   const invite = useMutation({
     mutationFn: () => teamsApi.inviteMember(activeTeam!.id, { email: email.trim(), role }),
-    onSuccess: ({ invitation }) => setInvitation(invitation),
+    onSuccess: ({ invitation }) => {
+      setInvitation(invitation);
+      setCopyError(null);
+      setCopyState("idle");
+    },
   });
   const updateRole = useMutation({
     mutationFn: ({ userId, role }: { userId: string; role: ManagedTeamRole }) =>
@@ -80,6 +86,35 @@ export function TeamMembersRoute() {
     ? `${window.location.origin}/invitations/accept?token=${encodeURIComponent(invitation.token)}`
     : "";
 
+  const setInviteDialogOpen = (open: boolean) => {
+    setInviteOpen(open);
+    if (!open) {
+      setEmail("");
+      setRole("member");
+      setInvitation(null);
+      setCopyError(null);
+      setCopyState("idle");
+      invite.reset();
+    }
+  };
+
+  const openInviteDialog = () => {
+    invite.reset();
+    setEmail("");
+    setRole("member");
+    setInvitation(null);
+    setCopyError(null);
+    setCopyState("idle");
+    setInviteOpen(true);
+  };
+
+  const setRemoveDialogOpen = (open: boolean) => {
+    if (!open) {
+      setRemoveTarget(null);
+      remove.reset();
+    }
+  };
+
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
       <div className="flex items-end justify-between gap-4">
@@ -88,12 +123,7 @@ export function TeamMembersRoute() {
           <p className="text-sm text-muted-foreground">Manage access to {activeTeam?.name}.</p>
         </div>
         {manageable && (
-          <Button
-            onClick={() => {
-              setInvitation(null);
-              setInviteOpen(true);
-            }}
-          >
+          <Button onClick={openInviteDialog}>
             <PlusIcon data-icon="inline-start" />
             Invite member
           </Button>
@@ -108,7 +138,9 @@ export function TeamMembersRoute() {
           {members.isLoading ? (
             <Spinner />
           ) : members.error ? (
-            <p className="text-sm text-destructive">{members.error.message}</p>
+            <p role="alert" className="text-sm text-destructive">
+              {members.error.message}
+            </p>
           ) : members.data?.members.length === 0 ? (
             <div className="py-10 text-center text-sm text-muted-foreground">
               No members found for this team.
@@ -117,10 +149,10 @@ export function TeamMembersRoute() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>User</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead>Joined</TableHead>
-                  <TableHead>
+                  <TableHead className="px-0 pr-2 md:px-4">User</TableHead>
+                  <TableHead className="px-2 md:px-4">Role</TableHead>
+                  <TableHead className="hidden md:table-cell">Joined</TableHead>
+                  <TableHead className="w-10 px-0 md:px-4">
                     <span className="sr-only">Actions</span>
                   </TableHead>
                 </TableRow>
@@ -128,24 +160,29 @@ export function TeamMembersRoute() {
               <TableBody>
                 {members.data?.members.map((member) => (
                   <TableRow key={member.id}>
-                    <TableCell>
+                    <TableCell className="px-0 pr-2 md:px-4">
                       <div className="font-medium">{member.display_name || member.email}</div>
                       <div className="text-xs text-muted-foreground">{member.email}</div>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="px-2 md:px-4">
                       {member.role === "owner" || !manageable ? (
                         <span className="capitalize">{member.role}</span>
                       ) : (
                         <Select
                           value={member.role}
-                          onValueChange={(value) =>
+                          disabled={updateRole.isPending}
+                          onValueChange={(value) => {
+                            updateRole.reset();
                             updateRole.mutate({
                               userId: member.user_id,
                               role: value as ManagedTeamRole,
-                            })
-                          }
+                            });
+                          }}
                         >
-                          <SelectTrigger aria-label={`Role for ${member.email}`} className="w-32">
+                          <SelectTrigger
+                            aria-label={`Role for ${member.email}`}
+                            className="w-28 md:w-32"
+                          >
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
@@ -160,8 +197,10 @@ export function TeamMembersRoute() {
                         </Select>
                       )}
                     </TableCell>
-                    <TableCell>{new Date(member.joined_at).toLocaleDateString()}</TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
+                      {new Date(member.joined_at).toLocaleDateString()}
+                    </TableCell>
+                    <TableCell className="w-10 px-0 text-right md:px-4">
                       {manageable && member.role !== "owner" && (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -176,7 +215,12 @@ export function TeamMembersRoute() {
                           <DropdownMenuContent align="end">
                             <DropdownMenuGroup>
                               <DropdownMenuItem
-                                onSelect={() => setTimeout(() => setRemoveTarget(member), 0)}
+                                onSelect={() =>
+                                  setTimeout(() => {
+                                    remove.reset();
+                                    setRemoveTarget(member);
+                                  }, 0)
+                                }
                                 className="text-destructive"
                               >
                                 Remove member
@@ -191,9 +235,14 @@ export function TeamMembersRoute() {
               </TableBody>
             </Table>
           )}
+          {updateRole.error && (
+            <p role="alert" className="mt-4 text-sm text-destructive">
+              {updateRole.error.message}
+            </p>
+          )}
         </CardContent>
       </Card>
-      <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
+      <Dialog open={inviteOpen} onOpenChange={setInviteDialogOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{invitation ? "Invitation link created" : "Invite member"}</DialogTitle>
@@ -204,16 +253,33 @@ export function TeamMembersRoute() {
             </DialogDescription>
           </DialogHeader>
           {invitation ? (
-            <div className="flex gap-2">
-              <Input value={link} readOnly aria-label="Invitation link" />
-              <Button
-                type="button"
-                size="icon"
-                onClick={() => navigator.clipboard.writeText(link)}
-                aria-label="Copy invitation link"
-              >
-                <CopyIcon />
-              </Button>
+            <div className="flex flex-col gap-2">
+              <div className="flex gap-2">
+                <Input value={link} readOnly aria-label="Invitation link" />
+                <Button
+                  type="button"
+                  size="icon"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(link);
+                      setCopyError(null);
+                      setCopyState("copied");
+                    } catch {
+                      setCopyError("Unable to copy the invitation link.");
+                    }
+                  }}
+                  aria-label={
+                    copyState === "copied" ? "Invitation link copied" : "Copy invitation link"
+                  }
+                >
+                  {copyState === "copied" ? <CheckIcon /> : <CopyIcon />}
+                </Button>
+              </div>
+              {copyError && (
+                <p role="alert" className="text-sm text-destructive">
+                  {copyError}
+                </p>
+              )}
             </div>
           ) : (
             <form
@@ -262,7 +328,7 @@ export function TeamMembersRoute() {
           )}
         </DialogContent>
       </Dialog>
-      <Dialog open={Boolean(removeTarget)} onOpenChange={(open) => !open && setRemoveTarget(null)}>
+      <Dialog open={Boolean(removeTarget)} onOpenChange={setRemoveDialogOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Remove member?</DialogTitle>
@@ -270,9 +336,13 @@ export function TeamMembersRoute() {
               {removeTarget?.email} will lose access to this team.
             </DialogDescription>
           </DialogHeader>
-          {remove.error && <p className="text-sm text-destructive">{remove.error.message}</p>}
+          {remove.error && (
+            <p role="alert" className="text-sm text-destructive">
+              {remove.error.message}
+            </p>
+          )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setRemoveTarget(null)}>
+            <Button variant="outline" onClick={() => setRemoveDialogOpen(false)}>
               Cancel
             </Button>
             <Button

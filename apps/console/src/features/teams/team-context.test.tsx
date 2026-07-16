@@ -87,4 +87,14 @@ describe("TeamProvider", () => {
     expect(result.current.activeTeam?.id).toBe("shared");
     expect(localStorage.getItem(ACTIVE_TEAM_STORAGE_KEY)).toBe("shared");
   });
+
+  it("surfaces a failure to load the active team details", async () => {
+    const detailError = new Error("Unable to load team details");
+    vi.mocked(teamsApi.list).mockResolvedValue({ teams: [personal] });
+    vi.mocked(teamsApi.get).mockRejectedValue(detailError);
+
+    const { result } = renderHook(() => useTeam(), { wrapper });
+
+    await waitFor(() => expect(result.current.error).toBe(detailError));
+  });
 });

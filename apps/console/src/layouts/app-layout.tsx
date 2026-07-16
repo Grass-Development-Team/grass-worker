@@ -6,9 +6,11 @@ import {
   ShieldCheckIcon,
   UsersIcon,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import {
   Sidebar,
@@ -24,6 +26,7 @@ import {
   SidebarMenuItem,
   SidebarProvider,
   SidebarTrigger,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { useAuth } from "@/features/auth/auth-context";
 import { canViewTeamSettings } from "@/features/teams/team-permissions";
@@ -42,19 +45,38 @@ const settingsNavigation = [
 const initials = (value: string) => value.slice(0, 2).toUpperCase();
 
 export function AppLayout() {
+  return (
+    <SidebarProvider>
+      <AppLayoutContent />
+    </SidebarProvider>
+  );
+}
+
+function AppLayoutContent() {
   const { user, logout } = useAuth();
-  const { activeTeam, activeRole } = useTeam();
+  const { activeTeam, activeRole, error, refreshTeams } = useTeam();
   const location = useLocation();
   const navigate = useNavigate();
+  const { isMobile, setOpenMobile } = useSidebar();
+  const [actionError, setActionError] = useState<string | null>(null);
   const showSettings = activeRole ? canViewTeamSettings(activeRole) : false;
 
+  useEffect(() => {
+    if (isMobile) setOpenMobile(false);
+  }, [isMobile, location.pathname, location.search, setOpenMobile]);
+
   const signOut = async () => {
-    await logout();
-    navigate("/login", { replace: true });
+    setActionError(null);
+    try {
+      await logout();
+      navigate("/login", { replace: true });
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : "Unable to log out.");
+    }
   };
 
   return (
-    <SidebarProvider>
+    <>
       <Sidebar collapsible="icon">
         <SidebarHeader>
           <SidebarMenu>
@@ -135,9 +157,29 @@ export function AppLayout() {
           </div>
         </header>
         <main className="flex flex-1 flex-col gap-6 p-4 md:p-6">
-          <Outlet />
+          {actionError && (
+            <p role="alert" className="border-l-2 border-destructive pl-3 text-sm text-destructive">
+              {actionError}
+            </p>
+          )}
+          {error ? (
+            <div
+              role="alert"
+              className="flex min-h-64 flex-col items-center justify-center gap-4 text-center"
+            >
+              <div>
+                <h1 className="font-semibold">Unable to load this workspace</h1>
+                <p className="text-sm text-muted-foreground">{error.message}</p>
+              </div>
+              <Button variant="outline" onClick={() => refreshTeams()}>
+                Retry
+              </Button>
+            </div>
+          ) : (
+            <Outlet key={activeTeam?.id ?? "no-team"} />
+          )}
         </main>
       </SidebarInset>
-    </SidebarProvider>
+    </>
   );
 }

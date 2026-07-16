@@ -69,13 +69,14 @@ export function Router() {
         }
       >
         <Route path="/" element={<DashboardRoute />} />
-        <Route path="/dashboard" element={<DashboardRoute />} />
+        <Route path="/dashboard" element={<Navigate to="/" replace />} />
         <Route path="/admin" element={<AdminRoute />} />
         <Route path="/invitations/accept" element={<AcceptInvitationRoute />} />
         <Route element={<TeamSettingsGuard />}>
           <Route path="/settings/team" element={<TeamSettingsRoute />} />
           <Route path="/settings/members" element={<TeamMembersRoute />} />
         </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
   );
