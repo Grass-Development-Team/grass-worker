@@ -1,0 +1,66 @@
+import { render, screen } from "@testing-library/react";
+import { MemoryRouter, Outlet } from "react-router";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
+import { useAuth } from "@/features/auth/auth-context";
+import { Router } from "./router";
+
+vi.mock("@/features/auth/auth-context", () => ({ useAuth: vi.fn() }));
+vi.mock("@/features/teams/team-context", () => ({
+  TeamProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
+vi.mock("@/layouts/app-layout", () => ({ AppLayout: () => <Outlet /> }));
+vi.mock("@/layouts/auth-layout", () => ({ AuthLayout: () => <Outlet /> }));
+vi.mock("@/features/dashboard/dashboard-route", () => ({
+  DashboardRoute: () => <div>Overview page</div>,
+}));
+vi.mock("@/features/admin/admin-route", () => ({
+  AdminRoute: () => <div>Administration page</div>,
+}));
+vi.mock("@/features/teams/team-settings-guard", () => ({
+  TeamSettingsGuard: () => <Outlet />,
+}));
+
+function setUser(platformRole: "admin" | "user") {
+  vi.mocked(useAuth).mockReturnValue({
+    user: {
+      id: "user-1",
+      email: "user@example.com",
+      display_name: "User",
+      platform_role: platformRole,
+    },
+    isLoading: false,
+    login: vi.fn(),
+    register: vi.fn(),
+    logout: vi.fn(),
+  } as ReturnType<typeof useAuth>);
+}
+
+describe("Administration routing", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("redirects a regular platform user away from /admin", () => {
+    setUser("user");
+
+    render(
+      <MemoryRouter initialEntries={["/admin"]}>
+        <Router />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText("Overview page")).toBeInTheDocument();
+    expect(screen.queryByText("Administration page")).not.toBeInTheDocument();
+  });
+
+  it("allows a platform administrator to open /admin", () => {
+    setUser("admin");
+
+    render(
+      <MemoryRouter initialEntries={["/admin"]}>
+        <Router />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText("Administration page")).toBeInTheDocument();
+  });
+});

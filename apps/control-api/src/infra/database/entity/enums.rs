@@ -16,6 +16,20 @@ string_active_enum!(UserStatus, "user_status", {
     Disabled => "disabled",
 });
 
+string_active_enum!(PlatformRole, "platform_role", {
+    User => "user",
+    Admin => "admin",
+});
+
+impl PlatformRole {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Admin => "admin",
+        }
+    }
+}
+
 string_active_enum!(TeamKind, "team_kind", {
     Personal => "personal",
     Team => "team",

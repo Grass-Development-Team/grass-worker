@@ -2,3 +2,4 @@ pub mod m20260515_000001_bootstrap;
 pub mod m20260525_000002_lifecycle;
 pub mod m20260710_000003_team_invitation_tokens;
 pub mod m20260714_000004_m0_m2_remediation;
+pub mod m20260720_000005_platform_admin_role;

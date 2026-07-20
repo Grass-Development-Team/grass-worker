@@ -19,7 +19,12 @@ describe("authApi.register", () => {
   it("registers with an invitation token and stores the returned csrf token", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       response({
-        user: { id: "user-1", email: "leo@example.com", display_name: "Leo" },
+        user: {
+          id: "user-1",
+          email: "leo@example.com",
+          display_name: "Leo",
+          platform_role: "user",
+        },
         csrf_token: "csrf-token",
       }),
     );
@@ -51,7 +56,14 @@ describe("authApi.register", () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
-        response({ user: { id: "user-1", email: "leo@example.com", display_name: "Leo" } }),
+        response({
+          user: {
+            id: "user-1",
+            email: "leo@example.com",
+            display_name: "Leo",
+            platform_role: "user",
+          },
+        }),
       )
       .mockResolvedValueOnce(response({ csrf_token: "restored-token" }))
       .mockResolvedValueOnce(response({ ok: true }));
@@ -80,11 +92,25 @@ describe("authApi.register", () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
-        response({ user: { id: "user-1", email: "leo@example.com", display_name: "Leo" } }),
+        response({
+          user: {
+            id: "user-1",
+            email: "leo@example.com",
+            display_name: "Leo",
+            platform_role: "user",
+          },
+        }),
       )
       .mockResolvedValueOnce(response({ csrf_token: "restored-token" }))
       .mockResolvedValueOnce(
-        response({ user: { id: "user-1", email: "leo@example.com", display_name: "Leo" } }),
+        response({
+          user: {
+            id: "user-1",
+            email: "leo@example.com",
+            display_name: "Leo",
+            platform_role: "user",
+          },
+        }),
       )
       .mockResolvedValueOnce(response({ csrf_token: "stale-token" }));
 

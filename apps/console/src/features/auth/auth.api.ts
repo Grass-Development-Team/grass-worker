@@ -1,8 +1,17 @@
 import { request } from "@/lib/api";
 import { setCsrfToken } from "@/lib/csrf";
 
+export type PlatformRole = "admin" | "user";
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  display_name: string | null;
+  platform_role: PlatformRole;
+}
+
 interface AuthResponse {
-  user: { id: string; email: string; display_name: string | null };
+  user: AuthUser;
   csrf_token: string;
 }
 
@@ -14,7 +23,7 @@ export interface RegisterInput {
 }
 
 interface MeResponse {
-  user: { id: string; email: string; display_name: string | null };
+  user: AuthUser;
 }
 
 interface CsrfResponse {

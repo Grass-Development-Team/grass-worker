@@ -23,7 +23,12 @@ afterEach(() => {
 
 it("clears local authentication when an API request reports an expired session", async () => {
   vi.mocked(authApi.restore).mockResolvedValue({
-    user: { id: "user-1", email: "leo@example.com", display_name: "Leo" },
+    user: {
+      id: "user-1",
+      email: "leo@example.com",
+      display_name: "Leo",
+      platform_role: "user",
+    },
   });
   setCsrfToken("csrf-token");
   const wrapper = ({ children }: { children: ReactNode }) => (

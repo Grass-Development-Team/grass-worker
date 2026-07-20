@@ -33,10 +33,12 @@ import { canViewTeamSettings } from "@/features/teams/team-permissions";
 import { TeamSwitcher } from "@/features/teams/team-switcher";
 import { useTeam } from "@/features/teams/team-context";
 
-const primaryNavigation = [
-  { title: "Overview", url: "/", icon: HomeIcon },
-  { title: "Administration", url: "/admin", icon: ShieldCheckIcon },
-];
+const primaryNavigation = [{ title: "Overview", url: "/", icon: HomeIcon }];
+const administrationNavigation = {
+  title: "Administration",
+  url: "/admin",
+  icon: ShieldCheckIcon,
+};
 const settingsNavigation = [
   { title: "General", url: "/settings/team", icon: SettingsIcon },
   { title: "Members", url: "/settings/members", icon: UsersIcon },
@@ -60,6 +62,10 @@ function AppLayoutContent() {
   const { isMobile, setOpenMobile } = useSidebar();
   const [actionError, setActionError] = useState<string | null>(null);
   const showSettings = activeRole ? canViewTeamSettings(activeRole) : false;
+  const navigation =
+    user?.platform_role === "admin"
+      ? [...primaryNavigation, administrationNavigation]
+      : primaryNavigation;
 
   useEffect(() => {
     if (isMobile) setOpenMobile(false);
@@ -96,7 +102,7 @@ function AppLayoutContent() {
             <SidebarGroupLabel>Workspace</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {primaryNavigation.map((item) => (
+                {navigation.map((item) => (
                   <SidebarMenuItem key={item.url}>
                     <SidebarMenuButton asChild isActive={location.pathname === item.url}>
                       <NavLink to={item.url}>

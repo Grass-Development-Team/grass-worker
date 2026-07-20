@@ -1,16 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { authApi, type RegisterInput } from "./auth.api";
+import { authApi, type AuthUser, type RegisterInput } from "./auth.api";
 import { API_UNAUTHORIZED_EVENT } from "@/lib/api";
 import { setCsrfToken } from "@/lib/csrf";
 
-interface User {
-  id: string;
-  email: string;
-  display_name: string | null;
-}
-
 interface AuthState {
-  user: User | null;
+  user: AuthUser | null;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (input: RegisterInput) => Promise<void>;
@@ -20,7 +14,7 @@ interface AuthState {
 const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {

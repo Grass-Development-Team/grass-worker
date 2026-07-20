@@ -266,7 +266,8 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 - **M2.8 Login Console**：实现登录页、登录态恢复和错误展示；
 - **M2.9 App Shell 与 Team Switcher**：实现受保护布局、团队切换和基础导航；
 - **M2.10 Team Settings 页面**：实现成员和团队基础设置页面；
-- **M2.11 用户注册与 Signup Console**：实现注册 API、注册页面、个人团队初始化、signup policy 和邀请注册闭环。
+- **M2.11 用户注册与 Signup Console**：实现注册 API、注册页面、个人团队初始化、signup policy 和邀请注册闭环；
+- **M2.12 平台管理员权限边界**：增加独立平台角色、initial admin 身份迁移、Admin API Guard 和 Console Administration 路由保护。
 
 ### Auth
 
@@ -298,7 +299,15 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 - 个人团队作为特殊团队处理；
 - 权限统一基于团队成员关系判断。
 
-### Role
+### Platform Role
+
+- `admin`：访问跨团队的系统管理 API 和 Console Administration；
+- `user`：普通平台用户；
+- initial admin 保存为平台 `admin`，普通注册用户保存为平台 `user`；
+- 平台角色不从团队角色或团队分组推导；
+- `/api/v1/admin/*` 必须由 Control API 统一校验平台管理员身份。
+
+### Team Role
 
 - `owner`；
 - `admin`；
@@ -315,12 +324,14 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 - team switcher；
 - team settings；
 - members 页面；
-- 基础 admin 页面入口。
+- 仅平台管理员可见且可访问的 admin 页面入口。
 
 ### 验收标准
 
 - 未登录访问受保护 API 返回 `401`；
 - 非团队成员访问团队资源返回 `403`；
+- 普通平台用户访问管理 API 返回 `403`，且无法看到或进入 Console Administration；
+- initial admin 可以访问管理 API 和 Console Administration；
 - 不同角色权限符合设计；
 - Console 可以注册、登录、切换团队、查看成员；
 - 新注册用户自动获得个人团队；
@@ -925,6 +936,7 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 
 ### Admin / Team Pages
 
+- Admin Pages 仅平台 `admin` 可访问；Team Pages 按团队成员关系和团队角色授权；
 - quota usage；
 - team members；
 - team groups；

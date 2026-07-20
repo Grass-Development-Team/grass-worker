@@ -2,9 +2,11 @@ import { SettingsIcon, ShieldCheckIcon, UsersIcon } from "lucide-react";
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/features/auth/auth-context";
 import { useTeam } from "@/features/teams/team-context";
 
 export function DashboardRoute() {
+  const { user } = useAuth();
   const { activeTeam, activeRole } = useTeam();
 
   return (
@@ -33,7 +35,7 @@ export function DashboardRoute() {
 
       <section className="space-y-3">
         <h2 className="text-base font-semibold">Workspace controls</h2>
-        <div className="grid gap-2 sm:grid-cols-3">
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           <Button asChild variant="outline" className="h-12 justify-start">
             <Link to="/settings/team">
               <SettingsIcon data-icon="inline-start" />
@@ -46,12 +48,14 @@ export function DashboardRoute() {
               Members
             </Link>
           </Button>
-          <Button asChild variant="outline" className="h-12 justify-start">
-            <Link to="/admin">
-              <ShieldCheckIcon data-icon="inline-start" />
-              Administration
-            </Link>
-          </Button>
+          {user?.platform_role === "admin" && (
+            <Button asChild variant="outline" className="h-12 justify-start">
+              <Link to="/admin">
+                <ShieldCheckIcon data-icon="inline-start" />
+                Administration
+              </Link>
+            </Button>
+          )}
         </div>
       </section>
     </div>
