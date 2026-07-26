@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod auth;
+pub mod internal;
 pub mod me;
 pub mod projects;
 pub mod setup;
@@ -50,6 +51,17 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
             state.clone(),
             require_ready_mode,
         )))
+        .nest(
+            "/internal",
+            internal::router(state.clone())
+                // Artifact uploads carry whole build outputs; quota enforces
+                // the real per-team limit.
+                .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 1024))
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    require_ready_mode,
+                )),
+        )
 }
 
 #[cfg(test)]
