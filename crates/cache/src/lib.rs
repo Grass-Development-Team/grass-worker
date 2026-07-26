@@ -25,6 +25,30 @@ impl std::fmt::Display for CacheBackend {
     }
 }
 
+/// One counter to check and pre-consume inside an atomic multi-key quota
+/// operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuotaCounterCheck {
+    pub key: String,
+    /// Amount to add to the counter.
+    pub amount: i64,
+    /// Inclusive maximum. A negative maximum means unlimited.
+    pub max: i64,
+    /// Optional expiry applied when the counter is created or refreshed,
+    /// used for periodic counters such as monthly windows.
+    pub ttl: Option<Duration>,
+}
+
+/// Outcome of an atomic multi-counter check-and-consume.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuotaCheckOutcome {
+    /// Every counter fit under its maximum and all increments were applied.
+    Allowed,
+    /// The counter with this key would exceed its maximum. No increments
+    /// were left applied.
+    Denied { key: String },
+}
+
 #[async_trait::async_trait]
 pub trait Cache: Send + Sync + Clone + 'static {
     async fn get(&self, key: &str) -> anyhow::Result<Option<String>>;
@@ -44,6 +68,27 @@ pub trait Cache: Send + Sync + Clone + 'static {
         capacity: u32,
         refill_period: Duration,
     ) -> anyhow::Result<bool>;
+    /// Stores the value only when the key does not exist yet. Returns whether
+    /// the value was stored. Used to seed quota counters from durable state
+    /// before atomic increments run against them.
+    async fn set_if_absent(&self, key: &str, value: &str, ttl: Duration) -> anyhow::Result<bool>;
+    /// Atomically checks every counter against its maximum and applies all
+    /// increments, rolling back already-applied increments when any counter
+    /// would exceed its maximum.
+    async fn check_and_consume(
+        &self,
+        checks: &[QuotaCounterCheck],
+    ) -> anyhow::Result<QuotaCheckOutcome>;
+    /// Adds `amount` (may be negative) to a counter without a limit check,
+    /// clamping the result at zero. Used to roll back reserved quota after a
+    /// failed business operation.
+    async fn adjust_counter(&self, key: &str, amount: i64) -> anyhow::Result<i64>;
+    /// Acquires one slot of a bounded semaphore. Returns whether a slot was
+    /// acquired. The key expires after `ttl` so crashed holders cannot occupy
+    /// slots forever; callers should re-acquire or refresh long-lived slots.
+    async fn acquire_slot(&self, key: &str, max: i64, ttl: Duration) -> anyhow::Result<bool>;
+    /// Releases one slot of a bounded semaphore, clamping at zero.
+    async fn release_slot(&self, key: &str) -> anyhow::Result<()>;
 }
 
 #[derive(Clone)]
@@ -119,6 +164,44 @@ impl Cache for CacheStore {
         match self {
             Self::Moka(c) => c.consume_rate_limit(key, capacity, refill_period).await,
             Self::Redis(c) => c.consume_rate_limit(key, capacity, refill_period).await,
+        }
+    }
+
+    async fn set_if_absent(&self, key: &str, value: &str, ttl: Duration) -> anyhow::Result<bool> {
+        match self {
+            Self::Moka(c) => c.set_if_absent(key, value, ttl).await,
+            Self::Redis(c) => c.set_if_absent(key, value, ttl).await,
+        }
+    }
+
+    async fn check_and_consume(
+        &self,
+        checks: &[QuotaCounterCheck],
+    ) -> anyhow::Result<QuotaCheckOutcome> {
+        match self {
+            Self::Moka(c) => c.check_and_consume(checks).await,
+            Self::Redis(c) => c.check_and_consume(checks).await,
+        }
+    }
+
+    async fn adjust_counter(&self, key: &str, amount: i64) -> anyhow::Result<i64> {
+        match self {
+            Self::Moka(c) => c.adjust_counter(key, amount).await,
+            Self::Redis(c) => c.adjust_counter(key, amount).await,
+        }
+    }
+
+    async fn acquire_slot(&self, key: &str, max: i64, ttl: Duration) -> anyhow::Result<bool> {
+        match self {
+            Self::Moka(c) => c.acquire_slot(key, max, ttl).await,
+            Self::Redis(c) => c.acquire_slot(key, max, ttl).await,
+        }
+    }
+
+    async fn release_slot(&self, key: &str) -> anyhow::Result<()> {
+        match self {
+            Self::Moka(c) => c.release_slot(key).await,
+            Self::Redis(c) => c.release_slot(key).await,
         }
     }
 }

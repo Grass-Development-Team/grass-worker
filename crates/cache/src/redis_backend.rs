@@ -86,6 +86,138 @@ return 1
         Ok(value)
     }
 
+    async fn set_if_absent(&self, key: &str, value: &str, ttl: Duration) -> anyhow::Result<bool> {
+        let mut conn = self.conn.clone();
+        let stored: bool = redis::cmd("SET")
+            .arg(key)
+            .arg(value)
+            .arg("NX")
+            .arg("PX")
+            .arg(ttl.as_millis().max(1) as u64)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| anyhow::anyhow!("redis set-if-absent failed: {e}"))?;
+        Ok(stored)
+    }
+
+    async fn check_and_consume(
+        &self,
+        checks: &[super::QuotaCounterCheck],
+    ) -> anyhow::Result<super::QuotaCheckOutcome> {
+        if checks.is_empty() {
+            return Ok(super::QuotaCheckOutcome::Allowed);
+        }
+
+        let mut conn = self.conn.clone();
+        let script = redis::Script::new(
+            r#"
+local count = tonumber(ARGV[1])
+for i = 1, count do
+    local amount = tonumber(ARGV[1 + i])
+    local max = tonumber(ARGV[1 + count + i])
+    local current = tonumber(redis.call('GET', KEYS[i]) or '0')
+    if max >= 0 and current + amount > max then
+        return {0, KEYS[i]}
+    end
+end
+for i = 1, count do
+    local amount = tonumber(ARGV[1 + i])
+    local ttl_ms = tonumber(ARGV[1 + 2 * count + i])
+    redis.call('INCRBY', KEYS[i], amount)
+    if ttl_ms > 0 and redis.call('PTTL', KEYS[i]) < 0 then
+        redis.call('PEXPIRE', KEYS[i], ttl_ms)
+    end
+end
+return {1}
+"#,
+        );
+        let mut invocation = script.prepare_invoke();
+        invocation.arg(checks.len());
+        for check in checks {
+            invocation.key(&check.key);
+        }
+        for check in checks {
+            invocation.arg(check.amount);
+        }
+        for check in checks {
+            invocation.arg(check.max);
+        }
+        for check in checks {
+            invocation.arg(check.ttl.map(|ttl| ttl.as_millis() as u64).unwrap_or(0));
+        }
+
+        let result: Vec<redis::Value> = invocation
+            .invoke_async(&mut conn)
+            .await
+            .map_err(|e| anyhow::anyhow!("redis quota check failed: {e}"))?;
+
+        match result.first() {
+            Some(redis::Value::Int(1)) => Ok(super::QuotaCheckOutcome::Allowed),
+            Some(redis::Value::Int(0)) => {
+                let key = match result.get(1) {
+                    Some(redis::Value::BulkString(bytes)) => {
+                        String::from_utf8_lossy(bytes).into_owned()
+                    }
+                    Some(redis::Value::SimpleString(text)) => text.clone(),
+                    _ => String::new(),
+                };
+                Ok(super::QuotaCheckOutcome::Denied { key })
+            }
+            _ => Err(anyhow::anyhow!("redis quota check returned invalid reply")),
+        }
+    }
+
+    async fn adjust_counter(&self, key: &str, amount: i64) -> anyhow::Result<i64> {
+        let mut conn = self.conn.clone();
+        let value: i64 = redis::Script::new(
+            r#"
+local next = tonumber(redis.call('GET', KEYS[1]) or '0') + tonumber(ARGV[1])
+if next < 0 then
+    next = 0
+end
+local ttl = redis.call('PTTL', KEYS[1])
+redis.call('SET', KEYS[1], next)
+if ttl > 0 then
+    redis.call('PEXPIRE', KEYS[1], ttl)
+end
+return next
+"#,
+        )
+        .key(key)
+        .arg(amount)
+        .invoke_async(&mut conn)
+        .await
+        .map_err(|e| anyhow::anyhow!("redis counter adjust failed: {e}"))?;
+        Ok(value)
+    }
+
+    async fn acquire_slot(&self, key: &str, max: i64, ttl: Duration) -> anyhow::Result<bool> {
+        let mut conn = self.conn.clone();
+        let acquired: i64 = redis::Script::new(
+            r#"
+local max = tonumber(ARGV[1])
+local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+if max >= 0 and current + 1 > max then
+    return 0
+end
+redis.call('INCR', KEYS[1])
+redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[2]))
+return 1
+"#,
+        )
+        .key(key)
+        .arg(max)
+        .arg(ttl.as_millis().max(1) as u64)
+        .invoke_async(&mut conn)
+        .await
+        .map_err(|e| anyhow::anyhow!("redis slot acquire failed: {e}"))?;
+        Ok(acquired == 1)
+    }
+
+    async fn release_slot(&self, key: &str) -> anyhow::Result<()> {
+        self.adjust_counter(key, -1).await.map(|_| ())
+    }
+
     async fn consume_rate_limit(
         &self,
         key: &str,
