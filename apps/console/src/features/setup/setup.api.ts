@@ -7,6 +7,30 @@ export interface SetupState {
   is_setup_mode: boolean;
 }
 
+export function buildPostgresUrl(
+  host: string,
+  port: string,
+  username: string,
+  password: string,
+  database: string,
+): string {
+  const normalizedHost = host.trim();
+  const url = new URL("postgres://placeholder");
+  url.hostname = normalizedHost.includes(":")
+    ? normalizedHost.startsWith("[")
+      ? normalizedHost
+      : `[${normalizedHost}]`
+    : normalizedHost;
+  if (url.hostname === "placeholder" && normalizedHost !== "placeholder") {
+    throw new Error("Database host is invalid.");
+  }
+  url.port = port.trim();
+  url.username = username.trim();
+  url.password = password;
+  url.pathname = `/${encodeURIComponent(database.trim())}`;
+  return url.toString();
+}
+
 export const setupApi = {
   getSetupState: () => request<SetupState>("/api/v1/setup/state"),
 
@@ -17,7 +41,7 @@ export const setupApi = {
     password: string,
     database: string,
   ) => {
-    const url = `postgres://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}/${database}`;
+    const url = buildPostgresUrl(host, port, username, password, database);
     return request<{ connected: boolean; migrations_applied: boolean; seed_completed: boolean }>(
       "/api/v1/setup/database",
       { method: "POST", body: JSON.stringify({ url }) },

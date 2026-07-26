@@ -37,6 +37,11 @@ function GuestRoute({ children }: { children: React.ReactNode }) {
   return user ? <Navigate to="/" replace /> : <>{children}</>;
 }
 
+function PlatformAdminRoute({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  return user?.platform_role === "admin" ? <>{children}</> : <Navigate to="/" replace />;
+}
+
 export function Router() {
   return (
     <Routes>
@@ -69,13 +74,21 @@ export function Router() {
         }
       >
         <Route path="/" element={<DashboardRoute />} />
-        <Route path="/dashboard" element={<DashboardRoute />} />
-        <Route path="/admin" element={<AdminRoute />} />
+        <Route path="/dashboard" element={<Navigate to="/" replace />} />
+        <Route
+          path="/admin"
+          element={
+            <PlatformAdminRoute>
+              <AdminRoute />
+            </PlatformAdminRoute>
+          }
+        />
         <Route path="/invitations/accept" element={<AcceptInvitationRoute />} />
         <Route element={<TeamSettingsGuard />}>
           <Route path="/settings/team" element={<TeamSettingsRoute />} />
           <Route path="/settings/members" element={<TeamMembersRoute />} />
         </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
   );

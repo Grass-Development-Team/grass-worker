@@ -43,6 +43,17 @@ export function TeamSwitcher() {
   const [error, setError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
 
+  const resetCreateForm = () => {
+    setName("");
+    setSlug("");
+    setError(null);
+  };
+
+  const setCreateDialogOpen = (open: boolean) => {
+    setCreateOpen(open);
+    if (!open) resetCreateForm();
+  };
+
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!name.trim() || !slug.trim()) {
@@ -54,9 +65,7 @@ export function TeamSwitcher() {
     setError(null);
     try {
       await createTeam({ name: name.trim(), slug: slug.trim() });
-      setName("");
-      setSlug("");
-      setCreateOpen(false);
+      setCreateDialogOpen(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to create team.");
     } finally {
@@ -70,15 +79,16 @@ export function TeamSwitcher() {
         <DropdownMenuTrigger asChild>
           <Button
             variant="ghost"
-            className="h-auto w-full justify-start gap-2 px-2 py-2 text-left"
+            className="h-auto w-full justify-start gap-2 px-2 py-2 text-left group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:p-0"
             disabled={isLoading}
+            aria-label={activeTeam ? `Switch team, current team ${activeTeam.name}` : "Select team"}
           >
             <Avatar className="size-8 rounded-md">
               <AvatarFallback className="rounded-md text-xs">
                 {activeTeam ? initials(activeTeam.name) : "GW"}
               </AvatarFallback>
             </Avatar>
-            <span className="min-w-0 flex-1">
+            <span className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
               <span className="block truncate text-sm font-medium">
                 {activeTeam?.name ?? (isLoading ? "Loading teams" : "No team")}
               </span>
@@ -86,7 +96,10 @@ export function TeamSwitcher() {
                 {activeTeam?.kind === "personal" ? "Personal workspace" : "Team workspace"}
               </span>
             </span>
-            <ChevronsUpDownIcon data-icon="inline-end" />
+            <ChevronsUpDownIcon
+              data-icon="inline-end"
+              className="group-data-[collapsible=icon]:hidden"
+            />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent className="w-64" align="start">
@@ -106,7 +119,14 @@ export function TeamSwitcher() {
           </DropdownMenuGroup>
           <DropdownMenuSeparator />
           <DropdownMenuGroup>
-            <DropdownMenuItem onSelect={() => setTimeout(() => setCreateOpen(true), 0)}>
+            <DropdownMenuItem
+              onSelect={() =>
+                setTimeout(() => {
+                  resetCreateForm();
+                  setCreateOpen(true);
+                }, 0)
+              }
+            >
               <PlusIcon />
               Create team
             </DropdownMenuItem>
@@ -114,7 +134,7 @@ export function TeamSwitcher() {
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+      <Dialog open={createOpen} onOpenChange={setCreateDialogOpen}>
         <DialogContent>
           <form className="flex flex-col gap-6" onSubmit={submit}>
             <DialogHeader>
@@ -148,7 +168,7 @@ export function TeamSwitcher() {
               </Field>
             </FieldGroup>
             <DialogFooter className="gap-2">
-              <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>
+              <Button type="button" variant="outline" onClick={() => setCreateDialogOpen(false)}>
                 Cancel
               </Button>
               <Button type="submit" disabled={isCreating}>

@@ -18,7 +18,7 @@ pub async fn handler(
         message: "cache service not available".to_owned(),
     })?;
 
-    let token = csrf::generate_csrf_token(cache, &session.session_id)
+    let token = csrf::get_or_generate_csrf_token(cache, &session.session_id)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: "csrf.generate",

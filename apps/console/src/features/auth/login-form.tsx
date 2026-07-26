@@ -11,7 +11,16 @@ import { useAuth } from "./auth-context";
 export function LoginForm({ className, ...props }: React.ComponentPropsWithoutRef<"div">) {
   const navigate = useNavigate();
   const location = useLocation();
-  const invitationToken = new URLSearchParams(location.search).get("invitation_token");
+  const from = (location.state as { from?: string } | null)?.from;
+  const redirectedInvitationToken = (() => {
+    if (!from?.startsWith("/")) return null;
+    const redirectUrl = new URL(from, window.location.origin);
+    return redirectUrl.pathname === "/invitations/accept"
+      ? redirectUrl.searchParams.get("token")
+      : null;
+  })();
+  const invitationToken =
+    new URLSearchParams(location.search).get("invitation_token") ?? redirectedInvitationToken;
   const signupHref = invitationToken
     ? `/signup?${new URLSearchParams({ invitation_token: invitationToken })}`
     : "/signup";
@@ -33,7 +42,6 @@ export function LoginForm({ className, ...props }: React.ComponentPropsWithoutRe
     setIsSubmitting(true);
     try {
       await login(email.trim(), password);
-      const from = (location.state as { from?: string } | null)?.from;
       const destination =
         from ??
         (invitationToken

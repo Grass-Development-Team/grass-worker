@@ -1,6 +1,6 @@
 use sea_orm::entity::prelude::*;
 
-use super::enums::UserStatus;
+use super::enums::{PlatformRole, UserStatus};
 
 #[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
@@ -12,6 +12,7 @@ pub struct Model {
     pub email: String,
     pub display_name: Option<String>,
     pub status: UserStatus,
+    pub platform_role: PlatformRole,
     pub last_login_at: Option<TimeDateTimeWithTimeZone>,
     pub deleted_at: Option<TimeDateTimeWithTimeZone>,
     pub created_at: TimeDateTimeWithTimeZone,

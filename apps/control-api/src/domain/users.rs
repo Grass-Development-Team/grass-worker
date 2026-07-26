@@ -7,12 +7,13 @@ use sea_orm::{
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::infra::database::entity::{UserStatus, user, user_password_credential};
+use crate::infra::database::entity::{PlatformRole, UserStatus, user, user_password_credential};
 
 pub struct CreateUserParams {
     pub email: String,
     pub display_name: Option<String>,
     pub password_hash: String,
+    pub platform_role: PlatformRole,
 }
 
 static DUMMY_PASSWORD_HASH: LazyLock<String> = LazyLock::new(|| {
@@ -32,6 +33,7 @@ pub async fn create_user<C: ConnectionTrait>(
         email: Set(params.email.clone()),
         display_name: Set(params.display_name),
         status: Set(UserStatus::Active),
+        platform_role: Set(params.platform_role),
         last_login_at: Set(None),
         deleted_at: Set(None),
         created_at: Set(now),

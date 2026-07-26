@@ -27,6 +27,17 @@ pub async fn generate_csrf_token(
     Ok(token)
 }
 
+pub async fn get_or_generate_csrf_token(
+    cache: &impl grass_cache::Cache,
+    session_id: &str,
+) -> anyhow::Result<String> {
+    let key = csrf_key(session_id);
+    if let Some(token) = cache.get(&key).await? {
+        return Ok(token);
+    }
+    generate_csrf_token(cache, session_id).await
+}
+
 pub async fn validate_csrf_token(
     cache: &impl grass_cache::Cache,
     session_id: &str,
@@ -139,6 +150,18 @@ mod tests {
         assert!(csrf_exempt_path("/setup/database"));
         assert!(!csrf_exempt_path("/auth/logout"));
         assert!(!csrf_exempt_path("/teams"));
+    }
+
+    #[tokio::test]
+    async fn restoring_a_session_reuses_its_csrf_token() {
+        let cache = CacheStore::connect_cache(CacheBackend::Moka, "")
+            .await
+            .unwrap();
+
+        let first = get_or_generate_csrf_token(&cache, "session").await.unwrap();
+        let second = get_or_generate_csrf_token(&cache, "session").await.unwrap();
+
+        assert_eq!(first, second);
     }
 
     async fn authenticated_app() -> (Router, CacheStore, String) {

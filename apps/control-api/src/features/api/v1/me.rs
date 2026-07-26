@@ -1,6 +1,3 @@
-use axum::{extract::State, response::IntoResponse};
-use serde_json::json;
-
 use crate::{
     domain::users,
     infra::{
@@ -9,6 +6,7 @@ use crate::{
     },
     state::ControlApiState,
 };
+use axum::{extract::State, response::IntoResponse};
 
 pub async fn handler(
     State(state): State<ControlApiState>,
@@ -30,11 +28,7 @@ pub async fn handler(
             message: "user not found".to_owned(),
         })?;
 
-    Ok(ok_response(json!({
-        "user": {
-            "id": user.id,
-            "email": user.email,
-            "display_name": user.display_name,
-        },
+    Ok(ok_response(serde_json::json!({
+        "user": super::auth::user_data(&user),
     })))
 }

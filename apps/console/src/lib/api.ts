@@ -1,37 +1,85 @@
 import { getCsrfToken } from "@/lib/csrf";
 
+export const API_UNAUTHORIZED_EVENT = "grass-worker:api-unauthorized";
+
 interface ApiResponse<T> {
   code: number;
   message: string;
   data: T;
+  op?: string;
+}
+
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code?: number;
+  readonly operation?: string;
+
+  constructor(message: string, status: number, code?: number, operation?: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+    this.operation = operation;
+  }
+}
+
+export function apiUrl(path: string): string {
+  return `${baseUrl()}${path}`;
 }
 
 function baseUrl(): string {
-  return import.meta.env.VITE_API_BASE_URL ?? "";
+  return (import.meta.env.VITE_API_BASE_URL ?? "").trim().replace(/\/+$/, "");
 }
 
 export async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
+  const headers: Record<string, string> = {};
 
-  if (options?.method && !["GET", "HEAD", "OPTIONS"].includes(options.method)) {
+  new Headers(options?.headers).forEach((value, key) => {
+    headers[key] = value;
+  });
+
+  if (
+    typeof options?.body === "string" &&
+    !Object.keys(headers).some((key) => key.toLowerCase() === "content-type")
+  ) {
+    headers["Content-Type"] = "application/json";
+  }
+
+  if (options?.method && !["GET", "HEAD", "OPTIONS"].includes(options.method.toUpperCase())) {
     const csrf = getCsrfToken();
     if (csrf) {
       headers["x-csrf-token"] = csrf;
     }
   }
 
-  const response = await fetch(`${baseUrl()}${url}`, {
+  const response = await fetch(apiUrl(url), {
+    credentials: "include",
     ...options,
-    headers: {
-      ...headers,
-      ...(options?.headers as Record<string, string> | undefined),
-    },
+    headers,
   });
-  const json: ApiResponse<T> = await response.json();
-  if (response.ok && json.code === 200) {
+
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  let json: ApiResponse<T> | null = null;
+  if (contentType.includes("application/json")) {
+    try {
+      json = (await response.json()) as ApiResponse<T>;
+    } catch {
+      throw new ApiError("Control API returned an invalid response", response.status);
+    }
+  }
+
+  if (response.ok && json?.code === 200) {
     return json.data;
   }
-  throw new Error(json.message || "Request failed");
+
+  if (response.status === 401 && typeof window !== "undefined") {
+    window.dispatchEvent(new Event(API_UNAUTHORIZED_EVENT));
+  }
+
+  throw new ApiError(
+    json?.message || `Request failed (${response.status})`,
+    response.status,
+    json?.code,
+    json?.op,
+  );
 }

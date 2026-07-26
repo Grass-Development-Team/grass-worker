@@ -28,6 +28,28 @@ it("keeps the invitation token in the login sign-up link", () => {
   );
 });
 
+it("keeps an invitation token from a protected-route redirect in the sign-up link", () => {
+  vi.mocked(useAuth).mockReturnValue({ login: vi.fn() } as unknown as ReturnType<typeof useAuth>);
+
+  render(
+    <MemoryRouter
+      initialEntries={[
+        {
+          pathname: "/login",
+          state: { from: "/invitations/accept?token=invite-token" },
+        },
+      ]}
+    >
+      <LoginForm />
+    </MemoryRouter>,
+  );
+
+  expect(screen.getByRole("link", { name: "Sign up" })).toHaveAttribute(
+    "href",
+    "/signup?invitation_token=invite-token",
+  );
+});
+
 it("continues an invitation after an existing user logs in", async () => {
   const user = userEvent.setup();
   const login = vi.fn().mockResolvedValue(undefined);

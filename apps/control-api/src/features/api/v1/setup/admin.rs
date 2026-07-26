@@ -9,7 +9,7 @@ use crate::{
         users::{self, CreateUserParams},
     },
     infra::{
-        database::entity::TeamKind,
+        database::entity::{PlatformRole, TeamKind},
         error::{AppError, ok_response},
     },
     state::ControlApiState,
@@ -98,6 +98,7 @@ pub async fn handler(
             email: email.clone(),
             display_name: display_name.or_else(|| email.split('@').next().map(str::to_owned)),
             password_hash,
+            platform_role: initial_platform_role(),
         },
     )
     .await
@@ -135,6 +136,7 @@ pub async fn handler(
             "id": user.id,
             "email": user.email,
             "display_name": user.display_name,
+            "platform_role": user.platform_role.as_str(),
         },
         "team": {
             "id": team.id,
@@ -142,6 +144,10 @@ pub async fn handler(
             "name": team.name,
         },
     })))
+}
+
+fn initial_platform_role() -> PlatformRole {
+    PlatformRole::Admin
 }
 
 fn make_slug(email: &str) -> String {
@@ -166,6 +172,11 @@ fn make_slug(email: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setup_creates_a_platform_administrator() {
+        assert_eq!(initial_platform_role(), PlatformRole::Admin);
+    }
 
     #[test]
     fn initial_team_slug_is_normalized() {

@@ -145,6 +145,17 @@ draft → pending_review → approved → active
 
 团队是项目和配额的组织边界。为了减少个人项目和团队项目的分支判断，个人空间也作为一种特殊团队处理。
 
+### 平台角色
+
+平台角色控制跨团队的 Control API 管理能力，与团队成员角色和团队分组相互独立：
+
+- `admin`：平台管理员，可以访问 `/api/v1/admin/*` 以及 Console Administration；
+- `user`：普通平台用户，只能在其所属团队和团队角色允许的范围内操作；
+- setup flow 创建的 initial admin 必须保存为平台 `admin`；
+- 普通注册用户必须保存为平台 `user`；
+- 团队 `owner` 或 `admin` 不授予平台管理权限，因为每个用户都会拥有一个个人团队；
+- `/api/v1/admin/*` 必须由 Control API 统一执行平台管理员校验，Console 隐藏入口和路由守卫只作为用户体验补充。
+
 ### 团队模型
 
 - 所有项目都归属于 `team_id`；
@@ -1518,6 +1529,8 @@ Node 主要用于观测和任务分配，不直接作为业务 owner。
 
 Setup flow 必须覆盖基础系统配置：database、initial admin、site config、first node、secret key。`POST /api/v1/setup/admin` 负责注册初始管理员，并创建管理员的个人团队和 owner 成员关系；seed 不创建默认管理员，也不创建无 owner 的个人团队。Host Source 由 setup flow 或后续 Host Source 管理能力创建，不由 seed 创建。storage root 在 `config.toml` 中配置，默认值为 `/data`，setup 页面默认填入 `/data`。非关键 Runtime Settings 可以在 setup 中跳过，之后通过 Console 配置。
 
+初始管理员的 `users.platform_role` 必须为 `admin`；普通注册用户必须为 `user`。平台角色不得从个人团队或普通团队中的 `owner/admin/member/viewer` 角色推导。
+
 ### 11.3 Auth API
 
 - `POST /api/v1/auth/register`
@@ -1526,6 +1539,8 @@ Setup flow 必须覆盖基础系统配置：database、initial admin、site conf
 - `GET /api/v1/me`
 
 注册必须在单一数据库事务中创建用户、密码凭据、个人团队和 owner 成员关系。`signup.policy` 支持 `open`、`invite_only` 和 `closed`；默认 seed 使用 `open`。携带 invitation token 注册时，注册邮箱必须匹配邀请邮箱，并在同一事务中接受邀请。注册成功后直接创建 session。
+
+`GET /api/v1/me`、登录和注册响应必须返回 `platform_role`。所有 `/api/v1/admin/*` 路由必须在服务端校验平台 `admin` 角色；`GET /api/v1/admin/status` 提供 Administration 页面所需的基础服务状态。
 
 ### 11.4 Team API
 

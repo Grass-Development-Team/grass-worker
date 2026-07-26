@@ -1,21 +1,41 @@
+import { useQuery } from "@tanstack/react-query";
 import { ShieldCheckIcon } from "lucide-react";
 
+import { adminApi } from "./admin.api";
+
 export function AdminRoute() {
+  const status = useQuery({
+    queryKey: ["admin", "status"],
+    queryFn: adminApi.status,
+  });
+
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
       <div>
         <h1 className="text-2xl font-semibold">Administration</h1>
         <p className="text-sm text-muted-foreground">System-level configuration and operations.</p>
       </div>
-      <div className="flex items-center gap-4 border-y py-6">
-        <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted">
-          <ShieldCheckIcon className="size-5" />
+      {status.isError ? (
+        <p role="alert" className="border-l-2 border-destructive pl-3 text-sm text-destructive">
+          {status.error.message}
+        </p>
+      ) : (
+        <div className="flex min-h-24 items-center gap-4 border-y py-6">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted">
+            <ShieldCheckIcon className="size-5" />
+          </div>
+          {status.data ? (
+            <div>
+              <p className="font-medium">{status.data.service}</p>
+              <p className="text-sm text-muted-foreground">
+                Ready mode | Version {status.data.version}
+              </p>
+            </div>
+          ) : (
+            <div className="h-10 w-56 animate-pulse rounded-sm bg-muted" aria-hidden="true" />
+          )}
         </div>
-        <div>
-          <p className="font-medium">Grass Worker Control API</p>
-          <p className="text-sm text-muted-foreground">Ready mode | Version 0.1.0</p>
-        </div>
-      </div>
+      )}
     </div>
   );
 }

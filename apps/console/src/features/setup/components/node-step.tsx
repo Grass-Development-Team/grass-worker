@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
-import { AlertCircle, ArrowRight, Check, Server } from "lucide-react";
+import { AlertCircle, ArrowRight, Check, Copy, Server } from "lucide-react";
 
 import { setupApi } from "@/features/setup/setup.api";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,8 @@ export function NodeStep({
 }) {
   const [name, setName] = useState("local-node");
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
   const mutation = useMutation({
     mutationFn: () => setupApi.createNode(name || undefined),
     onSuccess: (data) => {
@@ -47,8 +49,32 @@ export function NodeStep({
           <div className="grid gap-3">
             <div className="rounded-lg border bg-muted p-4">
               <p className="text-xs font-medium text-muted-foreground mb-1">NODE TOKEN</p>
-              <code className="text-sm break-all font-mono">{token}</code>
+              <div className="flex items-center gap-2">
+                <code className="min-w-0 flex-1 break-all font-mono text-sm">{token}</code>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  aria-label={copied ? "Node token copied" : "Copy node token"}
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(token);
+                      setCopied(true);
+                      setCopyError(null);
+                    } catch {
+                      setCopyError("Unable to copy the node token.");
+                    }
+                  }}
+                >
+                  {copied ? <Check /> : <Copy />}
+                </Button>
+              </div>
             </div>
+            {copyError && (
+              <p role="alert" className="text-sm text-destructive">
+                {copyError}
+              </p>
+            )}
             <p className="text-sm text-muted-foreground">
               Copy this token and set it as <code>node_token</code> in your node configuration.
             </p>

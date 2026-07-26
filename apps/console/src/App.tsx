@@ -3,6 +3,7 @@ import { AlertCircleIcon, RefreshCwIcon } from "lucide-react";
 import { useEffect } from "react";
 import { useNavigate, useLocation } from "react-router";
 import { Button } from "@/components/ui/button";
+import { apiUrl } from "@/lib/api";
 import { Router } from "./router";
 import { AuthProvider } from "@/features/auth/auth-context";
 
@@ -14,7 +15,7 @@ interface HealthResponse {
 }
 
 async function fetchHealth(): Promise<HealthResponse> {
-  const res = await fetch("/health");
+  const res = await fetch(apiUrl("/health"), { credentials: "include" });
   if (!res.ok) throw new Error("health check failed");
   return res.json();
 }

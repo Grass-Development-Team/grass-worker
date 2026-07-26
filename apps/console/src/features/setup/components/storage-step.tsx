@@ -26,7 +26,9 @@ export function StorageStep({ onSuccess }: { onSuccess: () => void }) {
   const skipMutation = useMutation({
     mutationFn: () => setupApi.configureStorage("/data"),
     onSuccess,
+    onError: (err: Error) => setError(err.message),
   });
+  const isPending = mutation.isPending || skipMutation.isPending;
   return (
     <Card>
       <CardHeader>
@@ -55,7 +57,7 @@ export function StorageStep({ onSuccess }: { onSuccess: () => void }) {
               placeholder="/data"
             />
             {error && (
-              <div className="flex items-center gap-2 text-sm text-destructive">
+              <div role="alert" className="flex items-center gap-2 text-sm text-destructive">
                 <AlertCircle className="size-4" />
                 {error}
               </div>
@@ -63,7 +65,7 @@ export function StorageStep({ onSuccess }: { onSuccess: () => void }) {
           </div>
         </CardContent>
         <CardFooter className="flex flex-col gap-2">
-          <Button type="submit" className="w-full" disabled={mutation.isPending}>
+          <Button type="submit" className="w-full" disabled={isPending}>
             {mutation.isPending ? "Saving..." : "Save Storage Path"}
             {!mutation.isPending && <ArrowRight className="ml-2 size-4" />}
           </Button>
@@ -71,8 +73,11 @@ export function StorageStep({ onSuccess }: { onSuccess: () => void }) {
             type="button"
             variant="ghost"
             className="w-full"
-            disabled={skipMutation.isPending}
-            onClick={() => skipMutation.mutate()}
+            disabled={isPending}
+            onClick={() => {
+              setError(null);
+              skipMutation.mutate();
+            }}
           >
             {skipMutation.isPending ? "Skipping..." : "Skip for now (use /data)"}
           </Button>

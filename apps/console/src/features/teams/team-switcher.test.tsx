@@ -73,4 +73,25 @@ describe("TeamSwitcher", () => {
 
     await waitFor(() => expect(createTeam).toHaveBeenCalledWith({ name: "Acme", slug: "acme" }));
   });
+
+  it("clears a failed creation form before it is reopened", async () => {
+    const user = userEvent.setup();
+    mockTeamContext({ createTeam: vi.fn().mockRejectedValue(new Error("Slug already exists")) });
+
+    render(<TeamSwitcher />);
+    await user.click(screen.getByRole("button", { name: /personal/i }));
+    await user.click(screen.getByRole("menuitem", { name: /create team/i }));
+    await user.type(screen.getByLabelText("Team name"), "Acme");
+    await user.type(screen.getByLabelText("Team slug"), "acme");
+    await user.click(screen.getByRole("button", { name: "Create team" }));
+    expect(await screen.findByText("Slug already exists")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    await user.click(screen.getByRole("button", { name: /personal/i }));
+    await user.click(screen.getByRole("menuitem", { name: /create team/i }));
+
+    expect(screen.queryByText("Slug already exists")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Team name")).toHaveValue("");
+    expect(screen.getByLabelText("Team slug")).toHaveValue("");
+  });
 });

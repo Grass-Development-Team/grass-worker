@@ -10,7 +10,7 @@ use crate::{
         users::{self, CreateUserParams},
     },
     infra::{
-        database::entity::{TeamKind, team_invitation},
+        database::entity::{PlatformRole, TeamKind, team_invitation},
         error::AppError,
     },
     state::ControlApiState,
@@ -131,6 +131,7 @@ pub async fn handler(
             email: input.email.clone(),
             display_name: display_name.clone(),
             password_hash,
+            platform_role: registration_platform_role(),
         },
     )
     .await
@@ -192,6 +193,10 @@ pub async fn handler(
     super::login::authenticated_response(&state, cache, jar, user).await
 }
 
+fn registration_platform_role() -> PlatformRole {
+    PlatformRole::User
+}
+
 fn signup_policy(value: Option<&str>) -> Result<SignupPolicy, AppError> {
     match value.unwrap_or("open") {
         "open" => Ok(SignupPolicy::Open),
@@ -201,6 +206,16 @@ fn signup_policy(value: Option<&str>) -> Result<SignupPolicy, AppError> {
             op: "auth.register.invalid_policy",
             message: "signup policy setting is invalid".to_owned(),
         }),
+    }
+}
+
+#[cfg(test)]
+mod platform_role_tests {
+    use super::*;
+
+    #[test]
+    fn registration_creates_a_regular_platform_user() {
+        assert_eq!(registration_platform_role(), PlatformRole::User);
     }
 }
 
