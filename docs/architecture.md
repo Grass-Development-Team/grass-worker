@@ -2,6 +2,8 @@
 
 当前版本：0.1.0
 
+> 状态（2026-07）：第一阶段（Milestone 0–13）已全部交付并合并到 `main`。本文档描述的能力除明确标注"预留 / TODO / 未实现"外均已落地。待改进与第二阶段计划见 `docs/roadmap.md` 的"第二阶段：待办与优化"。
+
 ## 1. 项目目标
 
 `grass-worker` 是一个全新实现的自托管部署平台，第一目标是完整实现类似 Vercel Deployments Page 的部署管理体验，并围绕该页面构建必要的后端、Node、团队、配额和自动域名能力。
@@ -247,7 +249,9 @@ draft → pending_review → approved → active
 
 配额检查和消耗面临并发竞态（check-then-consume），必须原子化处理。
 
-**策略**：Redis 原子操作为主 + PostgreSQL 事件溯源为持久层。
+**策略**：缓存原子操作为主 + PostgreSQL 事件溯源为持久层。
+
+> 实现说明：缓存访问经由 `crates/cache` 的 `Cache` trait，支持 `redis` 与 `moka`（进程内）两种 backend。生产多实例部署使用 Redis；单实例或本地开发可使用 Moka backend。下文以 Redis 描述的操作在两种 backend 下语义一致。
 
 **写入路径**：
 
@@ -476,7 +480,7 @@ Node 不直接访问数据库，所有元数据读取和状态变更都通过 Co
 开启 build 后，Node 负责：
 
 - 向 Control API claim deployment；
-- 拉取 Git 仓库；
+- 拉取 Git 仓库（仓库 URL 限定 http(s)，branch / commit ref 限定保守字符集，git 进程设置 `GIT_ALLOW_PROTOCOL=http:https` 作为纵深防御）；
 - 执行 install command；
 - 执行 build command；
 - 通过 Output Adapter 生成 `.grass/output`；
@@ -497,7 +501,8 @@ Node 不直接访问数据库，所有元数据读取和状态变更都通过 Co
 - 根据路径返回静态文件；
 - 支持 directory `index.html`；
 - 支持 SPA fallback；
-- 设置 cache-control。
+- 设置 cache-control；
+- SSR deployment：按需启动服务容器（Next.js / Astro / Nuxt）、闲置回收，并将请求反向代理到容器。
 
 第一阶段约束：
 
@@ -1114,13 +1119,14 @@ grass-worker/
 │               ├── quota/
 │               └── admin/
 ├── crates/
+│   ├── archive/
 │   ├── assets/
+│   ├── cache/
 │   ├── config/
 │   ├── crypto/
+│   ├── node-protocol/
 │   ├── session/
 │   ├── token/
-│   ├── archive/
-│   ├── node-protocol/
 │   └── validator/
 └── docs/
 ```
@@ -1483,7 +1489,7 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 
 `projects` 必须通过 `team_id` 归属团队，不直接归属个人用户。
 
-`projects` 和 `deployments` 应包含 `runtime_kind`，第一阶段支持 `static` 和 `ssr` 两种枚举值；`ssr` 先返回未实现错误，不进入实际 serve。
+`projects` 和 `deployments` 应包含 `runtime_kind`，第一阶段支持 `static` 和 `ssr` 两种枚举值；`ssr` 已实现（Next.js standalone / Astro node adapter / Nuxt Nitro），由 Node 以服务容器 + 反向代理方式 serve。
 
 ### 10.4 Host
 
@@ -2105,7 +2111,7 @@ Inspector 负责检查构建产物：
 - Astro static output -> `static`；
 - 存在 `.next/server`、`.output/server`、server entry -> `ssr`；
 - 存在 `.vercel/output/functions` -> `serverless`；
-- 存在 edge function / middleware -> `edge`。
+- 根目录存在 `middleware.js` / `middleware.ts` 不单独作为 runtime 判定信号（曾被误判为 `edge` 导致静态构建失败，已移除；`edge` 仅在 manifest 显式声明时出现并返回未实现错误）。
 
 ### 15.6 第一阶段部署成功条件
 
@@ -2113,12 +2119,12 @@ Inspector 负责检查构建产物：
 
 1. `.grass/output/output.toml` 存在；
 2. manifest version 支持；
-3. `runtime.kind = "static"`；
-4. `[static].directory` 存在；
-5. static directory 中存在 `index.html`；
+3. `runtime.kind = "static"` 或 `"ssr"`；
+4. static：`[static].directory` 存在且包含 `index.html`；
+5. ssr：`[server].entry` / `start_command` 有效，`server/` 产物完整；
 6. `.grass/output` 能被安全打包；
 7. artifact 上传成功；
-8. Node serve 根据 `output.toml` 提供静态服务。
+8. Node serve 根据 `output.toml` 提供静态服务或启动服务容器并反向代理。
 
 ### 15.7 数据模型关联
 
@@ -2232,6 +2238,7 @@ build_timeout_seconds = 600
 要求：
 
 - 解压 zip 必须防止路径穿越；
+- 解压 zip 必须有解压炸弹上限（条目数、单条目字节数、总解压字节数），超限时明确失败而不是耗尽宿主磁盘；
 - 读取 build log 必须防止 unsafe path；
 - public site path 必须 normalize；
 - artifact 上传需要记录 size 和 checksum。
@@ -2328,6 +2335,8 @@ Node 必须覆盖：
 - quota usage display；
 - protected route；
 - shadcn/ui block smoke test。
+
+> 现状：后端与 Node 测试已覆盖（约 160 个）；前端测试基本缺失，属于第二阶段待补项（见 roadmap "第二阶段：待办与优化"）。
 
 质量命令通过 Just 统一执行，不直接要求用户手动组合底层命令。
 
@@ -2457,20 +2466,19 @@ CI 后续应加入 license 检查，至少覆盖：
 
 项目自身通过 GitHub Actions 完成 CI/CD，使用 Just 统一命令入口。
 
-```yaml
-# .github/workflows/ci.yml
-- just clippy
-- just test
-- just console-check
-- just console-test
+实际 workflow：
 
-# .github/workflows/build.yml (push main / tag)
-- just build-release
-- docker build + push
+```yaml
+# .github/workflows/quality.yml (PR + push main)
+- just quality   # fmt + clippy(-D warnings) + test + check + build + license-check
+
+# .github/workflows/release.yml (push main / tag)
+- docker build + push（GHCR）
+- tag push 时构建 release binary
 ```
 
 要求：
 
-- PR 必须通过 CI（clippy + test + console-check）才能合并；
-- main 分支 push 自动构建 Docker image；
+- PR 必须通过 Quality workflow（`just quality`）才能合并；
+- main 分支 push 自动构建 Docker image 并发布到 GHCR；
 - tag push 自动构建 release binary 和 Docker image。

@@ -2,6 +2,8 @@
 
 当前版本：0.1.0
 
+> **状态（2026-07-26）：第一阶段（Milestone 0–13）已全部交付**，合并至 `main` 并通过 Release workflow 发布 Docker image。最终验收清单全部通过。Milestone 章节保留为范围与验收记录；接下来的工作见文末"[第二阶段：待办与优化](#第二阶段待办与优化)"。
+
 本文档基于 `docs/architecture.md` 编写，用于指导 `grass-worker` 第一阶段落地。
 
 第一阶段的核心原则：**尽快完成第一目标全链路可用**。第一目标不是一个极简 demo，而是应用的基础闭环，因此不能为了“最小实现”砍掉 Deployment Page、构建、日志、产物、自动域名、Node serve、团队、权限、配额、审核、审计等基础能力。
@@ -69,7 +71,7 @@
 - DNS Provider 临时失败：Host Binding 进入 `pending` 或 `failed`，记录 provision event，并提供重试入口；
 - Node capability 被配置为只 build 或只 serve：启动时自动修正为 build + serve 并输出警告。
 
-## Milestone 0：工程骨架与基础设施
+## Milestone 0：工程骨架与基础设施 ✅
 
 目标：搭出可以持续开发、测试和运行的项目骨架。
 
@@ -133,7 +135,7 @@
 - 基础 GitHub Actions 可以在 PR 和 main push 上运行质量命令；
 - `/health` 返回成功。
 
-## Milestone 1：数据库、迁移、Seed 与 Setup Flow
+## Milestone 1：数据库、迁移、Seed 与 Setup Flow ✅
 
 目标：让系统可以从空环境初始化为可登录、可管理、可运行的 ready 状态。
 
@@ -250,7 +252,7 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 - 普通更新会由数据库自动刷新 `updated_at`；
 - 软删除表的删除语义不会物理移除主业务记录，并且默认查询不返回 `deleted_at IS NOT NULL` 的记录。
 
-## Milestone 2：认证、团队、权限与基础 Console
+## Milestone 2：认证、团队、权限与基础 Console ✅
 
 目标：形成可登录、多团队、多角色的管理基础。
 
@@ -337,7 +339,7 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 - 新注册用户自动获得个人团队；
 - `invite_only` 和 `closed` 策略能稳定拒绝不符合条件的注册。
 
-## Milestone 3：配额系统
+## Milestone 3：配额系统 ✅
 
 目标：第一阶段即实现配额定义、检查、消耗、用量统计和错误展示。
 
@@ -411,7 +413,7 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 - 上传 artifact 时检查存储配额；
 - 所有配额拒绝返回稳定错误码并记录审计事件。
 
-## Milestone 4：项目与 Host Provisioning
+## Milestone 4：项目与 Host Provisioning ✅
 
 目标：创建项目时形成团队归属、源码配置、平台域名和 Host 绑定基础。
 
@@ -440,11 +442,11 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 - hard delete；
 - 项目必须归属 `team_id`；
 - 项目包含 `runtime_kind`，第一阶段支持 `static` 和 `ssr` 枚举；
-- SSR 项目允许创建，但实际 deployment 明确失败。
+- SSR 项目可创建并部署（Next.js standalone / Astro node adapter / Nuxt Nitro）；其余 SSR 框架部署明确失败并提示未实现。
 
 ### Source Config
 
-- Git 仓库 URL；
+- Git 仓库 URL（限定 http(s) scheme；控制面校验 + 构建节点二次校验）；
 - 分支；
 - root directory；
 - install command；
@@ -491,7 +493,7 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 - Host 配额生效；
 - Host provision 成功、pending、failed 都有事件记录。
 
-## Milestone 5：Deployment Control Plane
+## Milestone 5：Deployment Control Plane ✅
 
 目标：完成部署元数据、状态流转、审核、审计和 API。
 
@@ -573,7 +575,7 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 - deployment 详情展示总览、时间线、日志、阶段、源码、artifact、环境、访问地址、域名状态、错误详情和操作按钮；
 - 不合法状态转换被拒绝并返回稳定错误。
 
-## Milestone 6：Internal Node API 与 Node 注册心跳
+## Milestone 6：Internal Node API 与 Node 注册心跳 ✅
 
 目标：让 Node 通过内部协议参与构建和 serve，不直接访问数据库。
 
@@ -634,7 +636,7 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 - token 错误的 Node 无法访问 internal API；
 - 单个 deployment 不会被多个 Node 同时 claim。
 
-## Milestone 7：Container Runtime 与 Build Pipeline
+## Milestone 7：Container Runtime 与 Build Pipeline ✅
 
 目标：让 Node 能在隔离运行时中完成真实静态站点构建。
 
@@ -699,7 +701,7 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 - artifact 信息落库；
 - quota build minutes 和 artifact storage usage 被记录。
 
-## Milestone 8：Grass Output API 与 Static Artifact
+## Milestone 8：Grass Output API 与 Static Artifact ✅
 
 目标：统一构建产物格式，让 serve 阶段只消费 `.grass/output`。
 
@@ -764,7 +766,7 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 - SSR / serverless / edge 输出会失败并提示尚未实现；
 - 自定义 `.grass/output/output.toml` 会失败并提示第一阶段不支持 Custom Output。
 
-## Milestone 9：Realtime Build Logs
+## Milestone 9：Realtime Build Logs ✅
 
 目标：Node、Control API、Browser 之间形成实时日志闭环。
 
@@ -818,7 +820,7 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 - 断线重连不丢日志；
 - cancel 能从 Console 发出并停止构建。
 
-## Milestone 10：Node Serve 与公开访问 URL
+## Milestone 10：Node Serve 与公开访问 URL ✅
 
 目标：构建成功并激活后，公开 URL 可以访问静态站点。
 
@@ -870,7 +872,7 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 - 尝试访问 `../` 等非法路径被拒绝；
 - Host resolve 缓存过期后能刷新。
 
-## Milestone 11：Deployment Page 完整体验
+## Milestone 11：Deployment Page 完整体验 ✅
 
 目标：实现类似 Vercel Deployments Page 的核心产品体验。
 
@@ -951,7 +953,7 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 - deployment 列表和详情足以定位失败原因；
 - 配额错误、Host provision 错误、Node 错误都有清晰展示。
 
-## Milestone 12：上线审核、审计与操作闭环
+## Milestone 12：上线审核、审计与操作闭环 ✅
 
 目标：上线操作有治理能力，关键行为可追踪。
 
@@ -1010,7 +1012,7 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 - audit 页面可以查看关键事件；
 - 审计事件包含 actor、action、target、timestamp、result、reason。
 
-## Milestone 13：测试、质量、安全与发布
+## Milestone 13：测试、质量、安全与发布 ✅
 
 目标：第一阶段达到可自托管试用的质量标准。
 
@@ -1105,37 +1107,70 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 
 ## 第一阶段最终验收清单
 
-- [ ] 可以从空数据库完成 setup；
-- [ ] 管理员可以登录 Console；
-- [ ] 个人团队自动创建；
-- [ ] 普通团队、成员、角色可管理；
-- [ ] 团队分组和配额计划生效；
-- [ ] 项目可创建并自动分配平台域名；
-- [ ] Host Source 和 Host Binding 可管理；
-- [ ] 可以创建 Production deployment；
-- [ ] 可以创建 Preview deployment；
-- [ ] Node 可以注册、心跳、claim deployment；
-- [ ] 构建在 Podman 或 Docker socket runtime 中执行；
-- [ ] 构建日志可以实时查看；
-- [ ] 构建日志可以历史补拉；
-- [ ] Grass Output v1 static manifest 可生成和校验；
-- [ ] static artifact 可打包、上传、解包和 serve；
-- [ ] Production deployment 审核通过后可激活；
-- [ ] Preview deployment 有唯一访问 URL；
-- [ ] Production deployment 有稳定访问 URL；
-- [ ] cancel / retry / promote / rollback 可用；
-- [ ] deployment 列表页信息完整；
-- [ ] deployment 详情页信息完整；
-- [ ] 配额拒绝有稳定错误码和 Console 展示；
-- [ ] Host provision 失败可见且可重试；
-- [ ] 审计事件可查询；
-- [ ] hybrid / serverless / edge 等未实现 runtime 有明确错误，SSR（Next.js / Astro / Nuxt）可部署并对外服务；
-- [ ] `just quality` 通过；
-- [ ] Docker image 可用于自托管试用。
+- [x] 可以从空数据库完成 setup；
+- [x] 管理员可以登录 Console；
+- [x] 个人团队自动创建；
+- [x] 普通团队、成员、角色可管理；
+- [x] 团队分组和配额计划生效；
+- [x] 项目可创建并自动分配平台域名；
+- [x] Host Source 和 Host Binding 可管理；
+- [x] 可以创建 Production deployment；
+- [x] 可以创建 Preview deployment；
+- [x] Node 可以注册、心跳、claim deployment；
+- [x] 构建在 Podman 或 Docker socket runtime 中执行；
+- [x] 构建日志可以实时查看；
+- [x] 构建日志可以历史补拉；
+- [x] Grass Output v1 static manifest 可生成和校验；
+- [x] static artifact 可打包、上传、解包和 serve；
+- [x] Production deployment 审核通过后可激活；
+- [x] Preview deployment 有唯一访问 URL；
+- [x] Production deployment 有稳定访问 URL；
+- [x] cancel / retry / promote / rollback 可用；
+- [x] deployment 列表页信息完整；
+- [x] deployment 详情页信息完整；
+- [x] 配额拒绝有稳定错误码和 Console 展示；
+- [x] Host provision 失败可见且可重试；
+- [x] 审计事件可查询；
+- [x] hybrid / serverless / edge 等未实现 runtime 有明确错误，SSR（Next.js / Astro / Nuxt）可部署并对外服务；
+- [x] `just quality` 通过；
+- [x] Docker image 可用于自托管试用。
+
+# 第二阶段：待办与优化
+
+第一阶段交付后的合并前审查（2026-07）确认了以下待办。按优先级分组；已修复项不再列出（双槽释放、构建超时回退、middleware 误判 Edge、解压炸弹上限、日志丢行、git transport 加固均已随第一阶段发布）。
+
+## P0：存量数据与回归保护
+
+- **repository_url 存量巡检**：`repository_url` 现已限定 http(s)。若数据库中存有 ssh / git 形式地址的项目，其下一次更新会被校验拒绝。需要一次数据巡检（或迁移脚本）把存量地址改写为 http(s) 或清空，并在 Console 给出可理解的报错文案；
+- **安全修复回归测试**：为并发构建槽（取消路径不双重释放）、构建超时回退（无 per-build 超时时使用节点 `command_timeout_seconds`）、archive 解压上限（条目数 / 单条目 / 总字节）补集成或回归测试，把行为锁住，防止后续重构回退。
+
+## P1：测试与工程质量
+
+- **前端测试落地**：architecture §19 列出的前端覆盖要求（setup、login、team switcher、deployment list/detail、quota、protected route）目前基本缺失；优先补 log viewer（seq 去重 + 连续水位补拉）和 protected route；
+- **Console 代码分割**：主 bundle 717 KB（gzip 202 KB），超出 500 KB 警告线。按路由动态 `import()` 拆分 admin / deployments / setup 等 feature chunk；
+- **Node 构建端到端冒烟**：用一个最小 Vite 仓库跑 checkout → build → output → serve 的 CI 冒烟（可选，依赖 CI 内容器运行时）。
+
+## P2：产品能力（第一阶段明确不做、现在可排期）
+
+- **Artifact 清理策略**（architecture §17.1 TODO）：日志保留天数、preview / 失败部署保留、production 保留最近 N 个、定时清理任务，作为 Runtime Setting 落地；
+- **更多 SSR 框架**：SvelteKit adapter-node、Remix / React Router SSR 等，复用现有服务容器 + 反向代理路径；
+- **Custom Grass Output**：允许用户自带 `.grass/output/output.toml`（需要 manifest 安全校验策略）；
+- **认证增强**：OAuth 登录、MFA、密码策略与找回流程（SMTP 依赖见下）；
+- **SMTP / 邮件通知与 Webhook**：邀请邮件、部署结果通知。
+
+## P3：平台扩展（架构预留，未排期）
+
+- S3 / MinIO / R2 artifact storage（`StaticSiteStorage` 抽象已预留）；
+- build node 与 serve node 分离调度、artifact 跨节点同步、多节点负载均衡与 failover；
+- 分布式构建缓存；
+- Serverless Functions / Edge Runtime / ISR / Middleware / hybrid runtime；
+- Apple Container 与 Jail backend 实际实现；
+- Vercel Output API 深度兼容；
+- preview / production 独立默认 Host Source。
 
 # Future
 
-以下内容不属于第一阶段，不应混入当前阶段任务：
+以下内容为长期方向，尚未排期（与第二阶段 P3 部分重叠，保留作完整清单）：
 
 - 在线支付；
 - 发票；
