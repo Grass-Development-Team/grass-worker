@@ -161,7 +161,7 @@ pub async fn mark_stale_offline<C: ConnectionTrait>(
     let result = node::Entity::update_many()
         .col_expr(
             node::Column::Status,
-            sea_orm::sea_query::Expr::value(NodeStatus::Offline),
+            sea_orm::ActiveEnum::as_enum(&NodeStatus::Offline),
         )
         .filter(node::Column::Status.eq(NodeStatus::Active))
         .filter(node::Column::DeletedAt.is_null())
