@@ -16,6 +16,7 @@ import { AdminRoute } from "@/features/admin/admin-route";
 import { QuotaRoute } from "@/features/quota/quota-route";
 import { ProjectsRoute } from "@/features/projects/projects-route";
 import { ProjectDetailRoute } from "@/features/projects/project-detail-route";
+import { DeploymentDetailRoute } from "@/features/deployments/deployment-detail-route";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
@@ -81,6 +82,10 @@ export function Router() {
         <Route path="/quota" element={<QuotaRoute />} />
         <Route path="/projects" element={<ProjectsRoute />} />
         <Route path="/projects/:projectId" element={<ProjectDetailRoute />} />
+        <Route
+          path="/projects/:projectId/deployments/:deploymentId"
+          element={<DeploymentDetailRoute />}
+        />
         <Route
           path="/admin"
           element={

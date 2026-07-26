@@ -18,6 +18,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { DeploymentsTab } from "@/features/deployments/deployments-tab";
 
 import { projectsApi, type HostStatus, type Project } from "./projects.api";
 
@@ -79,11 +80,15 @@ export function ProjectDetailRoute() {
         </Button>
       </div>
 
-      <Tabs defaultValue="hosts">
+      <Tabs defaultValue="deployments">
         <TabsList>
+          <TabsTrigger value="deployments">Deployments</TabsTrigger>
           <TabsTrigger value="hosts">Hosts</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
+        <TabsContent value="deployments">
+          <DeploymentsTab projectId={project.id} />
+        </TabsContent>
         <TabsContent value="hosts">
           <HostsTab projectId={project.id} />
         </TabsContent>
