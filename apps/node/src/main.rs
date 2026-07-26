@@ -4,10 +4,13 @@ use anyhow::Context;
 use clap::Parser;
 use tracing::info;
 
+mod build;
 mod cli;
 mod client;
 mod config;
 mod lifecycle;
+mod output;
+mod runtime;
 
 use crate::{cli::Cli, client::ControlApiClient, config::NodeConfig};
 
@@ -39,8 +42,32 @@ async fn main() -> anyhow::Result<()> {
     let active_builds = Arc::new(AtomicU16::new(0));
     let heartbeat = lifecycle::spawn_heartbeat(client.clone(), active_builds.clone());
 
+    let runtime = match runtime::BuildRuntime::from_config(&config.runtime) {
+        Ok(runtime) => Some(Arc::new(runtime)),
+        Err(error) => {
+            tracing::error!(
+                operation = "node.runtime.unavailable",
+                %error,
+                "container runtime unavailable; builds are disabled until it is fixed"
+            );
+            None
+        }
+    };
+    let build_loop = runtime.map(|runtime| {
+        build::BuildLoop {
+            client: client.clone(),
+            config: config.clone(),
+            runtime,
+            active_builds: active_builds.clone(),
+        }
+        .spawn()
+    });
+
     wait_for_shutdown().await;
 
+    if let Some(build_loop) = build_loop {
+        build_loop.abort();
+    }
     heartbeat.abort();
     info!(operation = "node.stop", name = %config.node.id, "Node stopped");
 

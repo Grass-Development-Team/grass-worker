@@ -122,6 +122,49 @@ impl Default for ServeConfig {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct RuntimeConfig {
+    #[serde(default = "default_runtime_backend")]
+    pub backend: String,
+    #[serde(default = "default_runtime_socket")]
+    pub socket: String,
+    #[serde(default = "default_build_image")]
+    pub default_build_image: String,
+    #[serde(default = "default_network")]
+    pub network: String,
+    #[serde(default)]
+    pub resources: RuntimeResourcesConfig,
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            backend: default_runtime_backend(),
+            socket: default_runtime_socket(),
+            default_build_image: default_build_image(),
+            network: default_network(),
+            resources: RuntimeResourcesConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct RuntimeResourcesConfig {
+    #[serde(default = "default_cpu_limit")]
+    pub cpu_limit: u32,
+    #[serde(default = "default_memory_mb")]
+    pub memory_mb: u64,
+}
+
+impl Default for RuntimeResourcesConfig {
+    fn default() -> Self {
+        Self {
+            cpu_limit: default_cpu_limit(),
+            memory_mb: default_memory_mb(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
 pub struct SecurityConfig {
     #[serde(default)]
@@ -140,6 +183,8 @@ pub struct NodeConfig {
     pub node: NodeIdentityConfig,
     #[serde(default)]
     pub build: BuildConfig,
+    #[serde(default)]
+    pub runtime: RuntimeConfig,
     #[serde(default)]
     pub serve: ServeConfig,
     #[serde(default)]
@@ -256,6 +301,32 @@ const fn default_metadata_cache_ttl_seconds() -> u64 {
 
 fn default_artifact_cache_root() -> String {
     "/data/node/artifacts".to_owned()
+}
+
+fn default_runtime_backend() -> String {
+    "podman-socket".to_owned()
+}
+
+fn default_runtime_socket() -> String {
+    // Podman rootless socket for the current user; Docker deployments set
+    // unix:///var/run/docker.sock.
+    "unix:///run/user/1000/podman/podman.sock".to_owned()
+}
+
+fn default_build_image() -> String {
+    "docker.io/library/node:22".to_owned()
+}
+
+fn default_network() -> String {
+    "bridge".to_owned()
+}
+
+const fn default_cpu_limit() -> u32 {
+    2
+}
+
+const fn default_memory_mb() -> u64 {
+    2048
 }
 
 #[cfg(test)]

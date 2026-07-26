@@ -51,6 +51,10 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "json"] }
 url = "2.5.4"
 uuid = { version = "1.18.1", features = ["serde", "v7"] }
+walkdir = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+bollard = "0.19"
+futures-util = "0.3"
 
 grass-archive = { path = "crates/archive" }
 grass-assets = { path = "crates/assets" }
