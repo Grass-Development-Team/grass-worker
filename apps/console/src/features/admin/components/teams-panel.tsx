@@ -45,6 +45,7 @@ type TeamAction =
   | { kind: "detail"; team: AdminTeam }
   | { kind: "rename"; team: AdminTeam }
   | { kind: "group"; team: AdminTeam }
+  | { kind: "plan"; team: AdminTeam }
   | { kind: "delete"; team: AdminTeam };
 
 export function TeamsPanel() {
@@ -141,6 +142,9 @@ export function TeamsPanel() {
                       <DropdownMenuItem onClick={() => setAction({ kind: "group", team })}>
                         Change group
                       </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setAction({ kind: "plan", team })}>
+                        Override quota plan
+                      </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
                         disabled={team.kind === "personal"}
@@ -171,6 +175,16 @@ export function TeamsPanel() {
       )}
       {action?.kind === "group" && (
         <ChangeGroupDialog
+          team={action.team}
+          onClose={close}
+          onSaved={() => {
+            invalidate();
+            close();
+          }}
+        />
+      )}
+      {action?.kind === "plan" && (
+        <OverridePlanDialog
           team={action.team}
           onClose={close}
           onSaved={() => {
@@ -413,6 +427,77 @@ function DeleteTeamDialog({
             {mutation.isPending ? "Deleting…" : "Delete team"}
           </Button>
         </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const INHERIT_GROUP = "__inherit__";
+
+function OverridePlanDialog({
+  team,
+  onClose,
+  onSaved,
+}: {
+  team: AdminTeam;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [planId, setPlanId] = useState(team.explicit_quota_plan_id ?? INHERIT_GROUP);
+  const plansQuery = useQuery({
+    queryKey: ["admin", "quota-plans"],
+    queryFn: adminApi.listQuotaPlans,
+  });
+  const mutation = useMutation({
+    mutationFn: () => adminApi.setTeamQuotaPlan(team.id, planId === INHERIT_GROUP ? null : planId),
+    onSuccess: onSaved,
+  });
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Override quota plan</DialogTitle>
+          <DialogDescription>
+            An explicit plan wins over the group plan for {team.name}.
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            mutation.mutate();
+          }}
+        >
+          <Field>
+            <FieldLabel htmlFor="admin-team-plan">Quota plan</FieldLabel>
+            <Select value={planId} onValueChange={setPlanId}>
+              <SelectTrigger id="admin-team-plan">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={INHERIT_GROUP}>Inherit from team group</SelectItem>
+                {plansQuery.data?.plans
+                  .filter((plan) => plan.enabled)
+                  .map((plan) => (
+                    <SelectItem key={plan.id} value={plan.id}>
+                      {plan.name} ({plan.code})
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          {mutation.isError && (
+            <p role="alert" className="text-sm text-destructive">
+              {mutation.error instanceof Error ? mutation.error.message : "Unable to save."}
+            </p>
+          )}
+          <DialogFooter>
+            <Button type="submit" disabled={mutation.isPending}>
+              {mutation.isPending ? "Saving…" : "Save"}
+            </Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );

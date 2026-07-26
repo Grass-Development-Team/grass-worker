@@ -338,6 +338,51 @@ async fn upsert_limit<C: ConnectionTrait>(
     Ok(())
 }
 
+/// Fetches a plan regardless of enabled state, for admin management.
+pub async fn get_plan<C: ConnectionTrait>(
+    db: &C,
+    plan_id: Uuid,
+) -> anyhow::Result<Option<quota_plan::Model>> {
+    quota_plan::Entity::find()
+        .filter(quota_plan::Column::Id.eq(plan_id))
+        .one(db)
+        .await
+        .map_err(Into::into)
+}
+
+/// Promotes a plan to the single platform default. Run inside a transaction:
+/// the partial unique index on `is_default` requires the demote to land
+/// before the promote.
+pub async fn set_default_plan<C: ConnectionTrait>(db: &C, plan_id: Uuid) -> anyhow::Result<()> {
+    use sea_orm::sea_query::Expr;
+
+    quota_plan::Entity::update_many()
+        .col_expr(quota_plan::Column::IsDefault, Expr::value(false))
+        .filter(quota_plan::Column::IsDefault.eq(true))
+        .exec(db)
+        .await?;
+    quota_plan::Entity::update_many()
+        .col_expr(quota_plan::Column::IsDefault, Expr::value(true))
+        .filter(quota_plan::Column::Id.eq(plan_id))
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
+/// Removes a limit row, returning the dimension to "unlimited via absence".
+pub async fn delete_limit<C: ConnectionTrait>(
+    db: &C,
+    plan_id: Uuid,
+    dimension: QuotaDimension,
+) -> anyhow::Result<()> {
+    quota_limit::Entity::delete_many()
+        .filter(quota_limit::Column::QuotaPlanId.eq(plan_id))
+        .filter(quota_limit::Column::Dimension.eq(dimension.as_str()))
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
 /// Current monthly window boundaries in UTC.
 pub fn current_period_window(now: OffsetDateTime) -> (OffsetDateTime, OffsetDateTime) {
     let start = now

@@ -16,6 +16,7 @@ import { AdminRoute } from "@/features/admin/admin-route";
 import { NodesPanel } from "@/features/admin/components/nodes-panel";
 import { HostSourcesPanel } from "@/features/admin/components/host-sources-panel";
 import { QuotaPlansPanel } from "@/features/admin/components/quota-plans-panel";
+import { TeamGroupsPanel } from "@/features/admin/components/team-groups-panel";
 import { UsersPanel } from "@/features/admin/components/users-panel";
 import { TeamsPanel } from "@/features/admin/components/teams-panel";
 import { SettingsPanel } from "@/features/admin/components/settings-panel";
@@ -106,6 +107,7 @@ export function Router() {
           <Route path="nodes" element={<NodesPanel />} />
           <Route path="host-sources" element={<HostSourcesPanel />} />
           <Route path="quota-plans" element={<QuotaPlansPanel />} />
+          <Route path="team-groups" element={<TeamGroupsPanel />} />
           <Route path="users" element={<UsersPanel />} />
           <Route path="teams" element={<TeamsPanel />} />
           <Route path="settings" element={<SettingsPanel />} />

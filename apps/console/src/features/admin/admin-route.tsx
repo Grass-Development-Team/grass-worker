@@ -10,6 +10,7 @@ const sections = [
   { to: "/admin/nodes", label: "Nodes" },
   { to: "/admin/host-sources", label: "Host sources" },
   { to: "/admin/quota-plans", label: "Quota plans" },
+  { to: "/admin/team-groups", label: "Team groups" },
   { to: "/admin/users", label: "Users" },
   { to: "/admin/teams", label: "Teams" },
   { to: "/admin/settings", label: "Settings" },
