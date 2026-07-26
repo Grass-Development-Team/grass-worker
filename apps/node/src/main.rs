@@ -49,12 +49,12 @@ async fn main() -> anyhow::Result<()> {
             tracing::error!(
                 operation = "node.runtime.unavailable",
                 %error,
-                "container runtime unavailable; builds are disabled until it is fixed"
+                "container runtime unavailable; builds and SSR serving are disabled until it is fixed"
             );
             None
         }
     };
-    let build_loop = runtime.map(|runtime| {
+    let build_loop = runtime.clone().map(|runtime| {
         build::BuildLoop {
             client: client.clone(),
             config: config.clone(),
@@ -64,12 +64,15 @@ async fn main() -> anyhow::Result<()> {
         .spawn()
     });
 
-    let serve_state = Arc::new(serve::ServeState::new(client.clone(), &config));
+    let ssr_manager = Arc::new(serve::ssr::SsrManager::new(runtime, &config));
+    let ssr_reaper = ssr_manager.clone().spawn_reaper();
+    let serve_state = Arc::new(serve::ServeState::new(client.clone(), &config, ssr_manager));
     let serve_task = serve::spawn(serve_state, &config);
 
     wait_for_shutdown().await;
 
     serve_task.abort();
+    ssr_reaper.abort();
 
     if let Some(build_loop) = build_loop {
         build_loop.abort();

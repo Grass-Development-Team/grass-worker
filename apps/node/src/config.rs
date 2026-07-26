@@ -108,6 +108,8 @@ pub struct ServeConfig {
     pub metadata_cache_ttl_seconds: u64,
     #[serde(default = "default_artifact_cache_root")]
     pub artifact_cache_root: String,
+    #[serde(default)]
+    pub ssr: SsrServeConfig,
 }
 
 impl Default for ServeConfig {
@@ -118,6 +120,29 @@ impl Default for ServeConfig {
             public_base_url: default_serve_public_base_url(),
             metadata_cache_ttl_seconds: default_metadata_cache_ttl_seconds(),
             artifact_cache_root: default_artifact_cache_root(),
+            ssr: SsrServeConfig::default(),
+        }
+    }
+}
+
+/// SSR service lifecycle settings. Services start on the first request for
+/// their deployment and stop again after sitting idle.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct SsrServeConfig {
+    /// Idle seconds before a service container is stopped; 0 keeps
+    /// services running until the deployment stops resolving.
+    #[serde(default = "default_ssr_idle_stop_seconds")]
+    pub idle_stop_seconds: u64,
+    /// Seconds to wait for a freshly started service to accept connections.
+    #[serde(default = "default_ssr_startup_timeout_seconds")]
+    pub startup_timeout_seconds: u64,
+}
+
+impl Default for SsrServeConfig {
+    fn default() -> Self {
+        Self {
+            idle_stop_seconds: default_ssr_idle_stop_seconds(),
+            startup_timeout_seconds: default_ssr_startup_timeout_seconds(),
         }
     }
 }
@@ -130,6 +155,9 @@ pub struct RuntimeConfig {
     pub socket: String,
     #[serde(default = "default_build_image")]
     pub default_build_image: String,
+    /// Image used to run SSR service containers.
+    #[serde(default = "default_serve_image")]
+    pub default_serve_image: String,
     #[serde(default = "default_network")]
     pub network: String,
     #[serde(default)]
@@ -142,6 +170,7 @@ impl Default for RuntimeConfig {
             backend: default_runtime_backend(),
             socket: default_runtime_socket(),
             default_build_image: default_build_image(),
+            default_serve_image: default_serve_image(),
             network: default_network(),
             resources: RuntimeResourcesConfig::default(),
         }
@@ -239,6 +268,14 @@ fn apply_env(config: &mut NodeConfig) -> Result<(), ConfigError> {
         "GWNODE_SERVE_PUBLIC_BASE_URL",
         &mut config.serve.public_base_url,
     );
+    // SSR service containers must share a network with the node process
+    // (containerized nodes dial them by container IP); deployments override
+    // this without editing the generated node config.
+    overlay_string("GWNODE_RUNTIME_NETWORK", &mut config.runtime.network);
+    overlay_string(
+        "GWNODE_RUNTIME_SERVE_IMAGE",
+        &mut config.runtime.default_serve_image,
+    );
     overlay_string("GWNODE_LOG_LEVEL", &mut config.log.level);
     overlay_string("LOG_LEVEL", &mut config.log.level);
     Ok(())
@@ -315,6 +352,18 @@ fn default_runtime_socket() -> String {
 
 fn default_build_image() -> String {
     "docker.io/library/node:22".to_owned()
+}
+
+fn default_serve_image() -> String {
+    "docker.io/library/node:22".to_owned()
+}
+
+const fn default_ssr_idle_stop_seconds() -> u64 {
+    1800
+}
+
+const fn default_ssr_startup_timeout_seconds() -> u64 {
+    90
 }
 
 fn default_network() -> String {

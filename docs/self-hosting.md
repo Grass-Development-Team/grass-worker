@@ -141,10 +141,22 @@ deployments receive unique `slug-xxxxxxxx.apps.example.com` hosts.
 
 ## Notes
 
-- SSR, hybrid, serverless, and edge outputs fail with an explicit
-  "not implemented yet" message in the first stage; static outputs from
-  Vite/React/Vue/Svelte SPAs, Next.js static export, Nuxt SPA/prerender,
-  SvelteKit adapter-static, and Astro static are supported.
+- Static outputs from Vite/React/Vue/Svelte SPAs, Next.js static export,
+  Nuxt SPA/prerender, SvelteKit adapter-static, and Astro static are
+  supported. **SSR deployments work for Next.js, Astro, and Nuxt**: the
+  build produces a `.grass/output/server` bundle (Next.js standalone —
+  requested automatically when no static export is configured; Astro needs
+  the `@astrojs/node` adapter in standalone mode; Nuxt uses its Nitro
+  output) and the node runs it in a service container on first request,
+  reverse-proxying the domain to it. Services stop after 30 idle minutes
+  (`[serve.ssr] idle_stop_seconds`) and restart on demand; the service
+  image defaults to `node:22` (`[runtime] default_serve_image`).
+  Containerized nodes reach SSR containers by container IP, so both must
+  share a network — set `[runtime] network` (or `GWNODE_RUNTIME_NETWORK`)
+  to the compose network when the node itself runs in a container.
+  Hybrid, serverless, and edge outputs still fail with an explicit
+  "not implemented yet" message. SSR project env vars are not implemented
+  yet; SSR previews and reviews behave exactly like static ones.
 - Quota plans ship seeded (`free`, `student`, `plus`, `pro`, `ultra`);
   team groups map teams to plans, and usage appears under Usage.
 - **Administration → Projects** lists every project on the platform with

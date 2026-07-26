@@ -53,8 +53,8 @@
 - DNS Provider API 模式的抽象与至少一个可用实现或可配置占位实现；
 - 上线审核；
 - 审计事件；
-- SSR 字段、枚举和接口预留；
-- SSR / hybrid / serverless / edge 等非 static runtime 的明确失败提示；
+- SSR 部署（Next.js standalone / Astro node adapter / Nuxt Nitro；服务容器 + 反向代理）；
+- hybrid / serverless / edge 等未实现 runtime 的明确失败提示；
 - Docker / Podman socket container runtime backend；
 - path traversal 防护；
 - 基础测试与质量命令。
@@ -63,7 +63,7 @@
 
 这些内容不实现实际能力，但第一阶段需要给出受控行为：
 
-- SSR deployment：保留字段和接口，检测到后返回未实现错误；
+- SSR deployment：Next.js / Astro / Nuxt 已实现；其余 SSR 框架检测到后返回未实现错误；
 - Custom Grass Output：第一阶段不接受用户自定义 `.grass/output/output.toml`，检测到后返回明确错误；
 - 无可用 Host Source 或 Host 配额不足：项目创建不失败，但不自动分配 host，并在 Console 展示原因；
 - DNS Provider 临时失败：Host Binding 进入 `pending` 或 `failed`，记录 provision event，并提供重试入口；
@@ -1129,7 +1129,7 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 - [ ] 配额拒绝有稳定错误码和 Console 展示；
 - [ ] Host provision 失败可见且可重试；
 - [ ] 审计事件可查询；
-- [ ] SSR / serverless / edge 等 runtime 有明确未实现错误；
+- [ ] hybrid / serverless / edge 等未实现 runtime 有明确错误，SSR（Next.js / Astro / Nuxt）可部署并对外服务；
 - [ ] `just quality` 通过；
 - [ ] Docker image 可用于自托管试用。
 
@@ -1144,7 +1144,6 @@ Seed 不创建 Host Source。Host Source 是用户或平台管理员提供的 Ru
 - GitHub App 深度集成；
 - Serverless Functions；
 - Edge Runtime；
-- SSR runtime 实际运行与进程管理；
 - ISR；
 - Middleware；
 - 分布式构建缓存；

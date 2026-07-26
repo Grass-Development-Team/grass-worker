@@ -58,14 +58,30 @@ pub struct BuildExecutionResult {
     pub exit_code: i64,
 }
 
-// Reserved SSR service types: constructed once run_service is implemented.
+/// A long-running SSR server container.
 #[derive(Debug)]
-#[allow(dead_code)]
-pub struct RunServiceInput;
+pub struct RunServiceInput {
+    /// Deterministic container name; an existing running container with this
+    /// name is adopted instead of recreated.
+    pub name: String,
+    pub image: String,
+    /// Local directory uploaded to `/app` inside the container.
+    pub app_dir: PathBuf,
+    /// Shell command executed with `sh -lc` from `/app`.
+    pub start_command: String,
+    pub env: Vec<(String, String)>,
+    /// Port the server listens on inside the container.
+    pub container_port: u16,
+    pub cpu_limit: u32,
+    pub memory_mb: u64,
+    pub network: String,
+}
 
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct RunningService;
+#[derive(Debug, Clone)]
+pub struct RunningService {
+    /// `ip:port` address of the service reachable from this node process.
+    pub upstream: String,
+}
 
 pub trait ContainerRuntime: Send + Sync {
     /// Ensures the build image exists locally, pulling it when missing.
@@ -84,15 +100,14 @@ pub trait ContainerRuntime: Send + Sync {
         cancel: watch::Receiver<bool>,
     ) -> impl Future<Output = Result<BuildExecutionResult, ContainerRuntimeError>> + Send;
 
-    /// Reserved for SSR runtimes; the first stage never starts services.
-    #[allow(dead_code)]
+    /// Starts (or adopts) the SSR service container described by `input`
+    /// and returns how to reach it.
     fn run_service(
         &self,
         input: RunServiceInput,
     ) -> impl Future<Output = Result<RunningService, ContainerRuntimeError>> + Send;
 
-    /// Reserved for SSR runtimes.
-    #[allow(dead_code)]
+    /// Stops and removes an SSR service container by name.
     fn stop_service(
         &self,
         service_id: &str,
@@ -231,17 +246,15 @@ impl ContainerRuntime for FakeRuntime {
 
     async fn run_service(
         &self,
-        _input: RunServiceInput,
+        input: RunServiceInput,
     ) -> Result<RunningService, ContainerRuntimeError> {
-        Err(ContainerRuntimeError::BackendNotImplemented(
-            "run_service".to_owned(),
-        ))
+        Ok(RunningService {
+            upstream: format!("127.0.0.1:{}", input.container_port),
+        })
     }
 
     async fn stop_service(&self, _service_id: &str) -> Result<(), ContainerRuntimeError> {
-        Err(ContainerRuntimeError::BackendNotImplemented(
-            "stop_service".to_owned(),
-        ))
+        Ok(())
     }
 }
 
@@ -319,9 +332,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn services_are_reserved_in_the_first_stage() {
+    async fn fake_runtime_reports_services_on_loopback() {
         let runtime = FakeRuntime::default();
-        assert!(runtime.run_service(RunServiceInput).await.is_err());
-        assert!(runtime.stop_service("svc").await.is_err());
+        let running = runtime
+            .run_service(RunServiceInput {
+                name: "grass-ssr-test".to_owned(),
+                image: "node:22".to_owned(),
+                app_dir: PathBuf::from("/tmp"),
+                start_command: "node server.js".to_owned(),
+                env: Vec::new(),
+                container_port: 8321,
+                cpu_limit: 1,
+                memory_mb: 512,
+                network: "bridge".to_owned(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(running.upstream, "127.0.0.1:8321");
+        assert!(runtime.stop_service("grass-ssr-test").await.is_ok());
     }
 }

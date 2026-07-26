@@ -95,7 +95,9 @@ pub async fn claim(
     // reach the queue; they fail at creation time.
     let candidates = deployment::Entity::find()
         .filter(deployment::Column::BuildStatus.eq(DeploymentBuildStatus::Pending))
-        .filter(deployment::Column::RuntimeKind.eq(ProjectRuntime::Static))
+        .filter(
+            deployment::Column::RuntimeKind.is_in([ProjectRuntime::Static, ProjectRuntime::Ssr]),
+        )
         .filter(deployment::Column::DeletedAt.is_null())
         .order_by_asc(deployment::Column::CreatedAt)
         .limit(10)

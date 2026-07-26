@@ -651,15 +651,11 @@ pub async fn review_policy<C: ConnectionTrait>(db: &C) -> anyhow::Result<ReviewP
     })
 }
 
-/// Whether SSR-style runtimes are deployable in the first stage. Returns the
-/// stable failure message when they are not.
+/// Whether a runtime kind is deployable. Returns the stable failure message
+/// for the kinds that are still unimplemented (hybrid/serverless/edge).
 pub fn runtime_failure(runtime: &ProjectRuntime) -> Option<(&'static str, &'static str)> {
     match runtime {
-        ProjectRuntime::Static => None,
-        ProjectRuntime::Ssr => Some((
-            "runtime_not_implemented",
-            "SSR runtime is not implemented yet",
-        )),
+        ProjectRuntime::Static | ProjectRuntime::Ssr => None,
         ProjectRuntime::Hybrid => Some((
             "runtime_not_implemented",
             "Hybrid runtime is not implemented yet",
@@ -716,10 +712,10 @@ mod tests {
     }
 
     #[test]
-    fn only_static_runtime_is_deployable_in_the_first_stage() {
+    fn static_and_ssr_runtimes_are_deployable() {
         assert!(runtime_failure(&ProjectRuntime::Static).is_none());
+        assert!(runtime_failure(&ProjectRuntime::Ssr).is_none());
         for runtime in [
-            ProjectRuntime::Ssr,
             ProjectRuntime::Hybrid,
             ProjectRuntime::Serverless,
             ProjectRuntime::Edge,

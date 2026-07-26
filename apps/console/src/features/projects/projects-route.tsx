@@ -59,11 +59,32 @@ const FRAMEWORK_PRESETS = [
     output: "out",
   },
   {
+    id: "nextjs-ssr",
+    label: "Next.js (SSR)",
+    install: "npm install",
+    build: "npm run build",
+    output: "",
+  },
+  {
     id: "nuxt",
     label: "Nuxt (static)",
     install: "npm install",
     build: "npm run generate",
     output: ".output/public",
+  },
+  {
+    id: "nuxt-ssr",
+    label: "Nuxt (SSR)",
+    install: "npm install",
+    build: "npm run build",
+    output: "",
+  },
+  {
+    id: "astro-ssr",
+    label: "Astro (SSR, node adapter)",
+    install: "npm install",
+    build: "npm run build",
+    output: "",
   },
   {
     id: "sveltekit",
@@ -280,7 +301,7 @@ function CreateProjectDialog({ teamId }: { teamId: string }) {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="static">Static</SelectItem>
-                  <SelectItem value="ssr">SSR (deploys fail until implemented)</SelectItem>
+                  <SelectItem value="ssr">SSR (Astro, Next.js, Nuxt)</SelectItem>
                 </SelectContent>
               </Select>
             </Field>

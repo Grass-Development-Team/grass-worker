@@ -55,6 +55,7 @@ pub fn inspect_build_output(
     // Server bundles produced by meta-frameworks.
     let next_server = project_root.join(".next/server").is_dir();
     let nuxt_server = project_root.join(".output/server").is_dir();
+    let astro_server = project_root.join("dist/server/entry.mjs").is_file();
     let sveltekit_server =
         detection.framework == Framework::SvelteKit && detection.static_signal == Some(false);
 
@@ -83,13 +84,16 @@ pub fn inspect_build_output(
             // A static export directory takes priority for frameworks whose
             // static mode was requested; otherwise a server bundle means SSR.
             let static_requested = detection.static_signal == Some(true);
-            if (next_server || nuxt_server || sveltekit_server) && !static_requested {
+            if (next_server || nuxt_server || astro_server || sveltekit_server) && !static_requested
+            {
                 InspectedRuntime::Ssr
             } else {
                 InspectedRuntime::Static { directory }
             }
         }
-        None if next_server || nuxt_server || sveltekit_server => InspectedRuntime::Ssr,
+        None if next_server || nuxt_server || astro_server || sveltekit_server => {
+            InspectedRuntime::Ssr
+        }
         None => InspectedRuntime::Unknown,
     }
 }
@@ -100,13 +104,120 @@ pub struct GeneratedOutput {
     pub framework_name: String,
     pub framework_version: String,
     pub spa_fallback: bool,
+    /// `static` or `ssr`; reported to the Control API on upload.
+    pub runtime_kind: &'static str,
+}
+
+/// How a framework's SSR build maps into `.grass/output/server`.
+struct SsrLayout {
+    /// Directory copied verbatim to `.grass/output/server`.
+    server_root: PathBuf,
+    /// Extra `(source, destination-relative-to-output-root)` copies applied
+    /// after the server tree (e.g. Next static assets into the standalone
+    /// directory).
+    overlays: Vec<(PathBuf, String)>,
+    /// Entry file relative to the output root.
+    entry: String,
+    host_env: &'static str,
+}
+
+/// Resolves the SSR layout for the supported frameworks, or a clear error
+/// describing what the build is missing.
+fn ssr_layout(project_root: &Path, detection: &Detection) -> Result<SsrLayout, OutputError> {
+    match detection.framework {
+        Framework::Next => {
+            let standalone = project_root.join(".next/standalone");
+            if !standalone.is_dir() {
+                return Err(OutputError::Unrecognized(
+                    "Next.js produced a server build without .next/standalone; \
+                     set output: 'standalone' in next.config.js (or remove a conflicting \
+                     output setting) and redeploy"
+                        .to_owned(),
+                ));
+            }
+            // server.js sits at the standalone root for plain projects and
+            // under the package path for monorepos.
+            let server_js = find_file(&standalone, "server.js", 4).ok_or_else(|| {
+                OutputError::Unrecognized(".next/standalone does not contain server.js".to_owned())
+            })?;
+            let relative = server_js
+                .strip_prefix(&standalone)
+                .map_err(|error| OutputError::Other(anyhow::anyhow!(error)))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let app_prefix = match relative.rsplit_once('/') {
+                Some((prefix, _)) => format!("server/{prefix}"),
+                None => "server".to_owned(),
+            };
+            // The standalone tree expects .next/static and public next to
+            // server.js; the build keeps them outside, so overlay them in.
+            let overlays = vec![
+                (
+                    project_root.join(".next/static"),
+                    format!("{app_prefix}/.next/static"),
+                ),
+                (project_root.join("public"), format!("{app_prefix}/public")),
+            ];
+            Ok(SsrLayout {
+                server_root: standalone,
+                overlays,
+                entry: format!("server/{relative}"),
+                host_env: "HOSTNAME",
+            })
+        }
+        Framework::Astro => {
+            let entry = project_root.join("dist/server/entry.mjs");
+            if !entry.is_file() {
+                return Err(OutputError::Unrecognized(
+                    "Astro produced a server build without dist/server/entry.mjs; \
+                     use the @astrojs/node adapter in standalone mode"
+                        .to_owned(),
+                ));
+            }
+            Ok(SsrLayout {
+                server_root: project_root.join("dist"),
+                overlays: Vec::new(),
+                entry: "server/server/entry.mjs".to_owned(),
+                host_env: "HOST",
+            })
+        }
+        Framework::Nuxt => {
+            let entry = project_root.join(".output/server/index.mjs");
+            if !entry.is_file() {
+                return Err(OutputError::Unrecognized(
+                    "Nuxt produced a server build without .output/server/index.mjs".to_owned(),
+                ));
+            }
+            Ok(SsrLayout {
+                server_root: project_root.join(".output"),
+                overlays: Vec::new(),
+                entry: "server/server/index.mjs".to_owned(),
+                host_env: "HOST",
+            })
+        }
+        Framework::SvelteKit => Err(OutputError::RuntimeNotImplemented("SvelteKit SSR")),
+        Framework::Vite | Framework::Unknown => {
+            Err(OutputError::RuntimeNotImplemented("This framework's SSR"))
+        }
+    }
+}
+
+/// Breadth-first search for a file name under `root`, bounded by depth.
+fn find_file(root: &Path, name: &str, max_depth: usize) -> Option<PathBuf> {
+    walkdir::WalkDir::new(root)
+        .max_depth(max_depth)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_map(Result::ok)
+        .find(|entry| entry.file_type().is_file() && entry.file_name().to_string_lossy() == name)
+        .map(|entry| entry.into_path())
 }
 
 /// Generates `.grass/output` from a finished build.
 ///
 /// Fails when the user project ships its own `.grass/output/output.toml`
 /// (custom output is a later-stage capability) and when the build output is
-/// not a supported static site.
+/// neither a supported static site nor a supported SSR server bundle.
 pub fn generate_grass_output(
     project_root: &Path,
     configured_output: Option<&str>,
@@ -121,7 +232,9 @@ pub fn generate_grass_output(
 
     let static_directory = match inspected {
         InspectedRuntime::Static { directory } => directory,
-        InspectedRuntime::Ssr => return Err(OutputError::RuntimeNotImplemented("SSR")),
+        InspectedRuntime::Ssr => {
+            return generate_ssr_output(project_root, &detection, configured_output, build_command);
+        }
         InspectedRuntime::Serverless => {
             return Err(OutputError::RuntimeNotImplemented("Serverless"));
         }
@@ -189,6 +302,66 @@ pub fn generate_grass_output(
         framework_name: detection.framework.name().to_owned(),
         framework_version: detection.framework_version,
         spa_fallback,
+        runtime_kind: "static",
+    })
+}
+
+/// Assembles `.grass/output` for an SSR build: the framework's server tree
+/// under `server/`, framework-specific asset overlays, and an `output.toml`
+/// with the `[server]` section the serve path executes.
+fn generate_ssr_output(
+    project_root: &Path,
+    detection: &Detection,
+    configured_output: Option<&str>,
+    build_command: Option<&str>,
+) -> Result<GeneratedOutput, OutputError> {
+    let layout = ssr_layout(project_root, detection)?;
+
+    let output_root = project_root.join(".grass/output");
+    if output_root.exists() {
+        std::fs::remove_dir_all(&output_root)?;
+    }
+    let server_target = output_root.join("server");
+    std::fs::create_dir_all(&server_target)?;
+    copy_dir(&layout.server_root, &server_target)?;
+    for (source, destination) in &layout.overlays {
+        if source.is_dir() {
+            let target = output_root.join(destination);
+            std::fs::create_dir_all(&target)?;
+            copy_dir(source, &target)?;
+        }
+    }
+
+    let manifest = manifest::ssr_manifest(
+        (detection.framework != Framework::Unknown).then(|| {
+            (
+                detection.framework.name(),
+                detection.framework_version.as_str(),
+            )
+        }),
+        manifest::ServerSection {
+            entry: layout.entry.clone(),
+            start_command: format!("node {}", layout.entry),
+            port_env: "PORT".to_owned(),
+            host_env: layout.host_env.to_owned(),
+        },
+        build_command,
+        configured_output,
+    );
+    std::fs::write(
+        output_root.join("output.toml"),
+        manifest::to_toml(&manifest).map_err(OutputError::Other)?,
+    )?;
+
+    manifest::validate_manifest(&manifest, &output_root)
+        .map_err(|error| OutputError::Other(anyhow::anyhow!(error)))?;
+
+    Ok(GeneratedOutput {
+        output_root,
+        framework_name: detection.framework.name().to_owned(),
+        framework_version: detection.framework_version.clone(),
+        spa_fallback: false,
+        runtime_kind: "ssr",
     })
 }
 
@@ -296,15 +469,113 @@ mod tests {
     }
 
     #[test]
-    fn next_server_output_fails_as_ssr() {
+    fn next_server_output_without_standalone_gets_a_clear_error() {
         let dir = project(&[
             ("package.json", r#"{"dependencies":{"next":"15.0.0"}}"#),
             (".next/server/app.js", "server"),
         ]);
 
         let error = generate_grass_output(&dir, None, None).unwrap_err();
-        assert!(matches!(error, OutputError::RuntimeNotImplemented("SSR")));
-        assert!(error.to_string().contains("not implemented yet"));
+        assert!(error.to_string().contains("standalone"), "{error}");
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn next_standalone_output_generates_ssr_grass_output() {
+        let dir = project(&[
+            ("package.json", r#"{"dependencies":{"next":"15.0.0"}}"#),
+            (".next/server/app.js", "server"),
+            (".next/standalone/server.js", "require('http')"),
+            (
+                ".next/standalone/node_modules/next/package.json",
+                "{\"name\":\"next\"}",
+            ),
+            (".next/static/chunks/main.js", "chunk"),
+            ("public/favicon.ico", "icon"),
+        ]);
+
+        let generated = generate_grass_output(&dir, None, Some("npm run build")).unwrap();
+        assert_eq!(generated.runtime_kind, "ssr");
+        assert_eq!(generated.framework_name, "next");
+        assert!(generated.output_root.join("server/server.js").is_file());
+        assert!(
+            generated
+                .output_root
+                .join("server/.next/static/chunks/main.js")
+                .is_file()
+        );
+        assert!(
+            generated
+                .output_root
+                .join("server/public/favicon.ico")
+                .is_file()
+        );
+
+        let manifest = manifest::parse_manifest(
+            &std::fs::read_to_string(generated.output_root.join("output.toml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest.runtime.kind, "ssr");
+        let server = manifest.server.unwrap();
+        assert_eq!(server.entry, "server/server.js");
+        assert_eq!(server.start_command, "node server/server.js");
+        assert_eq!(server.host_env, "HOSTNAME");
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn astro_node_adapter_output_generates_ssr_grass_output() {
+        let dir = project(&[
+            ("package.json", r#"{"dependencies":{"astro":"5.0.0"}}"#),
+            ("astro.config.mjs", "export default { output: 'server' }"),
+            ("dist/server/entry.mjs", "export {}"),
+            ("dist/client/_astro/app.js", "client"),
+        ]);
+
+        let generated = generate_grass_output(&dir, None, None).unwrap();
+        assert_eq!(generated.runtime_kind, "ssr");
+        assert_eq!(generated.framework_name, "astro");
+        assert!(
+            generated
+                .output_root
+                .join("server/server/entry.mjs")
+                .is_file()
+        );
+        assert!(
+            generated
+                .output_root
+                .join("server/client/_astro/app.js")
+                .is_file()
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn nuxt_nitro_output_generates_ssr_grass_output() {
+        let dir = project(&[
+            ("package.json", r#"{"dependencies":{"nuxt":"3.15.0"}}"#),
+            (".output/server/index.mjs", "export {}"),
+            (".output/public/_nuxt/app.js", "client"),
+        ]);
+
+        let generated = generate_grass_output(&dir, None, None).unwrap();
+        assert_eq!(generated.runtime_kind, "ssr");
+        assert_eq!(generated.framework_name, "nuxt");
+        assert!(
+            generated
+                .output_root
+                .join("server/server/index.mjs")
+                .is_file()
+        );
+        assert!(
+            generated
+                .output_root
+                .join("server/public/_nuxt/app.js")
+                .is_file()
+        );
 
         std::fs::remove_dir_all(dir).unwrap();
     }
