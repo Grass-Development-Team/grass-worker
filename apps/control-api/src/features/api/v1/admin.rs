@@ -40,6 +40,10 @@ pub fn router() -> Router<ControlApiState> {
         .route("/team-groups/{group_id}", patch(team_groups::update))
         .route("/teams/{team_id}/group", post(team_groups::assign))
         .route("/nodes", get(nodes::list).post(nodes::create))
+        .route(
+            "/nodes/local-process",
+            get(nodes::local_process_status).post(nodes::local_process_action),
+        )
         .route("/nodes/{node_id}", get(nodes::detail))
         .route("/nodes/{node_id}/health", get(nodes::health))
         .route("/nodes/{node_id}/rotate-token", post(nodes::rotate_token))

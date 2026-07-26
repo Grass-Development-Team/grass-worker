@@ -12,11 +12,13 @@ use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
         nodes::{self, CreateNodeParams},
+        settings,
     },
     infra::{
         database::entity::{AuditEventResult, node},
         error::{AppError, ok_response},
         http::middlewares::node_auth::revoked_token_key,
+        node_manager::config_file,
     },
     state::ControlApiState,
 };
@@ -57,7 +59,24 @@ pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoRespo
 
     Ok(ok_response(json!({
         "nodes": nodes.iter().map(|node| node_view(node, now)).collect::<Vec<_>>(),
+        "local_process": local_process_view(&state).await,
     })))
+}
+
+/// Local managed-process block shared by the list and status endpoints.
+async fn local_process_view(state: &ControlApiState) -> serde_json::Value {
+    let (auto_start, config_path) = {
+        let config = state.config.read().unwrap();
+        (
+            config.node_manager.auto_start_local_node,
+            config.node_manager.local_node_config.clone(),
+        )
+    };
+    json!({
+        "auto_start": auto_start,
+        "managed": config_file::exists(&config_path),
+        "process": state.node_manager.status().await,
+    })
 }
 
 /// GET /api/v1/admin/nodes/{node_id}
@@ -112,9 +131,14 @@ pub async fn health(
 #[derive(Deserialize)]
 pub struct CreateNodeRequest {
     pub name: String,
+    /// Generate the local node config and start the managed process.
+    #[serde(default)]
+    pub start_local: bool,
 }
 
 /// POST /api/v1/admin/nodes — creates a Node and returns its token once.
+/// With `start_local`, the managed node config is generated from that token
+/// and the local process is started immediately.
 pub async fn create(
     State(state): State<ControlApiState>,
     crate::infra::http::extractors::Session { data, .. }: crate::infra::http::extractors::Session,
@@ -152,16 +176,141 @@ pub async fn create(
             target_id: Some(node.id),
             result: AuditEventResult::Success,
             reason: None,
-            metadata: json!({ "name": node.name }),
+            metadata: json!({ "name": node.name, "start_local": body.start_local }),
         },
     )
     .await;
+
+    let mut warnings = Vec::new();
+    let mut local_process = None;
+    if body.start_local {
+        let storage_root = settings::get_setting(db, "storage.root")
+            .await
+            .ok()
+            .flatten()
+            .and_then(|setting| setting.value.as_str().map(str::to_owned))
+            .unwrap_or_else(|| state.config.read().unwrap().storage.root.clone());
+        let (config_path, control_api_url) = {
+            let config = state.config.read().unwrap();
+            (
+                config.node_manager.local_node_config.clone(),
+                config_file::control_api_url(config.server.host, config.server.port),
+            )
+        };
+
+        match config_file::generate(
+            &config_path,
+            &config_file::GenerateParams {
+                node_name: &node.name,
+                node_token: &token,
+                control_api_url,
+                storage_root: &storage_root,
+            },
+        ) {
+            Ok(mut generated_warnings) => {
+                warnings.append(&mut generated_warnings);
+                match state.node_manager.start().await {
+                    Ok(status) => {
+                        local_process = Some(status);
+                        let _ = audits::create_audit_event(
+                            db,
+                            CreateAuditEventParams {
+                                actor_user_id: Some(data.user_id),
+                                team_id: None,
+                                action: "node.local_process_started".to_owned(),
+                                target_type: "node".to_owned(),
+                                target_id: Some(node.id),
+                                result: AuditEventResult::Success,
+                                reason: None,
+                                metadata: json!({}),
+                            },
+                        )
+                        .await;
+                    }
+                    Err(error) => {
+                        warnings.push(format!("failed to start local node process: {error}"));
+                    }
+                }
+            }
+            Err(error) => warnings.push(format!("failed to write local node config: {error}")),
+        }
+    }
 
     Ok(ok_response(json!({
         "node": node_view(&node, OffsetDateTime::now_utc()),
         // Shown exactly once; only the hash is stored.
         "token": token,
+        "local_process": local_process,
+        "warnings": warnings,
     })))
+}
+
+/// GET /api/v1/admin/nodes/local-process
+pub async fn local_process_status(
+    State(state): State<ControlApiState>,
+) -> Result<impl IntoResponse, AppError> {
+    Ok(ok_response(local_process_view(&state).await))
+}
+
+#[derive(Deserialize)]
+pub struct LocalProcessActionRequest {
+    pub action: LocalProcessAction,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalProcessAction {
+    Start,
+    Stop,
+    Restart,
+}
+
+/// POST /api/v1/admin/nodes/local-process — start/stop/restart the managed
+/// local node process.
+pub async fn local_process_action(
+    State(state): State<ControlApiState>,
+    crate::infra::http::extractors::Session { data, .. }: crate::infra::http::extractors::Session,
+    Json(body): Json<LocalProcessActionRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "admin.nodes.local_process";
+    let db = super::database(&state, OP)?;
+
+    let (action_name, result) = match body.action {
+        LocalProcessAction::Start => ("node.local_process_started", {
+            state.node_manager.start().await
+        }),
+        LocalProcessAction::Stop => (
+            "node.local_process_stopped",
+            Ok(state.node_manager.stop().await),
+        ),
+        LocalProcessAction::Restart => ("node.local_process_restarted", {
+            state.node_manager.restart().await
+        }),
+    };
+
+    match result {
+        Ok(_) => {
+            let _ = audits::create_audit_event(
+                db,
+                CreateAuditEventParams {
+                    actor_user_id: Some(data.user_id),
+                    team_id: None,
+                    action: action_name.to_owned(),
+                    target_type: "node".to_owned(),
+                    target_id: None,
+                    result: AuditEventResult::Success,
+                    reason: None,
+                    metadata: json!({}),
+                },
+            )
+            .await;
+            Ok(ok_response(local_process_view(&state).await))
+        }
+        Err(error) => Err(AppError::Validation {
+            op: OP,
+            message: error.to_string(),
+        }),
+    }
 }
 
 /// POST /api/v1/admin/nodes/{node_id}/rotate-token
