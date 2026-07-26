@@ -20,6 +20,12 @@ public_base_url = "http://127.0.0.1:8080"
 metadata_cache_ttl_seconds = 30
 artifact_cache_root = "/data/node/artifacts"
 
+# SSR services start on the first request for their deployment and stop
+# again after sitting idle; 0 disables the idle stop.
+[serve.ssr]
+idle_stop_seconds = 1800
+startup_timeout_seconds = 90
+
 [security]
 allow_private_repository = false
 
@@ -29,3 +35,17 @@ verbose_build_log = true
 [log]
 level = "info"
 format = "pretty"
+
+[runtime]
+backend = "podman-socket"
+socket = "unix:///run/user/1000/podman/podman.sock"
+default_build_image = "docker.io/library/node:22"
+# Image that runs SSR service containers.
+default_serve_image = "docker.io/library/node:22"
+# SSR containers are reached by container IP, so a containerized node must
+# share this network with them (override with GWNODE_RUNTIME_NETWORK).
+network = "bridge"
+
+[runtime.resources]
+cpu_limit = 2
+memory_mb = 2048

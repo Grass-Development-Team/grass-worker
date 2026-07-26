@@ -77,6 +77,25 @@ pub async fn handler(
     }
     *state.config.write().unwrap() = updated_config;
 
+    // Keep the generated local node config (if any) pointing at the chosen
+    // storage root; hand-written node configs are never touched.
+    let local_node_config = state
+        .config
+        .read()
+        .unwrap()
+        .node_manager
+        .local_node_config
+        .clone();
+    if let Err(error) =
+        crate::infra::node_manager::config_file::update_storage_root(&local_node_config, &root)
+    {
+        tracing::warn!(
+            operation = "setup.storage.update_local_node_config",
+            %error,
+            "failed to update generated local node config"
+        );
+    }
+
     Ok(ok_response(json!({ "configured": true, "root": root })))
 }
 

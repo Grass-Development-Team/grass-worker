@@ -68,7 +68,31 @@ pub async fn handler(State(state): State<ControlApiState>) -> Result<impl IntoRe
         source,
     })?;
 
-    Ok(ok_response(json!({ "setup_finished": true })))
+    // Ready mode just unlocked the internal Node API — start the managed
+    // local node now if setup generated its config.
+    let mut local_node_started = false;
+    let (auto_start, config_path) = {
+        let config = state.config.read().unwrap();
+        (
+            config.node_manager.auto_start_local_node,
+            config.node_manager.local_node_config.clone(),
+        )
+    };
+    if auto_start && crate::infra::node_manager::config_file::exists(&config_path) {
+        match state.node_manager.start().await {
+            Ok(_) => local_node_started = true,
+            Err(error) => tracing::warn!(
+                operation = "setup.finish.local_node_start",
+                %error,
+                "failed to start managed local node"
+            ),
+        }
+    }
+
+    Ok(ok_response(json!({
+        "setup_finished": true,
+        "local_node_started": local_node_started,
+    })))
 }
 
 fn setup_prerequisites_complete(admin: bool, node: bool, site: bool, storage: bool) -> bool {

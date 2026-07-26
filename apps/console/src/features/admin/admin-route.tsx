@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ShieldCheckIcon } from "lucide-react";
+import { Outlet } from "react-router";
 
 import { adminApi } from "./admin.api";
 
@@ -10,7 +11,7 @@ export function AdminRoute() {
   });
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
       <div>
         <h1 className="text-2xl font-semibold">Administration</h1>
         <p className="text-sm text-muted-foreground">System-level configuration and operations.</p>
@@ -27,15 +28,15 @@ export function AdminRoute() {
           {status.data ? (
             <div>
               <p className="font-medium">{status.data.service}</p>
-              <p className="text-sm text-muted-foreground">
-                Ready mode | Version {status.data.version}
-              </p>
+              <p className="text-sm text-muted-foreground">Ready mode · v{status.data.version}</p>
             </div>
           ) : (
             <div className="h-10 w-56 animate-pulse rounded-sm bg-muted" aria-hidden="true" />
           )}
         </div>
       )}
+
+      <Outlet />
     </div>
   );
 }

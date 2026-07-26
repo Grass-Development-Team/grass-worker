@@ -2,7 +2,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use sea_orm::DatabaseConnection;
 
-use crate::infra::config::ControlApiConfig;
+use crate::infra::{config::ControlApiConfig, logs::LogStreamHub, node_manager::NodeManager};
 
 #[derive(Clone)]
 pub struct ControlApiState {
@@ -10,16 +10,21 @@ pub struct ControlApiState {
     config_path: Arc<String>,
     pub database: Arc<OnceLock<DatabaseConnection>>,
     pub cache: Arc<OnceLock<grass_cache::CacheStore>>,
+    pub log_hub: LogStreamHub,
+    pub node_manager: NodeManager,
     setup_mutex: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl ControlApiState {
     pub fn new(config: ControlApiConfig, config_path: impl Into<String>) -> Self {
+        let node_manager = NodeManager::new(&config.node_manager);
         Self {
             config: Arc::new(RwLock::new(config)),
             config_path: Arc::new(config_path.into()),
             database: Arc::new(OnceLock::new()),
             cache: Arc::new(OnceLock::new()),
+            log_hub: LogStreamHub::new(),
+            node_manager,
             setup_mutex: Arc::new(tokio::sync::Mutex::new(())),
         }
     }

@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { GalleryVerticalEnd } from "lucide-react";
+import { ActivityIcon } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
@@ -53,24 +54,25 @@ export function SignupForm({ className, ...props }: React.ComponentPropsWithoutR
 
   return (
     <div className={cn("flex flex-col gap-6", className)} {...props}>
-      <form onSubmit={handleSubmit}>
-        <div className="flex flex-col gap-6">
-          <div className="flex flex-col items-center gap-2">
-            <Link to="/" className="flex flex-col items-center gap-2 font-medium">
-              <div className="flex h-8 w-8 items-center justify-center rounded-md">
-                <GalleryVerticalEnd className="size-6" />
-              </div>
-              <span className="sr-only">Grass Worker</span>
-            </Link>
-            <h1 className="text-xl font-bold">Create your Grass Worker account</h1>
-            <div className="text-center text-sm">
-              Already have an account?{" "}
-              <Link to={loginHref} className="underline underline-offset-4">
-                Log in
-              </Link>
-            </div>
-          </div>
-          <div className="grid gap-4">
+      <div className="flex flex-col items-center gap-2">
+        <Link
+          to="/"
+          className="bg-primary text-primary-foreground flex size-9 items-center justify-center rounded-lg"
+        >
+          <ActivityIcon className="size-5" />
+          <span className="sr-only">Grass Worker</span>
+        </Link>
+        <h1 className="text-xl font-semibold">Create your Grass Worker account</h1>
+        <div className="text-center text-sm text-muted-foreground">
+          Already have an account?{" "}
+          <Link to={loginHref} className="text-foreground underline underline-offset-4">
+            Log in
+          </Link>
+        </div>
+      </div>
+      <Card>
+        <CardContent>
+          <form onSubmit={handleSubmit} className="grid gap-4">
             <div className="grid gap-2">
               <Label htmlFor="email">Email</Label>
               <Input
@@ -115,13 +117,17 @@ export function SignupForm({ className, ...props }: React.ComponentPropsWithoutR
                 required
               />
             </div>
-            {error && <p className="text-sm text-destructive">{error}</p>}
+            {error && (
+              <p role="alert" className="text-sm text-destructive">
+                {error}
+              </p>
+            )}
             <Button type="submit" className="w-full" disabled={isSubmitting}>
               {isSubmitting ? "Creating account..." : "Create account"}
             </Button>
-          </div>
-        </div>
-      </form>
+          </form>
+        </CardContent>
+      </Card>
     </div>
   );
 }

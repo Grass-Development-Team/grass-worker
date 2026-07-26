@@ -5,6 +5,8 @@
 .env.*
 !.env.example
 config.toml
+node.toml
+.deploy/
 apps/console/node_modules
 apps/console/dist
 apps/console/.vite

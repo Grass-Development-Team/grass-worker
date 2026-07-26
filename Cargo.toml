@@ -25,7 +25,7 @@ version = "0.1.0"
 anyhow = "1.0.100"
 argon2 = { version = "0.5", features = ["std"] }
 async-trait = "0.1"
-axum = "0.8.7"
+axum = { version = "0.8.7", features = ["ws"] }
 axum-extra = { version = "0.10", features = ["cookie"] }
 base64 = "0.22"
 clap = { version = "4.5.50", features = ["derive", "env"] }
@@ -35,6 +35,8 @@ mime_guess = "2"
 moka = { version = "0.12", features = ["future"] }
 rand = "0.8"
 redis = { version = "0.31.0", default-features = false, features = ["tokio-comp", "aio", "script"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 rust-embed = "8"
 sea-orm = { version = "2.0.0-rc.38", default-features = false, features = ["macros", "sqlx-postgres", "runtime-tokio-rustls", "with-json", "with-time", "with-uuid"] }
 sea-orm-migration = { version = "2.0.0-rc.38", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "with-json", "with-time", "with-uuid"] }
@@ -50,11 +52,18 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "json"] }
 url = "2.5.4"
 uuid = { version = "1.18.1", features = ["serde", "v7"] }
+walkdir = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+bollard = "0.19"
+tar = "0.4"
+futures-util = "0.3"
 
+grass-archive = { path = "crates/archive" }
 grass-assets = { path = "crates/assets" }
 grass-cache = { path = "crates/cache" }
 grass-config = { path = "crates/config" }
 grass-crypto = { path = "crates/crypto" }
+grass-node-protocol = { path = "crates/node-protocol" }
 grass-session = { path = "crates/session" }
 grass-token = { path = "crates/token" }
 grass-validator = { path = "crates/validator" }

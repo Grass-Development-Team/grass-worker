@@ -2,11 +2,16 @@ use axum::{Json, response::IntoResponse};
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::infra::http::timestamps::ts;
 use crate::{
-    domain::teams::{self, AcceptInvitationParams, CreateInvitationParams, InvitationError},
+    domain::{
+        quotas::QuotaDimension,
+        teams::{self, AcceptInvitationParams, CreateInvitationParams, InvitationError},
+    },
     infra::{
         error::{AppError, ok_response},
         http::extractors::{Session, TeamRole},
+        quota::{QuotaCharge, QuotaService},
     },
     state::ControlApiState,
 };
@@ -42,6 +47,32 @@ pub async fn create(
     })?;
 
     let db = super::database(&state, "teams.invitations.create.no_database")?;
+    let cache = super::cache(&state, "teams.invitations.create.no_cache")?;
+
+    // Member quota is consumed when an invitation is accepted; inviting only
+    // pre-checks the limit so teams cannot fan out invitations they can never
+    // accept.
+    let team = teams::get_by_id(db, team_role.team_id)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: "teams.invitations.create.team_lookup",
+            source,
+        })?
+        .ok_or_else(|| AppError::NotFound {
+            op: "teams.invitations.create.team_not_found",
+            message: "team not found".to_owned(),
+        })?;
+    let quota = QuotaService::new(db, cache);
+    let precheck = quota
+        .reserve(
+            "teams.invitations.create.quota",
+            &team,
+            Some(team_role.user_id),
+            &[QuotaCharge::one(QuotaDimension::Members)],
+        )
+        .await?;
+    quota.rollback(precheck).await;
+
     let token = grass_token::generate_token();
     let invitation = teams::create_invitation(
         db,
@@ -63,7 +94,7 @@ pub async fn create(
             "email": invitation.email,
             "role": super::role_value(&invitation.role),
             "status": "pending",
-            "expires_at": invitation.expires_at,
+            "expires_at": ts(invitation.expires_at),
             "token": token,
         }
     })))
@@ -82,15 +113,64 @@ pub async fn accept(
     }
 
     let db = super::database(&state, "teams.invitations.accept.no_database")?;
-    let member = teams::accept_invitation(
+    let cache = super::cache(&state, "teams.invitations.accept.no_cache")?;
+    let token_hash = teams::invitation_token_hash(body.token.trim());
+
+    let invitation_team_id = teams::invitation_team_by_token_hash(db, &token_hash)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: "teams.invitations.accept.lookup",
+            source,
+        })?
+        .ok_or_else(|| AppError::NotFound {
+            op: "teams.invitations.not_found",
+            message: "invitation not found".to_owned(),
+        })?;
+    let team = teams::get_by_id(db, invitation_team_id)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: "teams.invitations.accept.team_lookup",
+            source,
+        })?
+        .ok_or_else(|| AppError::NotFound {
+            op: "teams.invitations.accept.team_not_found",
+            message: "team not found".to_owned(),
+        })?;
+
+    let quota = QuotaService::new(db, cache);
+    let reservation = quota
+        .reserve(
+            "teams.invitations.accept.quota",
+            &team,
+            Some(session.data.user_id),
+            &[QuotaCharge::one(QuotaDimension::Members)],
+        )
+        .await?;
+
+    let member = match teams::accept_invitation(
         db,
         AcceptInvitationParams {
-            token_hash: teams::invitation_token_hash(body.token.trim()),
+            token_hash,
             user_id: session.data.user_id,
         },
     )
     .await
-    .map_err(map_invitation_error)?;
+    {
+        Ok(member) => member,
+        Err(error) => {
+            quota.rollback(reservation).await;
+            return Err(map_invitation_error(error));
+        }
+    };
+
+    quota
+        .commit(
+            "teams.invitations.accept.quota_commit",
+            reservation,
+            "team_member",
+            Some(member.id),
+        )
+        .await?;
 
     Ok(ok_response(json!({
         "member": {
@@ -98,7 +178,7 @@ pub async fn accept(
             "team_id": member.team_id,
             "user_id": member.user_id,
             "role": super::role_value(&member.role),
-            "joined_at": member.joined_at,
+            "joined_at": ts(member.joined_at),
         }
     })))
 }

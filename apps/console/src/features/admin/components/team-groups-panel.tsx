@@ -1,0 +1,341 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { PlusIcon } from "lucide-react";
+import { useState } from "react";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Field, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+
+import { adminApi, type AdminTeamGroup } from "../admin.api";
+
+const INHERIT_NONE = "__none__";
+
+export function TeamGroupsPanel() {
+  const queryClient = useQueryClient();
+  const [editing, setEditing] = useState<AdminTeamGroup | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [deleting, setDeleting] = useState<AdminTeamGroup | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const groupsQuery = useQuery({
+    queryKey: ["admin", "team-groups"],
+    queryFn: adminApi.listTeamGroups,
+  });
+  const plansQuery = useQuery({
+    queryKey: ["admin", "quota-plans"],
+    queryFn: adminApi.listQuotaPlans,
+  });
+
+  const planName = (planId: string | null) =>
+    plansQuery.data?.plans.find((plan) => plan.id === planId)?.name ?? (planId ? planId : "—");
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["admin", "team-groups"] });
+
+  const defaultMutation = useMutation({
+    mutationFn: (groupId: string) => adminApi.updateTeamGroup(groupId, { is_default: true }),
+    onSuccess: () => {
+      setError(null);
+      invalidate();
+    },
+    onError: (cause) =>
+      setError(cause instanceof Error ? cause.message : "Unable to change the default group."),
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-4">
+        <p className="text-sm text-muted-foreground">
+          Groups map teams to a quota plan. New teams join the default group.
+        </p>
+        <Button onClick={() => setCreating(true)}>
+          <PlusIcon /> New group
+        </Button>
+      </div>
+
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
+
+      {groupsQuery.isLoading && <Skeleton className="h-40 w-full" aria-busy="true" />}
+      {groupsQuery.isError && (
+        <p role="alert" className="text-sm text-destructive">
+          Unable to load team groups.
+        </p>
+      )}
+      {groupsQuery.data && (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Group</TableHead>
+              <TableHead>Quota plan</TableHead>
+              <TableHead>Teams</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {groupsQuery.data.groups.map((group) => (
+              <TableRow key={group.id}>
+                <TableCell>
+                  <span className="flex items-center gap-2 font-medium">
+                    {group.name}
+                    {group.is_default && <Badge>Default</Badge>}
+                  </span>
+                  <p className="text-xs text-muted-foreground">
+                    {group.code}
+                    {group.description ? ` — ${group.description}` : ""}
+                  </p>
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground">
+                  {planName(group.quota_plan_id)}
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground">
+                  {group.team_count ?? 0}
+                </TableCell>
+                <TableCell className="text-right">
+                  <div className="flex justify-end gap-1">
+                    <Button size="sm" variant="outline" onClick={() => setEditing(group)}>
+                      Edit
+                    </Button>
+                    {!group.is_default && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => defaultMutation.mutate(group.id)}
+                          disabled={defaultMutation.isPending}
+                        >
+                          Make default
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-destructive"
+                          onClick={() => setDeleting(group)}
+                        >
+                          Delete
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+
+      {(creating || editing) && (
+        <GroupFormDialog
+          group={editing}
+          onClose={() => {
+            setCreating(false);
+            setEditing(null);
+          }}
+          onSaved={() => {
+            setCreating(false);
+            setEditing(null);
+            invalidate();
+          }}
+        />
+      )}
+      {deleting && (
+        <DeleteGroupDialog
+          group={deleting}
+          onClose={() => setDeleting(null)}
+          onDeleted={() => {
+            setDeleting(null);
+            invalidate();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function GroupFormDialog({
+  group,
+  onClose,
+  onSaved,
+}: {
+  group: AdminTeamGroup | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [code, setCode] = useState(group?.code ?? "");
+  const [name, setName] = useState(group?.name ?? "");
+  const [description, setDescription] = useState(group?.description ?? "");
+  const [planId, setPlanId] = useState(group?.quota_plan_id ?? INHERIT_NONE);
+
+  const plansQuery = useQuery({
+    queryKey: ["admin", "quota-plans"],
+    queryFn: adminApi.listQuotaPlans,
+  });
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      group
+        ? adminApi.updateTeamGroup(group.id, {
+            name,
+            description,
+            quota_plan_id: planId === INHERIT_NONE ? null : planId,
+          })
+        : adminApi.createTeamGroup({
+            code,
+            name,
+            description: description || undefined,
+            quota_plan_id: planId === INHERIT_NONE ? undefined : planId,
+          }),
+    onSuccess: onSaved,
+  });
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{group ? `Edit ${group.name}` : "New team group"}</DialogTitle>
+          <DialogDescription>
+            Teams in a group without a plan fall back to the platform default plan.
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (name.trim() && (group || code.trim())) mutation.mutate();
+          }}
+        >
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field>
+              <FieldLabel htmlFor="group-code">Code</FieldLabel>
+              <Input
+                id="group-code"
+                value={code}
+                onChange={(event) => setCode(event.target.value)}
+                disabled={group != null}
+                placeholder="enterprise"
+                required={group == null}
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="group-name">Name</FieldLabel>
+              <Input
+                id="group-name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                required
+              />
+            </Field>
+          </div>
+          <Field>
+            <FieldLabel htmlFor="group-description">Description</FieldLabel>
+            <Input
+              id="group-description"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="group-plan">Quota plan</FieldLabel>
+            <Select value={planId} onValueChange={setPlanId}>
+              <SelectTrigger id="group-plan">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={INHERIT_NONE}>None — use platform default</SelectItem>
+                {plansQuery.data?.plans
+                  .filter((plan) => plan.enabled)
+                  .map((plan) => (
+                    <SelectItem key={plan.id} value={plan.id}>
+                      {plan.name} ({plan.code})
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          {mutation.isError && (
+            <p role="alert" className="text-sm text-destructive">
+              {mutation.error instanceof Error ? mutation.error.message : "Unable to save."}
+            </p>
+          )}
+          <DialogFooter>
+            <Button type="submit" disabled={mutation.isPending}>
+              {mutation.isPending ? "Saving…" : group ? "Save group" : "Create group"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DeleteGroupDialog({
+  group,
+  onClose,
+  onDeleted,
+}: {
+  group: AdminTeamGroup;
+  onClose: () => void;
+  onDeleted: () => void;
+}) {
+  const mutation = useMutation({
+    mutationFn: () => adminApi.deleteTeamGroup(group.id),
+    onSuccess: onDeleted,
+  });
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Delete team group</DialogTitle>
+          <DialogDescription>
+            Deletes “{group.name}”. Groups with assigned teams are refused.
+          </DialogDescription>
+        </DialogHeader>
+        {mutation.isError && (
+          <p role="alert" className="text-sm text-destructive">
+            {mutation.error instanceof Error ? mutation.error.message : "Unable to delete."}
+          </p>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={() => mutation.mutate()}
+            disabled={mutation.isPending}
+          >
+            {mutation.isPending ? "Deleting…" : "Delete group"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

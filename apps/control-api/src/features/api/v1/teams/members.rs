@@ -3,11 +3,16 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::infra::http::timestamps::ts;
 use crate::{
-    domain::teams::{self, MemberMutationError},
+    domain::{
+        quotas::QuotaDimension,
+        teams::{self, MemberMutationError},
+    },
     infra::{
         error::{AppError, ok_response},
         http::extractors::TeamRole,
+        quota::{QuotaCharge, QuotaService},
     },
     state::ControlApiState,
 };
@@ -41,7 +46,7 @@ pub async fn list(
             "email": user.email,
             "display_name": user.display_name,
             "role": super::role_value(&member.role),
-            "joined_at": member.joined_at,
+            "joined_at": ts(member.joined_at),
         })).collect::<Vec<_>>()
     })))
 }
@@ -80,6 +85,18 @@ pub async fn remove(
     teams::remove_member(db, team_role.team_id, path.user_id)
         .await
         .map_err(map_member_mutation_error)?;
+
+    if let Ok(cache) = super::cache(&state, "teams.members.remove.no_cache") {
+        QuotaService::new(db, cache)
+            .release(
+                "teams.members.remove.quota_release",
+                team_role.team_id,
+                &[QuotaCharge::one(QuotaDimension::Members)],
+                "team_member",
+                Some(path.user_id),
+            )
+            .await?;
+    }
 
     Ok(ok_response(json!({ "ok": true })))
 }

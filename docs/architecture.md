@@ -36,7 +36,7 @@
 - 配额检查与用量统计；
 - 部署上线审核；
 - 审计事件记录；
-- SSR 应用类型预留接口。
+- SSR 应用部署（Next.js standalone / Astro node adapter / Nuxt Nitro，按需启动的服务容器 + 反向代理）。
 
 ### 1.2 非第一阶段目标
 
@@ -1903,7 +1903,7 @@ Runtime Settings 示例：
 
 ## 15. Grass Output API
 
-第一阶段支持各框架的 SSG / static 输出，不支持 SSR、ISR、Serverless、Edge、Middleware 等需要运行时计算的能力。框架支持不是通过框架名直接决定 runtime，而是通过框架配置 detector 和 build output inspector 判断最终输出是否能归一化为 `runtime.kind = "static"`。
+支持各框架的 SSG / static 输出，以及 Next.js（standalone）、Astro（node adapter standalone）、Nuxt（Nitro）的 SSR 输出；ISR、Serverless、Edge、Middleware 等能力仍未实现。框架支持不是通过框架名直接决定 runtime，而是通过框架配置 detector 和 build output inspector 判断最终输出归一化为 `runtime.kind = "static"` 还是 `"ssr"`。
 
 第一阶段目标：
 
@@ -1913,7 +1913,8 @@ Runtime Settings 示例：
 - SvelteKit：支持 `adapter-static`；
 - Astro：支持 `output = "static"`；
 - Custom Output：第一阶段先不实现；
-- SSR / ISR / Serverless / Edge / Middleware：识别后失败并返回明确错误。
+- SSR：Next.js standalone、Astro node adapter（standalone）、Nuxt Nitro 输出打包为 `server/` 并由 Node 以服务容器运行；
+- ISR / Serverless / Edge / Middleware：识别后失败并返回明确错误。
 
 项目部署不直接消费任意框架构建产物，而是统一消费 Grass Output API。构建阶段负责把用户项目输出转换成 `.grass/output`，部署和 serve 阶段只读取 `.grass/output/output.toml`。
 
@@ -1992,23 +1993,26 @@ generated_by = "grass-node"
 generated_at = "2026-01-01T00:00:00Z"
 ```
 
-未来 SSR manifest 预留：
+SSR manifest：
 
-```output-ssr-future.toml
+```output-ssr.toml
 version = 1
 
 [runtime]
 kind = "ssr"
 
 [server]
-entry = "server/index.js"
-start_command = "node server/index.js"
+entry = "server/server.js"
+start_command = "node server/server.js"
 port_env = "PORT"
-
-[static]
-directory = "static"
-public_path = "/"
+host_env = "HOSTNAME"
 ```
+
+SSR 输出把整个服务端产物放进 `.grass/output/server/`（Next.js 为 standalone
+树加静态资源覆盖；Astro / Nuxt 为整个 `dist` / `.output`），serve 阶段在
+服务容器内以 output root 为工作目录执行 `start_command`，通过
+`port_env` / `host_env` 及通用变量（PORT/HOST/HOSTNAME/NITRO_*）注入监听
+地址，并将请求反向代理到容器。
 
 ### 15.3 Runtime Detection Result
 
@@ -2027,7 +2031,7 @@ Output API 内部支持以下 runtime kind：
 | runtime kind | 第一阶段行为 |
 | --- | --- |
 | `static` | 正常部署 |
-| `ssr` | deployment failed: `SSR runtime is not implemented yet` |
+| `ssr` | 正常部署（Next.js standalone / Astro node adapter / Nuxt Nitro） |
 | `hybrid` | deployment failed: `Hybrid runtime is not implemented yet` |
 | `serverless` | deployment failed: `Serverless runtime is not implemented yet` |
 | `edge` | deployment failed: `Edge runtime is not implemented yet` |
@@ -2185,7 +2189,7 @@ pub trait ContainerRuntime {
 - build log 从容器 stdout / stderr 收集；
 - `.grass/output` 从容器产物目录读取；
 - static serve 可以由 Node 进程读取已解包 artifact；
-- 未来 SSR serve 必须通过 `run_service` 启动隔离服务，不直接在宿主机启动用户进程。
+- SSR serve 通过 `run_service` 启动隔离服务容器（按需启动、闲置回收、跨 Node 重启收养），不直接在宿主机启动用户进程。
 
 ### 16.3 配置示例
 
@@ -2371,8 +2375,7 @@ just build
 - Output API manifest 使用 TOML，文件名为 `.grass/output/output.toml`；
 - 构建和部署必须通过 `ContainerRuntime` 抽象，不直接裸跑用户命令；
 - 第一阶段至少支持 `podman-socket` 和 `docker-socket` backend，并预留 Apple Container 和 Jail backend；
-- SSR runtime kind 必须从第一阶段保留字段和接口；
-- 第一阶段 SSR deployment 应明确失败并提示尚未实现；
+- SSR deployment 已支持 Next.js / Astro / Nuxt；其余 SSR 框架与 hybrid / serverless / edge 仍需明确失败并提示尚未实现；
 - DNS Provider secret 不得提交仓库；
 - Web Console 必须使用 Vite+，不要按普通 Vite 项目编写工具链文档；
 - UI 初始风格使用 shadcn/ui 官方 blocks 和官方默认风格。

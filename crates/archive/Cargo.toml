@@ -6,5 +6,12 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-[lib]
-path = "src/lib.rs"
+[dependencies]
+anyhow.workspace = true
+hex.workspace = true
+sha2.workspace = true
+walkdir.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+uuid.workspace = true

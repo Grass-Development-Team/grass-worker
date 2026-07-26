@@ -9,6 +9,7 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
     pub actor_user_id: Option<Uuid>,
+    pub team_id: Option<Uuid>,
     pub action: String,
     pub target_type: String,
     pub target_id: Option<Uuid>,

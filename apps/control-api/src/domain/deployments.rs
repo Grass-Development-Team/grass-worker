@@ -1,0 +1,741 @@
+//! Database-backed deployment business functions.
+//!
+//! Deployments carry two independent lifecycles: the build status driven by
+//! Nodes, and the release status driven by people and review policy. Every
+//! transition is validated against the state machine, appended to
+//! `deployment_events`, and activation switches are transactional so one
+//! project environment never has two active deployments.
+
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter,
+    QueryOrder, QuerySelect,
+};
+use time::OffsetDateTime;
+use uuid::Uuid;
+
+use crate::infra::database::entity::{
+    DeploymentBuildStatus, DeploymentEnvironment, DeploymentEventKind, DeploymentReleaseStatus,
+    DeploymentReviewStatus, ProjectRuntime, ReleaseReason, deployment, deployment_artifact,
+    deployment_event, deployment_review, project, release,
+};
+
+// --- State machine ----------------------------------------------------------
+
+/// Valid build status transitions:
+///
+/// ```text
+/// pending → claimed → queued → building → ready
+///        ↘ canceled          ↘ failed / canceled
+/// ```
+pub fn can_transition_build(from: &DeploymentBuildStatus, to: &DeploymentBuildStatus) -> bool {
+    use DeploymentBuildStatus as B;
+    matches!(
+        (from, to),
+        (B::Pending, B::Claimed)
+            | (B::Pending, B::Canceled)
+            | (B::Pending, B::Failed)
+            | (B::Claimed, B::Queued)
+            | (B::Claimed, B::Building)
+            | (B::Claimed, B::Failed)
+            | (B::Claimed, B::Canceled)
+            | (B::Queued, B::Building)
+            | (B::Queued, B::Failed)
+            | (B::Queued, B::Canceled)
+            | (B::Building, B::Ready)
+            | (B::Building, B::Failed)
+            | (B::Building, B::Canceled)
+    )
+}
+
+/// Valid release status transitions. `active → approved` happens when a
+/// newer deployment takes over the environment.
+pub fn can_transition_release(
+    from: &DeploymentReleaseStatus,
+    to: &DeploymentReleaseStatus,
+) -> bool {
+    use DeploymentReleaseStatus as R;
+    matches!(
+        (from, to),
+        (R::Draft, R::PendingReview)
+            | (R::Draft, R::Active)
+            | (R::PendingReview, R::Approved)
+            | (R::PendingReview, R::Rejected)
+            | (R::Rejected, R::PendingReview)
+            | (R::Approved, R::Active)
+            | (R::Active, R::Approved)
+    )
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DeploymentStateError {
+    #[error("invalid build status transition from {from} to {to}")]
+    InvalidBuildTransition { from: String, to: String },
+    #[error("invalid release status transition from {from} to {to}")]
+    InvalidReleaseTransition { from: String, to: String },
+    #[error("only ready deployments can enter the release flow")]
+    BuildNotReady,
+    #[error(transparent)]
+    Database(#[from] sea_orm::DbErr),
+}
+
+pub fn build_status_value(status: &DeploymentBuildStatus) -> &'static str {
+    match status {
+        DeploymentBuildStatus::Pending => "pending",
+        DeploymentBuildStatus::Claimed => "claimed",
+        DeploymentBuildStatus::Queued => "queued",
+        DeploymentBuildStatus::Building => "building",
+        DeploymentBuildStatus::Ready => "ready",
+        DeploymentBuildStatus::Failed => "failed",
+        DeploymentBuildStatus::Canceled => "canceled",
+    }
+}
+
+pub fn release_status_value(status: &DeploymentReleaseStatus) -> &'static str {
+    match status {
+        DeploymentReleaseStatus::Draft => "draft",
+        DeploymentReleaseStatus::PendingReview => "pending_review",
+        DeploymentReleaseStatus::Approved => "approved",
+        DeploymentReleaseStatus::Rejected => "rejected",
+        DeploymentReleaseStatus::Active => "active",
+    }
+}
+
+pub fn environment_value(environment: &DeploymentEnvironment) -> &'static str {
+    match environment {
+        DeploymentEnvironment::Production => "production",
+        DeploymentEnvironment::Preview => "preview",
+    }
+}
+
+// --- Creation ---------------------------------------------------------------
+
+pub struct CreateDeploymentParams {
+    pub project: project::Model,
+    pub environment: DeploymentEnvironment,
+    pub triggered_by_user_id: Option<Uuid>,
+    pub branch: Option<String>,
+    pub commit_hash: Option<String>,
+    pub commit_message: Option<String>,
+    pub preview_host: Option<String>,
+}
+
+/// Creates a deployment snapshotting the project's source and build
+/// configuration so later project edits do not change queued builds.
+pub async fn create_deployment<C: ConnectionTrait>(
+    db: &C,
+    params: CreateDeploymentParams,
+) -> anyhow::Result<deployment::Model> {
+    let now = OffsetDateTime::now_utc();
+    let project = params.project;
+
+    let deployment = deployment::ActiveModel {
+        id: Set(Uuid::now_v7()),
+        project_id: Set(project.id),
+        team_id: Set(project.team_id),
+        node_id: Set(None),
+        environment: Set(params.environment),
+        runtime_kind: Set(project.runtime.clone()),
+        build_status: Set(DeploymentBuildStatus::Pending),
+        release_status: Set(DeploymentReleaseStatus::Draft),
+        source_repository_url: Set(project.repository_url.clone()),
+        source_branch: Set(params
+            .branch
+            .or_else(|| project.default_branch.clone())
+            .or_else(|| Some("main".to_owned()))),
+        commit_hash: Set(params.commit_hash),
+        commit_message: Set(params.commit_message),
+        triggered_by_user_id: Set(params.triggered_by_user_id),
+        install_command: Set(project.install_command.clone()),
+        build_command: Set(project.build_command.clone()),
+        output_directory: Set(project.output_directory.clone()),
+        source_metadata: Set(project.source_config.clone()),
+        preview_host: Set(params.preview_host),
+        build_stage: Set(None),
+        failure_code: Set(None),
+        failure_message: Set(None),
+        claimed_at: Set(None),
+        build_started_at: Set(None),
+        build_finished_at: Set(None),
+        deleted_at: Set(None),
+        created_at: Set(now),
+        updated_at: Set(now),
+    }
+    .insert(db)
+    .await?;
+
+    append_event(
+        db,
+        deployment.id,
+        DeploymentEventKind::System,
+        "deployment created",
+        serde_json::json!({
+            "environment": environment_value(&deployment.environment),
+        }),
+    )
+    .await?;
+
+    Ok(deployment)
+}
+
+// --- Events -----------------------------------------------------------------
+
+pub async fn append_event<C: ConnectionTrait>(
+    db: &C,
+    deployment_id: Uuid,
+    kind: DeploymentEventKind,
+    message: &str,
+    metadata: serde_json::Value,
+) -> anyhow::Result<deployment_event::Model> {
+    deployment_event::ActiveModel {
+        id: Set(Uuid::now_v7()),
+        deployment_id: Set(deployment_id),
+        kind: Set(kind),
+        message: Set(message.to_owned()),
+        metadata: Set(metadata),
+        created_at: Set(OffsetDateTime::now_utc()),
+    }
+    .insert(db)
+    .await
+    .map_err(Into::into)
+}
+
+pub async fn list_events<C: ConnectionTrait>(
+    db: &C,
+    deployment_id: Uuid,
+) -> anyhow::Result<Vec<deployment_event::Model>> {
+    deployment_event::Entity::find()
+        .filter(deployment_event::Column::DeploymentId.eq(deployment_id))
+        .order_by_asc(deployment_event::Column::CreatedAt)
+        .all(db)
+        .await
+        .map_err(Into::into)
+}
+
+// --- Queries ----------------------------------------------------------------
+
+pub async fn get_by_id<C: ConnectionTrait>(
+    db: &C,
+    deployment_id: Uuid,
+) -> anyhow::Result<Option<deployment::Model>> {
+    deployment::Entity::find()
+        .filter(deployment::Column::Id.eq(deployment_id))
+        .filter(deployment::Column::DeletedAt.is_null())
+        .one(db)
+        .await
+        .map_err(Into::into)
+}
+
+pub struct DeploymentListFilter {
+    pub environment: Option<DeploymentEnvironment>,
+    pub build_status: Option<DeploymentBuildStatus>,
+    pub limit: u64,
+    pub offset: u64,
+}
+
+pub async fn list_for_project<C: ConnectionTrait>(
+    db: &C,
+    project_id: Uuid,
+    filter: DeploymentListFilter,
+) -> anyhow::Result<Vec<deployment::Model>> {
+    let mut query = deployment::Entity::find()
+        .filter(deployment::Column::ProjectId.eq(project_id))
+        .filter(deployment::Column::DeletedAt.is_null());
+    if let Some(environment) = filter.environment {
+        query = query.filter(deployment::Column::Environment.eq(environment));
+    }
+    if let Some(status) = filter.build_status {
+        query = query.filter(deployment::Column::BuildStatus.eq(status));
+    }
+    query
+        .order_by_desc(deployment::Column::CreatedAt)
+        .limit(filter.limit.clamp(1, 100))
+        .offset(filter.offset)
+        .all(db)
+        .await
+        .map_err(Into::into)
+}
+
+#[allow(dead_code)] // Wired by the serve resolve API in Milestone 6.
+pub async fn find_active<C: ConnectionTrait>(
+    db: &C,
+    project_id: Uuid,
+    environment: DeploymentEnvironment,
+) -> anyhow::Result<Option<deployment::Model>> {
+    deployment::Entity::find()
+        .filter(deployment::Column::ProjectId.eq(project_id))
+        .filter(deployment::Column::Environment.eq(environment))
+        .filter(deployment::Column::ReleaseStatus.eq(DeploymentReleaseStatus::Active))
+        .filter(deployment::Column::DeletedAt.is_null())
+        .one(db)
+        .await
+        .map_err(Into::into)
+}
+
+#[allow(dead_code)] // Wired by the serve resolve API in Milestone 6.
+pub async fn find_by_preview_host<C: ConnectionTrait>(
+    db: &C,
+    host: &str,
+) -> anyhow::Result<Option<deployment::Model>> {
+    deployment::Entity::find()
+        .filter(deployment::Column::PreviewHost.eq(host))
+        .filter(deployment::Column::DeletedAt.is_null())
+        .one(db)
+        .await
+        .map_err(Into::into)
+}
+
+pub async fn list_artifacts<C: ConnectionTrait>(
+    db: &C,
+    deployment_id: Uuid,
+) -> anyhow::Result<Vec<deployment_artifact::Model>> {
+    deployment_artifact::Entity::find()
+        .filter(deployment_artifact::Column::DeploymentId.eq(deployment_id))
+        .order_by_asc(deployment_artifact::Column::CreatedAt)
+        .all(db)
+        .await
+        .map_err(Into::into)
+}
+
+// --- Build status transitions ----------------------------------------------
+
+pub struct BuildTransition {
+    pub to: DeploymentBuildStatus,
+    pub stage: Option<String>,
+    pub failure_code: Option<String>,
+    pub failure_message: Option<String>,
+    pub node_id: Option<Uuid>,
+}
+
+/// Applies a validated build status transition, maintaining lifecycle
+/// timestamps and appending a build event.
+pub async fn transition_build<C: ConnectionTrait>(
+    db: &C,
+    deployment: deployment::Model,
+    transition: BuildTransition,
+) -> Result<deployment::Model, DeploymentStateError> {
+    if !can_transition_build(&deployment.build_status, &transition.to) {
+        return Err(DeploymentStateError::InvalidBuildTransition {
+            from: build_status_value(&deployment.build_status).to_owned(),
+            to: build_status_value(&transition.to).to_owned(),
+        });
+    }
+
+    let now = OffsetDateTime::now_utc();
+    let deployment_id = deployment.id;
+    let to_value = build_status_value(&transition.to);
+    let mut active: deployment::ActiveModel = deployment.into();
+    active.build_status = Set(transition.to.clone());
+    if let Some(stage) = &transition.stage {
+        active.build_stage = Set(Some(stage.clone()));
+    }
+    match transition.to {
+        DeploymentBuildStatus::Claimed => {
+            active.claimed_at = Set(Some(now));
+            if let Some(node_id) = transition.node_id {
+                active.node_id = Set(Some(node_id));
+            }
+        }
+        DeploymentBuildStatus::Building => {
+            active.build_started_at = Set(Some(now));
+        }
+        DeploymentBuildStatus::Ready
+        | DeploymentBuildStatus::Failed
+        | DeploymentBuildStatus::Canceled => {
+            active.build_finished_at = Set(Some(now));
+            active.failure_code = Set(transition.failure_code.clone());
+            active.failure_message = Set(transition.failure_message.clone());
+        }
+        _ => {}
+    }
+
+    let updated = active.update(db).await?;
+    append_event(
+        db,
+        deployment_id,
+        DeploymentEventKind::Build,
+        &format!("build status changed to {to_value}"),
+        serde_json::json!({
+            "status": to_value,
+            "stage": transition.stage,
+            "failure_code": transition.failure_code,
+            "failure_message": transition.failure_message,
+        }),
+    )
+    .await
+    .map_err(|error| DeploymentStateError::Database(sea_orm::DbErr::Custom(error.to_string())))?;
+
+    Ok(updated)
+}
+
+/// Updates only the build stage without changing status; used for progress
+/// reporting between status transitions.
+#[allow(dead_code)] // Wired by the Node stage API in Milestone 6.
+pub async fn update_stage<C: ConnectionTrait>(
+    db: &C,
+    deployment: deployment::Model,
+    stage: &str,
+) -> anyhow::Result<deployment::Model> {
+    let deployment_id = deployment.id;
+    let mut active: deployment::ActiveModel = deployment.into();
+    active.build_stage = Set(Some(stage.to_owned()));
+    let updated = active.update(db).await?;
+    append_event(
+        db,
+        deployment_id,
+        DeploymentEventKind::Build,
+        &format!("stage changed to {stage}"),
+        serde_json::json!({ "stage": stage }),
+    )
+    .await?;
+    Ok(updated)
+}
+
+// --- Release transitions ----------------------------------------------------
+
+pub async fn transition_release<C: ConnectionTrait>(
+    db: &C,
+    deployment: deployment::Model,
+    to: DeploymentReleaseStatus,
+    metadata: serde_json::Value,
+) -> Result<deployment::Model, DeploymentStateError> {
+    if !can_transition_release(&deployment.release_status, &to) {
+        return Err(DeploymentStateError::InvalidReleaseTransition {
+            from: release_status_value(&deployment.release_status).to_owned(),
+            to: release_status_value(&to).to_owned(),
+        });
+    }
+    if !matches!(deployment.build_status, DeploymentBuildStatus::Ready)
+        && !matches!(to, DeploymentReleaseStatus::Approved)
+    {
+        // Only ready builds may move through the release flow. The exception
+        // is demotion of a previously active deployment, which stays ready
+        // by definition.
+        return Err(DeploymentStateError::BuildNotReady);
+    }
+
+    let deployment_id = deployment.id;
+    let to_value = release_status_value(&to);
+    let mut active: deployment::ActiveModel = deployment.into();
+    active.release_status = Set(to.clone());
+    let updated = active.update(db).await?;
+
+    append_event(
+        db,
+        deployment_id,
+        DeploymentEventKind::Release,
+        &format!("release status changed to {to_value}"),
+        metadata,
+    )
+    .await
+    .map_err(|error| DeploymentStateError::Database(sea_orm::DbErr::Custom(error.to_string())))?;
+
+    Ok(updated)
+}
+
+/// Makes a deployment the single active deployment of its project
+/// environment: demotes the current active one, promotes the target, and
+/// records the release timeline entry. Must run inside a transaction.
+pub async fn activate<C: ConnectionTrait>(
+    db: &C,
+    target: deployment::Model,
+    reason: ReleaseReason,
+    actor_user_id: Option<Uuid>,
+) -> Result<deployment::Model, DeploymentStateError> {
+    if !matches!(target.build_status, DeploymentBuildStatus::Ready) {
+        return Err(DeploymentStateError::BuildNotReady);
+    }
+
+    let previous = deployment::Entity::find()
+        .filter(deployment::Column::ProjectId.eq(target.project_id))
+        .filter(deployment::Column::Environment.eq(target.environment.clone()))
+        .filter(deployment::Column::ReleaseStatus.eq(DeploymentReleaseStatus::Active))
+        .filter(deployment::Column::Id.ne(target.id))
+        .filter(deployment::Column::DeletedAt.is_null())
+        .one(db)
+        .await?;
+
+    let previous_id = match previous {
+        Some(previous) => {
+            let demoted = transition_release(
+                db,
+                previous,
+                DeploymentReleaseStatus::Approved,
+                serde_json::json!({ "demoted_by": target.id }),
+            )
+            .await?;
+            Some(demoted.id)
+        }
+        None => None,
+    };
+
+    let project_id = target.project_id;
+    let environment = target.environment.clone();
+    let activated = transition_release(
+        db,
+        target,
+        DeploymentReleaseStatus::Active,
+        serde_json::json!({
+            "reason": release_reason_value(&reason),
+            "previous_deployment_id": previous_id,
+        }),
+    )
+    .await?;
+
+    release::ActiveModel {
+        id: Set(Uuid::now_v7()),
+        project_id: Set(project_id),
+        deployment_id: Set(activated.id),
+        environment: Set(environment),
+        reason: Set(reason),
+        actor_user_id: Set(actor_user_id),
+        previous_deployment_id: Set(previous_id),
+        created_at: Set(OffsetDateTime::now_utc()),
+    }
+    .insert(db)
+    .await?;
+
+    Ok(activated)
+}
+
+pub fn release_reason_value(reason: &ReleaseReason) -> &'static str {
+    match reason {
+        ReleaseReason::Auto => "auto",
+        ReleaseReason::Promote => "promote",
+        ReleaseReason::Rollback => "rollback",
+    }
+}
+
+#[allow(dead_code)] // Wired by the deployment timeline in Milestone 11.
+pub async fn list_releases_for_project<C: ConnectionTrait>(
+    db: &C,
+    project_id: Uuid,
+) -> anyhow::Result<Vec<release::Model>> {
+    release::Entity::find()
+        .filter(release::Column::ProjectId.eq(project_id))
+        .order_by_desc(release::Column::CreatedAt)
+        .all(db)
+        .await
+        .map_err(Into::into)
+}
+
+/// Whether this deployment was ever active, which is what makes it a valid
+/// rollback target.
+pub async fn was_active<C: ConnectionTrait>(db: &C, deployment_id: Uuid) -> anyhow::Result<bool> {
+    release::Entity::find()
+        .filter(release::Column::DeploymentId.eq(deployment_id))
+        .one(db)
+        .await
+        .map(|entry| entry.is_some())
+        .map_err(Into::into)
+}
+
+// --- Reviews ----------------------------------------------------------------
+
+pub async fn create_review<C: ConnectionTrait>(
+    db: &C,
+    deployment_id: Uuid,
+) -> anyhow::Result<deployment_review::Model> {
+    let now = OffsetDateTime::now_utc();
+    deployment_review::ActiveModel {
+        id: Set(Uuid::now_v7()),
+        deployment_id: Set(deployment_id),
+        reviewer_user_id: Set(None),
+        status: Set(DeploymentReviewStatus::Pending),
+        reason: Set(None),
+        requested_at: Set(now),
+        reviewed_at: Set(None),
+        created_at: Set(now),
+    }
+    .insert(db)
+    .await
+    .map_err(Into::into)
+}
+
+pub async fn latest_pending_review<C: ConnectionTrait>(
+    db: &C,
+    deployment_id: Uuid,
+) -> anyhow::Result<Option<deployment_review::Model>> {
+    deployment_review::Entity::find()
+        .filter(deployment_review::Column::DeploymentId.eq(deployment_id))
+        .filter(deployment_review::Column::Status.eq(DeploymentReviewStatus::Pending))
+        .order_by_desc(deployment_review::Column::RequestedAt)
+        .one(db)
+        .await
+        .map_err(Into::into)
+}
+
+pub async fn resolve_review<C: ConnectionTrait>(
+    db: &C,
+    review: deployment_review::Model,
+    reviewer_user_id: Uuid,
+    approved: bool,
+    reason: Option<String>,
+) -> anyhow::Result<deployment_review::Model> {
+    let mut active: deployment_review::ActiveModel = review.into();
+    active.reviewer_user_id = Set(Some(reviewer_user_id));
+    active.status = Set(if approved {
+        DeploymentReviewStatus::Approved
+    } else {
+        DeploymentReviewStatus::Rejected
+    });
+    active.reason = Set(reason);
+    active.reviewed_at = Set(Some(OffsetDateTime::now_utc()));
+    active.update(db).await.map_err(Into::into)
+}
+
+pub async fn list_reviews<C: ConnectionTrait>(
+    db: &C,
+    deployment_id: Uuid,
+) -> anyhow::Result<Vec<deployment_review::Model>> {
+    deployment_review::Entity::find()
+        .filter(deployment_review::Column::DeploymentId.eq(deployment_id))
+        .order_by_desc(deployment_review::Column::RequestedAt)
+        .all(db)
+        .await
+        .map_err(Into::into)
+}
+
+// --- Review policy ----------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewMode {
+    /// Activation requires an approved review.
+    Manual,
+    /// Activation happens without review.
+    Auto,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ReviewPolicy {
+    pub production: ReviewMode,
+    pub preview: ReviewMode,
+}
+
+impl ReviewPolicy {
+    pub fn mode_for(&self, environment: &DeploymentEnvironment) -> ReviewMode {
+        match environment {
+            DeploymentEnvironment::Production => self.production,
+            DeploymentEnvironment::Preview => self.preview,
+        }
+    }
+}
+
+impl Default for ReviewPolicy {
+    fn default() -> Self {
+        Self {
+            production: ReviewMode::Manual,
+            preview: ReviewMode::Auto,
+        }
+    }
+}
+
+fn parse_mode(value: Option<&serde_json::Value>, default: ReviewMode) -> ReviewMode {
+    match value.and_then(|value| value.as_str()) {
+        Some("auto") => ReviewMode::Auto,
+        Some("manual") => ReviewMode::Manual,
+        _ => default,
+    }
+}
+
+/// Reads the system release review policy seeded as
+/// `release_review_policy.default`.
+pub async fn review_policy<C: ConnectionTrait>(db: &C) -> anyhow::Result<ReviewPolicy> {
+    let setting = crate::domain::settings::get_setting(db, "release_review_policy.default").await?;
+    let defaults = ReviewPolicy::default();
+    Ok(match setting {
+        Some(setting) => ReviewPolicy {
+            production: parse_mode(setting.value.get("production"), defaults.production),
+            preview: parse_mode(setting.value.get("preview"), defaults.preview),
+        },
+        None => defaults,
+    })
+}
+
+/// Whether a runtime kind is deployable. Returns the stable failure message
+/// for the kinds that are still unimplemented (hybrid/serverless/edge).
+pub fn runtime_failure(runtime: &ProjectRuntime) -> Option<(&'static str, &'static str)> {
+    match runtime {
+        ProjectRuntime::Static | ProjectRuntime::Ssr => None,
+        ProjectRuntime::Hybrid => Some((
+            "runtime_not_implemented",
+            "Hybrid runtime is not implemented yet",
+        )),
+        ProjectRuntime::Serverless => Some((
+            "runtime_not_implemented",
+            "Serverless runtime is not implemented yet",
+        )),
+        ProjectRuntime::Edge => Some((
+            "runtime_not_implemented",
+            "Edge runtime is not implemented yet",
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_transitions_follow_the_state_machine() {
+        use DeploymentBuildStatus as B;
+        assert!(can_transition_build(&B::Pending, &B::Claimed));
+        assert!(can_transition_build(&B::Claimed, &B::Queued));
+        assert!(can_transition_build(&B::Claimed, &B::Building));
+        assert!(can_transition_build(&B::Queued, &B::Building));
+        assert!(can_transition_build(&B::Building, &B::Ready));
+        assert!(can_transition_build(&B::Building, &B::Failed));
+        assert!(can_transition_build(&B::Building, &B::Canceled));
+        assert!(can_transition_build(&B::Pending, &B::Canceled));
+
+        assert!(!can_transition_build(&B::Ready, &B::Building));
+        assert!(!can_transition_build(&B::Failed, &B::Ready));
+        assert!(!can_transition_build(&B::Canceled, &B::Building));
+        assert!(!can_transition_build(&B::Pending, &B::Building));
+        assert!(!can_transition_build(&B::Ready, &B::Canceled));
+    }
+
+    #[test]
+    fn release_transitions_follow_the_state_machine() {
+        use DeploymentReleaseStatus as R;
+        assert!(can_transition_release(&R::Draft, &R::PendingReview));
+        assert!(can_transition_release(&R::Draft, &R::Active));
+        assert!(can_transition_release(&R::PendingReview, &R::Approved));
+        assert!(can_transition_release(&R::PendingReview, &R::Rejected));
+        assert!(can_transition_release(&R::Rejected, &R::PendingReview));
+        assert!(can_transition_release(&R::Approved, &R::Active));
+        assert!(can_transition_release(&R::Active, &R::Approved));
+
+        assert!(!can_transition_release(&R::Rejected, &R::Active));
+        assert!(!can_transition_release(&R::Draft, &R::Approved));
+        assert!(!can_transition_release(&R::Active, &R::Draft));
+        assert!(!can_transition_release(&R::Approved, &R::Rejected));
+    }
+
+    #[test]
+    fn static_and_ssr_runtimes_are_deployable() {
+        assert!(runtime_failure(&ProjectRuntime::Static).is_none());
+        assert!(runtime_failure(&ProjectRuntime::Ssr).is_none());
+        for runtime in [
+            ProjectRuntime::Hybrid,
+            ProjectRuntime::Serverless,
+            ProjectRuntime::Edge,
+        ] {
+            let (code, message) = runtime_failure(&runtime).expect("must fail");
+            assert_eq!(code, "runtime_not_implemented");
+            assert!(message.contains("not implemented"));
+        }
+    }
+
+    #[test]
+    fn review_policy_defaults_to_manual_production_auto_preview() {
+        let policy = ReviewPolicy::default();
+        assert_eq!(
+            policy.mode_for(&DeploymentEnvironment::Production),
+            ReviewMode::Manual
+        );
+        assert_eq!(
+            policy.mode_for(&DeploymentEnvironment::Preview),
+            ReviewMode::Auto
+        );
+    }
+}

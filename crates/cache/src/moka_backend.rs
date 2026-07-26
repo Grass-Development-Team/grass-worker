@@ -67,6 +67,37 @@ impl MokaCache {
     pub fn connect() -> Self {
         Self::new(10_000)
     }
+
+    /// Reads a numeric counter and its stored expiry timestamp, treating
+    /// missing or non-numeric values as zero. Callers must hold
+    /// `atomic_mutex`.
+    async fn read_counter_entry(&self, key: &str) -> (i64, Option<i64>) {
+        match self.inner.get(key).await {
+            Some(raw) => match extract_value(&raw) {
+                Some((expiry, value)) => (value.parse::<i64>().unwrap_or(0), Some(expiry)),
+                None => (raw.parse::<i64>().unwrap_or(0), None),
+            },
+            None => (0, None),
+        }
+    }
+
+    async fn read_counter(&self, key: &str) -> i64 {
+        self.read_counter_entry(key).await.0
+    }
+
+    /// Writes a numeric counter with an optional absolute expiry timestamp.
+    /// Callers must hold `atomic_mutex`.
+    async fn write_counter(&self, key: &str, value: i64, expiry: Option<i64>) {
+        let stored = match expiry {
+            Some(expiry) => format!("{expiry}:{value}"),
+            None => value.to_string(),
+        };
+        self.inner.insert(key.to_owned(), stored).await;
+    }
+}
+
+fn expiry_from_ttl(ttl: Duration) -> i64 {
+    time::OffsetDateTime::now_utc().unix_timestamp() + ttl.as_secs() as i64
 }
 
 fn extract_value(raw: &str) -> Option<(i64, &str)> {
@@ -148,6 +179,70 @@ impl super::Cache for MokaCache {
         let next = current - 1;
         self.inner.insert(key.to_owned(), next.to_string()).await;
         Ok(next)
+    }
+
+    async fn set_if_absent(&self, key: &str, value: &str, ttl: Duration) -> anyhow::Result<bool> {
+        let _guard = self.atomic_mutex.lock().await;
+        if self.inner.get(key).await.is_some() {
+            return Ok(false);
+        }
+
+        let expiry = time::OffsetDateTime::now_utc().unix_timestamp() + ttl.as_secs() as i64;
+        self.inner
+            .insert(key.to_owned(), format!("{expiry}:{value}"))
+            .await;
+        Ok(true)
+    }
+
+    async fn check_and_consume(
+        &self,
+        checks: &[super::QuotaCounterCheck],
+    ) -> anyhow::Result<super::QuotaCheckOutcome> {
+        let _guard = self.atomic_mutex.lock().await;
+
+        for check in checks {
+            let current = self.read_counter(&check.key).await;
+            if check.max >= 0 && current + check.amount > check.max {
+                return Ok(super::QuotaCheckOutcome::Denied {
+                    key: check.key.clone(),
+                });
+            }
+        }
+
+        for check in checks {
+            let (current, existing_expiry) = self.read_counter_entry(&check.key).await;
+            let expiry = check.ttl.map(expiry_from_ttl).or(existing_expiry);
+            self.write_counter(&check.key, current + check.amount, expiry)
+                .await;
+        }
+
+        Ok(super::QuotaCheckOutcome::Allowed)
+    }
+
+    async fn adjust_counter(&self, key: &str, amount: i64) -> anyhow::Result<i64> {
+        let _guard = self.atomic_mutex.lock().await;
+        let (current, expiry) = self.read_counter_entry(key).await;
+        let next = (current + amount).max(0);
+        self.write_counter(key, next, expiry).await;
+        Ok(next)
+    }
+
+    async fn acquire_slot(&self, key: &str, max: i64, ttl: Duration) -> anyhow::Result<bool> {
+        let _guard = self.atomic_mutex.lock().await;
+        let current = self.read_counter(key).await;
+        if max >= 0 && current + 1 > max {
+            return Ok(false);
+        }
+        self.write_counter(key, current + 1, Some(expiry_from_ttl(ttl)))
+            .await;
+        Ok(true)
+    }
+
+    async fn release_slot(&self, key: &str) -> anyhow::Result<()> {
+        let _guard = self.atomic_mutex.lock().await;
+        let (current, expiry) = self.read_counter_entry(key).await;
+        self.write_counter(key, (current - 1).max(0), expiry).await;
+        Ok(())
     }
 
     async fn consume_rate_limit(
@@ -234,5 +329,103 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    fn check(key: &str, amount: i64, max: i64) -> crate::QuotaCounterCheck {
+        crate::QuotaCounterCheck {
+            key: key.to_owned(),
+            amount,
+            max,
+            ttl: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn quota_check_consumes_all_dimensions_when_allowed() {
+        let cache = MokaCache::connect();
+        let outcome = cache
+            .check_and_consume(&[check("quota:a", 1, 3), check("quota:b", 2, 5)])
+            .await
+            .unwrap();
+
+        assert_eq!(outcome, crate::QuotaCheckOutcome::Allowed);
+        assert_eq!(cache.get("quota:a").await.unwrap().as_deref(), Some("1"));
+        assert_eq!(cache.get("quota:b").await.unwrap().as_deref(), Some("2"));
+    }
+
+    #[tokio::test]
+    async fn quota_check_denies_and_rolls_back_when_any_dimension_exceeds() {
+        let cache = MokaCache::connect();
+        cache
+            .check_and_consume(&[check("quota:a", 1, 3)])
+            .await
+            .unwrap();
+
+        let outcome = cache
+            .check_and_consume(&[check("quota:a", 1, 3), check("quota:b", 1, 0)])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outcome,
+            crate::QuotaCheckOutcome::Denied {
+                key: "quota:b".to_owned()
+            }
+        );
+        assert_eq!(cache.get("quota:a").await.unwrap().as_deref(), Some("1"));
+        assert_eq!(cache.get("quota:b").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn negative_max_is_unlimited() {
+        let cache = MokaCache::connect();
+        for _ in 0..10 {
+            assert_eq!(
+                cache
+                    .check_and_consume(&[check("quota:unlimited", 1, -1)])
+                    .await
+                    .unwrap(),
+                crate::QuotaCheckOutcome::Allowed
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn adjust_counter_clamps_at_zero() {
+        let cache = MokaCache::connect();
+        assert_eq!(cache.adjust_counter("quota:adjust", -5).await.unwrap(), 0);
+        assert_eq!(cache.adjust_counter("quota:adjust", 3).await.unwrap(), 3);
+        assert_eq!(cache.adjust_counter("quota:adjust", -1).await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn slots_are_bounded_and_released() {
+        let cache = MokaCache::connect();
+        let ttl = Duration::from_secs(60);
+
+        assert!(cache.acquire_slot("slots:test", 2, ttl).await.unwrap());
+        assert!(cache.acquire_slot("slots:test", 2, ttl).await.unwrap());
+        assert!(!cache.acquire_slot("slots:test", 2, ttl).await.unwrap());
+
+        cache.release_slot("slots:test").await.unwrap();
+        assert!(cache.acquire_slot("slots:test", 2, ttl).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn set_if_absent_only_stores_once() {
+        let cache = MokaCache::connect();
+        assert!(
+            cache
+                .set_if_absent("seed:test", "7", Duration::from_secs(60))
+                .await
+                .unwrap()
+        );
+        assert!(
+            !cache
+                .set_if_absent("seed:test", "9", Duration::from_secs(60))
+                .await
+                .unwrap()
+        );
+        assert_eq!(cache.get("seed:test").await.unwrap().as_deref(), Some("7"));
     }
 }
