@@ -1,5 +1,6 @@
 import {
   ActivityIcon,
+  GaugeIcon,
   HomeIcon,
   LogOutIcon,
   SettingsIcon,
@@ -33,7 +34,10 @@ import { canViewTeamSettings } from "@/features/teams/team-permissions";
 import { TeamSwitcher } from "@/features/teams/team-switcher";
 import { useTeam } from "@/features/teams/team-context";
 
-const primaryNavigation = [{ title: "Overview", url: "/", icon: HomeIcon }];
+const primaryNavigation = [
+  { title: "Overview", url: "/", icon: HomeIcon },
+  { title: "Usage", url: "/quota", icon: GaugeIcon },
+];
 const administrationNavigation = {
   title: "Administration",
   url: "/admin",

@@ -13,6 +13,7 @@ import { TeamSettingsRoute } from "@/features/teams/team-settings-route";
 import { TeamMembersRoute } from "@/features/teams/team-members-route";
 import { AcceptInvitationRoute } from "@/features/teams/accept-invitation-route";
 import { AdminRoute } from "@/features/admin/admin-route";
+import { QuotaRoute } from "@/features/quota/quota-route";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
@@ -75,6 +76,7 @@ export function Router() {
       >
         <Route path="/" element={<DashboardRoute />} />
         <Route path="/dashboard" element={<Navigate to="/" replace />} />
+        <Route path="/quota" element={<QuotaRoute />} />
         <Route
           path="/admin"
           element={
