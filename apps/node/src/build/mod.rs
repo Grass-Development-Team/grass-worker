@@ -277,9 +277,9 @@ async fn run_pipeline(
 ) -> Result<(), BuildFailure> {
     let deployment_id = claimed.deployment_id;
 
-    // The Control API refuses non-static runtimes at creation; this guard
+    // The Control API refuses unimplemented runtimes at creation; this guard
     // keeps the Node safe against protocol drift.
-    if claimed.runtime_kind != "static" {
+    if claimed.runtime_kind != "static" && claimed.runtime_kind != "ssr" {
         return Err(BuildFailure::new(
             "runtime_not_implemented",
             format!("{} runtime is not implemented yet", claimed.runtime_kind),
@@ -386,6 +386,21 @@ if [ $rc -ne 0 ]; then echo \"build command failed with exit code $rc\"; exit 92
     collector.log(stage::BUILD, format!("$ {install_command}"));
     collector.log(stage::BUILD, format!("$ {build_command}"));
 
+    // Next.js without a static-export config builds a server bundle; ask it
+    // for the self-contained standalone output so SSR serving has a complete
+    // tree. The flag is ignored by every other framework.
+    let mut build_env = vec![("CI".to_owned(), "true".to_owned())];
+    let pre_detection = output::detect::detect(&checkout.project_root);
+    if pre_detection.framework == output::detect::Framework::Next
+        && pre_detection.static_signal != Some(true)
+    {
+        build_env.push(("NEXT_PRIVATE_STANDALONE".to_owned(), "true".to_owned()));
+        collector.log(
+            stage::BUILD,
+            "next.js without static export detected; requesting standalone output",
+        );
+    }
+
     let (log_tx, mut log_rx) = mpsc::channel::<String>(256);
     let pump_collector = collector.clone();
     let pump = tokio::spawn(async move {
@@ -405,7 +420,18 @@ if [ $rc -ne 0 ]; then echo \"build command failed with exit code $rc\"; exit 92
     {
         export_paths.push(configured.trim_matches('/').to_owned());
     }
-    for candidate in ["dist", "build", "out", ".output", "public", "_site"] {
+    for candidate in [
+        "dist",
+        "build",
+        "out",
+        ".output",
+        "public",
+        "_site",
+        // SSR bundles: the Next standalone tree plus its static assets.
+        ".next/standalone",
+        ".next/static",
+        ".next/server",
+    ] {
         if !export_paths.iter().any(|existing| existing == candidate) {
             export_paths.push(candidate.to_owned());
         }
@@ -421,7 +447,7 @@ if [ $rc -ne 0 ]; then echo \"build command failed with exit code $rc\"; exit 92
                     &checkout.project_root,
                 ),
                 script,
-                env: vec![("CI".to_owned(), "true".to_owned())],
+                env: build_env,
                 cpu_limit: config.runtime.resources.cpu_limit,
                 memory_mb: config.runtime.resources.memory_mb,
                 network: config.runtime.network.clone(),
@@ -523,7 +549,7 @@ if [ $rc -ne 0 ]; then echo \"build command failed with exit code $rc\"; exit 92
         .upload_artifact(
             deployment_id,
             bytes,
-            "static",
+            generated.runtime_kind,
             "1",
             Some(&generated.framework_name),
             (!generated.framework_version.is_empty())
