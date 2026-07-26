@@ -35,6 +35,7 @@ mime_guess = "2"
 moka = { version = "0.12", features = ["future"] }
 rand = "0.8"
 redis = { version = "0.31.0", default-features = false, features = ["tokio-comp", "aio", "script"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 rust-embed = "8"
 sea-orm = { version = "2.0.0-rc.38", default-features = false, features = ["macros", "sqlx-postgres", "runtime-tokio-rustls", "with-json", "with-time", "with-uuid"] }
 sea-orm-migration = { version = "2.0.0-rc.38", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "with-json", "with-time", "with-uuid"] }
@@ -51,10 +52,12 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "jso
 url = "2.5.4"
 uuid = { version = "1.18.1", features = ["serde", "v7"] }
 
+grass-archive = { path = "crates/archive" }
 grass-assets = { path = "crates/assets" }
 grass-cache = { path = "crates/cache" }
 grass-config = { path = "crates/config" }
 grass-crypto = { path = "crates/crypto" }
+grass-node-protocol = { path = "crates/node-protocol" }
 grass-session = { path = "crates/session" }
 grass-token = { path = "crates/token" }
 grass-validator = { path = "crates/validator" }
