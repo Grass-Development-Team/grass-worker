@@ -11,6 +11,7 @@ mod config;
 mod lifecycle;
 mod output;
 mod runtime;
+mod serve;
 
 use crate::{cli::Cli, client::ControlApiClient, config::NodeConfig};
 
@@ -63,7 +64,12 @@ async fn main() -> anyhow::Result<()> {
         .spawn()
     });
 
+    let serve_state = Arc::new(serve::ServeState::new(client.clone(), &config));
+    let serve_task = serve::spawn(serve_state, &config);
+
     wait_for_shutdown().await;
+
+    serve_task.abort();
 
     if let Some(build_loop) = build_loop {
         build_loop.abort();
