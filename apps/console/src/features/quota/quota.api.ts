@@ -32,7 +32,7 @@ export const quotaApi = {
     ),
 };
 
-const DIMENSION_LABELS: Record<string, string> = {
+export const DIMENSION_LABELS: Record<string, string> = {
   projects: "Projects",
   "projects.static": "Static projects",
   "projects.ssr": "SSR projects",

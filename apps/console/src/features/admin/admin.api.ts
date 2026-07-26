@@ -119,7 +119,13 @@ export interface AdminTeamGroup {
   description: string | null;
   quota_plan_id: string | null;
   is_default: boolean;
+  team_count?: number;
   created_at: string;
+}
+
+export interface QuotaLimitInput {
+  dimension: string;
+  limit_value: number | null;
 }
 
 export interface AdminSettings {
@@ -231,6 +237,66 @@ export const adminApi = {
     request<{ team_id: string; group_id: string }>(`/api/v1/admin/teams/${teamId}/group`, {
       method: "POST",
       body: JSON.stringify({ group_id: groupId }),
+    }),
+
+  createQuotaPlan: (input: {
+    code: string;
+    name: string;
+    description?: string;
+    limits: QuotaLimitInput[];
+  }) =>
+    request<{ plan: { id: string; code: string; name: string } }>("/api/v1/admin/quota-plans", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  updateQuotaPlan: (
+    planId: string,
+    input: {
+      name?: string;
+      description?: string;
+      enabled?: boolean;
+      is_default?: boolean;
+      limits?: QuotaLimitInput[];
+    },
+  ) =>
+    request<{ plan: { id: string } }>(`/api/v1/admin/quota-plans/${planId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+
+  createTeamGroup: (input: {
+    code: string;
+    name: string;
+    description?: string;
+    quota_plan_id?: string;
+  }) =>
+    request<{ group: AdminTeamGroup }>("/api/v1/admin/team-groups", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  updateTeamGroup: (
+    groupId: string,
+    input: {
+      name?: string;
+      description?: string;
+      quota_plan_id?: string | null;
+      is_default?: boolean;
+    },
+  ) =>
+    request<{ group: AdminTeamGroup }>(`/api/v1/admin/team-groups/${groupId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+
+  deleteTeamGroup: (groupId: string) =>
+    request<{ deleted: true }>(`/api/v1/admin/team-groups/${groupId}`, { method: "DELETE" }),
+
+  setTeamQuotaPlan: (teamId: string, planId: string | null) =>
+    request<{ team: { id: string } }>(`/api/v1/admin/teams/${teamId}/quota-plan`, {
+      method: "POST",
+      body: JSON.stringify({ plan_id: planId }),
     }),
 
   getSettings: () => request<AdminSettings>("/api/v1/admin/settings"),
