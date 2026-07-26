@@ -29,27 +29,49 @@ export function LogViewer({ projectId, deploymentId, buildStatus, onDone }: LogV
   const [lines, setLines] = useState<BuildLogLine[]>([]);
   const [connected, setConnected] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
-  const lastSeqRef = useRef(0);
+  // Lines are keyed by seq so websocket frames and HTTP catch-up dedupe
+  // against each other and render in sequence order regardless of arrival
+  // order. `contiguousRef` is the highest seq with no gap before it; catch-up
+  // resumes from there so a gap between catch-up and the socket is backfilled.
+  const linesRef = useRef<Map<number, BuildLogLine>>(new Map());
+  const contiguousRef = useRef(0);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const runningRef = useRef(isBuildRunning(buildStatus));
   runningRef.current = isBuildRunning(buildStatus);
 
   const appendLines = useCallback((incoming: BuildLogLine[]) => {
-    const fresh = incoming.filter((line) => line.seq > lastSeqRef.current);
-    if (fresh.length === 0) return;
-    lastSeqRef.current = Math.max(lastSeqRef.current, ...fresh.map((line) => line.seq));
-    setLines((existing) => [...existing, ...fresh]);
+    const store = linesRef.current;
+    let added = false;
+    for (const line of incoming) {
+      if (!store.has(line.seq)) {
+        store.set(line.seq, line);
+        added = true;
+      }
+    }
+    if (!added) return;
+    while (store.has(contiguousRef.current + 1)) {
+      contiguousRef.current += 1;
+    }
+    setLines([...store.values()].sort((a, b) => a.seq - b.seq));
   }, []);
 
   const catchUp = useCallback(async () => {
     try {
-      const result = await deploymentsApi.buildLog(projectId, deploymentId, lastSeqRef.current);
+      const result = await deploymentsApi.buildLog(projectId, deploymentId, contiguousRef.current);
       appendLines(result.lines);
     } catch {
       // Catch-up failures are retried on the next reconnect.
     }
   }, [projectId, deploymentId, appendLines]);
+
+  // Reset accumulated state when switching deployments so lines never bleed
+  // across builds.
+  useEffect(() => {
+    linesRef.current = new Map();
+    contiguousRef.current = 0;
+    setLines([]);
+  }, [projectId, deploymentId]);
 
   useEffect(() => {
     let disposed = false;
