@@ -8,6 +8,7 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::infra::http::timestamps::ts;
 use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
@@ -39,7 +40,7 @@ fn team_view(
         })),
         "explicit_quota_plan_id": team.explicit_quota_plan_id,
         "member_count": member_count,
-        "created_at": team.created_at,
+        "created_at": ts(team.created_at),
     })
 }
 
@@ -151,7 +152,7 @@ pub async fn detail(
                 "email": user.email,
                 "display_name": user.display_name,
                 "role": crate::features::api::v1::teams::role_value(&member.role),
-                "joined_at": member.joined_at,
+                "joined_at": ts(member.joined_at),
             }))
             .collect::<Vec<_>>(),
         "quota_plan": {

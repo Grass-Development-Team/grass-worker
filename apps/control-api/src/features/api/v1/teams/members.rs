@@ -3,6 +3,7 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::infra::http::timestamps::ts;
 use crate::{
     domain::{
         quotas::QuotaDimension,
@@ -45,7 +46,7 @@ pub async fn list(
             "email": user.email,
             "display_name": user.display_name,
             "role": super::role_value(&member.role),
-            "joined_at": member.joined_at,
+            "joined_at": ts(member.joined_at),
         })).collect::<Vec<_>>()
     })))
 }

@@ -7,6 +7,7 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::infra::http::timestamps::ts;
 use crate::{
     domain::hosts::{self, CreateHostSourceParams, HostSourceError, UpdateHostSourceParams},
     infra::{
@@ -36,7 +37,7 @@ fn source_view(source: &host_source::Model) -> serde_json::Value {
             .as_object()
             .map(|map| map.keys().cloned().collect::<Vec<_>>())
             .unwrap_or_default(),
-        "created_at": source.created_at,
+        "created_at": ts(source.created_at),
     })
 }
 

@@ -7,6 +7,7 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::infra::http::timestamps::ts;
 use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
@@ -27,8 +28,8 @@ fn user_view(user: &user::Model) -> serde_json::Value {
         "display_name": user.display_name,
         "status": user.status.as_str(),
         "platform_role": user.platform_role.as_str(),
-        "last_login_at": user.last_login_at,
-        "created_at": user.created_at,
+        "last_login_at": ts(user.last_login_at),
+        "created_at": ts(user.created_at),
     })
 }
 

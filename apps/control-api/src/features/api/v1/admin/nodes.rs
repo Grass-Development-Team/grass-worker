@@ -8,6 +8,7 @@ use serde_json::json;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::infra::http::timestamps::ts;
 use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
@@ -38,8 +39,8 @@ fn node_view(node: &node::Model, now: OffsetDateTime) -> serde_json::Value {
         "base_url": node.base_url,
         "work_root": node.work_root,
         "version": node.metadata.get("version"),
-        "last_heartbeat_at": node.last_heartbeat_at,
-        "created_at": node.created_at,
+        "last_heartbeat_at": ts(node.last_heartbeat_at),
+        "created_at": ts(node.created_at),
     })
 }
 
@@ -121,7 +122,7 @@ pub async fn health(
         "node_id": node.id,
         "status": nodes::status_value(&node.status),
         "healthy": nodes::is_healthy(&node, now, HEARTBEAT_STALE_SECONDS),
-        "last_heartbeat_at": node.last_heartbeat_at,
+        "last_heartbeat_at": ts(node.last_heartbeat_at),
         "seconds_since_heartbeat": node
             .last_heartbeat_at
             .map(|at| (now - at).whole_seconds()),

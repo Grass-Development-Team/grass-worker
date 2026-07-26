@@ -25,6 +25,8 @@ export default defineConfig(({ mode }) => {
         "/api": {
           target: apiTarget,
           changeOrigin: true,
+          // The build log stream is a WebSocket under /api/v1/.../logs/ws.
+          ws: true,
         },
         "/health": {
           target: apiTarget,

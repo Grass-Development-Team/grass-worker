@@ -111,16 +111,28 @@ pub async fn claim(
         let team = team_for(db, candidate.team_id, OP).await?;
 
         // Concurrency slot first so we never claim more than the team may
-        // run; released on any failure below.
+        // run; released on every failure path below so a transient error
+        // cannot leave the team blocked until the slot TTL expires.
         if !quota.acquire_build_slot(OP, &team).await? {
             continue;
         }
+
+        let build_timeout_seconds = match quota
+            .scalar_limit(OP, &team, QuotaDimension::BuildTimeoutSeconds)
+            .await
+        {
+            Ok(limit) => limit,
+            Err(error) => {
+                quota.release_build_slot(team.id).await;
+                return Err(error);
+            }
+        };
 
         // Optimistic claim: only one node can flip pending → claimed.
         let claim_result = deployment::Entity::update_many()
             .col_expr(
                 deployment::Column::BuildStatus,
-                sea_orm::sea_query::Expr::value(DeploymentBuildStatus::Claimed),
+                sea_orm::ActiveEnum::as_enum(&DeploymentBuildStatus::Claimed),
             )
             .col_expr(
                 deployment::Column::NodeId,
@@ -133,18 +145,25 @@ pub async fn claim(
             .filter(deployment::Column::Id.eq(candidate.id))
             .filter(deployment::Column::BuildStatus.eq(DeploymentBuildStatus::Pending))
             .exec(db)
-            .await
-            .map_err(|source| AppError::Infrastructure {
-                op: OP,
-                source: source.into(),
-            })?;
+            .await;
+        let claim_result = match claim_result {
+            Ok(result) => result,
+            Err(source) => {
+                quota.release_build_slot(team.id).await;
+                return Err(AppError::Infrastructure {
+                    op: OP,
+                    source: source.into(),
+                });
+            }
+        };
 
         if claim_result.rows_affected == 0 {
             quota.release_build_slot(team.id).await;
             continue;
         }
 
-        deployments::append_event(
+        // The claim is committed; a missing timeline event must not fail it.
+        if let Err(error) = deployments::append_event(
             db,
             candidate.id,
             crate::infra::database::entity::DeploymentEventKind::Build,
@@ -152,11 +171,13 @@ pub async fn claim(
             json!({ "status": "claimed", "node_id": node.id }),
         )
         .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-
-        let build_timeout_seconds = quota
-            .scalar_limit(OP, &team, QuotaDimension::BuildTimeoutSeconds)
-            .await?;
+        {
+            tracing::warn!(
+                operation = OP,
+                %error,
+                "failed to append claim event"
+            );
+        }
 
         let root_directory = candidate
             .source_metadata

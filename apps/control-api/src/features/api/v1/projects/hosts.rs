@@ -8,6 +8,7 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::infra::http::timestamps::ts;
 use crate::{
     domain::hosts,
     infra::{
@@ -40,7 +41,7 @@ fn binding_view(binding: &project_host_binding::Model) -> serde_json::Value {
         "failure_reason": binding.failure_reason,
         "is_primary": binding.is_primary,
         "host_source_id": binding.host_source_id,
-        "created_at": binding.created_at,
+        "created_at": ts(binding.created_at),
     })
 }
 
@@ -98,7 +99,7 @@ pub async fn list(
                     },
                     "operation": event.operation,
                     "error_message": event.error_message,
-                    "created_at": event.created_at,
+                    "created_at": ts(event.created_at),
                 }))
                 .collect::<Vec<_>>()
         );

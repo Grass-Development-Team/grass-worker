@@ -6,6 +6,7 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::infra::http::timestamps::ts;
 use crate::{
     domain::audits::{self, AuditEventFilter},
     infra::{
@@ -42,7 +43,7 @@ pub(crate) fn event_view(event: &audit_event::Model) -> serde_json::Value {
         },
         "reason": event.reason,
         "metadata": event.metadata,
-        "created_at": event.created_at,
+        "created_at": ts(event.created_at),
     })
 }
 
