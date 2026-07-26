@@ -163,6 +163,11 @@ export function NodesPanel() {
           node unhealthy.
         </p>
         <CreateNodeDialog
+          defaultStartLocal={
+            (nodesQuery.data?.local_process?.managed ||
+              nodesQuery.data?.local_process?.auto_start) ??
+            false
+          }
           onCreated={(token, createdWarnings) => {
             setRevealedToken({ label: "New node token", token });
             setWarnings(createdWarnings);
@@ -171,7 +176,10 @@ export function NodesPanel() {
         />
       </div>
 
-      {nodesQuery.data?.local_process && <LocalProcessCard info={nodesQuery.data.local_process} />}
+      {nodesQuery.data?.local_process &&
+        (nodesQuery.data.local_process.managed || nodesQuery.data.local_process.auto_start) && (
+          <LocalProcessCard info={nodesQuery.data.local_process} />
+        )}
 
       {warnings.length > 0 && (
         <div
@@ -266,13 +274,15 @@ export function NodesPanel() {
 }
 
 function CreateNodeDialog({
+  defaultStartLocal,
   onCreated,
 }: {
+  defaultStartLocal: boolean;
   onCreated: (token: string, warnings: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
-  const [startLocal, setStartLocal] = useState(true);
+  const [startLocal, setStartLocal] = useState(defaultStartLocal);
 
   const createMutation = useMutation({
     mutationFn: () => adminApi.createNode({ name, start_local: startLocal }),
