@@ -116,9 +116,15 @@ deployments receive unique `slug-xxxxxxxx.apps.example.com` hosts.
    runtime, produce Grass Output v1, and upload the artifact.
 4. Preview deployments activate automatically (default policy) and are
    reachable at their preview URL as soon as the build is ready.
-5. Production deployments require review by default: request review,
-   approve as a team admin, then **Promote**. The stable domain now serves
-   the deployment. **Roll back** from any previously active deployment.
+5. Production deployments require review by default: request review, then
+   approve as a team admin on the deployment page — or platform-wide under
+   **Administration → Reviews**, where administrators see every pending
+   review and can **Approve**, **Approve & promote** (publish in the same
+   step), or **Reject** with a reason. After a plain approve, **Promote**
+   publishes. The stable domain now serves the deployment. **Roll back**
+   from any previously active deployment. The review requirement per
+   environment is configured under **Administration → Settings → Release
+   review** (production defaults to manual, preview to auto).
 
 ## Notes
 
@@ -128,6 +134,9 @@ deployments receive unique `slug-xxxxxxxx.apps.example.com` hosts.
   SvelteKit adapter-static, and Astro static are supported.
 - Quota plans ship seeded (`free`, `student`, `plus`, `pro`, `ultra`);
   team groups map teams to plans, and usage appears under Usage.
+- **Administration → Projects** lists every project on the platform with
+  its team and latest deployment; administrators can archive or soft-delete
+  projects from there.
 - Every key action is recorded under team and administrator audit pages.
 - Secrets never land in the repository: node tokens are stored hashed, and
   DNS provider credentials belong in host source config or environment
