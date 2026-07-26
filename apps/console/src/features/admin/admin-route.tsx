@@ -1,7 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { ShieldCheckIcon } from "lucide-react";
 
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
 import { adminApi } from "./admin.api";
+import { NodesPanel } from "./components/nodes-panel";
 
 export function AdminRoute() {
   const status = useQuery({
@@ -10,7 +13,7 @@ export function AdminRoute() {
   });
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
       <div>
         <h1 className="text-2xl font-semibold">Administration</h1>
         <p className="text-sm text-muted-foreground">System-level configuration and operations.</p>
@@ -36,6 +39,15 @@ export function AdminRoute() {
           )}
         </div>
       )}
+
+      <Tabs defaultValue="nodes">
+        <TabsList>
+          <TabsTrigger value="nodes">Nodes</TabsTrigger>
+        </TabsList>
+        <TabsContent value="nodes">
+          <NodesPanel />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
