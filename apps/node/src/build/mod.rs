@@ -436,6 +436,13 @@ if [ $rc -ne 0 ]; then echo \"build command failed with exit code $rc\"; exit 92
             export_paths.push(candidate.to_owned());
         }
     }
+    // Astro's node adapter resolves externalized runtime dependencies from
+    // node_modules, so an Astro server build must carry it along.
+    if pre_detection.framework == output::detect::Framework::Astro
+        && pre_detection.static_signal != Some(true)
+    {
+        export_paths.push("node_modules".to_owned());
+    }
 
     let result = runtime
         .run_build(

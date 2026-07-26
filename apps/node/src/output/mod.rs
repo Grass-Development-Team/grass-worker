@@ -174,9 +174,13 @@ fn ssr_layout(project_root: &Path, detection: &Detection) -> Result<SsrLayout, O
                         .to_owned(),
                 ));
             }
+            // Unlike Next standalone and Nuxt Nitro, the Astro node adapter
+            // externalizes some runtime dependencies instead of bundling
+            // them, so the project's node_modules ships next to the server
+            // tree for module resolution to walk into.
             Ok(SsrLayout {
                 server_root: project_root.join("dist"),
-                overlays: Vec::new(),
+                overlays: vec![(project_root.join("node_modules"), "node_modules".to_owned())],
                 entry: "server/server/entry.mjs".to_owned(),
                 host_env: "HOST",
             })
@@ -532,6 +536,7 @@ mod tests {
             ("astro.config.mjs", "export default { output: 'server' }"),
             ("dist/server/entry.mjs", "export {}"),
             ("dist/client/_astro/app.js", "client"),
+            ("node_modules/piccolore/index.js", "module.exports = {}"),
         ]);
 
         let generated = generate_grass_output(&dir, None, None).unwrap();
@@ -547,6 +552,13 @@ mod tests {
             generated
                 .output_root
                 .join("server/client/_astro/app.js")
+                .is_file()
+        );
+        // Externalized runtime deps resolve from node_modules at the root.
+        assert!(
+            generated
+                .output_root
+                .join("node_modules/piccolore/index.js")
                 .is_file()
         );
 
