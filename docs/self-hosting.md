@@ -1,0 +1,120 @@
+# Self-hosting Grass Worker
+
+This guide walks through the first-stage end-to-end flow: setup, login,
+project creation, an automatic platform domain, a container build, realtime
+logs, review, activation, and public access.
+
+## Requirements
+
+- PostgreSQL 15+
+- Redis 7+ (recommended; an in-memory fallback exists for evaluation)
+- A container engine socket: Podman (rootless works) or Docker
+- `git` available to the Node process
+- Rust 1.85+ and [Vite+](https://viteplus.dev/) when building from source
+
+## 1. Build
+
+```sh
+just install console
+just build            # builds the Console, embeds it, and builds both binaries
+```
+
+Or use the Docker image (both binaries are included):
+
+```sh
+docker build -t grass-worker .
+```
+
+## 2. Start the Control API
+
+Copy `config.toml.example` to `config.toml` and set at least the database
+URL and Redis URL. Then:
+
+```sh
+just run api          # or: grass-control-api --config config.toml
+```
+
+With an empty database the service starts in **setup mode**. Open the
+Console (`just run console` during development, or the embedded Console on
+the Control API port in release builds) and finish the setup flow:
+
+1. Database check
+2. Initial administrator (becomes the platform `admin` with a personal team)
+3. Site configuration
+4. First Node — this generates the Node token; copy it now, it is shown once
+5. Storage root (defaults to `/data`)
+6. Finish — the service switches to ready mode
+
+## 3. Start a Node
+
+Copy `node.toml.example` to `node.toml`, paste the Node token, point
+`control_api` at the Control API, and configure the container runtime
+socket:
+
+```toml
+[runtime]
+backend = "podman-socket"   # or "docker-socket"
+socket = "unix:///run/user/1000/podman/podman.sock"
+default_build_image = "docker.io/library/node:22"
+```
+
+```sh
+just run node         # or: grass-node --config node.toml
+```
+
+The Node registers, heartbeats every 30 seconds, and appears under
+Administration → Nodes. First-stage Nodes always build **and** serve; if the
+config disables either capability it is corrected with a warning.
+
+## 4. Configure a host source
+
+Public URLs need a host source. Point a wildcard DNS record
+(`*.apps.example.com`) at the Node serve listener (port 8080 by default),
+then add a **Wildcard** host source with that base domain under
+Administration → Host sources and mark it as the default.
+
+New projects automatically receive `slug.apps.example.com`; preview
+deployments receive unique `slug-xxxxxxxx.apps.example.com` hosts.
+
+## 5. Deploy
+
+1. Create a project with a public Git repository URL and build settings.
+2. Open the project → Deployments → **Deploy preview** or **Deploy
+   production**.
+3. Watch the realtime build log. Builds run inside the configured container
+   runtime, produce Grass Output v1, and upload the artifact.
+4. Preview deployments activate automatically (default policy) and are
+   reachable at their preview URL as soon as the build is ready.
+5. Production deployments require review by default: request review,
+   approve as a team admin, then **Promote**. The stable domain now serves
+   the deployment. **Roll back** from any previously active deployment.
+
+## Notes
+
+- SSR, hybrid, serverless, and edge outputs fail with an explicit
+  "not implemented yet" message in the first stage; static outputs from
+  Vite/React/Vue/Svelte SPAs, Next.js static export, Nuxt SPA/prerender,
+  SvelteKit adapter-static, and Astro static are supported.
+- Quota plans ship seeded (`free`, `student`, `plus`, `pro`, `ultra`);
+  team groups map teams to plans, and usage appears under Usage.
+- Every key action is recorded under team and administrator audit pages.
+- Secrets never land in the repository: node tokens are stored hashed, and
+  DNS provider credentials belong in host source config or environment
+  variables.
+
+## Docker quick reference
+
+```sh
+# Control API
+docker run -d --name grass-api \
+  -p 7817:7817 -v grass-data:/data \
+  -v $PWD/config.toml:/home/grass/config.toml:ro \
+  grass-worker grass-control-api --config /home/grass/config.toml
+
+# Node (needs the container engine socket for builds)
+docker run -d --name grass-node \
+  -p 8080:8080 -v grass-node-data:/data \
+  -v /run/user/1000/podman/podman.sock:/run/podman.sock \
+  -v $PWD/node.toml:/home/grass/node.toml:ro \
+  grass-worker grass-node --config /home/grass/node.toml
+```
