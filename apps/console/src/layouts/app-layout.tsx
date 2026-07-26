@@ -1,5 +1,6 @@
 import {
   ActivityIcon,
+  FolderGitIcon,
   GaugeIcon,
   HomeIcon,
   LogOutIcon,
@@ -36,6 +37,7 @@ import { useTeam } from "@/features/teams/team-context";
 
 const primaryNavigation = [
   { title: "Overview", url: "/", icon: HomeIcon },
+  { title: "Projects", url: "/projects", icon: FolderGitIcon },
   { title: "Usage", url: "/quota", icon: GaugeIcon },
 ];
 const administrationNavigation = {

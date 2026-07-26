@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod auth;
 pub mod me;
+pub mod projects;
 pub mod setup;
 pub mod teams;
 
@@ -42,6 +43,10 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
         )
         .nest("/admin", administration)
         .merge(teams::router().layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_ready_mode,
+        )))
+        .merge(projects::router().layer(middleware::from_fn_with_state(
             state.clone(),
             require_ready_mode,
         )))

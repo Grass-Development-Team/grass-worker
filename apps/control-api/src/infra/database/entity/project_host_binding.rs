@@ -16,6 +16,7 @@ pub struct Model {
     pub environment: HostBindingEnvironment,
     pub status: HostBindingStatus,
     pub failure_reason: Option<String>,
+    pub is_primary: bool,
     pub deleted_at: Option<TimeDateTimeWithTimeZone>,
     pub created_at: TimeDateTimeWithTimeZone,
     pub updated_at: TimeDateTimeWithTimeZone,

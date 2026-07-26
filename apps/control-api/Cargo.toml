@@ -20,6 +20,7 @@ grass-validator.workspace = true
 grass-assets.workspace = true
 subtle = "2"
 mime_guess.workspace = true
+rand.workspace = true
 sea-orm.workspace = true
 sea-orm-migration.workspace = true
 serde.workspace = true

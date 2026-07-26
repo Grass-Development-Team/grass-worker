@@ -26,6 +26,7 @@ pub struct Model {
     pub build_command: Option<String>,
     pub output_directory: Option<String>,
     pub source_metadata: Json,
+    pub preview_host: Option<String>,
     pub failure_code: Option<String>,
     pub failure_message: Option<String>,
     pub claimed_at: Option<TimeDateTimeWithTimeZone>,
