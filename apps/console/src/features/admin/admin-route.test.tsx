@@ -13,13 +13,27 @@ function jsonResponse(data: unknown): Response {
   });
 }
 
+const localProcessFixture = {
+  auto_start: true,
+  managed: true,
+  process: {
+    state: "running",
+    pid: 4242,
+    started_at: new Date().toISOString(),
+    restart_count: 0,
+    last_exit_code: null,
+    last_exit_at: null,
+    message: null,
+  },
+};
+
 it("loads system status through the protected administration API", async () => {
   const fetchMock = vi
     .spyOn(globalThis, "fetch")
     .mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/api/v1/admin/nodes")) {
-        return jsonResponse({ nodes: [] });
+        return jsonResponse({ nodes: [], local_process: localProcessFixture });
       }
       return jsonResponse({
         service: "Grass Worker Control API",
@@ -63,6 +77,7 @@ it("lists nodes with health state for administrators", async () => {
             created_at: new Date().toISOString(),
           },
         ],
+        local_process: localProcessFixture,
       });
     }
     return jsonResponse({ service: "Grass Worker Control API", mode: "ready", version: "9.9.9" });

@@ -1,5 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { PlusIcon, RefreshCwIcon, ServerIcon } from "lucide-react";
+import {
+  PlayIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  RotateCcwIcon,
+  ServerIcon,
+  SquareIcon,
+} from "lucide-react";
 import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -25,7 +32,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-import { adminApi, type AdminNode } from "../admin.api";
+import { adminApi, type AdminLocalProcessInfo, type AdminNode } from "../admin.api";
 
 function healthBadge(node: AdminNode) {
   if (node.healthy) return <Badge variant="success">Healthy</Badge>;
@@ -33,9 +40,102 @@ function healthBadge(node: AdminNode) {
   return <Badge variant="destructive">{node.status}</Badge>;
 }
 
+function processBadge(info: AdminLocalProcessInfo) {
+  switch (info.process.state) {
+    case "running":
+      return <Badge variant="success">Running</Badge>;
+    case "backoff":
+      return <Badge variant="warning">Restarting</Badge>;
+    case "failed":
+      return <Badge variant="destructive">Failed</Badge>;
+    default:
+      return <Badge variant="secondary">Stopped</Badge>;
+  }
+}
+
+function LocalProcessCard({ info }: { info: AdminLocalProcessInfo }) {
+  const queryClient = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+
+  const actionMutation = useMutation({
+    mutationFn: (action: "start" | "stop" | "restart") => adminApi.localNodeProcess(action),
+    onSuccess: () => {
+      setError(null);
+      queryClient.invalidateQueries({ queryKey: ["admin", "nodes"] });
+    },
+    onError: (cause) =>
+      setError(cause instanceof Error ? cause.message : "Unable to control the local process."),
+  });
+
+  const running = info.process.state === "running" || info.process.state === "backoff";
+
+  return (
+    <div className="rounded-md border p-3 text-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <ServerIcon className="size-4 text-muted-foreground" />
+          <span className="font-medium">Local node process</span>
+          {processBadge(info)}
+          {info.process.pid != null && (
+            <span className="text-xs text-muted-foreground">pid {info.process.pid}</span>
+          )}
+          {info.process.restart_count > 0 && (
+            <span className="text-xs text-muted-foreground">
+              {info.process.restart_count} restarts
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1">
+          {running ? (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => actionMutation.mutate("restart")}
+                disabled={actionMutation.isPending}
+              >
+                <RotateCcwIcon /> Restart
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => actionMutation.mutate("stop")}
+                disabled={actionMutation.isPending}
+              >
+                <SquareIcon /> Stop
+              </Button>
+            </>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => actionMutation.mutate("start")}
+              disabled={actionMutation.isPending || !info.managed}
+            >
+              <PlayIcon /> Start
+            </Button>
+          )}
+        </div>
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">
+        {info.managed
+          ? (info.process.message ??
+            "The Control API supervises this grass-node process and restarts it on unexpected exits.")
+          : "No generated node config yet. Create a node with “Start local process” to generate one."}
+      </p>
+      {error && (
+        <p role="alert" className="mt-1 text-xs text-destructive">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function NodesPanel() {
   const queryClient = useQueryClient();
   const [revealedToken, setRevealedToken] = useState<{ label: string; token: string } | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const nodesQuery = useQuery({
@@ -63,12 +163,26 @@ export function NodesPanel() {
           node unhealthy.
         </p>
         <CreateNodeDialog
-          onCreated={(token) => {
+          onCreated={(token, createdWarnings) => {
             setRevealedToken({ label: "New node token", token });
+            setWarnings(createdWarnings);
             queryClient.invalidateQueries({ queryKey: ["admin", "nodes"] });
           }}
         />
       </div>
+
+      {nodesQuery.data?.local_process && <LocalProcessCard info={nodesQuery.data.local_process} />}
+
+      {warnings.length > 0 && (
+        <div
+          role="alert"
+          className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm"
+        >
+          {warnings.map((warning) => (
+            <p key={warning}>{warning}</p>
+          ))}
+        </div>
+      )}
 
       {revealedToken && (
         <div className="rounded-md border bg-muted/40 p-3 text-sm">
@@ -151,16 +265,21 @@ export function NodesPanel() {
   );
 }
 
-function CreateNodeDialog({ onCreated }: { onCreated: (token: string) => void }) {
+function CreateNodeDialog({
+  onCreated,
+}: {
+  onCreated: (token: string, warnings: string[]) => void;
+}) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
+  const [startLocal, setStartLocal] = useState(true);
 
   const createMutation = useMutation({
-    mutationFn: () => adminApi.createNode({ name }),
-    onSuccess: ({ token }) => {
+    mutationFn: () => adminApi.createNode({ name, start_local: startLocal }),
+    onSuccess: ({ token, warnings }) => {
       setOpen(false);
       setName("");
-      onCreated(token);
+      onCreated(token, warnings ?? []);
     },
   });
 
@@ -195,6 +314,16 @@ function CreateNodeDialog({ onCreated }: { onCreated: (token: string) => void })
               required
             />
           </Field>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="size-4"
+              checked={startLocal}
+              onChange={(event) => setStartLocal(event.target.checked)}
+            />
+            Start local process — generate node.toml with this token and run grass-node on this
+            machine
+          </label>
           {createMutation.isError && (
             <p role="alert" className="text-sm text-destructive">
               {createMutation.error instanceof Error

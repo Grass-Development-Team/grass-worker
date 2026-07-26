@@ -30,8 +30,9 @@ async fn main() -> anyhow::Result<()> {
     init::database(&state).await?;
     init::cache(&state).await?;
     spawn_node_health_sweep(state.clone());
+    auto_start_local_node(&state).await;
     let addr = init::address(&state);
-    let app = features::router::router(state.clone()).with_state(state);
+    let app = features::router::router(state.clone()).with_state(state.clone());
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("failed to bind Control API listener on {addr}"))?;
@@ -44,9 +45,50 @@ async fn main() -> anyhow::Result<()> {
     .with_graceful_shutdown(shutdown_signal())
     .await
     .context("Control API server failed")?;
+    state.node_manager.shutdown().await;
     info!(operation = "control_api.stop", "Control API stopped");
 
     Ok(())
+}
+
+/// Starts the managed local Node on boot when the platform is ready and the
+/// operator opted in via `[node_manager] auto_start_local_node`.
+async fn auto_start_local_node(state: &ControlApiState) {
+    let auto_start = state
+        .config
+        .read()
+        .unwrap()
+        .node_manager
+        .auto_start_local_node;
+    if !auto_start {
+        return;
+    }
+    let Some(db) = state.try_database() else {
+        return;
+    };
+    if !matches!(init::is_setup_finished(db).await, Ok(true)) {
+        return;
+    }
+    let config_path = state.node_manager.config_path().await;
+    if !infra::node_manager::config_file::exists(&config_path) {
+        info!(
+            operation = "control_api.local_node_autostart_skipped",
+            config = %config_path,
+            "local node config not generated yet; skipping auto start"
+        );
+        return;
+    }
+    match state.node_manager.start().await {
+        Ok(_) => info!(
+            operation = "control_api.local_node_autostart",
+            "local node process started"
+        ),
+        Err(error) => tracing::warn!(
+            operation = "control_api.local_node_autostart_failed",
+            %error,
+            "failed to auto start local node process"
+        ),
+    }
 }
 
 /// Periodically marks Nodes without a recent heartbeat as offline so the

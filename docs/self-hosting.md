@@ -47,6 +47,37 @@ the Control API port in release builds) and finish the setup flow:
 
 ## 3. Start a Node
 
+### Managed local Node (recommended for single-machine setups)
+
+When the Control API and the Node run on the same machine, the Control API
+can manage the Node process itself. Enable it in `config.toml`:
+
+```toml
+[node_manager]
+auto_start_local_node = true
+local_node_binary = "grass-node"
+local_node_config = "./node.toml"
+restart_on_exit = true
+```
+
+With this enabled:
+
+- the setup wizard's Node step (or creating a node under Administration →
+  Nodes with **Start local process** checked) generates
+  `local_node_config` with the node token, a detected container runtime
+  socket, and work directories under `{storage.root}/node`;
+- the process starts automatically when setup finishes and on every
+  Control API boot, restarts with backoff on unexpected exits, and stops
+  with the Control API;
+- Administration → Nodes shows the process state and offers
+  start/stop/restart.
+
+The generated file is written with mode 0600 because it contains the node
+token; it is rewritten automatically if the storage root changes.
+Hand-written node configs are never touched.
+
+### Standalone Node
+
 Copy `node.toml.example` to `node.toml`, paste the Node token, point
 `control_api` at the Control API, and configure the container runtime
 socket:

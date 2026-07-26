@@ -23,6 +23,24 @@ export interface AdminNode {
   created_at: string;
 }
 
+export type LocalProcessState = "stopped" | "running" | "backoff" | "failed";
+
+export interface AdminLocalProcess {
+  state: LocalProcessState;
+  pid: number | null;
+  started_at: string | null;
+  restart_count: number;
+  last_exit_code: number | null;
+  last_exit_at: string | null;
+  message: string | null;
+}
+
+export interface AdminLocalProcessInfo {
+  auto_start: boolean;
+  managed: boolean;
+  process: AdminLocalProcess;
+}
+
 export interface AdminQuotaLimit {
   dimension: string;
   limit_value: number;
@@ -86,12 +104,24 @@ export const adminApi = {
   removeHostSource: (sourceId: string) =>
     request<{ ok: true }>(`/api/v1/admin/host-sources/${sourceId}`, { method: "DELETE" }),
 
-  listNodes: () => request<{ nodes: AdminNode[] }>("/api/v1/admin/nodes"),
+  listNodes: () =>
+    request<{ nodes: AdminNode[]; local_process: AdminLocalProcessInfo }>("/api/v1/admin/nodes"),
 
-  createNode: (input: { name: string }) =>
-    request<{ node: AdminNode; token: string }>("/api/v1/admin/nodes", {
+  createNode: (input: { name: string; start_local?: boolean }) =>
+    request<{
+      node: AdminNode;
+      token: string;
+      local_process: AdminLocalProcess | null;
+      warnings: string[];
+    }>("/api/v1/admin/nodes", {
       method: "POST",
       body: JSON.stringify(input),
+    }),
+
+  localNodeProcess: (action: "start" | "stop" | "restart") =>
+    request<AdminLocalProcessInfo>("/api/v1/admin/nodes/local-process", {
+      method: "POST",
+      body: JSON.stringify({ action }),
     }),
 
   rotateNodeToken: (nodeId: string) =>

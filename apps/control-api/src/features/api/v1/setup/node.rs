@@ -65,7 +65,7 @@ pub async fn handler(
         CreateNodeParams {
             name: name.to_owned(),
             token_hash,
-            storage_root,
+            storage_root: storage_root.clone(),
         },
     )
     .await
@@ -74,9 +74,53 @@ pub async fn handler(
         source,
     })?;
 
+    // When the operator opted into the managed local node, generate its
+    // config now — this is the only moment the plaintext token exists. The
+    // process itself starts at setup finish, once ready mode unlocks the
+    // internal API.
+    let mut warnings = Vec::new();
+    let mut local_node_config_generated = false;
+    let (auto_start, config_path, control_api_url, config_storage_root) = {
+        let config = state.config.read().unwrap();
+        (
+            config.node_manager.auto_start_local_node,
+            config.node_manager.local_node_config.clone(),
+            crate::infra::node_manager::config_file::control_api_url(
+                config.server.host,
+                config.server.port,
+            ),
+            config.storage.root.clone(),
+        )
+    };
+    if auto_start {
+        let storage_root = settings::get_setting(db, "storage.root")
+            .await
+            .ok()
+            .flatten()
+            .and_then(|setting| setting.value.as_str().map(str::to_owned))
+            .unwrap_or(config_storage_root);
+        match crate::infra::node_manager::config_file::generate(
+            &config_path,
+            &crate::infra::node_manager::config_file::GenerateParams {
+                node_name: &node.name,
+                node_token: &token,
+                control_api_url,
+                storage_root: &storage_root,
+            },
+        ) {
+            Ok(mut generated_warnings) => {
+                local_node_config_generated = true;
+                warnings.append(&mut generated_warnings);
+            }
+            Err(error) => warnings.push(format!("failed to write local node config: {error}")),
+        }
+    }
+
     Ok(ok_response(json!({
         "node": { "id": node.id, "name": node.name },
         "token": token,
+        "local_node_config_generated": local_node_config_generated,
+        "warnings": warnings,
     })))
 }
 
