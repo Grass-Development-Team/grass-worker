@@ -12,6 +12,7 @@ use serde_json::json;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::infra::http::timestamps::ts;
 use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
@@ -33,7 +34,7 @@ fn group_view(group: &team_group::Model) -> serde_json::Value {
         "description": group.description,
         "quota_plan_id": group.quota_plan_id,
         "is_default": group.is_default,
-        "created_at": group.created_at,
+        "created_at": ts(group.created_at),
     })
 }
 

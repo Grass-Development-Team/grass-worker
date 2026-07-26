@@ -13,6 +13,7 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::infra::http::timestamps::ts;
 use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
@@ -159,10 +160,10 @@ pub(crate) fn deployment_view(
         "failure_code": deployment.failure_code,
         "failure_message": deployment.failure_message,
         "duration_seconds": duration_seconds,
-        "claimed_at": deployment.claimed_at,
-        "build_started_at": deployment.build_started_at,
-        "build_finished_at": deployment.build_finished_at,
-        "created_at": deployment.created_at,
+        "claimed_at": ts(deployment.claimed_at),
+        "build_started_at": ts(deployment.build_started_at),
+        "build_finished_at": ts(deployment.build_finished_at),
+        "created_at": ts(deployment.created_at),
     });
     if let serde_json::Value::Object(map) = urls.urls(deployment)
         && let serde_json::Value::Object(view_map) = &mut view
@@ -492,7 +493,7 @@ pub async fn detail(
             "kind": event_kind_value(&event.kind),
             "message": event.message,
             "metadata": event.metadata,
-            "created_at": event.created_at,
+            "created_at": ts(event.created_at),
         })).collect::<Vec<_>>(),
         "artifacts": artifacts.iter().map(|artifact| json!({
             "id": artifact.id,
@@ -501,15 +502,15 @@ pub async fn detail(
             "checksum_sha256": artifact.checksum_sha256,
             "size_bytes": artifact.size_bytes,
             "manifest": artifact.manifest,
-            "created_at": artifact.created_at,
+            "created_at": ts(artifact.created_at),
         })).collect::<Vec<_>>(),
         "reviews": reviews.iter().map(|review| json!({
             "id": review.id,
             "status": review_status_value(&review.status),
             "reviewer_user_id": review.reviewer_user_id,
             "reason": review.reason,
-            "requested_at": review.requested_at,
-            "reviewed_at": review.reviewed_at,
+            "requested_at": ts(review.requested_at),
+            "reviewed_at": ts(review.reviewed_at),
         })).collect::<Vec<_>>(),
         "review_required": matches!(policy.mode_for(&deployment.environment), ReviewMode::Manual),
     })))
@@ -568,7 +569,7 @@ pub async fn events(
             "kind": event_kind_value(&event.kind),
             "message": event.message,
             "metadata": event.metadata,
-            "created_at": event.created_at,
+            "created_at": ts(event.created_at),
         })).collect::<Vec<_>>(),
     })))
 }
@@ -595,7 +596,7 @@ pub async fn artifacts(
             "checksum_sha256": artifact.checksum_sha256,
             "size_bytes": artifact.size_bytes,
             "manifest": artifact.manifest,
-            "created_at": artifact.created_at,
+            "created_at": ts(artifact.created_at),
         })).collect::<Vec<_>>(),
     })))
 }

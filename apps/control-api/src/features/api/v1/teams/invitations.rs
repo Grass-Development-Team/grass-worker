@@ -2,6 +2,7 @@ use axum::{Json, response::IntoResponse};
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::infra::http::timestamps::ts;
 use crate::{
     domain::{
         quotas::QuotaDimension,
@@ -93,7 +94,7 @@ pub async fn create(
             "email": invitation.email,
             "role": super::role_value(&invitation.role),
             "status": "pending",
-            "expires_at": invitation.expires_at,
+            "expires_at": ts(invitation.expires_at),
             "token": token,
         }
     })))
@@ -177,7 +178,7 @@ pub async fn accept(
             "team_id": member.team_id,
             "user_id": member.user_id,
             "role": super::role_value(&member.role),
-            "joined_at": member.joined_at,
+            "joined_at": ts(member.joined_at),
         }
     })))
 }

@@ -12,6 +12,7 @@ use axum::{
 use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 
+use crate::infra::http::timestamps::ts;
 use crate::{
     domain::{projects, teams},
     infra::{
@@ -233,10 +234,10 @@ pub(crate) fn project_view(project: &project::Model) -> serde_json::Value {
         "output_directory": project.output_directory,
         "source_config": project.source_config,
         "build_config": project.build_config,
-        "archived_at": project.archived_at,
-        "deleted_at": project.deleted_at,
-        "created_at": project.created_at,
-        "updated_at": project.updated_at,
+        "archived_at": ts(project.archived_at),
+        "deleted_at": ts(project.deleted_at),
+        "created_at": ts(project.created_at),
+        "updated_at": ts(project.updated_at),
     })
 }
 
