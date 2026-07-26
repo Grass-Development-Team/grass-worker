@@ -243,7 +243,14 @@ async fn report_stage_checked(
 /// Detects the package manager from lockfiles for default commands.
 fn default_commands(project_root: &Path) -> (String, String) {
     if project_root.join("bun.lock").is_file() || project_root.join("bun.lockb").is_file() {
-        ("bun install".to_owned(), "bun run build".to_owned())
+        // Auto-detected defaults must survive images without bun (the stock
+        // node image): fall back to npm, which installs from package.json.
+        // Explicit project commands always run verbatim.
+        (
+            "if command -v bun >/dev/null 2>&1; then bun install; else npm install; fi".to_owned(),
+            "if command -v bun >/dev/null 2>&1; then bun run build; else npm run build; fi"
+                .to_owned(),
+        )
     } else if project_root.join("pnpm-lock.yaml").is_file() {
         (
             "corepack enable >/dev/null 2>&1 || true; pnpm install --frozen-lockfile".to_owned(),
