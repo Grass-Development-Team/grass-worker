@@ -3,8 +3,9 @@
 //! Callers describe the host they want; a provisioner decides how the DNS
 //! side is fulfilled. Wildcard sources only need the internal binding, the
 //! manual mode leaves configuration to an operator, and the DNS provider
-//! mode is a configurable placeholder for real provider integrations.
+//! mode drives a real provider API (currently Cloudflare).
 
+pub mod cloudflare;
 pub mod service;
 
 use crate::infra::database::entity::{HostBindingStatus, HostSourceKind, host_source};
@@ -15,7 +16,6 @@ pub struct ProvisionProjectHostInput<'a> {
 }
 
 pub struct DeprovisionProjectHostInput<'a> {
-    #[allow(dead_code)] // Read by DNS provider implementations that delete records.
     pub host: &'a str,
     pub source: &'a host_source::Model,
 }
@@ -32,7 +32,6 @@ pub struct ProvisionedHost {
 
 #[derive(Debug, thiserror::Error)]
 pub enum HostProvisionError {
-    #[allow(dead_code)] // Reserved for future host source kinds.
     #[error("host source kind is not supported: {0}")]
     UnsupportedSource(String),
     #[error("dns provider request failed: {0}")]
@@ -102,51 +101,87 @@ impl HostProvisioner for ManualHostProvisioner {
     }
 }
 
-/// Configurable placeholder for DNS provider integrations. The source
-/// config's `placeholder_result` key decides the simulated outcome
-/// (`active`, `pending`, or `failed`) until a real provider client lands.
-pub struct DnsProviderHostProvisioner;
+/// Creates one DNS record per provisioned host through the provider named
+/// on the source. Cloudflare is the supported provider; other names fail
+/// with a clear message so the binding records why it cannot resolve.
+pub struct DnsProviderHostProvisioner {
+    cloudflare: cloudflare::CloudflareDns,
+}
+
+impl DnsProviderHostProvisioner {
+    pub fn new() -> Self {
+        Self {
+            cloudflare: cloudflare::CloudflareDns::new(),
+        }
+    }
+
+    fn unsupported(provider: Option<&str>) -> HostProvisionError {
+        HostProvisionError::UnsupportedSource(format!(
+            "dns provider '{}' is not supported (supported: {})",
+            provider.unwrap_or("none"),
+            cloudflare::PROVIDER_NAME,
+        ))
+    }
+}
+
+impl Default for DnsProviderHostProvisioner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl HostProvisioner for DnsProviderHostProvisioner {
     async fn provision_project_host(
         &self,
         input: ProvisionProjectHostInput<'_>,
     ) -> Result<ProvisionedHost, HostProvisionError> {
-        let provider = input.source.provider.as_deref().unwrap_or("none");
-        let placeholder = input
+        let provider = input
             .source
-            .config
-            .get("placeholder_result")
-            .and_then(|value| value.as_str())
-            .unwrap_or("pending");
-
-        match placeholder {
-            "active" => Ok(ProvisionedHost {
-                status: HostBindingStatus::Active,
-                provider_request_id: Some(format!("placeholder-{provider}")),
-                message: Some(format!(
-                    "placeholder {provider} provisioning treated the record as created"
-                )),
-            }),
-            "failed" => Err(HostProvisionError::Provider(format!(
-                "placeholder {provider} provisioning is configured to fail"
-            ))),
-            _ => Ok(ProvisionedHost {
-                status: HostBindingStatus::Pending,
-                provider_request_id: None,
-                message: Some(format!(
-                    "{provider} DNS provider integration is not configured yet; \
-                     binding stays pending until provisioning is retried"
-                )),
-            }),
+            .provider
+            .as_deref()
+            .map(str::to_ascii_lowercase);
+        match provider.as_deref() {
+            Some(cloudflare::PROVIDER_NAME) => {
+                let config = cloudflare::CloudflareConfig::from_source(input.source)
+                    .map_err(HostProvisionError::Provider)?;
+                let ensured = self.cloudflare.ensure_record(&config, input.host).await?;
+                Ok(ProvisionedHost {
+                    status: HostBindingStatus::Active,
+                    provider_request_id: Some(ensured.id),
+                    message: Some(format!(
+                        "cloudflare {} record for {} {}",
+                        config.record_type,
+                        input.host,
+                        if ensured.updated {
+                            "updated"
+                        } else {
+                            "created"
+                        },
+                    )),
+                })
+            }
+            other => Err(Self::unsupported(other)),
         }
     }
 
     async fn deprovision_project_host(
         &self,
-        _input: DeprovisionProjectHostInput<'_>,
+        input: DeprovisionProjectHostInput<'_>,
     ) -> Result<(), HostProvisionError> {
-        Ok(())
+        let provider = input
+            .source
+            .provider
+            .as_deref()
+            .map(str::to_ascii_lowercase);
+        match provider.as_deref() {
+            Some(cloudflare::PROVIDER_NAME) => {
+                let config = cloudflare::CloudflareConfig::from_source(input.source)
+                    .map_err(HostProvisionError::Provider)?;
+                self.cloudflare.remove_record(&config, input.host).await?;
+                Ok(())
+            }
+            other => Err(Self::unsupported(other)),
+        }
     }
 }
 
@@ -168,7 +203,7 @@ impl CompositeHostProvisioner {
         Self {
             wildcard: WildcardHostProvisioner,
             manual: ManualHostProvisioner,
-            dns_provider: DnsProviderHostProvisioner,
+            dns_provider: DnsProviderHostProvisioner::new(),
         }
     }
 }
@@ -248,28 +283,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dns_provider_placeholder_honours_configured_outcome() {
-        let pending = source(HostSourceKind::DnsProvider, serde_json::json!({}));
-        let provisioned = CompositeHostProvisioner::new()
+    async fn dns_provider_requires_a_supported_provider_name() {
+        let mut unsupported = source(HostSourceKind::DnsProvider, serde_json::json!({}));
+        unsupported.provider = Some("route53".to_owned());
+        let error = CompositeHostProvisioner::new()
             .provision_project_host(ProvisionProjectHostInput {
                 host: "demo.grass.test",
-                source: &pending,
+                source: &unsupported,
             })
             .await
-            .unwrap();
-        assert_eq!(provisioned.status, HostBindingStatus::Pending);
+            .unwrap_err();
+        assert!(matches!(error, HostProvisionError::UnsupportedSource(_)));
 
-        let failing = source(
+        let mut unset = source(HostSourceKind::DnsProvider, serde_json::json!({}));
+        unset.provider = None;
+        let error = CompositeHostProvisioner::new()
+            .provision_project_host(ProvisionProjectHostInput {
+                host: "demo.grass.test",
+                source: &unset,
+            })
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("cloudflare"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn cloudflare_sources_fail_clearly_on_incomplete_config() {
+        let incomplete = source(
             HostSourceKind::DnsProvider,
-            serde_json::json!({ "placeholder_result": "failed" }),
+            serde_json::json!({ "zone_id": "zone1" }),
         );
         let error = CompositeHostProvisioner::new()
             .provision_project_host(ProvisionProjectHostInput {
                 host: "demo.grass.test",
-                source: &failing,
+                source: &incomplete,
             })
             .await
             .unwrap_err();
-        assert!(matches!(error, HostProvisionError::Provider(_)));
+        assert!(error.to_string().contains("api_token"), "{error}");
     }
 }

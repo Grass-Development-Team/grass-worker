@@ -193,6 +193,8 @@ export const adminApi = {
     kind: HostSourceKind;
     base_domain: string;
     is_default?: boolean;
+    provider?: string;
+    config?: Record<string, unknown>;
   }) =>
     request<{ source: AdminHostSource }>("/api/v1/admin/host-sources", {
       method: "POST",
@@ -203,7 +205,11 @@ export const adminApi = {
     sourceId: string,
     input: Partial<
       Pick<AdminHostSource, "label" | "enabled" | "allows_auto_assign" | "is_default">
-    >,
+    > & {
+      provider?: string;
+      /** Shallow-merged server side; a null value deletes the key. */
+      config?: Record<string, unknown>;
+    },
   ) =>
     request<{ source: AdminHostSource }>(`/api/v1/admin/host-sources/${sourceId}`, {
       method: "PATCH",

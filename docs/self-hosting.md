@@ -104,6 +104,19 @@ Public URLs need a host source. Point a wildcard DNS record
 then add a **Wildcard** host source with that base domain under
 Administration → Host sources and mark it as the default.
 
+Without wildcard DNS, add a **DNS provider (Cloudflare)** source instead:
+provide an API token with the Zone / DNS / Edit permission, the zone ID,
+and the record the platform should create for every domain (type `A`,
+`AAAA`, or `CNAME` plus the node address as the value). Each provisioned
+domain then becomes one DNS record created through the Cloudflare API;
+bindings turn `failed` with the provider message when the API rejects a
+request and can be retried from the project's Domains page. Credentials
+are write-only: the API returns configured key names, never values, and
+editing a source only overwrites the fields you fill in.
+
+A **Manual** source assigns domains without touching DNS; bindings stay
+`pending` until an operator creates the record and re-runs provisioning.
+
 New projects automatically receive `slug.apps.example.com`; preview
 deployments receive unique `slug-xxxxxxxx.apps.example.com` hosts.
 
