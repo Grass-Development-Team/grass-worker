@@ -1,19 +1,24 @@
-//! Public static site serving.
+//! Public serving.
 //!
 //! Every public request resolves its Host header through the Control API
-//! (with a short-lived local cache), locates the deployment's unpacked
-//! Grass Output, and serves files from the manifest's static directory with
-//! index handling, SPA fallback, and strict path normalization.
+//! (with a short-lived local cache) and locates the deployment's unpacked
+//! Grass Output. Static outputs are served from the manifest's static
+//! directory with index handling, SPA fallback, and strict path
+//! normalization; SSR outputs are reverse-proxied to the deployment's
+//! service container (started on demand by [`ssr::SsrManager`]).
+
+pub mod ssr;
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::{
     body::Body,
-    extract::State,
-    http::{HeaderMap, StatusCode, Uri, header},
+    extract::{ConnectInfo, Request, State},
+    http::{HeaderMap, HeaderName, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use tokio::sync::Mutex;
@@ -23,10 +28,17 @@ use uuid::Uuid;
 use crate::{client::ControlApiClient, config::NodeConfig, output::manifest};
 
 #[derive(Clone)]
-struct ResolvedTarget {
-    static_dir: PathBuf,
-    spa_fallback: bool,
-    not_found: Option<String>,
+enum ResolvedTarget {
+    Static {
+        static_dir: PathBuf,
+        spa_fallback: bool,
+        not_found: Option<String>,
+    },
+    Ssr {
+        deployment_id: Uuid,
+        deployment_dir: PathBuf,
+        server: manifest::ServerSection,
+    },
 }
 
 struct CachedResolution {
@@ -39,15 +51,24 @@ pub struct ServeState {
     cache_root: PathBuf,
     metadata_ttl: Duration,
     resolutions: Mutex<HashMap<String, CachedResolution>>,
+    ssr: Arc<ssr::SsrManager>,
+    /// Proxy client for SSR upstreams: connect timeout only, so streamed
+    /// responses (SSE, long polls) are never cut off by a total timeout.
+    proxy: reqwest::Client,
 }
 
 impl ServeState {
-    pub fn new(client: ControlApiClient, config: &NodeConfig) -> Self {
+    pub fn new(client: ControlApiClient, config: &NodeConfig, ssr: Arc<ssr::SsrManager>) -> Self {
         Self {
             client,
             cache_root: PathBuf::from(&config.serve.artifact_cache_root),
             metadata_ttl: Duration::from_secs(config.serve.metadata_cache_ttl_seconds.max(1)),
             resolutions: Mutex::new(HashMap::new()),
+            ssr,
+            proxy: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(5))
+                .build()
+                .expect("static reqwest options cannot fail"),
         }
     }
 }
@@ -66,7 +87,12 @@ pub fn spawn(state: Arc<ServeState>, config: &NodeConfig) -> tokio::task::JoinHa
             }
         };
         info!(operation = "node.serve.start", %addr, "public serve listener started");
-        if let Err(error) = axum::serve(listener, app).await {
+        if let Err(error) = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        {
             warn!(operation = "node.serve.stopped", %error, "serve listener stopped");
         }
     })
@@ -175,10 +201,10 @@ fn host_from_headers(headers: &HeaderMap) -> Option<String> {
 
 async fn handle_request(
     State(state): State<Arc<ServeState>>,
-    headers: HeaderMap,
-    uri: Uri,
+    ConnectInfo(client_addr): ConnectInfo<SocketAddr>,
+    request: Request,
 ) -> Response {
-    let Some(host) = host_from_headers(&headers) else {
+    let Some(host) = host_from_headers(request.headers()) else {
         return error_page(
             StatusCode::BAD_REQUEST,
             "This request has no valid Host header.",
@@ -202,32 +228,147 @@ async fn handle_request(
         }
     };
 
-    let Some(segments) = normalize_public_path(uri.path()) else {
-        return error_page(
-            StatusCode::BAD_REQUEST,
-            "The requested path is not allowed.",
-        );
-    };
+    match target {
+        ResolvedTarget::Static {
+            static_dir,
+            spa_fallback,
+            not_found,
+        } => {
+            let Some(segments) = normalize_public_path(request.uri().path()) else {
+                return error_page(
+                    StatusCode::BAD_REQUEST,
+                    "The requested path is not allowed.",
+                );
+            };
 
-    match resolve_static_file(&target.static_dir, &segments, target.spa_fallback) {
-        Some(file) => serve_file(&file, StatusCode::OK).await,
-        None => {
-            if let Some(not_found) = &target.not_found {
-                let mut custom = target.static_dir.clone();
-                for segment in not_found.trim_start_matches('/').split('/') {
-                    custom.push(segment);
-                }
-                if custom.is_file() {
-                    return serve_file(&custom, StatusCode::NOT_FOUND).await;
+            match resolve_static_file(&static_dir, &segments, spa_fallback) {
+                Some(file) => serve_file(&file, StatusCode::OK).await,
+                None => {
+                    if let Some(not_found) = &not_found {
+                        let mut custom = static_dir.clone();
+                        for segment in not_found.trim_start_matches('/').split('/') {
+                            custom.push(segment);
+                        }
+                        if custom.is_file() {
+                            return serve_file(&custom, StatusCode::NOT_FOUND).await;
+                        }
+                    }
+                    let fallback_404 = static_dir.join("404.html");
+                    if fallback_404.is_file() {
+                        return serve_file(&fallback_404, StatusCode::NOT_FOUND).await;
+                    }
+                    error_page(StatusCode::NOT_FOUND, "This page could not be found.")
                 }
             }
-            let fallback_404 = target.static_dir.join("404.html");
-            if fallback_404.is_file() {
-                return serve_file(&fallback_404, StatusCode::NOT_FOUND).await;
+        }
+        ResolvedTarget::Ssr {
+            deployment_id,
+            deployment_dir,
+            server,
+        } => {
+            let upstream = match state
+                .ssr
+                .upstream_for(deployment_id, &deployment_dir, &server)
+                .await
+            {
+                Ok(upstream) => upstream,
+                Err(error) => {
+                    warn!(
+                        operation = "node.serve.ssr_start",
+                        %error,
+                        deployment_id = %deployment_id,
+                        "ssr service unavailable"
+                    );
+                    return error_page(
+                        StatusCode::BAD_GATEWAY,
+                        "The application server failed to start.",
+                    );
+                }
+            };
+            match forward_to_ssr(&state.proxy, &upstream, client_addr, request).await {
+                Ok(response) => response,
+                Err(error) => {
+                    // A connect failure means the container died or lost its
+                    // address; drop it so the next request restarts it.
+                    if error.is_connect() {
+                        state.ssr.invalidate(deployment_id).await;
+                    }
+                    warn!(
+                        operation = "node.serve.ssr_proxy",
+                        %error,
+                        deployment_id = %deployment_id,
+                        "ssr proxy request failed"
+                    );
+                    error_page(
+                        StatusCode::BAD_GATEWAY,
+                        "The application server could not be reached.",
+                    )
+                }
             }
-            error_page(StatusCode::NOT_FOUND, "This page could not be found.")
         }
     }
+}
+
+/// Hop-by-hop headers never forwarded in either direction.
+fn is_hop_by_hop(name: &HeaderName) -> bool {
+    matches!(
+        name.as_str(),
+        "connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+    )
+}
+
+/// Streams the request to the SSR upstream and the response back, keeping
+/// end-to-end headers and adding the standard forwarding metadata.
+async fn forward_to_ssr(
+    proxy: &reqwest::Client,
+    upstream: &str,
+    client_addr: SocketAddr,
+    request: Request,
+) -> Result<Response, reqwest::Error> {
+    let (parts, body) = request.into_parts();
+    let path_and_query = parts
+        .uri
+        .path_and_query()
+        .map(|value| value.as_str())
+        .unwrap_or("/");
+    let url = format!("http://{upstream}{path_and_query}");
+
+    let mut builder = proxy.request(parts.method.clone(), url);
+    for (name, value) in &parts.headers {
+        if is_hop_by_hop(name) {
+            continue;
+        }
+        builder = builder.header(name, value);
+    }
+    builder = builder
+        .header("x-forwarded-proto", "http")
+        .header("x-forwarded-for", client_addr.ip().to_string());
+    if let Some(host) = parts.headers.get(header::HOST) {
+        builder = builder.header("x-forwarded-host", host);
+    }
+
+    let upstream_response = builder
+        .body(reqwest::Body::wrap_stream(body.into_data_stream()))
+        .send()
+        .await?;
+
+    let mut response = Response::builder().status(upstream_response.status());
+    for (name, value) in upstream_response.headers() {
+        if is_hop_by_hop(name) {
+            continue;
+        }
+        response = response.header(name, value);
+    }
+    Ok(response
+        .body(Body::from_stream(upstream_response.bytes_stream()))
+        .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response()))
 }
 
 async fn serve_file(path: &Path, status: StatusCode) -> Response {
@@ -334,11 +475,22 @@ async fn ensure_artifact(
     manifest::validate_manifest(&manifest, &deployment_dir)
         .map_err(|error| anyhow::anyhow!("invalid output manifest: {error}"))?;
 
+    if manifest.runtime.kind == "ssr" {
+        let server = manifest
+            .server
+            .ok_or_else(|| anyhow::anyhow!("ssr manifest has no server section"))?;
+        return Ok(ResolvedTarget::Ssr {
+            deployment_id,
+            deployment_dir,
+            server,
+        });
+    }
+
     let static_section = manifest
         .static_site
         .ok_or_else(|| anyhow::anyhow!("manifest has no static section"))?;
 
-    Ok(ResolvedTarget {
+    Ok(ResolvedTarget::Static {
         static_dir: deployment_dir.join(static_section.directory),
         spa_fallback: static_section.spa_fallback,
         not_found: (!static_section.not_found.trim().is_empty())

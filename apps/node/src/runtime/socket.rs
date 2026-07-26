@@ -6,11 +6,13 @@
 use std::path::{Path, PathBuf};
 
 use bollard::Docker;
-use bollard::models::{ContainerCreateBody, HostConfig};
+use bollard::models::{
+    ContainerCreateBody, ContainerInspectResponse, HostConfig, RestartPolicy, RestartPolicyNameEnum,
+};
 use bollard::query_parameters::{
-    CreateContainerOptions, CreateImageOptions, DownloadFromContainerOptions, LogsOptions,
-    RemoveContainerOptions, StartContainerOptions, StopContainerOptions, UploadToContainerOptions,
-    WaitContainerOptions,
+    CreateContainerOptions, CreateImageOptions, DownloadFromContainerOptions,
+    InspectContainerOptions, LogsOptions, RemoveContainerOptions, StartContainerOptions,
+    StopContainerOptions, UploadToContainerOptions, WaitContainerOptions,
 };
 use futures_util::StreamExt;
 use tokio::sync::{mpsc, watch};
@@ -60,13 +62,16 @@ impl SocketRuntime {
     }
 }
 
-/// Packs the local workspace as a `workspace/`-rooted tar for upload.
-async fn workspace_tar(workspace: PathBuf) -> Result<Vec<u8>, ContainerRuntimeError> {
+/// Packs a local directory as a tar rooted at `root_name` for upload.
+async fn rooted_tar(
+    root_name: &'static str,
+    dir: PathBuf,
+) -> Result<Vec<u8>, ContainerRuntimeError> {
     tokio::task::spawn_blocking(move || {
         let mut builder = tar::Builder::new(Vec::new());
         builder.follow_symlinks(false);
         builder
-            .append_dir_all("workspace", &workspace)
+            .append_dir_all(root_name, &dir)
             .map_err(|error| runtime_error("workspace archive", error))?;
         builder
             .into_inner()
@@ -74,6 +79,20 @@ async fn workspace_tar(workspace: PathBuf) -> Result<Vec<u8>, ContainerRuntimeEr
     })
     .await
     .map_err(|error| runtime_error("workspace archive task", error))?
+}
+
+/// Address of a service container as seen from this node process: the
+/// container IP on the configured network (containers on the same bridge or
+/// user network reach each other directly, no published ports needed).
+fn upstream_address(
+    inspect: &ContainerInspectResponse,
+    network: &str,
+    port: u16,
+) -> Option<String> {
+    let networks = inspect.network_settings.as_ref()?.networks.as_ref()?;
+    let endpoint = networks.get(network).or_else(|| networks.values().next())?;
+    let ip = endpoint.ip_address.as_deref().filter(|ip| !ip.is_empty())?;
+    Some(format!("{ip}:{port}"))
 }
 
 /// Unpacks an exported tar under `destination`; `unpack_in` rejects entries
@@ -193,7 +212,7 @@ impl super::ContainerRuntime for SocketRuntime {
         // Copy the workspace in instead of bind-mounting it: the engine may
         // live on another host (containerized Node), where host paths from
         // this process do not exist.
-        let tar_bytes = match workspace_tar(input.workspace.clone()).await {
+        let tar_bytes = match rooted_tar("workspace", input.workspace.clone()).await {
             Ok(bytes) => bytes,
             Err(error) => {
                 self.remove_container(&name).await;
@@ -364,16 +383,126 @@ impl super::ContainerRuntime for SocketRuntime {
 
     async fn run_service(
         &self,
-        _input: RunServiceInput,
+        input: RunServiceInput,
     ) -> Result<RunningService, ContainerRuntimeError> {
-        Err(ContainerRuntimeError::BackendNotImplemented(
-            "run_service (SSR)".to_owned(),
-        ))
+        // Adopt a running container left over from a previous node process;
+        // recreate anything stopped or unreachable.
+        if let Ok(existing) = self
+            .docker
+            .inspect_container(&input.name, None::<InspectContainerOptions>)
+            .await
+        {
+            let running = existing
+                .state
+                .as_ref()
+                .and_then(|state| state.running)
+                .unwrap_or(false);
+            if running
+                && let Some(upstream) =
+                    upstream_address(&existing, &input.network, input.container_port)
+            {
+                return Ok(RunningService { upstream });
+            }
+            self.remove_container(&input.name).await;
+        }
+
+        let env: Vec<String> = input
+            .env
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect();
+        let config = ContainerCreateBody {
+            image: Some(input.image.clone()),
+            cmd: Some(vec![
+                "/bin/sh".to_owned(),
+                "-lc".to_owned(),
+                input.start_command.clone(),
+            ]),
+            working_dir: Some("/app".to_owned()),
+            env: Some(env),
+            host_config: Some(HostConfig {
+                memory: Some((input.memory_mb * 1024 * 1024) as i64),
+                nano_cpus: Some(i64::from(input.cpu_limit) * 1_000_000_000),
+                network_mode: Some(input.network.clone()),
+                restart_policy: Some(RestartPolicy {
+                    name: Some(RestartPolicyNameEnum::ON_FAILURE),
+                    maximum_retry_count: Some(3),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        self.docker
+            .create_container(
+                Some(CreateContainerOptions {
+                    name: Some(input.name.clone()),
+                    ..Default::default()
+                }),
+                config,
+            )
+            .await
+            .map_err(|error| runtime_error("service create", error))?;
+
+        let tar_bytes = match rooted_tar("app", input.app_dir.clone()).await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.remove_container(&input.name).await;
+                return Err(error);
+            }
+        };
+        if let Err(error) = self
+            .docker
+            .upload_to_container(
+                &input.name,
+                Some(UploadToContainerOptions {
+                    path: "/".to_owned(),
+                    ..Default::default()
+                }),
+                bollard::body_full(tar_bytes.into()),
+            )
+            .await
+        {
+            self.remove_container(&input.name).await;
+            return Err(runtime_error("service upload", error));
+        }
+
+        if let Err(error) = self
+            .docker
+            .start_container(&input.name, None::<StartContainerOptions>)
+            .await
+        {
+            self.remove_container(&input.name).await;
+            return Err(runtime_error("service start", error));
+        }
+
+        let inspected = self
+            .docker
+            .inspect_container(&input.name, None::<InspectContainerOptions>)
+            .await
+            .map_err(|error| runtime_error("service inspect", error))?;
+        let Some(upstream) = upstream_address(&inspected, &input.network, input.container_port)
+        else {
+            self.remove_container(&input.name).await;
+            return Err(ContainerRuntimeError::Runtime(format!(
+                "service container has no IP address on network {}",
+                input.network
+            )));
+        };
+        Ok(RunningService { upstream })
     }
 
-    async fn stop_service(&self, _service_id: &str) -> Result<(), ContainerRuntimeError> {
-        Err(ContainerRuntimeError::BackendNotImplemented(
-            "stop_service (SSR)".to_owned(),
-        ))
+    async fn stop_service(&self, service_id: &str) -> Result<(), ContainerRuntimeError> {
+        let _ = self
+            .docker
+            .stop_container(
+                service_id,
+                Some(StopContainerOptions {
+                    t: Some(5),
+                    ..Default::default()
+                }),
+            )
+            .await;
+        self.remove_container(service_id).await;
+        Ok(())
     }
 }
