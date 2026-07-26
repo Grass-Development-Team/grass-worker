@@ -1,3 +1,4 @@
+pub mod audit;
 pub mod create;
 pub mod detail;
 pub mod invitations;
@@ -22,6 +23,7 @@ pub fn router() -> Router<ControlApiState> {
             get(detail::handler).patch(update::handler),
         )
         .route("/teams/{team_id}/members", get(members::list))
+        .route("/teams/{team_id}/audit-events", get(audit::list))
         .route("/teams/{team_id}/quota", get(quota::plan))
         .route("/teams/{team_id}/quota/usage", get(quota::usage))
         .route(
