@@ -25,7 +25,7 @@ version = "0.1.0"
 anyhow = "1.0.100"
 argon2 = { version = "0.5", features = ["std"] }
 async-trait = "0.1"
-axum = "0.8.7"
+axum = { version = "0.8.7", features = ["ws"] }
 axum-extra = { version = "0.10", features = ["cookie"] }
 base64 = "0.22"
 clap = { version = "4.5.50", features = ["derive", "env"] }
@@ -36,6 +36,7 @@ moka = { version = "0.12", features = ["future"] }
 rand = "0.8"
 redis = { version = "0.31.0", default-features = false, features = ["tokio-comp", "aio", "script"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 rust-embed = "8"
 sea-orm = { version = "2.0.0-rc.38", default-features = false, features = ["macros", "sqlx-postgres", "runtime-tokio-rustls", "with-json", "with-time", "with-uuid"] }
 sea-orm-migration = { version = "2.0.0-rc.38", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "with-json", "with-time", "with-uuid"] }

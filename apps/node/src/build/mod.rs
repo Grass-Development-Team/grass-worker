@@ -3,6 +3,7 @@
 
 pub mod git;
 pub mod logs;
+pub mod realtime;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -101,10 +102,13 @@ async fn run_build_job(
     let workspace = PathBuf::from(&config.node.work_root)
         .join("builds")
         .join(deployment_id.to_string());
+    let publisher =
+        realtime::RealtimePublisher::start(&config.node.control_api, &config.node.node_token);
     let (collector, log_flusher) = logs::LogCollector::start(
         deployment_id,
         client.clone(),
         workspace.join("build-log.txt"),
+        Some(publisher),
     );
 
     // Cancel watcher: polls the stage endpoint so user cancels reach the
@@ -164,6 +168,13 @@ async fn run_build_job(
     } else {
         collector.log("system", "build completed successfully");
     }
+
+    let status_value = match status {
+        ReportedStatus::Ready => "ready",
+        ReportedStatus::Canceled => "canceled",
+        _ => "failed",
+    };
+    collector.publish_done(status_value);
 
     let report = StageRequest {
         status: Some(status),
@@ -282,6 +293,7 @@ async fn run_pipeline(
         &stage_report(Some(ReportedStatus::Building), stage::CHECKOUT),
     )
     .await?;
+    collector.publish_stage(stage::CHECKOUT);
     collector.log(
         stage::CHECKOUT,
         format!("cloning {}", claimed.repository_url),
@@ -357,6 +369,7 @@ async fn run_pipeline(
         (stage::BUILD, &build_command),
     ] {
         report_stage_checked(client, deployment_id, &stage_report(None, stage_name)).await?;
+        collector.publish_stage(stage_name);
         collector.log(stage_name, format!("$ {command}"));
 
         let (log_tx, mut log_rx) = mpsc::channel::<String>(256);
@@ -420,6 +433,7 @@ async fn run_pipeline(
 
     // --- Grass Output -------------------------------------------------------
     report_stage_checked(client, deployment_id, &stage_report(None, stage::OUTPUT)).await?;
+    collector.publish_stage(stage::OUTPUT);
     collector.log(stage::OUTPUT, "generating .grass/output");
 
     let project_root = checkout.project_root.clone();
@@ -453,6 +467,7 @@ async fn run_pipeline(
 
     // --- Archive ------------------------------------------------------------
     report_stage_checked(client, deployment_id, &stage_report(None, stage::ARCHIVE)).await?;
+    collector.publish_stage(stage::ARCHIVE);
     let archive_path = workspace.join("grass-output.zip");
     let output_root = generated.output_root.clone();
     let archive_target = archive_path.clone();
@@ -471,6 +486,7 @@ async fn run_pipeline(
 
     // --- Upload -------------------------------------------------------------
     report_stage_checked(client, deployment_id, &stage_report(None, stage::UPLOAD)).await?;
+    collector.publish_stage(stage::UPLOAD);
     let bytes = tokio::fs::read(&archive_path)
         .await
         .map_err(|error| BuildFailure::new("upload_failed", error.to_string()))?;

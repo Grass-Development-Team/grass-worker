@@ -6,12 +6,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use grass_node_protocol::{AppendBuildLogRequest, BuildLogLine};
+use grass_node_protocol::{AppendBuildLogRequest, BuildLogLine, LogStreamMessage};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::client::ControlApiClient;
+use crate::{build::realtime::RealtimePublisher, client::ControlApiClient};
 
 const FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(700);
 const FLUSH_BATCH: usize = 100;
@@ -21,6 +21,7 @@ pub struct LogCollector {
     deployment_id: Uuid,
     seq: Arc<AtomicU64>,
     sender: mpsc::UnboundedSender<BuildLogLine>,
+    realtime: Option<RealtimePublisher>,
 }
 
 impl LogCollector {
@@ -31,6 +32,7 @@ impl LogCollector {
         deployment_id: Uuid,
         client: ControlApiClient,
         local_log_path: PathBuf,
+        realtime: Option<RealtimePublisher>,
     ) -> (Self, tokio::task::JoinHandle<()>) {
         let (sender, mut receiver) = mpsc::unbounded_channel::<BuildLogLine>();
 
@@ -83,6 +85,7 @@ impl LogCollector {
                 deployment_id,
                 seq: Arc::new(AtomicU64::new(0)),
                 sender,
+                realtime,
             },
             flusher,
         )
@@ -93,7 +96,8 @@ impl LogCollector {
         self.deployment_id
     }
 
-    /// Records one log line under the given stage.
+    /// Records one log line under the given stage: persisted through the
+    /// HTTP batch and mirrored on the realtime channel.
     pub fn log(&self, stage: &str, line: impl Into<String>) {
         let seq = self.seq.fetch_add(1, Ordering::Relaxed) + 1;
         let entry = BuildLogLine {
@@ -102,7 +106,36 @@ impl LogCollector {
             line: line.into(),
             timestamp_ms: now_ms(),
         };
+        if let Some(realtime) = &self.realtime {
+            realtime.publish(LogStreamMessage::Log {
+                deployment_id: self.deployment_id,
+                stage: entry.stage.clone(),
+                line: entry.line.clone(),
+                timestamp_ms: entry.timestamp_ms,
+                seq: entry.seq,
+            });
+        }
         let _ = self.sender.send(entry);
+    }
+
+    /// Announces a stage change on the realtime channel.
+    pub fn publish_stage(&self, stage: &str) {
+        if let Some(realtime) = &self.realtime {
+            realtime.publish(LogStreamMessage::StageChange {
+                deployment_id: self.deployment_id,
+                stage: stage.to_owned(),
+            });
+        }
+    }
+
+    /// Announces the terminal build status on the realtime channel.
+    pub fn publish_done(&self, build_status: &str) {
+        if let Some(realtime) = &self.realtime {
+            realtime.publish(LogStreamMessage::Done {
+                deployment_id: self.deployment_id,
+                build_status: build_status.to_owned(),
+            });
+        }
     }
 
     #[allow(dead_code)] // Read by the websocket log pusher in Milestone 9.

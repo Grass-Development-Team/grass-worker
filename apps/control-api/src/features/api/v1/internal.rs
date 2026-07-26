@@ -1,4 +1,5 @@
 pub mod deployments;
+pub mod log_stream;
 pub mod nodes;
 pub mod serve;
 
@@ -34,6 +35,7 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
             get(deployments::download_artifact),
         )
         .route("/serve/resolve-host", get(serve::resolve_host))
+        .route("/log-stream", get(log_stream::ingest))
         .layer(middleware::from_fn_with_state(
             state,
             node_auth::node_auth_middleware,
