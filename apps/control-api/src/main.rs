@@ -29,6 +29,7 @@ async fn main() -> anyhow::Result<()> {
 
     init::database(&state).await?;
     init::cache(&state).await?;
+    spawn_node_health_sweep(state.clone());
     let addr = init::address(&state);
     let app = features::router::router(state.clone()).with_state(state);
     let listener = tokio::net::TcpListener::bind(addr)
@@ -46,6 +47,38 @@ async fn main() -> anyhow::Result<()> {
     info!(operation = "control_api.stop", "Control API stopped");
 
     Ok(())
+}
+
+/// Periodically marks Nodes without a recent heartbeat as offline so the
+/// admin console and claim decisions reflect real availability.
+fn spawn_node_health_sweep(state: ControlApiState) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            let Some(db) = state.try_database() else {
+                continue;
+            };
+            match domain::nodes::mark_stale_offline(
+                db,
+                features::api::v1::admin::nodes::HEARTBEAT_STALE_SECONDS,
+            )
+            .await
+            {
+                Ok(0) => {}
+                Ok(count) => info!(
+                    operation = "control_api.node_health_sweep",
+                    count, "marked stale nodes offline"
+                ),
+                Err(error) => tracing::warn!(
+                    operation = "control_api.node_health_sweep",
+                    %error,
+                    "node health sweep failed"
+                ),
+            }
+        }
+    });
 }
 
 async fn shutdown_signal() {

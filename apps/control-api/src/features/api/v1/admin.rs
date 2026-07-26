@@ -1,10 +1,11 @@
 pub mod host_sources;
+pub mod nodes;
 pub mod quota_plans;
 
 use axum::{
     Router,
     response::IntoResponse,
-    routing::{get, patch},
+    routing::{get, patch, post},
 };
 use serde_json::json;
 
@@ -29,6 +30,10 @@ pub fn router() -> Router<ControlApiState> {
             "/host-sources/{source_id}",
             patch(host_sources::update).delete(host_sources::remove),
         )
+        .route("/nodes", get(nodes::list).post(nodes::create))
+        .route("/nodes/{node_id}", get(nodes::detail))
+        .route("/nodes/{node_id}/health", get(nodes::health))
+        .route("/nodes/{node_id}/rotate-token", post(nodes::rotate_token))
 }
 
 pub(crate) fn database<'a>(
