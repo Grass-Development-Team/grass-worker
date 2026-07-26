@@ -4,6 +4,7 @@ import {
   GaugeIcon,
   HomeIcon,
   LogOutIcon,
+  ScrollTextIcon,
   SettingsIcon,
   ShieldCheckIcon,
   UsersIcon,
@@ -48,6 +49,7 @@ const administrationNavigation = {
 const settingsNavigation = [
   { title: "General", url: "/settings/team", icon: SettingsIcon },
   { title: "Members", url: "/settings/members", icon: UsersIcon },
+  { title: "Audit", url: "/settings/audit", icon: ScrollTextIcon },
 ];
 
 const initials = (value: string) => value.slice(0, 2).toUpperCase();

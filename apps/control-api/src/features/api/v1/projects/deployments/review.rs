@@ -27,6 +27,7 @@ use super::map_state_error;
 async fn record_review_audit(
     db: &sea_orm::DatabaseConnection,
     actor: Uuid,
+    team_id: Uuid,
     action: &str,
     deployment_id: Uuid,
     reason: Option<String>,
@@ -35,6 +36,7 @@ async fn record_review_audit(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(actor),
+            team_id: Some(team_id),
             action: action.to_owned(),
             target_type: "deployment".to_owned(),
             target_id: Some(deployment_id),
@@ -117,6 +119,7 @@ pub async fn request(
     record_review_audit(
         db,
         session.data.user_id,
+        access.team.id,
         "deployment.review_requested",
         deployment.id,
         None,
@@ -202,6 +205,7 @@ async fn decide(
     record_review_audit(
         db,
         session.data.user_id,
+        access.team.id,
         if approved {
             "deployment.review_approved"
         } else {

@@ -3,6 +3,8 @@ import { ShieldCheckIcon } from "lucide-react";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
+import { AuditEventsTable } from "@/features/audit/audit-events-table";
+
 import { adminApi } from "./admin.api";
 import { HostSourcesPanel } from "./components/host-sources-panel";
 import { NodesPanel } from "./components/nodes-panel";
@@ -47,6 +49,7 @@ export function AdminRoute() {
           <TabsTrigger value="nodes">Nodes</TabsTrigger>
           <TabsTrigger value="host-sources">Host sources</TabsTrigger>
           <TabsTrigger value="quota-plans">Quota plans</TabsTrigger>
+          <TabsTrigger value="audit">Audit</TabsTrigger>
         </TabsList>
         <TabsContent value="nodes">
           <NodesPanel />
@@ -56,6 +59,9 @@ export function AdminRoute() {
         </TabsContent>
         <TabsContent value="quota-plans">
           <QuotaPlansPanel />
+        </TabsContent>
+        <TabsContent value="audit">
+          <AuditEventsTable />
         </TabsContent>
       </Tabs>
     </div>

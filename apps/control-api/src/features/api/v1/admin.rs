@@ -1,6 +1,8 @@
+pub mod audit_events;
 pub mod host_sources;
 pub mod nodes;
 pub mod quota_plans;
+pub mod team_groups;
 
 use axum::{
     Router,
@@ -30,6 +32,13 @@ pub fn router() -> Router<ControlApiState> {
             "/host-sources/{source_id}",
             patch(host_sources::update).delete(host_sources::remove),
         )
+        .route("/audit-events", get(audit_events::list))
+        .route(
+            "/team-groups",
+            get(team_groups::list).post(team_groups::create),
+        )
+        .route("/team-groups/{group_id}", patch(team_groups::update))
+        .route("/teams/{team_id}/group", post(team_groups::assign))
         .route("/nodes", get(nodes::list).post(nodes::create))
         .route("/nodes/{node_id}", get(nodes::detail))
         .route("/nodes/{node_id}/health", get(nodes::health))

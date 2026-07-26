@@ -8,6 +8,7 @@ use crate::infra::database::entity::{AuditEventResult, audit_event};
 
 pub struct CreateAuditEventParams {
     pub actor_user_id: Option<Uuid>,
+    pub team_id: Option<Uuid>,
     pub action: String,
     pub target_type: String,
     pub target_id: Option<Uuid>,
@@ -23,6 +24,7 @@ pub async fn create_audit_event<C: ConnectionTrait>(
     audit_event::ActiveModel {
         id: Set(Uuid::now_v7()),
         actor_user_id: Set(params.actor_user_id),
+        team_id: Set(params.team_id),
         action: Set(params.action),
         target_type: Set(params.target_type),
         target_id: Set(params.target_id),
@@ -36,15 +38,14 @@ pub async fn create_audit_event<C: ConnectionTrait>(
     .map_err(Into::into)
 }
 
-// Consumed by the audit query APIs in Milestone 12.
-#[allow(dead_code)]
 pub struct AuditEventFilter {
     pub action: Option<String>,
     pub target_id: Option<Uuid>,
+    /// Restrict to one team's events; `None` is the platform-wide view.
+    pub team_id: Option<Uuid>,
     pub limit: u64,
 }
 
-#[allow(dead_code)] // Consumed by the audit query APIs in Milestone 12.
 pub async fn list_events<C: ConnectionTrait>(
     db: &C,
     filter: AuditEventFilter,
@@ -57,6 +58,9 @@ pub async fn list_events<C: ConnectionTrait>(
     }
     if let Some(target_id) = filter.target_id {
         query = query.filter(audit_event::Column::TargetId.eq(target_id));
+    }
+    if let Some(team_id) = filter.team_id {
+        query = query.filter(audit_event::Column::TeamId.eq(team_id));
     }
 
     query
