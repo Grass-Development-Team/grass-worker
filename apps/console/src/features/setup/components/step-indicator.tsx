@@ -23,32 +23,39 @@ const STAGE_ORDER: SetupStage[] = [
 
 export function StepIndicator({ stage }: { stage: SetupStage }) {
   const currentIndex = STAGE_ORDER.indexOf(stage);
+  const current = STEPS.find((step) => step.stage === stage);
   return (
-    <div className="flex items-center justify-center gap-1">
-      {STEPS.map((step, i) => {
-        const isCompleted = i < currentIndex;
-        const isCurrent = step.stage === stage;
-        return (
-          <div key={step.stage} className="flex items-center gap-1">
-            <div
-              className={`flex size-6 items-center justify-center rounded-full text-xs font-medium ${
-                isCompleted
-                  ? "bg-primary text-primary-foreground"
-                  : isCurrent
-                    ? "border-2 border-primary text-primary"
-                    : "border-2 border-muted-foreground/30 text-muted-foreground"
-              }`}
-            >
-              {isCompleted ? <Check className="size-3" /> : i + 1}
-            </div>
-            {i < STEPS.length - 1 && (
+    <div className="flex flex-col items-center gap-2">
+      <div className="flex items-center justify-center gap-1.5">
+        {STEPS.map((step, i) => {
+          const isCompleted = i < currentIndex;
+          const isCurrent = step.stage === stage;
+          return (
+            <div key={step.stage} className="flex items-center gap-1.5">
               <div
-                className={`h-px w-4 ${isCompleted ? "bg-primary" : "bg-muted-foreground/30"}`}
-              />
-            )}
-          </div>
-        );
-      })}
+                className={`flex size-7 items-center justify-center rounded-full text-xs font-medium transition-colors ${
+                  isCompleted
+                    ? "bg-primary text-primary-foreground"
+                    : isCurrent
+                      ? "border-2 border-primary text-primary"
+                      : "border border-border text-muted-foreground"
+                }`}
+                title={step.title}
+              >
+                {isCompleted ? <Check className="size-3.5" /> : i + 1}
+              </div>
+              {i < STEPS.length - 1 && (
+                <div className={`h-px w-5 ${isCompleted ? "bg-primary" : "bg-border"}`} />
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {current && (
+        <p className="text-xs text-muted-foreground">
+          Step {currentIndex + 1} of {STEPS.length} — {current.title}
+        </p>
+      )}
     </div>
   );
 }

@@ -41,9 +41,7 @@ export function AdminRoute() {
           {status.data ? (
             <div>
               <p className="font-medium">{status.data.service}</p>
-              <p className="text-sm text-muted-foreground">
-                Ready mode | Version {status.data.version}
-              </p>
+              <p className="text-sm text-muted-foreground">Ready mode · v{status.data.version}</p>
             </div>
           ) : (
             <div className="h-10 w-56 animate-pulse rounded-sm bg-muted" aria-hidden="true" />
