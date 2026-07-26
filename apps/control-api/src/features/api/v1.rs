@@ -89,4 +89,71 @@ mod tests {
 
         assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
     }
+
+    #[tokio::test]
+    async fn internal_node_routes_require_a_bearer_token() {
+        let state = ControlApiState::new(ControlApiConfig::default(), "config.toml");
+        let router = router(state.clone()).with_state(state);
+
+        // Without a database the ready-mode gate rejects first; with one the
+        // node auth middleware rejects. Either way no unauthenticated
+        // request may ever succeed.
+        for uri in [
+            "/internal/serve/resolve-host?host=demo.grass.test",
+            "/internal/log-stream",
+        ] {
+            let response = router
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert!(
+                response.status().is_client_error(),
+                "{uri} must reject requests without a node token"
+            );
+        }
+
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/internal/nodes/heartbeat")
+                    .header("authorization", "Bearer wrong-token")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"active_builds":0}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            !response.status().is_success(),
+            "an invalid node token must never authenticate"
+        );
+    }
+
+    #[tokio::test]
+    async fn admin_governance_routes_are_guarded() {
+        let state = ControlApiState::new(ControlApiConfig::default(), "config.toml");
+        let router = router(state.clone()).with_state(state);
+
+        for uri in [
+            "/admin/audit-events",
+            "/admin/team-groups",
+            "/admin/quota-plans",
+            "/admin/host-sources",
+            "/admin/nodes",
+        ] {
+            let response = router
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::UNAUTHORIZED,
+                "{uri} must require an authenticated platform administrator"
+            );
+        }
+    }
 }
