@@ -5,3 +5,4 @@ pub mod m20260714_000004_m0_m2_remediation;
 pub mod m20260720_000005_platform_admin_role;
 pub mod m20260726_000006_project_host_columns;
 pub mod m20260726_000007_deployment_stage;
+pub mod m20260726_000008_audit_team_scope;
