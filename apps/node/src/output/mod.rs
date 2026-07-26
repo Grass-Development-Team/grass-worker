@@ -31,7 +31,6 @@ pub enum InspectedRuntime {
     Static { directory: PathBuf },
     Ssr,
     Serverless,
-    Edge,
     Unknown,
 }
 
@@ -46,10 +45,6 @@ pub fn inspect_build_output(
     // Serverless / edge outputs (Vercel build output layout).
     if project_root.join(".vercel/output/functions").is_dir() {
         return InspectedRuntime::Serverless;
-    }
-    if project_root.join("middleware.js").is_file() || project_root.join("middleware.ts").is_file()
-    {
-        return InspectedRuntime::Edge;
     }
 
     // Server bundles produced by meta-frameworks.
@@ -242,7 +237,6 @@ pub fn generate_grass_output(
         InspectedRuntime::Serverless => {
             return Err(OutputError::RuntimeNotImplemented("Serverless"));
         }
-        InspectedRuntime::Edge => return Err(OutputError::RuntimeNotImplemented("Edge")),
         InspectedRuntime::Unknown => {
             return Err(OutputError::Unrecognized(
                 "no static output directory with index.html was found".to_owned(),
