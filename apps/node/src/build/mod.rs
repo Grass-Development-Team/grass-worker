@@ -366,10 +366,16 @@ async fn run_pipeline(
     drop(log_tx);
     let _ = image_pump.await;
 
+    // Per-deployment override when set, otherwise the node's configured build
+    // command timeout so a runaway build is always bounded.
     let timeout = claimed
         .build_timeout_seconds
         .filter(|seconds| *seconds > 0)
-        .map(|seconds| Duration::from_secs(seconds as u64));
+        .map(|seconds| Duration::from_secs(seconds as u64))
+        .or_else(|| {
+            (config.build.command_timeout_seconds > 0)
+                .then(|| Duration::from_secs(config.build.command_timeout_seconds))
+        });
 
     // Install and build run in ONE container so state (node_modules) carries
     // over without host-path sharing; sentinel exit codes keep failure
