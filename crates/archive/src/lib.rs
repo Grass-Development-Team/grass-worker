@@ -113,14 +113,29 @@ pub fn unpack_zip_bytes(bytes: &[u8], destination: &Path) -> anyhow::Result<usiz
     unpack_zip_reader(std::io::Cursor::new(bytes), destination)
 }
 
+/// Upper bounds that keep a hostile archive from exhausting disk. A single
+/// build artifact is expected to be far below these; they exist so a
+/// decompression bomb fails loudly instead of filling the host.
+const MAX_ENTRIES: usize = 50_000;
+const MAX_TOTAL_UNPACKED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const MAX_ENTRY_UNPACKED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
 fn unpack_zip_reader<R: Read + std::io::Seek>(
     reader: R,
     destination: &Path,
 ) -> anyhow::Result<usize> {
     let mut archive = ZipArchive::new(reader)?;
+    if archive.len() > MAX_ENTRIES {
+        anyhow::bail!(
+            "archive has {} entries, exceeding the {} entry limit",
+            archive.len(),
+            MAX_ENTRIES
+        );
+    }
     std::fs::create_dir_all(destination)?;
 
     let mut extracted = 0;
+    let mut total_written: u64 = 0;
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index)?;
         let name = entry.name().to_owned();
@@ -137,7 +152,17 @@ fn unpack_zip_reader<R: Read + std::io::Seek>(
             std::fs::create_dir_all(parent)?;
         }
         let mut output = File::create(&target)?;
-        std::io::copy(&mut entry, &mut output)?;
+        // Bound each entry independently, then re-check the running total so
+        // neither one huge entry nor many small entries can overrun the caps.
+        let remaining_total = MAX_TOTAL_UNPACKED_BYTES.saturating_sub(total_written);
+        let entry_cap = MAX_ENTRY_UNPACKED_BYTES.min(remaining_total);
+        let written = std::io::copy(&mut entry.by_ref().take(entry_cap + 1), &mut output)?;
+        if written > entry_cap {
+            anyhow::bail!(
+                "archive entry {name} exceeds the unpack size limit; refusing decompression bomb"
+            );
+        }
+        total_written += written;
         extracted += 1;
     }
 
