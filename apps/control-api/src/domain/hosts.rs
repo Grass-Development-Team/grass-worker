@@ -391,10 +391,14 @@ pub fn platform_host_candidate(project_slug: &str, base_domain: &str, attempt: u
 
 /// Builds the preview host for a deployment under a base domain, keeping a
 /// single DNS label so one-level wildcard records still match.
-#[allow(dead_code)] // Wired by deployment creation in Milestone 5.
+///
+/// The suffix comes from the END of the UUID: v7 ids start with a
+/// timestamp, so their leading hex barely changes between deployments and
+/// collides on the partial unique preview-host index. The tail bytes are
+/// random.
 pub fn preview_host_for(project_slug: &str, deployment_id: Uuid, base_domain: &str) -> String {
-    let short = deployment_id.simple().to_string();
-    let short = &short[..8];
+    let simple = deployment_id.simple().to_string();
+    let short = &simple[simple.len() - 8..];
     let slug: String = project_slug.chars().take(63 - 9).collect();
     let slug = slug.trim_end_matches('-');
     format!("{slug}-{short}.{base_domain}")
@@ -497,5 +501,15 @@ mod tests {
 
         let long = preview_host_for(&"b".repeat(90), deployment_id, "grass.test");
         assert!(grass_validator::normalize_host(&long).is_ok());
+    }
+
+    #[test]
+    fn preview_hosts_differ_for_deployments_created_close_together() {
+        // v7 uuids share their leading timestamp hex for ~18 hours; the
+        // suffix must come from the random tail so back-to-back preview
+        // deployments of one project never collide.
+        let first = preview_host_for("my-app", Uuid::now_v7(), "grass.test");
+        let second = preview_host_for("my-app", Uuid::now_v7(), "grass.test");
+        assert_ne!(first, second);
     }
 }
