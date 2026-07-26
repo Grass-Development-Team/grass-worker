@@ -87,9 +87,104 @@ pub fn normalize_slug(value: &str) -> Result<String, SlugError> {
     Ok(normalized)
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum HostError {
+    Empty,
+    InvalidCharacter,
+    InvalidLabel,
+    TooLong,
+}
+
+impl std::fmt::Display for HostError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => formatter.write_str("host is required"),
+            Self::InvalidCharacter => formatter
+                .write_str("host may contain only ASCII letters, numbers, dots, and dashes"),
+            Self::InvalidLabel => formatter.write_str(
+                "host labels must be 1-63 characters and cannot start or end with a dash",
+            ),
+            Self::TooLong => formatter.write_str("host must not exceed 253 characters"),
+        }
+    }
+}
+
+impl std::error::Error for HostError {}
+
+/// Normalizes a DNS host name: trims, lowercases, strips one trailing dot,
+/// and validates RFC 1123 label rules.
+pub fn normalize_host(value: &str) -> Result<String, HostError> {
+    let trimmed = value.trim().trim_end_matches('.');
+    if trimmed.is_empty() {
+        return Err(HostError::Empty);
+    }
+    if trimmed.len() > 253 {
+        return Err(HostError::TooLong);
+    }
+
+    let normalized = trimmed.to_ascii_lowercase();
+    for label in normalized.split('.') {
+        if label.is_empty() || label.len() > 63 {
+            return Err(HostError::InvalidLabel);
+        }
+        if label.starts_with('-') || label.ends_with('-') {
+            return Err(HostError::InvalidLabel);
+        }
+        if !label
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        {
+            return Err(HostError::InvalidCharacter);
+        }
+    }
+
+    Ok(normalized)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalizes_host_names() {
+        assert_eq!(
+            normalize_host(" App.Example.COM. ").unwrap(),
+            "app.example.com"
+        );
+        assert_eq!(
+            normalize_host("a-b.example.com").unwrap(),
+            "a-b.example.com"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_host_names() {
+        assert_eq!(normalize_host("  "), Err(HostError::Empty));
+        assert_eq!(
+            normalize_host("-bad.example.com"),
+            Err(HostError::InvalidLabel)
+        );
+        assert_eq!(
+            normalize_host("bad-.example.com"),
+            Err(HostError::InvalidLabel)
+        );
+        assert_eq!(
+            normalize_host("bad..example.com"),
+            Err(HostError::InvalidLabel)
+        );
+        assert_eq!(
+            normalize_host("bad_host.example.com"),
+            Err(HostError::InvalidCharacter)
+        );
+        assert_eq!(
+            normalize_host(&format!("{}.example.com", "a".repeat(64))),
+            Err(HostError::InvalidLabel)
+        );
+        assert_eq!(
+            normalize_host(&format!("{}.com", "a.".repeat(140))),
+            Err(HostError::TooLong)
+        );
+    }
 
     #[test]
     fn normalizes_slug_case_and_separators() {
