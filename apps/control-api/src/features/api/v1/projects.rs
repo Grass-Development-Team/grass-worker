@@ -1,4 +1,5 @@
 pub mod create;
+pub mod deployments;
 pub mod detail;
 pub mod hosts;
 pub mod lifecycle;
@@ -58,6 +59,50 @@ pub fn router() -> Router<ControlApiState> {
         .route(
             "/projects/{project_id}/hosts/{host_id}/provision",
             post(hosts::provision),
+        )
+        .route(
+            "/projects/{project_id}/deployments",
+            get(deployments::list).post(deployments::create),
+        )
+        .route(
+            "/projects/{project_id}/deployments/{deployment_id}",
+            get(deployments::detail),
+        )
+        .route(
+            "/projects/{project_id}/deployments/{deployment_id}/events",
+            get(deployments::events),
+        )
+        .route(
+            "/projects/{project_id}/deployments/{deployment_id}/artifacts",
+            get(deployments::artifacts),
+        )
+        .route(
+            "/projects/{project_id}/deployments/{deployment_id}/cancel",
+            post(deployments::cancel),
+        )
+        .route(
+            "/projects/{project_id}/deployments/{deployment_id}/retry",
+            post(deployments::retry),
+        )
+        .route(
+            "/projects/{project_id}/deployments/{deployment_id}/promote",
+            post(deployments::promote),
+        )
+        .route(
+            "/projects/{project_id}/deployments/{deployment_id}/rollback",
+            post(deployments::rollback),
+        )
+        .route(
+            "/projects/{project_id}/deployments/{deployment_id}/review/request",
+            post(deployments::review::request),
+        )
+        .route(
+            "/projects/{project_id}/deployments/{deployment_id}/review/approve",
+            post(deployments::review::approve),
+        )
+        .route(
+            "/projects/{project_id}/deployments/{deployment_id}/review/reject",
+            post(deployments::review::reject),
         )
 }
 

@@ -1,4 +1,5 @@
 pub mod audits;
+pub mod deployments;
 pub mod hosts;
 pub mod nodes;
 pub mod projects;
