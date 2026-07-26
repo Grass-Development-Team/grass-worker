@@ -6,21 +6,27 @@ import { AdminRoute } from "./admin-route";
 
 afterEach(() => vi.restoreAllMocks());
 
+function jsonResponse(data: unknown): Response {
+  return new Response(JSON.stringify({ code: 200, message: "OK", data }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 it("loads system status through the protected administration API", async () => {
-  const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-    new Response(
-      JSON.stringify({
-        code: 200,
-        message: "OK",
-        data: {
-          service: "Grass Worker Control API",
-          mode: "ready",
-          version: "9.9.9",
-        },
-      }),
-      { status: 200, headers: { "Content-Type": "application/json" } },
-    ),
-  );
+  const fetchMock = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/v1/admin/nodes")) {
+        return jsonResponse({ nodes: [] });
+      }
+      return jsonResponse({
+        service: "Grass Worker Control API",
+        mode: "ready",
+        version: "9.9.9",
+      });
+    });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
   render(
@@ -34,4 +40,41 @@ it("loads system status through the protected administration API", async () => {
     "/api/v1/admin/status",
     expect.objectContaining({ credentials: "include" }),
   );
+});
+
+it("lists nodes with health state for administrators", async () => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/api/v1/admin/nodes")) {
+      return jsonResponse({
+        nodes: [
+          {
+            id: "node-1",
+            name: "build-node-1",
+            status: "active",
+            healthy: true,
+            build_enabled: true,
+            serve_enabled: true,
+            build_concurrency: 2,
+            base_url: "http://127.0.0.1:8080",
+            work_root: "/data/node",
+            version: "0.1.0",
+            last_heartbeat_at: new Date().toISOString(),
+            created_at: new Date().toISOString(),
+          },
+        ],
+      });
+    }
+    return jsonResponse({ service: "Grass Worker Control API", mode: "ready", version: "9.9.9" });
+  });
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+  render(
+    <QueryClientProvider client={queryClient}>
+      <AdminRoute />
+    </QueryClientProvider>,
+  );
+
+  expect(await screen.findByText("build-node-1")).toBeInTheDocument();
+  expect(screen.getByText("Healthy")).toBeInTheDocument();
 });

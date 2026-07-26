@@ -169,6 +169,41 @@ impl<'a> QuotaService<'a> {
         }
     }
 
+    /// Records usage that already happened and must not be blocked by the
+    /// limit, such as build minutes measured after a build finished. The
+    /// cache counter still advances so subsequent limit checks see it.
+    pub async fn charge_unchecked(
+        &self,
+        op: &'static str,
+        team_id: Uuid,
+        charges: &[QuotaCharge],
+        resource_type: &str,
+        resource_id: Option<Uuid>,
+    ) -> Result<(), AppError> {
+        for charge in charges {
+            let key = counter_key(team_id, charge.dimension);
+            self.cache
+                .adjust_counter(&key, charge.amount)
+                .await
+                .map_err(|source| AppError::Infrastructure { op, source })?;
+            quotas::record_event(
+                self.db,
+                RecordEventParams {
+                    team_id,
+                    dimension: charge.dimension,
+                    kind: QuotaEventKind::Consume,
+                    delta_value: charge.amount,
+                    resource_type: Some(resource_type.to_owned()),
+                    resource_id,
+                    metadata: serde_json::json!({ "unchecked": true }),
+                },
+            )
+            .await
+            .map_err(|source| AppError::Infrastructure { op, source })?;
+        }
+        Ok(())
+    }
+
     /// Releases previously consumed usage (project deleted, artifact removed,
     /// member removed) in both the cache and durable counters.
     pub async fn release(
