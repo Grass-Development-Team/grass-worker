@@ -298,3 +298,86 @@ pub async fn remove(
 
     Ok(ok_response(json!({ "deleted": true })))
 }
+
+#[derive(Deserialize)]
+pub struct SetQuotaPlanRequest {
+    /// `null` clears the override so the team inherits its group plan.
+    pub plan_id: Option<Uuid>,
+}
+
+/// POST /api/v1/admin/teams/{team_id}/quota-plan
+///
+/// Sets or clears the explicit per-team quota plan override, which wins
+/// over the team group's plan during resolution.
+pub async fn set_quota_plan(
+    State(state): State<ControlApiState>,
+    Session { data, .. }: Session,
+    Path(team_id): Path<Uuid>,
+    Json(body): Json<SetQuotaPlanRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "admin.teams.set_quota_plan";
+    let db = super::database(&state, OP)?;
+
+    let target = teams::get_by_id(db, team_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "team not found".to_owned(),
+        })?;
+
+    if let Some(plan_id) = body.plan_id {
+        let plan = crate::domain::quotas::get_plan(db, plan_id)
+            .await
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+        match plan {
+            Some(plan) if plan.enabled => {}
+            Some(_) => {
+                return Err(AppError::Validation {
+                    op: OP,
+                    message: "quota plan is disabled".to_owned(),
+                });
+            }
+            None => {
+                return Err(AppError::Validation {
+                    op: OP,
+                    message: "quota plan not found".to_owned(),
+                });
+            }
+        }
+    }
+
+    use sea_orm::{ActiveModelTrait, ActiveValue::Set};
+    let mut active: team::ActiveModel = target.into();
+    active.explicit_quota_plan_id = Set(body.plan_id);
+    let team = active
+        .update(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+
+    let _ = audits::create_audit_event(
+        db,
+        CreateAuditEventParams {
+            actor_user_id: Some(data.user_id),
+            team_id: Some(team.id),
+            action: "team.quota_plan_overridden".to_owned(),
+            target_type: "team".to_owned(),
+            target_id: Some(team.id),
+            result: AuditEventResult::Success,
+            reason: None,
+            metadata: json!({ "plan_id": body.plan_id }),
+        },
+    )
+    .await;
+
+    Ok(ok_response(json!({
+        "team": {
+            "id": team.id,
+            "slug": team.slug,
+            "explicit_quota_plan_id": team.explicit_quota_plan_id,
+        },
+    })))
+}
