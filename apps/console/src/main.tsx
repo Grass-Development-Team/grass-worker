@@ -6,7 +6,7 @@ import { ThemeProvider } from "next-themes";
 
 import { Toaster } from "@/components/ui/sonner";
 
-import { App } from "./app";
+import { App } from "./App";
 import "./styles.css";
 
 const queryClient = new QueryClient({
