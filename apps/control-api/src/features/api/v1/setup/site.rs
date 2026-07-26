@@ -76,7 +76,7 @@ pub async fn handler(
     })))
 }
 
-fn validate_site_url(value: &str, op: &'static str) -> Result<String, AppError> {
+pub(crate) fn validate_site_url(value: &str, op: &'static str) -> Result<String, AppError> {
     let value = value.trim().trim_end_matches('/');
     let url = url::Url::parse(value).map_err(|_| AppError::Validation {
         op,

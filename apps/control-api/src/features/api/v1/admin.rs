@@ -2,7 +2,10 @@ pub mod audit_events;
 pub mod host_sources;
 pub mod nodes;
 pub mod quota_plans;
+pub mod settings;
 pub mod team_groups;
+pub mod teams;
+pub mod users;
 
 use axum::{
     Router,
@@ -38,7 +41,21 @@ pub fn router() -> Router<ControlApiState> {
             get(team_groups::list).post(team_groups::create),
         )
         .route("/team-groups/{group_id}", patch(team_groups::update))
+        .route("/teams", get(teams::list))
+        .route(
+            "/teams/{team_id}",
+            get(teams::detail)
+                .patch(teams::update)
+                .delete(teams::remove),
+        )
         .route("/teams/{team_id}/group", post(team_groups::assign))
+        .route("/users", get(users::list))
+        .route("/users/{user_id}", patch(users::update))
+        .route(
+            "/users/{user_id}/reset-password",
+            post(users::reset_password),
+        )
+        .route("/settings", get(settings::get).patch(settings::update))
         .route("/nodes", get(nodes::list).post(nodes::create))
         .route(
             "/nodes/local-process",

@@ -13,6 +13,13 @@ import { TeamSettingsRoute } from "@/features/teams/team-settings-route";
 import { TeamMembersRoute } from "@/features/teams/team-members-route";
 import { AcceptInvitationRoute } from "@/features/teams/accept-invitation-route";
 import { AdminRoute } from "@/features/admin/admin-route";
+import { NodesPanel } from "@/features/admin/components/nodes-panel";
+import { HostSourcesPanel } from "@/features/admin/components/host-sources-panel";
+import { QuotaPlansPanel } from "@/features/admin/components/quota-plans-panel";
+import { UsersPanel } from "@/features/admin/components/users-panel";
+import { TeamsPanel } from "@/features/admin/components/teams-panel";
+import { SettingsPanel } from "@/features/admin/components/settings-panel";
+import { AuditEventsTable } from "@/features/audit/audit-events-table";
 import { QuotaRoute } from "@/features/quota/quota-route";
 import { ProjectsRoute } from "@/features/projects/projects-route";
 import { ProjectDetailRoute } from "@/features/projects/project-detail-route";
@@ -94,7 +101,16 @@ export function Router() {
               <AdminRoute />
             </PlatformAdminRoute>
           }
-        />
+        >
+          <Route index element={<Navigate to="/admin/nodes" replace />} />
+          <Route path="nodes" element={<NodesPanel />} />
+          <Route path="host-sources" element={<HostSourcesPanel />} />
+          <Route path="quota-plans" element={<QuotaPlansPanel />} />
+          <Route path="users" element={<UsersPanel />} />
+          <Route path="teams" element={<TeamsPanel />} />
+          <Route path="settings" element={<SettingsPanel />} />
+          <Route path="audit" element={<AuditEventsTable />} />
+        </Route>
         <Route path="/invitations/accept" element={<AcceptInvitationRoute />} />
         <Route element={<TeamSettingsGuard />}>
           <Route path="/settings/team" element={<TeamSettingsRoute />} />
