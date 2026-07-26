@@ -72,6 +72,63 @@ export interface AdminHostSource {
   created_at: string;
 }
 
+export interface AdminUser {
+  id: string;
+  email: string;
+  display_name: string | null;
+  status: "active" | "disabled";
+  platform_role: "user" | "admin";
+  last_login_at: string | null;
+  created_at: string;
+}
+
+export interface AdminTeamGroupRef {
+  id: string;
+  code: string;
+  name: string;
+}
+
+export interface AdminTeam {
+  id: string;
+  slug: string;
+  name: string;
+  kind: "personal" | "team";
+  group: AdminTeamGroupRef | null;
+  explicit_quota_plan_id: string | null;
+  member_count: number;
+  created_at: string;
+}
+
+export interface AdminTeamDetail {
+  team: AdminTeam;
+  members: {
+    user_id: string;
+    email: string;
+    display_name: string | null;
+    role: string;
+    joined_at: string;
+  }[];
+  quota_plan: { id: string; code: string; name: string; source: string };
+  project_count: number;
+}
+
+export interface AdminTeamGroup {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  quota_plan_id: string | null;
+  is_default: boolean;
+  created_at: string;
+}
+
+export interface AdminSettings {
+  site: { name: string | null; url: string | null; public_base_url: string | null };
+  storage: { root: string };
+  signup: { policy: "open" | "invite_only" | "closed" };
+  review: { production: "auto" | "manual"; preview: "auto" | "manual" };
+}
+
 export const adminApi = {
   status: () => request<AdministrationStatus>("/api/v1/admin/status"),
 
@@ -127,5 +184,68 @@ export const adminApi = {
   rotateNodeToken: (nodeId: string) =>
     request<{ node_id: string; token: string }>(`/api/v1/admin/nodes/${nodeId}/rotate-token`, {
       method: "POST",
+    }),
+
+  listUsers: (q?: string) =>
+    request<{ users: AdminUser[] }>(
+      `/api/v1/admin/users${q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ""}`,
+    ),
+
+  updateUser: (
+    userId: string,
+    input: {
+      display_name?: string | null;
+      status?: "active" | "disabled";
+      platform_role?: "user" | "admin";
+    },
+  ) =>
+    request<{ user: AdminUser }>(`/api/v1/admin/users/${userId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+
+  resetUserPassword: (userId: string) =>
+    request<{ user_id: string; password: string }>(`/api/v1/admin/users/${userId}/reset-password`, {
+      method: "POST",
+    }),
+
+  listTeams: (q?: string) =>
+    request<{ teams: AdminTeam[] }>(
+      `/api/v1/admin/teams${q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ""}`,
+    ),
+
+  teamDetail: (teamId: string) => request<AdminTeamDetail>(`/api/v1/admin/teams/${teamId}`),
+
+  updateTeam: (teamId: string, input: { name: string }) =>
+    request<{ team: AdminTeam }>(`/api/v1/admin/teams/${teamId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+
+  deleteTeam: (teamId: string) =>
+    request<{ deleted: true }>(`/api/v1/admin/teams/${teamId}`, { method: "DELETE" }),
+
+  listTeamGroups: () => request<{ groups: AdminTeamGroup[] }>("/api/v1/admin/team-groups"),
+
+  assignTeamGroup: (teamId: string, groupId: string) =>
+    request<{ team_id: string; group_id: string }>(`/api/v1/admin/teams/${teamId}/group`, {
+      method: "POST",
+      body: JSON.stringify({ group_id: groupId }),
+    }),
+
+  getSettings: () => request<AdminSettings>("/api/v1/admin/settings"),
+
+  updateSettings: (input: {
+    site_name?: string;
+    site_url?: string;
+    public_base_url?: string;
+    storage_root?: string;
+    signup_policy?: "open" | "invite_only" | "closed";
+    review_production?: "auto" | "manual";
+    review_preview?: "auto" | "manual";
+  }) =>
+    request<AdminSettings>("/api/v1/admin/settings", {
+      method: "PATCH",
+      body: JSON.stringify(input),
     }),
 };

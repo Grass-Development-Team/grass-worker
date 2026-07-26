@@ -1,14 +1,20 @@
 import { useQuery } from "@tanstack/react-query";
 import { ShieldCheckIcon } from "lucide-react";
+import { NavLink, Outlet } from "react-router";
 
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-
-import { AuditEventsTable } from "@/features/audit/audit-events-table";
+import { cn } from "@/lib/utils";
 
 import { adminApi } from "./admin.api";
-import { HostSourcesPanel } from "./components/host-sources-panel";
-import { NodesPanel } from "./components/nodes-panel";
-import { QuotaPlansPanel } from "./components/quota-plans-panel";
+
+const sections = [
+  { to: "/admin/nodes", label: "Nodes" },
+  { to: "/admin/host-sources", label: "Host sources" },
+  { to: "/admin/quota-plans", label: "Quota plans" },
+  { to: "/admin/users", label: "Users" },
+  { to: "/admin/teams", label: "Teams" },
+  { to: "/admin/settings", label: "Settings" },
+  { to: "/admin/audit", label: "Audit" },
+];
 
 export function AdminRoute() {
   const status = useQuery({
@@ -44,26 +50,24 @@ export function AdminRoute() {
         </div>
       )}
 
-      <Tabs defaultValue="nodes">
-        <TabsList>
-          <TabsTrigger value="nodes">Nodes</TabsTrigger>
-          <TabsTrigger value="host-sources">Host sources</TabsTrigger>
-          <TabsTrigger value="quota-plans">Quota plans</TabsTrigger>
-          <TabsTrigger value="audit">Audit</TabsTrigger>
-        </TabsList>
-        <TabsContent value="nodes">
-          <NodesPanel />
-        </TabsContent>
-        <TabsContent value="host-sources">
-          <HostSourcesPanel />
-        </TabsContent>
-        <TabsContent value="quota-plans">
-          <QuotaPlansPanel />
-        </TabsContent>
-        <TabsContent value="audit">
-          <AuditEventsTable />
-        </TabsContent>
-      </Tabs>
+      <nav aria-label="Administration sections" className="flex flex-wrap gap-1 border-b pb-px">
+        {sections.map((section) => (
+          <NavLink
+            key={section.to}
+            to={section.to}
+            className={({ isActive }) =>
+              cn(
+                "-mb-px border-b-2 border-transparent px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground",
+                isActive && "border-foreground text-foreground",
+              )
+            }
+          >
+            {section.label}
+          </NavLink>
+        ))}
+      </nav>
+
+      <Outlet />
     </div>
   );
 }

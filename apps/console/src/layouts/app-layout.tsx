@@ -112,7 +112,15 @@ function AppLayoutContent() {
               <SidebarMenu>
                 {navigation.map((item) => (
                   <SidebarMenuItem key={item.url}>
-                    <SidebarMenuButton asChild isActive={location.pathname === item.url}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={
+                        item.url === "/"
+                          ? location.pathname === "/"
+                          : location.pathname === item.url ||
+                            location.pathname.startsWith(`${item.url}/`)
+                      }
+                    >
                       <NavLink to={item.url}>
                         <item.icon />
                         <span>{item.title}</span>
@@ -130,7 +138,15 @@ function AppLayoutContent() {
                 <SidebarMenu>
                   {settingsNavigation.map((item) => (
                     <SidebarMenuItem key={item.url}>
-                      <SidebarMenuButton asChild isActive={location.pathname === item.url}>
+                      <SidebarMenuButton
+                        asChild
+                        isActive={
+                          item.url === "/"
+                            ? location.pathname === "/"
+                            : location.pathname === item.url ||
+                              location.pathname.startsWith(`${item.url}/`)
+                        }
+                      >
                         <NavLink to={item.url}>
                           <item.icon />
                           <span>{item.title}</span>

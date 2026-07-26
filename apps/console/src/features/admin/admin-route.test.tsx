@@ -1,8 +1,24 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 
 import { AdminRoute } from "./admin-route";
+import { NodesPanel } from "./components/nodes-panel";
+
+function renderAdmin(queryClient: QueryClient) {
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={["/admin/nodes"]}>
+        <Routes>
+          <Route path="/admin" element={<AdminRoute />}>
+            <Route path="nodes" element={<NodesPanel />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -43,11 +59,7 @@ it("loads system status through the protected administration API", async () => {
     });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-  render(
-    <QueryClientProvider client={queryClient}>
-      <AdminRoute />
-    </QueryClientProvider>,
-  );
+  renderAdmin(queryClient);
 
   expect(await screen.findByText("Ready mode | Version 9.9.9")).toBeInTheDocument();
   expect(fetchMock).toHaveBeenCalledWith(
@@ -84,12 +96,9 @@ it("lists nodes with health state for administrators", async () => {
   });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-  render(
-    <QueryClientProvider client={queryClient}>
-      <AdminRoute />
-    </QueryClientProvider>,
-  );
+  renderAdmin(queryClient);
 
   expect(await screen.findByText("build-node-1")).toBeInTheDocument();
   expect(screen.getByText("Healthy")).toBeInTheDocument();
+  expect(screen.getByText("Local node process")).toBeInTheDocument();
 });
