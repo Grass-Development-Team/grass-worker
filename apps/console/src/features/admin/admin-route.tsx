@@ -7,6 +7,8 @@ import { cn } from "@/lib/utils";
 import { adminApi } from "./admin.api";
 
 const sections = [
+  { to: "/admin/reviews", label: "Reviews" },
+  { to: "/admin/projects", label: "Projects" },
   { to: "/admin/nodes", label: "Nodes" },
   { to: "/admin/host-sources", label: "Host sources" },
   { to: "/admin/quota-plans", label: "Quota plans" },
@@ -22,6 +24,12 @@ export function AdminRoute() {
     queryKey: ["admin", "status"],
     queryFn: adminApi.status,
   });
+  const reviews = useQuery({
+    queryKey: ["admin", "reviews"],
+    queryFn: adminApi.listReviews,
+    refetchInterval: 60_000,
+  });
+  const pendingReviews = reviews.data?.total ?? 0;
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
@@ -62,6 +70,11 @@ export function AdminRoute() {
             }
           >
             {section.label}
+            {section.to === "/admin/reviews" && pendingReviews > 0 && (
+              <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-foreground px-1 text-[10px] font-semibold text-background">
+                {pendingReviews}
+              </span>
+            )}
           </NavLink>
         ))}
       </nav>

@@ -1,3 +1,4 @@
+import type { BuildStatus, ReleaseStatus } from "@/features/deployments/deployments.api";
 import { request } from "@/lib/api";
 
 export interface AdministrationStatus {
@@ -126,6 +127,51 @@ export interface AdminTeamGroup {
 export interface QuotaLimitInput {
   dimension: string;
   limit_value: number | null;
+}
+
+export interface AdminProjectTeamRef {
+  id: string;
+  slug: string;
+  name: string;
+}
+
+export interface AdminDeploymentSummary {
+  id: string;
+  environment: "production" | "preview";
+  build_status: BuildStatus;
+  release_status: ReleaseStatus;
+  created_at: string;
+}
+
+export interface AdminProject {
+  id: string;
+  slug: string;
+  name: string;
+  runtime: string;
+  repository_url: string | null;
+  team: AdminProjectTeamRef | null;
+  latest_deployment: AdminDeploymentSummary | null;
+  archived_at: string | null;
+  created_at: string;
+}
+
+export interface AdminReview {
+  id: string;
+  requested_at: string;
+  deployment: {
+    id: string;
+    environment: "production" | "preview";
+    build_status: BuildStatus;
+    release_status: ReleaseStatus;
+    source_branch: string | null;
+    commit_hash: string | null;
+    commit_message: string | null;
+    preview_host: string | null;
+    created_at: string;
+  };
+  project: { id: string; name: string; slug: string };
+  team: AdminProjectTeamRef | null;
+  triggered_by: { id: string; email: string; display_name: string | null } | null;
 }
 
 export interface AdminSettings {
@@ -319,6 +365,38 @@ export const adminApi = {
       method: "POST",
       body: JSON.stringify({ plan_id: planId }),
     }),
+
+  listProjects: (q?: string) =>
+    request<{ projects: AdminProject[] }>(
+      `/api/v1/admin/projects${q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ""}`,
+    ),
+
+  archiveProject: (projectId: string) =>
+    request<{ project: AdminProject }>(`/api/v1/admin/projects/${projectId}/archive`, {
+      method: "POST",
+    }),
+
+  unarchiveProject: (projectId: string) =>
+    request<{ project: AdminProject }>(`/api/v1/admin/projects/${projectId}/unarchive`, {
+      method: "POST",
+    }),
+
+  deleteProject: (projectId: string) =>
+    request<{ deleted: true }>(`/api/v1/admin/projects/${projectId}/delete`, { method: "POST" }),
+
+  listReviews: () => request<{ total: number; reviews: AdminReview[] }>("/api/v1/admin/reviews"),
+
+  approveReview: (deploymentId: string, opts?: { reason?: string; promote?: boolean }) =>
+    request<{ deployment_id: string; release_status: string; promoted: boolean }>(
+      `/api/v1/admin/deployments/${deploymentId}/review/approve`,
+      { method: "POST", body: JSON.stringify(opts ?? {}) },
+    ),
+
+  rejectReview: (deploymentId: string, reason?: string) =>
+    request<{ deployment_id: string; release_status: string }>(
+      `/api/v1/admin/deployments/${deploymentId}/review/reject`,
+      { method: "POST", body: JSON.stringify(reason ? { reason } : {}) },
+    ),
 
   getSettings: () => request<AdminSettings>("/api/v1/admin/settings"),
 
