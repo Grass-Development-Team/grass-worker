@@ -55,6 +55,7 @@ uuid = { version = "1.18.1", features = ["serde", "v7"] }
 walkdir = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 bollard = "0.19"
+tar = "0.4"
 futures-util = "0.3"
 
 grass-archive = { path = "crates/archive" }

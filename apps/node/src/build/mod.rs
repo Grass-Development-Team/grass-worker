@@ -349,7 +349,7 @@ async fn run_pipeline(
     let image_collector = collector.clone();
     let image_pump = tokio::spawn(async move {
         while let Some(line) = log_rx.recv().await {
-            image_collector.log(stage::INSTALL, line);
+            image_collector.log(stage::BUILD, line);
         }
     });
     runtime
@@ -364,70 +364,92 @@ async fn run_pipeline(
         .filter(|seconds| *seconds > 0)
         .map(|seconds| Duration::from_secs(seconds as u64));
 
-    for (stage_name, command) in [
-        (stage::INSTALL, &install_command),
-        (stage::BUILD, &build_command),
-    ] {
-        report_stage_checked(client, deployment_id, &stage_report(None, stage_name)).await?;
-        collector.publish_stage(stage_name);
-        collector.log(stage_name, format!("$ {command}"));
+    // Install and build run in ONE container so state (node_modules) carries
+    // over without host-path sharing; sentinel exit codes keep failure
+    // attribution while real exit codes stay visible in the log.
+    let script = format!(
+        "( {install_command} ); rc=$?; \
+if [ $rc -ne 0 ]; then echo \"install command failed with exit code $rc\"; exit 91; fi; \
+( {build_command} ); rc=$?; \
+if [ $rc -ne 0 ]; then echo \"build command failed with exit code $rc\"; exit 92; fi"
+    );
 
-        let (log_tx, mut log_rx) = mpsc::channel::<String>(256);
-        let pump_collector = collector.clone();
-        let pump_stage = stage_name.to_owned();
-        let pump = tokio::spawn(async move {
-            while let Some(line) = log_rx.recv().await {
-                pump_collector.log(&pump_stage, line);
-            }
-        });
+    report_stage_checked(client, deployment_id, &stage_report(None, stage::BUILD)).await?;
+    collector.publish_stage(stage::BUILD);
+    collector.log(stage::BUILD, format!("$ {install_command}"));
+    collector.log(stage::BUILD, format!("$ {build_command}"));
 
-        let result = runtime
-            .run_build(
-                RunBuildInput {
-                    image: image.clone(),
-                    workspace: checkout.source_dir.clone(),
-                    working_dir: git::container_working_dir(
-                        &checkout.source_dir,
-                        &checkout.project_root,
-                    ),
-                    script: command.clone(),
-                    env: vec![("CI".to_owned(), "true".to_owned())],
-                    cpu_limit: config.runtime.resources.cpu_limit,
-                    memory_mb: config.runtime.resources.memory_mb,
-                    network: config.runtime.network.clone(),
-                    timeout,
-                },
-                log_tx,
-                cancel.clone(),
-            )
-            .await;
-        let _ = pump.await;
+    let (log_tx, mut log_rx) = mpsc::channel::<String>(256);
+    let pump_collector = collector.clone();
+    let pump = tokio::spawn(async move {
+        while let Some(line) = log_rx.recv().await {
+            pump_collector.log(stage::BUILD, line);
+        }
+    });
 
-        match result {
-            Ok(result) if result.exit_code == 0 => {}
-            Ok(result) => {
-                let code = if stage_name == stage::INSTALL {
-                    "install_failed"
-                } else {
-                    "build_failed"
-                };
-                return Err(BuildFailure::new(
-                    code,
-                    format!("{stage_name} command exited with code {}", result.exit_code),
-                ));
-            }
-            Err(ContainerRuntimeError::Canceled) => {
-                return Err(BuildFailure::new("canceled", "build canceled by user"));
-            }
-            Err(ContainerRuntimeError::Timeout(seconds)) => {
-                return Err(BuildFailure::new(
-                    "build_timeout",
-                    format!("build exceeded the {seconds}s limit"),
-                ));
-            }
-            Err(error) => {
-                return Err(BuildFailure::new("runtime_failed", error.to_string()));
-            }
+    // Every output location the detector may look at, copied back after a
+    // successful build.
+    let mut export_paths: Vec<String> = Vec::new();
+    if let Some(configured) = claimed
+        .output_directory
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != ".")
+    {
+        export_paths.push(configured.trim_matches('/').to_owned());
+    }
+    for candidate in ["dist", "build", "out", ".output", "public", "_site"] {
+        if !export_paths.iter().any(|existing| existing == candidate) {
+            export_paths.push(candidate.to_owned());
+        }
+    }
+
+    let result = runtime
+        .run_build(
+            RunBuildInput {
+                image: image.clone(),
+                workspace: checkout.source_dir.clone(),
+                working_dir: git::container_working_dir(
+                    &checkout.source_dir,
+                    &checkout.project_root,
+                ),
+                script,
+                env: vec![("CI".to_owned(), "true".to_owned())],
+                cpu_limit: config.runtime.resources.cpu_limit,
+                memory_mb: config.runtime.resources.memory_mb,
+                network: config.runtime.network.clone(),
+                timeout,
+                export_paths,
+            },
+            log_tx,
+            cancel.clone(),
+        )
+        .await;
+    let _ = pump.await;
+
+    match result {
+        Ok(result) if result.exit_code == 0 => {}
+        Ok(result) if result.exit_code == 91 => {
+            return Err(BuildFailure::new(
+                "install_failed",
+                "install command failed",
+            ));
+        }
+        Ok(result) => {
+            let _ = result;
+            return Err(BuildFailure::new("build_failed", "build command failed"));
+        }
+        Err(ContainerRuntimeError::Canceled) => {
+            return Err(BuildFailure::new("canceled", "build canceled by user"));
+        }
+        Err(ContainerRuntimeError::Timeout(seconds)) => {
+            return Err(BuildFailure::new(
+                "build_timeout",
+                format!("build exceeded the {seconds}s limit"),
+            ));
+        }
+        Err(error) => {
+            return Err(BuildFailure::new("runtime_failed", error.to_string()));
         }
     }
 
