@@ -191,7 +191,7 @@ impl NodeManager {
     }
 
     fn spawn_child(&self, inner: &mut ManagerInner) -> anyhow::Result<()> {
-        let mut command = Command::new(&inner.binary);
+        let mut command = Command::new(resolve_binary(&inner.binary));
         command
             .args(&inner.args)
             .stdin(Stdio::null())
@@ -335,6 +335,26 @@ async fn pipe_child_output(reader: impl tokio::io::AsyncRead + Unpin, is_stderr:
     }
 }
 
+/// Resolves a bare binary name against the directory of the running
+/// executable first, so the node that ships alongside grass-control-api
+/// (same target dir in dev, same image dir in containers) is found without
+/// configuration; explicit paths and PATH lookups stay untouched.
+fn resolve_binary(configured: &str) -> std::path::PathBuf {
+    let configured_path = std::path::Path::new(configured);
+    if configured.contains('/') {
+        return configured_path.to_path_buf();
+    }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let sibling = dir.join(configured);
+        if sibling.is_file() {
+            return sibling;
+        }
+    }
+    configured_path.to_path_buf()
+}
+
 fn status_snapshot(inner: &ManagerInner) -> ProcessStatus {
     ProcessStatus {
         state: inner.state,
@@ -387,6 +407,20 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         false
+    }
+
+    #[test]
+    fn bare_binary_names_resolve_next_to_the_executable_when_present() {
+        assert_eq!(
+            resolve_binary("./explicit/path"),
+            std::path::Path::new("./explicit/path")
+        );
+        // No sibling named like this exists, so the bare name passes through
+        // for PATH resolution.
+        assert_eq!(
+            resolve_binary("grass-nonexistent-binary"),
+            std::path::Path::new("grass-nonexistent-binary")
+        );
     }
 
     #[tokio::test]

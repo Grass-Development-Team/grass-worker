@@ -135,17 +135,31 @@ deployments receive unique `slug-xxxxxxxx.apps.example.com` hosts.
 
 ## Docker quick reference
 
-```sh
-# Control API
-docker run -d --name grass-api \
-  -p 7817:7817 -v grass-data:/data \
-  -v $PWD/config.toml:/home/grass/config.toml:ro \
-  grass-worker grass-control-api --config /home/grass/config.toml
+The image contains both binaries, and the managed local Node makes a
+single container the simplest deployment: enable
+`[node_manager] auto_start_local_node` with
+`local_node_config = "/data/node.toml"`, mount the engine socket, and the
+Control API generates the node config during setup and runs `grass-node`
+inside the same container. Builds copy the workspace through the engine
+API (no host paths), so a socket from the host works as-is.
 
-# Node (needs the container engine socket for builds)
+```sh
+docker run -d --name grass-worker \
+  -p 7817:7817 -p 8080:8080 \
+  -v grass-data:/data \
+  -v $PWD/config-dir:/home/grass/config \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  grass-worker grass-control-api --config /home/grass/config/config.toml
+```
+
+Separate containers still work for split deployments — run a second
+container with `grass-node --config …` and a token created under
+Administration → Nodes:
+
+```sh
 docker run -d --name grass-node \
   -p 8080:8080 -v grass-node-data:/data \
-  -v /run/user/1000/podman/podman.sock:/run/podman.sock \
+  -v /var/run/docker.sock:/var/run/docker.sock \
   -v $PWD/node.toml:/home/grass/node.toml:ro \
   grass-worker grass-node --config /home/grass/node.toml
 ```
