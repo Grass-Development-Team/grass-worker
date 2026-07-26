@@ -135,6 +135,18 @@ deployments receive unique `slug-xxxxxxxx.apps.example.com` hosts.
 
 ## Docker quick reference
 
+Build `grass-build` first — the default build image with node, bun, and
+corepack shims so auto-detected projects build regardless of package
+manager:
+
+```sh
+docker build -t grass-build:local docker/build-image
+```
+
+Set `[runtime] default_build_image = "grass-build:local"` in the node
+config to use it (the stock `docker.io/library/node:22` works too, but
+projects whose scripts call bun will fail there).
+
 The image contains both binaries, and the managed local Node makes a
 single container the simplest deployment: enable
 `[node_manager] auto_start_local_node` with
