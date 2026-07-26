@@ -1,3 +1,4 @@
+pub mod logs;
 pub mod review;
 
 use std::collections::HashMap;
@@ -600,25 +601,24 @@ pub async fn artifacts(
 
 // --- Operations -------------------------------------------------------------
 
-/// POST /api/v1/projects/{project_id}/deployments/{deployment_id}/cancel
-pub async fn cancel(
-    State(state): State<ControlApiState>,
-    session: Session,
-    Path((project_id, deployment_id)): Path<(Uuid, Uuid)>,
-) -> Result<impl IntoResponse, AppError> {
-    const OP: &str = "deployments.cancel";
-    let access = super::project_access(&state, &session, project_id, false, OP).await?;
-    access.require_member(OP)?;
-    let db = super::database(&state, OP)?;
-    let cache = super::cache(&state, OP)?;
-    let deployment = load_deployment(db, &access, deployment_id, OP).await?;
-
+/// Cancels a deployment: validates the transition, sets the cooperative
+/// cancel flag for the building Node, releases the concurrency slot, and
+/// records the audit event. Shared by the REST handler and the websocket
+/// cancel path.
+pub(crate) async fn cancel_deployment_core(
+    db: &sea_orm::DatabaseConnection,
+    cache: &grass_cache::CacheStore,
+    deployment: deployment::Model,
+    actor_user_id: Uuid,
+    op: &'static str,
+) -> Result<deployment::Model, AppError> {
     let was_running = matches!(
         deployment.build_status,
         DeploymentBuildStatus::Claimed
             | DeploymentBuildStatus::Queued
             | DeploymentBuildStatus::Building
     );
+    let team_id = deployment.team_id;
 
     let deployment = deployments::transition_build(
         db,
@@ -632,7 +632,7 @@ pub async fn cancel(
         },
     )
     .await
-    .map_err(|error| map_state_error(error, OP))?;
+    .map_err(|error| map_state_error(error, op))?;
 
     if was_running {
         // Cooperative flag for the Node driving this build; it stops the
@@ -646,14 +646,14 @@ pub async fn cancel(
             )
             .await;
         QuotaService::new(db, cache)
-            .release_build_slot(access.team.id)
+            .release_build_slot(team_id)
             .await;
     }
 
     let _ = audits::create_audit_event(
         db,
         CreateAuditEventParams {
-            actor_user_id: Some(session.data.user_id),
+            actor_user_id: Some(actor_user_id),
             action: "deployment.canceled".to_owned(),
             target_type: "deployment".to_owned(),
             target_id: Some(deployment.id),
@@ -663,6 +663,25 @@ pub async fn cancel(
         },
     )
     .await;
+
+    Ok(deployment)
+}
+
+/// POST /api/v1/projects/{project_id}/deployments/{deployment_id}/cancel
+pub async fn cancel(
+    State(state): State<ControlApiState>,
+    session: Session,
+    Path((project_id, deployment_id)): Path<(Uuid, Uuid)>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "deployments.cancel";
+    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    access.require_member(OP)?;
+    let db = super::database(&state, OP)?;
+    let cache = super::cache(&state, OP)?;
+    let deployment = load_deployment(db, &access, deployment_id, OP).await?;
+
+    let deployment =
+        cancel_deployment_core(db, cache, deployment, session.data.user_id, OP).await?;
 
     let urls = UrlContext::load(db, access.project.id)
         .await
