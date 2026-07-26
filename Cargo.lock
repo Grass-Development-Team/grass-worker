@@ -1414,6 +1414,7 @@ dependencies = [
  "hex",
  "mime_guess",
  "rand 0.8.6",
+ "reqwest",
  "sea-orm",
  "sea-orm-migration",
  "serde",
