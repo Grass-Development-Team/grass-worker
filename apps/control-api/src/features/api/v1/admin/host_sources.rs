@@ -13,6 +13,7 @@ use crate::{
     infra::{
         database::entity::{HostSourceKind, host_source},
         error::{AppError, ok_response},
+        host_provision::cloudflare,
     },
     state::ControlApiState,
 };
@@ -64,6 +65,65 @@ fn map_source_error(error: HostSourceError, op: &'static str) -> AppError {
             source: source.into(),
         },
     }
+}
+
+/// DNS provider sources must name a supported provider and carry a config
+/// the matching client can actually use; failing early keeps broken
+/// credentials out of the provisioning path.
+fn validate_dns_provider_source(
+    provider: Option<&str>,
+    config: &serde_json::Value,
+    op: &'static str,
+) -> Result<(), AppError> {
+    match provider.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(name) if name.eq_ignore_ascii_case(cloudflare::PROVIDER_NAME) => {
+            cloudflare::CloudflareConfig::from_json(config)
+                .map(|_| ())
+                .map_err(|message| AppError::Validation {
+                    op,
+                    message: format!("cloudflare config: {message}"),
+                })
+        }
+        Some(other) => Err(AppError::Validation {
+            op,
+            message: format!(
+                "provider '{other}' is not supported for dns_provider sources (supported: {})",
+                cloudflare::PROVIDER_NAME
+            ),
+        }),
+        None => Err(AppError::Validation {
+            op,
+            message: format!(
+                "dns_provider sources require a provider (supported: {})",
+                cloudflare::PROVIDER_NAME
+            ),
+        }),
+    }
+}
+
+/// Shallow-merges a config patch into the stored config: explicit `null`
+/// removes a key, anything else replaces it, omitted keys stay untouched.
+/// This lets operators update one field without resending credentials.
+fn merge_config(
+    existing: &serde_json::Value,
+    patch: serde_json::Value,
+    op: &'static str,
+) -> Result<serde_json::Value, AppError> {
+    let Some(patch) = patch.as_object() else {
+        return Err(AppError::Validation {
+            op,
+            message: "config must be a JSON object".to_owned(),
+        });
+    };
+    let mut merged = existing.as_object().cloned().unwrap_or_default();
+    for (key, value) in patch {
+        if value.is_null() {
+            merged.remove(key);
+        } else {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+    Ok(serde_json::Value::Object(merged))
 }
 
 /// GET /api/v1/admin/host-sources
@@ -122,6 +182,17 @@ pub async fn create(
         }
     })?;
 
+    let provider = body
+        .provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|provider| !provider.is_empty())
+        .map(str::to_ascii_lowercase);
+    let config = body.config.unwrap_or_else(|| json!({}));
+    if kind == HostSourceKind::DnsProvider {
+        validate_dns_provider_source(provider.as_deref(), &config, OP)?;
+    }
+
     let source = hosts::create_source(
         db,
         CreateHostSourceParams {
@@ -131,8 +202,8 @@ pub async fn create(
             enabled: body.enabled,
             allows_auto_assign: body.allows_auto_assign,
             is_default: body.is_default,
-            provider: body.provider.filter(|provider| !provider.trim().is_empty()),
-            config: body.config.unwrap_or_else(|| json!({})),
+            provider,
+            config,
         },
     )
     .await
@@ -174,6 +245,23 @@ pub async fn update(
             message: "host source not found".to_owned(),
         })?;
 
+    let provider_patch = body.provider.map(|provider| {
+        Some(provider.trim().to_ascii_lowercase()).filter(|provider| !provider.is_empty())
+    });
+    let config_patch = body
+        .config
+        .map(|patch| merge_config(&source.config, patch, OP))
+        .transpose()?;
+    if source.kind == HostSourceKind::DnsProvider
+        && (provider_patch.is_some() || config_patch.is_some())
+    {
+        let effective_provider = provider_patch
+            .clone()
+            .unwrap_or_else(|| source.provider.clone());
+        let effective_config = config_patch.as_ref().unwrap_or(&source.config);
+        validate_dns_provider_source(effective_provider.as_deref(), effective_config, OP)?;
+    }
+
     let source = hosts::update_source(
         db,
         source,
@@ -182,10 +270,8 @@ pub async fn update(
             enabled: body.enabled,
             allows_auto_assign: body.allows_auto_assign,
             is_default: body.is_default,
-            provider: body
-                .provider
-                .map(|provider| Some(provider).filter(|p| !p.trim().is_empty())),
-            config: body.config,
+            provider: provider_patch,
+            config: config_patch,
         },
     )
     .await
