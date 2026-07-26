@@ -34,7 +34,9 @@ pub struct PrepareImageInput<'a> {
 
 pub struct RunBuildInput {
     pub image: String,
-    /// Host path bind-mounted read-write at /workspace inside the container.
+    /// Local workspace copied into the container at /workspace. The build
+    /// never bind-mounts host paths, so it works identically for bare-metal
+    /// and containerized Nodes (sibling-engine setups included).
     pub workspace: PathBuf,
     /// Working directory inside the container, relative to /workspace.
     pub working_dir: String,
@@ -46,6 +48,9 @@ pub struct RunBuildInput {
     pub network: String,
     /// Hard wall-clock limit; the container is stopped when it elapses.
     pub timeout: Option<Duration>,
+    /// Paths relative to the working directory copied back into the local
+    /// workspace after a successful build (missing paths are skipped).
+    pub export_paths: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -283,6 +288,7 @@ mod tests {
             cpu_limit: 1,
             memory_mb: 512,
             network: "bridge".to_owned(),
+            export_paths: Vec::new(),
             timeout: None,
         };
         let result = runtime
@@ -301,6 +307,7 @@ mod tests {
             cpu_limit: 1,
             memory_mb: 512,
             network: "bridge".to_owned(),
+            export_paths: Vec::new(),
             timeout: None,
         };
         let error = runtime

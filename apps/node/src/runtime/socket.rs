@@ -3,11 +3,14 @@
 //! Podman exposes a Docker-compatible API on its socket, so both backends
 //! share this implementation; only the socket path differs.
 
+use std::path::{Path, PathBuf};
+
 use bollard::Docker;
 use bollard::models::{ContainerCreateBody, HostConfig};
 use bollard::query_parameters::{
-    CreateContainerOptions, CreateImageOptions, LogsOptions, RemoveContainerOptions,
-    StartContainerOptions, StopContainerOptions, WaitContainerOptions,
+    CreateContainerOptions, CreateImageOptions, DownloadFromContainerOptions, LogsOptions,
+    RemoveContainerOptions, StartContainerOptions, StopContainerOptions, UploadToContainerOptions,
+    WaitContainerOptions,
 };
 use futures_util::StreamExt;
 use tokio::sync::{mpsc, watch};
@@ -57,6 +60,45 @@ impl SocketRuntime {
     }
 }
 
+/// Packs the local workspace as a `workspace/`-rooted tar for upload.
+async fn workspace_tar(workspace: PathBuf) -> Result<Vec<u8>, ContainerRuntimeError> {
+    tokio::task::spawn_blocking(move || {
+        let mut builder = tar::Builder::new(Vec::new());
+        builder.follow_symlinks(false);
+        builder
+            .append_dir_all("workspace", &workspace)
+            .map_err(|error| runtime_error("workspace archive", error))?;
+        builder
+            .into_inner()
+            .map_err(|error| runtime_error("workspace archive", error))
+    })
+    .await
+    .map_err(|error| runtime_error("workspace archive task", error))?
+}
+
+/// Unpacks an exported tar under `destination`; `unpack_in` rejects entries
+/// that would escape it.
+async fn unpack_export(destination: PathBuf, bytes: Vec<u8>) -> Result<(), ContainerRuntimeError> {
+    tokio::task::spawn_blocking(move || {
+        std::fs::create_dir_all(&destination)
+            .map_err(|error| runtime_error("export unpack", error))?;
+        let mut archive = tar::Archive::new(&bytes[..]);
+        archive.set_overwrite(true);
+        for entry in archive
+            .entries()
+            .map_err(|error| runtime_error("export unpack", error))?
+        {
+            let mut entry = entry.map_err(|error| runtime_error("export unpack", error))?;
+            entry
+                .unpack_in(&destination)
+                .map_err(|error| runtime_error("export unpack", error))?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|error| runtime_error("export unpack task", error))?
+}
+
 impl super::ContainerRuntime for SocketRuntime {
     async fn prepare_image(
         &self,
@@ -101,12 +143,17 @@ impl super::ContainerRuntime for SocketRuntime {
         mut cancel: watch::Receiver<bool>,
     ) -> Result<BuildExecutionResult, ContainerRuntimeError> {
         let name = format!("grass-build-{}", uuid::Uuid::now_v7().simple());
-        let workspace = input.workspace.display().to_string();
         let working_dir = if input.working_dir.trim().is_empty() || input.working_dir == "." {
             "/workspace".to_owned()
         } else {
             format!("/workspace/{}", input.working_dir.trim_matches('/'))
         };
+        let local_working_dir = if input.working_dir.trim().is_empty() || input.working_dir == "." {
+            input.workspace.clone()
+        } else {
+            input.workspace.join(input.working_dir.trim_matches('/'))
+        };
+        let container_working_dir = working_dir.clone();
 
         let env: Vec<String> = input
             .env
@@ -124,7 +171,6 @@ impl super::ContainerRuntime for SocketRuntime {
             working_dir: Some(working_dir),
             env: Some(env),
             host_config: Some(HostConfig {
-                binds: Some(vec![format!("{workspace}:/workspace")]),
                 memory: Some((input.memory_mb * 1024 * 1024) as i64),
                 nano_cpus: Some(i64::from(input.cpu_limit) * 1_000_000_000),
                 network_mode: Some(input.network.clone()),
@@ -143,6 +189,32 @@ impl super::ContainerRuntime for SocketRuntime {
             )
             .await
             .map_err(|error| runtime_error("container create", error))?;
+
+        // Copy the workspace in instead of bind-mounting it: the engine may
+        // live on another host (containerized Node), where host paths from
+        // this process do not exist.
+        let tar_bytes = match workspace_tar(input.workspace.clone()).await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.remove_container(&name).await;
+                return Err(error);
+            }
+        };
+        if let Err(error) = self
+            .docker
+            .upload_to_container(
+                &name,
+                Some(UploadToContainerOptions {
+                    path: "/".to_owned(),
+                    ..Default::default()
+                }),
+                bollard::body_full(tar_bytes.into()),
+            )
+            .await
+        {
+            self.remove_container(&name).await;
+            return Err(runtime_error("workspace upload", error));
+        }
 
         if let Err(error) = self
             .docker
@@ -238,8 +310,53 @@ impl super::ContainerRuntime for SocketRuntime {
             }
         };
 
-        // Give the log stream a moment to drain, then clean up.
+        // Give the log stream a moment to drain.
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), log_task).await;
+
+        // Copy requested outputs back out after a successful build. Missing
+        // paths are normal (framework candidates), so download errors skip.
+        if let Ok(result) = &outcome
+            && result.exit_code == 0
+        {
+            for relative in &input.export_paths {
+                let relative = relative.trim_matches('/');
+                if relative.is_empty() || relative.split('/').any(|part| part == "..") {
+                    continue;
+                }
+                let mut stream = self.docker.download_from_container(
+                    &name,
+                    Some(DownloadFromContainerOptions {
+                        path: format!("{container_working_dir}/{relative}"),
+                    }),
+                );
+                let mut bytes = Vec::new();
+                let mut download_failed = false;
+                while let Some(chunk) = stream.next().await {
+                    match chunk {
+                        Ok(data) => bytes.extend_from_slice(&data),
+                        Err(_) => {
+                            download_failed = true;
+                            break;
+                        }
+                    }
+                }
+                if download_failed || bytes.is_empty() {
+                    continue;
+                }
+                let parent = Path::new(relative)
+                    .parent()
+                    .map(|parent| local_working_dir.join(parent))
+                    .unwrap_or_else(|| local_working_dir.clone());
+                let target = local_working_dir.join(relative);
+                let _ = tokio::fs::remove_dir_all(&target).await;
+                let _ = tokio::fs::remove_file(&target).await;
+                if let Err(error) = unpack_export(parent, bytes).await {
+                    self.remove_container(&name).await;
+                    return Err(error);
+                }
+            }
+        }
+
         self.remove_container(&name).await;
 
         outcome
