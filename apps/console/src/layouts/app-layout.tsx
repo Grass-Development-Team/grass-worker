@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
+import { matchPath, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -43,7 +43,13 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { AdminSidebarNav } from "@/features/admin/components/admin-sidebar-nav";
+import { adminSections } from "@/features/admin/admin-sections";
 import { useAuth } from "@/features/auth/auth-context";
+import {
+  ProjectBreadcrumb,
+  ProjectSidebarNav,
+} from "@/features/projects/components/project-sidebar-nav";
 import { canViewTeamSettings } from "@/features/teams/team-permissions";
 import { TeamSwitcher } from "@/features/teams/team-switcher";
 import { useTeam } from "@/features/teams/team-context";
@@ -65,6 +71,29 @@ const settingsNavigation = [
 ];
 
 const initials = (value: string) => value.slice(0, 2).toUpperCase();
+
+function pageTitle(pathname: string, inProject: boolean): string {
+  if (pathname === "/") return "Overview";
+  if (pathname === "/projects") return "Projects";
+  if (inProject) {
+    if (/\/deployments\/[^/]+$/.test(pathname)) return "Deployment";
+    if (pathname.endsWith("/deployments")) return "Deployments";
+    if (pathname.endsWith("/domains")) return "Domains";
+    if (pathname.includes("/settings")) return "Project Settings";
+    return "Overview";
+  }
+  if (pathname === "/quota") return "Usage";
+  if (pathname.startsWith("/settings/team")) return "Team Settings";
+  if (pathname.startsWith("/settings/members")) return "Members";
+  if (pathname.startsWith("/settings/audit")) return "Audit";
+  if (pathname === "/admin" || pathname.startsWith("/admin/")) {
+    const section = adminSections.find(
+      (candidate) => pathname === candidate.to || pathname.startsWith(`${candidate.to}/`),
+    );
+    return section?.label ?? "Administration";
+  }
+  return "";
+}
 
 export function AppLayout() {
   return (
@@ -100,6 +129,70 @@ function ThemeToggle() {
   );
 }
 
+function TeamSidebarNav({
+  navigation,
+  showSettings,
+}: {
+  navigation: { title: string; url: string; icon: React.ComponentType }[];
+  showSettings: boolean;
+}) {
+  const location = useLocation();
+
+  return (
+    <>
+      <SidebarGroup>
+        <SidebarGroupLabel>Workspace</SidebarGroupLabel>
+        <SidebarGroupContent>
+          <SidebarMenu>
+            {navigation.map((item) => (
+              <SidebarMenuItem key={item.url}>
+                <SidebarMenuButton
+                  asChild
+                  isActive={
+                    item.url === "/"
+                      ? location.pathname === "/"
+                      : location.pathname === item.url ||
+                        location.pathname.startsWith(`${item.url}/`)
+                  }
+                >
+                  <NavLink to={item.url}>
+                    <item.icon />
+                    <span>{item.title}</span>
+                  </NavLink>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
+      {showSettings && (
+        <SidebarGroup>
+          <SidebarGroupLabel>Team settings</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {settingsNavigation.map((item) => (
+                <SidebarMenuItem key={item.url}>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={
+                      location.pathname === item.url || location.pathname.startsWith(`${item.url}/`)
+                    }
+                  >
+                    <NavLink to={item.url}>
+                      <item.icon />
+                      <span>{item.title}</span>
+                    </NavLink>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      )}
+    </>
+  );
+}
+
 function AppLayoutContent() {
   const { user, logout } = useAuth();
   const { activeTeam, activeRole, error, refreshTeams } = useTeam();
@@ -112,6 +205,14 @@ function AppLayoutContent() {
     user?.platform_role === "admin"
       ? [...primaryNavigation, administrationNavigation]
       : primaryNavigation;
+
+  const projectMatch = matchPath("/projects/:projectId/*", location.pathname);
+  const projectId =
+    projectMatch && projectMatch.params.projectId !== undefined
+      ? projectMatch.params.projectId
+      : null;
+  const inAdmin = location.pathname === "/admin" || location.pathname.startsWith("/admin/");
+  const title = pageTitle(location.pathname, Boolean(projectId));
 
   useEffect(() => {
     if (isMobile) setOpenMobile(false);
@@ -144,55 +245,12 @@ function AppLayoutContent() {
           <TeamSwitcher />
         </SidebarHeader>
         <SidebarContent>
-          <SidebarGroup>
-            <SidebarGroupLabel>Workspace</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {navigation.map((item) => (
-                  <SidebarMenuItem key={item.url}>
-                    <SidebarMenuButton
-                      asChild
-                      isActive={
-                        item.url === "/"
-                          ? location.pathname === "/"
-                          : location.pathname === item.url ||
-                            location.pathname.startsWith(`${item.url}/`)
-                      }
-                    >
-                      <NavLink to={item.url}>
-                        <item.icon />
-                        <span>{item.title}</span>
-                      </NavLink>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-          {showSettings && (
-            <SidebarGroup>
-              <SidebarGroupLabel>Team settings</SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  {settingsNavigation.map((item) => (
-                    <SidebarMenuItem key={item.url}>
-                      <SidebarMenuButton
-                        asChild
-                        isActive={
-                          location.pathname === item.url ||
-                          location.pathname.startsWith(`${item.url}/`)
-                        }
-                      >
-                        <NavLink to={item.url}>
-                          <item.icon />
-                          <span>{item.title}</span>
-                        </NavLink>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  ))}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
+          {projectId ? (
+            <ProjectSidebarNav projectId={projectId} />
+          ) : inAdmin ? (
+            <AdminSidebarNav />
+          ) : (
+            <TeamSidebarNav navigation={navigation} showSettings={showSettings} />
           )}
         </SidebarContent>
         <SidebarFooter>
@@ -229,13 +287,34 @@ function AppLayoutContent() {
         </SidebarFooter>
       </Sidebar>
       <SidebarInset>
-        <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
+        <header className="relative flex h-14 shrink-0 items-center gap-2 border-b px-4">
           <SidebarTrigger />
           <Separator orientation="vertical" className="data-[orientation=vertical]:h-4" />
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium">{activeTeam?.name ?? "No team"}</p>
-            <p className="text-xs capitalize text-muted-foreground">{activeRole ?? "Workspace"}</p>
+          <div className="flex min-w-0 items-center gap-2 text-sm">
+            <NavLink
+              to="/"
+              className="truncate font-medium text-foreground/90 hover:text-foreground"
+            >
+              {activeTeam?.name ?? "No team"}
+            </NavLink>
+            {projectId && (
+              <>
+                <span className="text-muted-foreground/60">/</span>
+                <ProjectBreadcrumb projectId={projectId} />
+              </>
+            )}
+            {inAdmin && (
+              <>
+                <span className="text-muted-foreground/60">/</span>
+                <span className="truncate text-sm font-medium">Administration</span>
+              </>
+            )}
           </div>
+          {title && (
+            <div className="pointer-events-none absolute left-1/2 hidden -translate-x-1/2 text-sm font-medium md:block">
+              {title}
+            </div>
+          )}
           <div className="ml-auto flex items-center gap-1">
             <ThemeToggle />
           </div>

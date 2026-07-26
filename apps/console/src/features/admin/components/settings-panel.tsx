@@ -1,8 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
@@ -12,9 +11,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { SettingsCard } from "@/components/settings-card";
 import { Skeleton } from "@/components/ui/skeleton";
 
 import { adminApi, type AdminSettings } from "../admin.api";
+
+type UpdateSettingsInput = Parameters<typeof adminApi.updateSettings>[0];
 
 export function SettingsPanel() {
   const settingsQuery = useQuery({
@@ -35,8 +37,40 @@ export function SettingsPanel() {
   return <SettingsForm initial={settingsQuery.data} />;
 }
 
-function SettingsForm({ initial }: { initial: AdminSettings }) {
+function useSettingsMutation() {
   const queryClient = useQueryClient();
+  const [saved, setSaved] = useState(false);
+  const mutation = useMutation({
+    mutationFn: (input: UpdateSettingsInput) => adminApi.updateSettings(input),
+    onSuccess: () => {
+      setSaved(true);
+      queryClient.invalidateQueries({ queryKey: ["admin", "settings"] });
+    },
+  });
+  return { mutation, saved, setSaved };
+}
+
+function SaveAction({ pending, saved }: { pending: boolean; saved: boolean }) {
+  return (
+    <>
+      {saved && !pending && <span className="text-xs text-muted-foreground">Saved.</span>}
+      <Button type="submit" size="sm" disabled={pending}>
+        {pending ? "Saving…" : "Save"}
+      </Button>
+    </>
+  );
+}
+
+function MutationError({ mutation }: { mutation: { isError: boolean; error: unknown } }) {
+  if (!mutation.isError) return null;
+  return (
+    <p role="alert" className="mt-3 text-sm text-destructive">
+      {mutation.error instanceof Error ? mutation.error.message : "Unable to save settings."}
+    </p>
+  );
+}
+
+function SettingsForm({ initial }: { initial: AdminSettings }) {
   const [siteName, setSiteName] = useState(initial.site.name ?? "");
   const [siteUrl, setSiteUrl] = useState(initial.site.url ?? "");
   const [publicBaseUrl, setPublicBaseUrl] = useState(initial.site.public_base_url ?? "");
@@ -44,44 +78,30 @@ function SettingsForm({ initial }: { initial: AdminSettings }) {
   const [signupPolicy, setSignupPolicy] = useState(initial.signup.policy);
   const [reviewProduction, setReviewProduction] = useState(initial.review.production);
   const [reviewPreview, setReviewPreview] = useState(initial.review.preview);
-  const [saved, setSaved] = useState(false);
 
-  useEffect(
-    () => setSaved(false),
-    [siteName, siteUrl, publicBaseUrl, storageRoot, signupPolicy, reviewProduction, reviewPreview],
-  );
-
-  const mutation = useMutation({
-    mutationFn: () =>
-      adminApi.updateSettings({
-        site_name: siteName,
-        site_url: siteUrl,
-        public_base_url: publicBaseUrl,
-        storage_root: storageRoot,
-        signup_policy: signupPolicy,
-        review_production: reviewProduction,
-        review_preview: reviewPreview,
-      }),
-    onSuccess: () => {
-      setSaved(true);
-      queryClient.invalidateQueries({ queryKey: ["admin", "settings"] });
-    },
-  });
+  const site = useSettingsMutation();
+  const storage = useSettingsMutation();
+  const policies = useSettingsMutation();
 
   return (
-    <form
-      className="space-y-6"
-      onSubmit={(event) => {
-        event.preventDefault();
-        mutation.mutate();
-      }}
-    >
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Site</CardTitle>
-          <CardDescription>Identity and URLs of this Grass Worker installation.</CardDescription>
-        </CardHeader>
-        <CardContent>
+    <div className="space-y-6">
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          site.mutation.mutate({
+            site_name: siteName,
+            site_url: siteUrl,
+            public_base_url: publicBaseUrl,
+          });
+        }}
+        onChange={() => site.setSaved(false)}
+      >
+        <SettingsCard
+          title="Site"
+          description="Identity and URLs of this Grass Worker installation."
+          hint="The public base URL is used in generated links."
+          action={<SaveAction pending={site.mutation.isPending} saved={site.saved} />}
+        >
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="settings-site-name">Site name</FieldLabel>
@@ -113,17 +133,23 @@ function SettingsForm({ initial }: { initial: AdminSettings }) {
               />
             </Field>
           </FieldGroup>
-        </CardContent>
-      </Card>
+          <MutationError mutation={site.mutation} />
+        </SettingsCard>
+      </form>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Storage</CardTitle>
-          <CardDescription>
-            Where the Control API keeps artifacts and where Nodes derive their work directories.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          storage.mutation.mutate({ storage_root: storageRoot });
+        }}
+        onChange={() => storage.setSaved(false)}
+      >
+        <SettingsCard
+          title="Storage"
+          description="Where the Control API keeps artifacts and where Nodes derive their work directories."
+          hint="Node work roots move with this path automatically."
+          action={<SaveAction pending={storage.mutation.isPending} saved={storage.saved} />}
+        >
           <Field>
             <FieldLabel htmlFor="settings-storage-root">Storage root</FieldLabel>
             <Input
@@ -137,21 +163,35 @@ function SettingsForm({ initial }: { initial: AdminSettings }) {
               config is updated automatically.
             </FieldDescription>
           </Field>
-        </CardContent>
-      </Card>
+          <MutationError mutation={storage.mutation} />
+        </SettingsCard>
+      </form>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Policies</CardTitle>
-          <CardDescription>Signup and release review defaults.</CardDescription>
-        </CardHeader>
-        <CardContent>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          policies.mutation.mutate({
+            signup_policy: signupPolicy,
+            review_production: reviewProduction,
+            review_preview: reviewPreview,
+          });
+        }}
+      >
+        <SettingsCard
+          title="Policies"
+          description="Signup and release review defaults."
+          hint="Release review changes apply to new deployments."
+          action={<SaveAction pending={policies.mutation.isPending} saved={policies.saved} />}
+        >
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="settings-signup-policy">Signup policy</FieldLabel>
               <Select
                 value={signupPolicy}
-                onValueChange={(value) => setSignupPolicy(value as typeof signupPolicy)}
+                onValueChange={(value) => {
+                  setSignupPolicy(value as typeof signupPolicy);
+                  policies.setSaved(false);
+                }}
               >
                 <SelectTrigger id="settings-signup-policy">
                   <SelectValue />
@@ -168,7 +208,10 @@ function SettingsForm({ initial }: { initial: AdminSettings }) {
                 <FieldLabel htmlFor="settings-review-production">Production review</FieldLabel>
                 <Select
                   value={reviewProduction}
-                  onValueChange={(value) => setReviewProduction(value as typeof reviewProduction)}
+                  onValueChange={(value) => {
+                    setReviewProduction(value as typeof reviewProduction);
+                    policies.setSaved(false);
+                  }}
                 >
                   <SelectTrigger id="settings-review-production">
                     <SelectValue />
@@ -183,7 +226,10 @@ function SettingsForm({ initial }: { initial: AdminSettings }) {
                 <FieldLabel htmlFor="settings-review-preview">Preview review</FieldLabel>
                 <Select
                   value={reviewPreview}
-                  onValueChange={(value) => setReviewPreview(value as typeof reviewPreview)}
+                  onValueChange={(value) => {
+                    setReviewPreview(value as typeof reviewPreview);
+                    policies.setSaved(false);
+                  }}
                 >
                   <SelectTrigger id="settings-review-preview">
                     <SelectValue />
@@ -196,20 +242,9 @@ function SettingsForm({ initial }: { initial: AdminSettings }) {
               </Field>
             </div>
           </FieldGroup>
-        </CardContent>
-      </Card>
-
-      <div className="flex items-center gap-3">
-        <Button type="submit" disabled={mutation.isPending}>
-          {mutation.isPending ? "Saving…" : "Save settings"}
-        </Button>
-        {saved && <p className="text-sm text-muted-foreground">Settings saved.</p>}
-        {mutation.isError && (
-          <p role="alert" className="text-sm text-destructive">
-            {mutation.error instanceof Error ? mutation.error.message : "Unable to save settings."}
-          </p>
-        )}
-      </div>
-    </form>
+          <MutationError mutation={policies.mutation} />
+        </SettingsCard>
+      </form>
+    </div>
   );
 }
