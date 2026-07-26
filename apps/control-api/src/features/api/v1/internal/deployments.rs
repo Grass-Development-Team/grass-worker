@@ -235,10 +235,11 @@ pub async fn stage(
         .is_some();
     if matches!(deployment.build_status, DeploymentBuildStatus::Canceled) || cancel_flagged {
         // The Node acknowledges by reporting canceled; account build minutes
-        // when it does.
+        // when it does. The concurrency slot was already released by
+        // cancel_deployment_core when the cancel was issued, so we must not
+        // release it again here or the team's slot count underflows.
         if matches!(body.status, Some(ReportedStatus::Canceled)) {
             let _ = cache.delete(&cancel_flag_key(deployment_id)).await;
-            quota.release_build_slot(deployment.team_id).await;
             if let Some(minutes) = body.build_minutes.filter(|minutes| *minutes > 0) {
                 quota
                     .charge_unchecked(
