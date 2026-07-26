@@ -25,7 +25,12 @@ import { SettingsPanel } from "@/features/admin/components/settings-panel";
 import { AuditEventsTable } from "@/features/audit/audit-events-table";
 import { QuotaRoute } from "@/features/quota/quota-route";
 import { ProjectsRoute } from "@/features/projects/projects-route";
-import { ProjectDetailRoute } from "@/features/projects/project-detail-route";
+import { ProjectLayout } from "@/features/projects/project-layout";
+import { ProjectOverviewRoute } from "@/features/projects/project-overview-route";
+import { ProjectDeploymentsRoute } from "@/features/projects/project-deployments-route";
+import { ProjectDomainsRoute } from "@/features/projects/project-domains-route";
+import { ProjectSettingsRoute } from "@/features/projects/project-settings-route";
+import { ProjectSettingsBuildRoute } from "@/features/projects/project-settings-build-route";
 import { DeploymentDetailRoute } from "@/features/deployments/deployment-detail-route";
 import { TeamAuditRoute } from "@/features/audit/team-audit-route";
 
@@ -92,11 +97,14 @@ export function Router() {
         <Route path="/dashboard" element={<Navigate to="/" replace />} />
         <Route path="/quota" element={<QuotaRoute />} />
         <Route path="/projects" element={<ProjectsRoute />} />
-        <Route path="/projects/:projectId" element={<ProjectDetailRoute />} />
-        <Route
-          path="/projects/:projectId/deployments/:deploymentId"
-          element={<DeploymentDetailRoute />}
-        />
+        <Route path="/projects/:projectId" element={<ProjectLayout />}>
+          <Route index element={<ProjectOverviewRoute />} />
+          <Route path="deployments" element={<ProjectDeploymentsRoute />} />
+          <Route path="deployments/:deploymentId" element={<DeploymentDetailRoute />} />
+          <Route path="domains" element={<ProjectDomainsRoute />} />
+          <Route path="settings" element={<ProjectSettingsRoute />} />
+          <Route path="settings/build-and-deployment" element={<ProjectSettingsBuildRoute />} />
+        </Route>
         <Route
           path="/admin"
           element={
