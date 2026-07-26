@@ -146,6 +146,7 @@ pub async fn create(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
+            team_id: None,
             action: "node.created".to_owned(),
             target_type: "node".to_owned(),
             target_id: Some(node.id),
@@ -205,6 +206,7 @@ pub async fn rotate_token(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
+            team_id: None,
             action: "node.token_revoked".to_owned(),
             target_type: "node".to_owned(),
             target_id: Some(node.id),

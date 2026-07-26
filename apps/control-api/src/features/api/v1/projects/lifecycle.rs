@@ -26,6 +26,7 @@ use crate::{
 async fn record_lifecycle_audit(
     state: &ControlApiState,
     actor: Uuid,
+    team_id: Uuid,
     action: &str,
     project_id: Uuid,
     metadata: serde_json::Value,
@@ -35,6 +36,7 @@ async fn record_lifecycle_audit(
             db,
             CreateAuditEventParams {
                 actor_user_id: Some(actor),
+                team_id: Some(team_id),
                 action: action.to_owned(),
                 target_type: "project".to_owned(),
                 target_id: Some(project_id),
@@ -71,6 +73,7 @@ pub async fn archive(
     record_lifecycle_audit(
         &state,
         session.data.user_id,
+        project.team_id,
         "project.archived",
         project.id,
         json!({}),
@@ -99,6 +102,7 @@ pub async fn unarchive(
     record_lifecycle_audit(
         &state,
         session.data.user_id,
+        project.team_id,
         "project.unarchived",
         project.id,
         json!({}),
@@ -143,6 +147,7 @@ pub async fn delete(
     record_lifecycle_audit(
         &state,
         session.data.user_id,
+        project.team_id,
         "project.deleted",
         project.id,
         json!({}),
@@ -200,6 +205,7 @@ pub async fn restore(
     record_lifecycle_audit(
         &state,
         session.data.user_id,
+        project.team_id,
         "project.restored",
         project.id,
         json!({}),
@@ -283,6 +289,7 @@ pub async fn transfer_team(
     record_lifecycle_audit(
         &state,
         session.data.user_id,
+        target_team.id,
         "project.transferred",
         project.id,
         json!({ "from_team_id": source_team_id, "to_team_id": target_team.id }),
@@ -317,6 +324,7 @@ pub async fn hard_delete(
     record_lifecycle_audit(
         &state,
         session.data.user_id,
+        access.team.id,
         "project.hard_deleted",
         project_id,
         json!({}),

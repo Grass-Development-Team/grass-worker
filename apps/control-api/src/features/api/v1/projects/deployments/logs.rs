@@ -116,14 +116,16 @@ pub async fn stream(
         crate::infra::database::entity::TeamMemberRole::Viewer
     );
     let user_id = session.data.user_id;
+    let team_id = access.team.id;
     Ok(upgrade.on_upgrade(move |socket| {
-        browser_stream(state, socket, deployment_id, user_id, can_cancel)
+        browser_stream(state, socket, deployment_id, team_id, user_id, can_cancel)
     }))
 }
 
 async fn record_stream_audit(
     state: &ControlApiState,
     user_id: Uuid,
+    team_id: Uuid,
     deployment_id: Uuid,
     action: &str,
 ) {
@@ -132,6 +134,7 @@ async fn record_stream_audit(
             db,
             CreateAuditEventParams {
                 actor_user_id: Some(user_id),
+                team_id: Some(team_id),
                 action: action.to_owned(),
                 target_type: "deployment".to_owned(),
                 target_id: Some(deployment_id),
@@ -148,12 +151,14 @@ async fn browser_stream(
     state: ControlApiState,
     mut socket: WebSocket,
     deployment_id: Uuid,
+    team_id: Uuid,
     user_id: Uuid,
     can_cancel: bool,
 ) {
     record_stream_audit(
         &state,
         user_id,
+        team_id,
         deployment_id,
         "deployment.log_stream_started",
     )
@@ -200,6 +205,7 @@ async fn browser_stream(
     record_stream_audit(
         &state,
         user_id,
+        team_id,
         deployment_id,
         "deployment.log_stream_ended",
     )

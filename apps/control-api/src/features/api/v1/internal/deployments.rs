@@ -288,6 +288,7 @@ pub async fn stage(
                     db,
                     CreateAuditEventParams {
                         actor_user_id: None,
+                        team_id: Some(team_id),
                         action: "deployment.build_started".to_owned(),
                         target_type: "deployment".to_owned(),
                         target_id: Some(updated.id),
@@ -320,6 +321,7 @@ pub async fn stage(
                     db,
                     CreateAuditEventParams {
                         actor_user_id: None,
+                        team_id: Some(team_id),
                         action: "deployment.build_finished".to_owned(),
                         target_type: "deployment".to_owned(),
                         target_id: Some(updated.id),
@@ -595,6 +597,7 @@ pub async fn upload_static_site(
         db,
         CreateAuditEventParams {
             actor_user_id: None,
+            team_id: Some(deployment.team_id),
             action: "artifact.uploaded".to_owned(),
             target_type: "deployment".to_owned(),
             target_id: Some(deployment.id),

@@ -310,6 +310,7 @@ pub async fn create(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(session.data.user_id),
+            team_id: Some(access.team.id),
             action: "deployment.created".to_owned(),
             target_type: "deployment".to_owned(),
             target_id: Some(deployment.id),
@@ -654,6 +655,7 @@ pub(crate) async fn cancel_deployment_core(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(actor_user_id),
+            team_id: Some(team_id),
             action: "deployment.canceled".to_owned(),
             target_type: "deployment".to_owned(),
             target_id: Some(deployment.id),
@@ -925,6 +927,7 @@ async fn activate_deployment(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(session.data.user_id),
+            team_id: Some(access.team.id),
             action: audit_action.to_owned(),
             target_type: "deployment".to_owned(),
             target_id: Some(activated.id),
