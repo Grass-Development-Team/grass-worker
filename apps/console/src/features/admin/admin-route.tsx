@@ -4,7 +4,9 @@ import { ShieldCheckIcon } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import { adminApi } from "./admin.api";
+import { HostSourcesPanel } from "./components/host-sources-panel";
 import { NodesPanel } from "./components/nodes-panel";
+import { QuotaPlansPanel } from "./components/quota-plans-panel";
 
 export function AdminRoute() {
   const status = useQuery({
@@ -43,9 +45,17 @@ export function AdminRoute() {
       <Tabs defaultValue="nodes">
         <TabsList>
           <TabsTrigger value="nodes">Nodes</TabsTrigger>
+          <TabsTrigger value="host-sources">Host sources</TabsTrigger>
+          <TabsTrigger value="quota-plans">Quota plans</TabsTrigger>
         </TabsList>
         <TabsContent value="nodes">
           <NodesPanel />
+        </TabsContent>
+        <TabsContent value="host-sources">
+          <HostSourcesPanel />
+        </TabsContent>
+        <TabsContent value="quota-plans">
+          <QuotaPlansPanel />
         </TabsContent>
       </Tabs>
     </div>

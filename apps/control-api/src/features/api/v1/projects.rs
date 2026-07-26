@@ -73,6 +73,14 @@ pub fn router() -> Router<ControlApiState> {
             get(deployments::events),
         )
         .route(
+            "/projects/{project_id}/deployments/{deployment_id}/build-log",
+            get(deployments::logs::build_log),
+        )
+        .route(
+            "/projects/{project_id}/deployments/{deployment_id}/logs/ws",
+            get(deployments::logs::stream),
+        )
+        .route(
             "/projects/{project_id}/deployments/{deployment_id}/artifacts",
             get(deployments::artifacts),
         )
