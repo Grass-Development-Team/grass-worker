@@ -1,7 +1,9 @@
 pub mod audit_events;
 pub mod host_sources;
 pub mod nodes;
+pub mod projects;
 pub mod quota_plans;
+pub mod reviews;
 pub mod settings;
 pub mod team_groups;
 pub mod teams;
@@ -60,6 +62,22 @@ pub fn router() -> Router<ControlApiState> {
             post(users::reset_password),
         )
         .route("/settings", get(settings::get).patch(settings::update))
+        .route("/projects", get(projects::list))
+        .route("/projects/{project_id}/archive", post(projects::archive))
+        .route(
+            "/projects/{project_id}/unarchive",
+            post(projects::unarchive),
+        )
+        .route("/projects/{project_id}/delete", post(projects::remove))
+        .route("/reviews", get(reviews::list))
+        .route(
+            "/deployments/{deployment_id}/review/approve",
+            post(reviews::approve),
+        )
+        .route(
+            "/deployments/{deployment_id}/review/reject",
+            post(reviews::reject),
+        )
         .route("/nodes", get(nodes::list).post(nodes::create))
         .route(
             "/nodes/local-process",
