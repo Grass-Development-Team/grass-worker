@@ -17,6 +17,7 @@ import { QuotaRoute } from "@/features/quota/quota-route";
 import { ProjectsRoute } from "@/features/projects/projects-route";
 import { ProjectDetailRoute } from "@/features/projects/project-detail-route";
 import { DeploymentDetailRoute } from "@/features/deployments/deployment-detail-route";
+import { TeamAuditRoute } from "@/features/audit/team-audit-route";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
@@ -98,6 +99,7 @@ export function Router() {
         <Route element={<TeamSettingsGuard />}>
           <Route path="/settings/team" element={<TeamSettingsRoute />} />
           <Route path="/settings/members" element={<TeamMembersRoute />} />
+          <Route path="/settings/audit" element={<TeamAuditRoute />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
