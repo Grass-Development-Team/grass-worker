@@ -43,6 +43,48 @@ import { useTeam } from "@/features/teams/team-context";
 
 import { projectsApi, type CreateProjectInput } from "./projects.api";
 
+const FRAMEWORK_PRESETS = [
+  {
+    id: "vite",
+    label: "Vite (React, Vue, Svelte…)",
+    install: "npm install",
+    build: "npm run build",
+    output: "dist",
+  },
+  {
+    id: "nextjs",
+    label: "Next.js (static export)",
+    install: "npm install",
+    build: "npm run build",
+    output: "out",
+  },
+  {
+    id: "nuxt",
+    label: "Nuxt (static)",
+    install: "npm install",
+    build: "npm run generate",
+    output: ".output/public",
+  },
+  {
+    id: "sveltekit",
+    label: "SvelteKit (adapter-static)",
+    install: "npm install",
+    build: "npm run build",
+    output: "build",
+  },
+  { id: "astro", label: "Astro", install: "npm install", build: "npm run build", output: "dist" },
+  {
+    id: "cra",
+    label: "Create React App",
+    install: "npm install",
+    build: "npm run build",
+    output: "build",
+  },
+  { id: "custom", label: "Other / custom", install: "", build: "", output: "" },
+] as const;
+
+type FrameworkPresetId = (typeof FRAMEWORK_PRESETS)[number]["id"];
+
 function slugify(value: string): string {
   return value
     .toLowerCase()
@@ -150,6 +192,7 @@ function CreateProjectDialog({ teamId }: { teamId: string }) {
   const [slug, setSlug] = useState("");
   const [slugTouched, setSlugTouched] = useState(false);
   const [runtime, setRuntime] = useState<"static" | "ssr">("static");
+  const [preset, setPreset] = useState<FrameworkPresetId>("vite");
   const [repositoryUrl, setRepositoryUrl] = useState("");
   const [defaultBranch, setDefaultBranch] = useState("main");
   const [installCommand, setInstallCommand] = useState("");
@@ -181,6 +224,7 @@ function CreateProjectDialog({ teamId }: { teamId: string }) {
       install_command: installCommand || undefined,
       build_command: buildCommand || undefined,
       output_directory: outputDirectory || undefined,
+      framework_hint: preset !== "custom" ? preset : undefined,
     });
   };
 
@@ -248,6 +292,33 @@ function CreateProjectDialog({ teamId }: { teamId: string }) {
                 value={repositoryUrl}
                 onChange={(event) => setRepositoryUrl(event.target.value)}
               />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="project-preset">Framework preset</FieldLabel>
+              <Select
+                value={preset}
+                onValueChange={(value) => {
+                  const id = value as FrameworkPresetId;
+                  setPreset(id);
+                  const found = FRAMEWORK_PRESETS.find((entry) => entry.id === id);
+                  if (found && found.id !== "custom") {
+                    setInstallCommand(found.install);
+                    setBuildCommand(found.build);
+                    setOutputDirectory(found.output);
+                  }
+                }}
+              >
+                <SelectTrigger id="project-preset">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {FRAMEWORK_PRESETS.map((entry) => (
+                    <SelectItem key={entry.id} value={entry.id}>
+                      {entry.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </Field>
             <div className="grid grid-cols-2 gap-4">
               <Field>
