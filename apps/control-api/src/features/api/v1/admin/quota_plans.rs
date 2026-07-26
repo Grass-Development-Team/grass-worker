@@ -104,7 +104,7 @@ fn parse_limits(
 /// GET /api/v1/admin/quota-plans
 pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.quota_plans.list";
-    let db = database(&state, OP)?;
+    let db = super::database(&state, OP)?;
     let plans = quotas::list_plans(db)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
@@ -136,7 +136,7 @@ pub async fn create(
     }
     let limits = parse_limits(body.limits, OP)?;
 
-    let db = database(&state, OP)?;
+    let db = super::database(&state, OP)?;
     let transaction = db
         .begin()
         .await
@@ -186,7 +186,7 @@ pub async fn update(
     const OP: &str = "admin.quota_plans.update";
     let limits = parse_limits(body.limits, OP)?;
 
-    let db = database(&state, OP)?;
+    let db = super::database(&state, OP)?;
     let transaction = db
         .begin()
         .await
@@ -221,14 +221,4 @@ pub async fn update(
     Ok(ok_response(serde_json::json!({
         "plan": { "id": plan.id, "code": plan.code, "name": plan.name, "enabled": plan.enabled },
     })))
-}
-
-fn database<'a>(
-    state: &'a ControlApiState,
-    op: &'static str,
-) -> Result<&'a sea_orm::DatabaseConnection, AppError> {
-    state.try_database().ok_or_else(|| AppError::Internal {
-        op,
-        message: "database not available".to_owned(),
-    })
 }
