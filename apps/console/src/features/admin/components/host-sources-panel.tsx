@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -228,10 +229,9 @@ function CreateHostSourceDialog({ onCreated }: { onCreated: () => void }) {
             />
           </Field>
           <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={isDefault}
-              onChange={(event) => setIsDefault(event.target.checked)}
+              onCheckedChange={(checked) => setIsDefault(checked === true)}
             />
             Use as the default source for automatic assignment
           </label>

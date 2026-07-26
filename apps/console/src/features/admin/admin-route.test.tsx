@@ -61,7 +61,7 @@ it("loads system status through the protected administration API", async () => {
 
   renderAdmin(queryClient);
 
-  expect(await screen.findByText("Ready mode | Version 9.9.9")).toBeInTheDocument();
+  expect(await screen.findByText("Ready mode · v9.9.9")).toBeInTheDocument();
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/v1/admin/status",
     expect.objectContaining({ credentials: "include" }),
