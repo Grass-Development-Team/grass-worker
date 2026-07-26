@@ -1,0 +1,11 @@
+.git
+.github
+.worktree
+.deploy
+target
+**/target
+apps/console/node_modules
+apps/console/dist
+apps/console/.vite
+config.toml
+node.toml
