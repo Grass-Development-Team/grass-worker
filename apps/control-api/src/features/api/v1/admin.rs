@@ -44,7 +44,7 @@ pub fn router() -> Router<ControlApiState> {
             "/team-groups/{group_id}",
             patch(team_groups::update).delete(team_groups::remove),
         )
-        .route("/teams", get(teams::list))
+        .route("/teams", get(teams::list).post(teams::create))
         .route(
             "/teams/{team_id}",
             get(teams::detail)
@@ -53,7 +53,7 @@ pub fn router() -> Router<ControlApiState> {
         )
         .route("/teams/{team_id}/group", post(team_groups::assign))
         .route("/teams/{team_id}/quota-plan", post(teams::set_quota_plan))
-        .route("/users", get(users::list))
+        .route("/users", get(users::list).post(users::create))
         .route("/users/{user_id}", patch(users::update))
         .route(
             "/users/{user_id}/reset-password",

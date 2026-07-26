@@ -1,9 +1,25 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { MoreHorizontalIcon } from "lucide-react";
+import { MoreHorizontalIcon, PlusIcon } from "lucide-react";
 import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Field, FieldLabel } from "@/components/ui/field";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -50,6 +66,9 @@ export function UsersPanel() {
   const [query, setQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [resetResult, setResetResult] = useState<{ email: string; password: string } | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [settingPassword, setSettingPassword] = useState<AdminUser | null>(null);
+  const [renaming, setRenaming] = useState<AdminUser | null>(null);
 
   const usersQuery = useQuery({
     queryKey: ["admin", "users", query],
@@ -79,7 +98,7 @@ export function UsersPanel() {
       adminApi.resetUserPassword(user.id).then((result) => ({ user, result })),
     onSuccess: ({ user, result }) => {
       setError(null);
-      setResetResult({ email: user.email, password: result.password });
+      if (result.password) setResetResult({ email: user.email, password: result.password });
     },
     onError: (cause) =>
       setError(cause instanceof Error ? cause.message : "Unable to reset the password."),
@@ -91,20 +110,25 @@ export function UsersPanel() {
         <p className="text-sm text-muted-foreground">
           Every account on this platform. Disabled users cannot sign in.
         </p>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            setQuery(search);
-          }}
-        >
-          <Input
-            aria-label="Search users"
-            placeholder="Search email or name…"
-            className="w-64"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-        </form>
+        <div className="flex items-center gap-2">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              setQuery(search);
+            }}
+          >
+            <Input
+              aria-label="Search users"
+              placeholder="Search email or name…"
+              className="w-64"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </form>
+          <Button onClick={() => setCreating(true)}>
+            <PlusIcon /> New user
+          </Button>
+        </div>
       </div>
 
       {resetResult && (
@@ -195,9 +219,15 @@ export function UsersPanel() {
                         >
                           {user.status === "active" ? "Disable account" : "Enable account"}
                         </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setRenaming(user)}>
+                          Edit display name
+                        </DropdownMenuItem>
                         <DropdownMenuSeparator />
+                        <DropdownMenuItem onClick={() => setSettingPassword(user)}>
+                          Set password…
+                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => resetMutation.mutate(user)}>
-                          Reset password
+                          Generate new password
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
@@ -208,6 +238,265 @@ export function UsersPanel() {
           </TableBody>
         </Table>
       )}
+
+      {creating && (
+        <CreateUserDialog
+          onClose={() => setCreating(false)}
+          onCreated={(email, password) => {
+            setCreating(false);
+            if (password) setResetResult({ email, password });
+            invalidate();
+          }}
+        />
+      )}
+      {settingPassword && (
+        <SetPasswordDialog
+          user={settingPassword}
+          onClose={() => setSettingPassword(null)}
+          onSaved={() => setSettingPassword(null)}
+        />
+      )}
+      {renaming && (
+        <RenameUserDialog
+          user={renaming}
+          onClose={() => setRenaming(null)}
+          onSaved={() => {
+            setRenaming(null);
+            invalidate();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function CreateUserDialog({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreated: (email: string, password: string | null) => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [role, setRole] = useState<"user" | "admin">("user");
+  const [password, setPassword] = useState("");
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      adminApi.createUser({
+        email,
+        display_name: displayName.trim() || undefined,
+        platform_role: role,
+        password: password || undefined,
+      }),
+    onSuccess: (result) => onCreated(result.user.email, result.password),
+  });
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>New user</DialogTitle>
+          <DialogDescription>
+            Creates an account with its personal team, bypassing the signup policy.
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (email.trim()) mutation.mutate();
+          }}
+        >
+          <Field>
+            <FieldLabel htmlFor="new-user-email">Email</FieldLabel>
+            <Input
+              id="new-user-email"
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              required
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="new-user-name">Display name</FieldLabel>
+            <Input
+              id="new-user-name"
+              value={displayName}
+              onChange={(event) => setDisplayName(event.target.value)}
+            />
+          </Field>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field>
+              <FieldLabel htmlFor="new-user-role">Platform role</FieldLabel>
+              <Select value={role} onValueChange={(value) => setRole(value as typeof role)}>
+                <SelectTrigger id="new-user-role">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="user">User</SelectItem>
+                  <SelectItem value="admin">Platform admin</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="new-user-password">Password</FieldLabel>
+              <Input
+                id="new-user-password"
+                type="password"
+                placeholder="Leave empty to generate"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </Field>
+          </div>
+          {mutation.isError && (
+            <p role="alert" className="text-sm text-destructive">
+              {mutation.error instanceof Error ? mutation.error.message : "Unable to create."}
+            </p>
+          )}
+          <DialogFooter>
+            <Button type="submit" disabled={mutation.isPending}>
+              {mutation.isPending ? "Creating…" : "Create user"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SetPasswordDialog({
+  user,
+  onClose,
+  onSaved,
+}: {
+  user: AdminUser;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [mismatch, setMismatch] = useState(false);
+
+  const mutation = useMutation({
+    mutationFn: () => adminApi.resetUserPassword(user.id, password),
+    onSuccess: onSaved,
+  });
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Set password</DialogTitle>
+          <DialogDescription>{user.email} — the password is never displayed.</DialogDescription>
+        </DialogHeader>
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (password !== confirm) {
+              setMismatch(true);
+              return;
+            }
+            setMismatch(false);
+            mutation.mutate();
+          }}
+        >
+          <Field>
+            <FieldLabel htmlFor="set-password">New password</FieldLabel>
+            <Input
+              id="set-password"
+              type="password"
+              minLength={8}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              required
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="set-password-confirm">Confirm password</FieldLabel>
+            <Input
+              id="set-password-confirm"
+              type="password"
+              value={confirm}
+              onChange={(event) => setConfirm(event.target.value)}
+              required
+            />
+          </Field>
+          {mismatch && (
+            <p role="alert" className="text-sm text-destructive">
+              Passwords do not match.
+            </p>
+          )}
+          {mutation.isError && (
+            <p role="alert" className="text-sm text-destructive">
+              {mutation.error instanceof Error ? mutation.error.message : "Unable to save."}
+            </p>
+          )}
+          <DialogFooter>
+            <Button type="submit" disabled={mutation.isPending}>
+              {mutation.isPending ? "Saving…" : "Set password"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function RenameUserDialog({
+  user,
+  onClose,
+  onSaved,
+}: {
+  user: AdminUser;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [displayName, setDisplayName] = useState(user.display_name ?? "");
+
+  const mutation = useMutation({
+    mutationFn: () => adminApi.updateUser(user.id, { display_name: displayName.trim() || null }),
+    onSuccess: onSaved,
+  });
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Edit display name</DialogTitle>
+          <DialogDescription>{user.email}</DialogDescription>
+        </DialogHeader>
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            mutation.mutate();
+          }}
+        >
+          <Field>
+            <FieldLabel htmlFor="rename-user">Display name</FieldLabel>
+            <Input
+              id="rename-user"
+              value={displayName}
+              onChange={(event) => setDisplayName(event.target.value)}
+              placeholder="Empty clears the name"
+            />
+          </Field>
+          {mutation.isError && (
+            <p role="alert" className="text-sm text-destructive">
+              {mutation.error instanceof Error ? mutation.error.message : "Unable to save."}
+            </p>
+          )}
+          <DialogFooter>
+            <Button type="submit" disabled={mutation.isPending}>
+              {mutation.isPending ? "Saving…" : "Save"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

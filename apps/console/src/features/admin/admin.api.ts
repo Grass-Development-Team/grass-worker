@@ -197,6 +197,17 @@ export const adminApi = {
       `/api/v1/admin/users${q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ""}`,
     ),
 
+  createUser: (input: {
+    email: string;
+    display_name?: string;
+    platform_role?: "user" | "admin";
+    password?: string;
+  }) =>
+    request<{ user: AdminUser; password: string | null }>("/api/v1/admin/users", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
   updateUser: (
     userId: string,
     input: {
@@ -210,15 +221,25 @@ export const adminApi = {
       body: JSON.stringify(input),
     }),
 
-  resetUserPassword: (userId: string) =>
-    request<{ user_id: string; password: string }>(`/api/v1/admin/users/${userId}/reset-password`, {
-      method: "POST",
-    }),
+  resetUserPassword: (userId: string, password?: string) =>
+    request<{ user_id: string; password: string | null }>(
+      `/api/v1/admin/users/${userId}/reset-password`,
+      {
+        method: "POST",
+        body: JSON.stringify(password ? { password } : {}),
+      },
+    ),
 
   listTeams: (q?: string) =>
     request<{ teams: AdminTeam[] }>(
       `/api/v1/admin/teams${q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ""}`,
     ),
+
+  createTeam: (input: { name: string; slug?: string; owner_user_id: string }) =>
+    request<{ team: AdminTeam }>("/api/v1/admin/teams", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
 
   teamDetail: (teamId: string) => request<AdminTeamDetail>(`/api/v1/admin/teams/${teamId}`),
 

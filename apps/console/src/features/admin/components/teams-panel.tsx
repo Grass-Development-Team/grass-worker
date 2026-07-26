@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { MoreHorizontalIcon } from "lucide-react";
+import { MoreHorizontalIcon, PlusIcon } from "lucide-react";
 import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -53,6 +53,7 @@ export function TeamsPanel() {
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
   const [action, setAction] = useState<TeamAction | null>(null);
+  const [creating, setCreating] = useState(false);
 
   const teamsQuery = useQuery({
     queryKey: ["admin", "teams", query],
@@ -68,20 +69,25 @@ export function TeamsPanel() {
         <p className="text-sm text-muted-foreground">
           All teams on this platform, including personal teams.
         </p>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            setQuery(search);
-          }}
-        >
-          <Input
-            aria-label="Search teams"
-            placeholder="Search slug or name…"
-            className="w-64"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-        </form>
+        <div className="flex items-center gap-2">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              setQuery(search);
+            }}
+          >
+            <Input
+              aria-label="Search teams"
+              placeholder="Search slug or name…"
+              className="w-64"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </form>
+          <Button onClick={() => setCreating(true)}>
+            <PlusIcon /> New team
+          </Button>
+        </div>
       </div>
 
       {teamsQuery.isLoading && <Skeleton className="h-40 w-full" aria-busy="true" />}
@@ -162,6 +168,15 @@ export function TeamsPanel() {
         </Table>
       )}
 
+      {creating && (
+        <CreateTeamDialog
+          onClose={() => setCreating(false)}
+          onCreated={() => {
+            setCreating(false);
+            invalidate();
+          }}
+        />
+      )}
       {action?.kind === "detail" && <TeamDetailDialog team={action.team} onClose={close} />}
       {action?.kind === "rename" && (
         <RenameTeamDialog
@@ -495,6 +510,102 @@ function OverridePlanDialog({
           <DialogFooter>
             <Button type="submit" disabled={mutation.isPending}>
               {mutation.isPending ? "Saving…" : "Save"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CreateTeamDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const [name, setName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [slugTouched, setSlugTouched] = useState(false);
+  const [ownerId, setOwnerId] = useState("");
+
+  const usersQuery = useQuery({
+    queryKey: ["admin", "users", ""],
+    queryFn: () => adminApi.listUsers(),
+  });
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      adminApi.createTeam({ name, slug: slug || undefined, owner_user_id: ownerId }),
+    onSuccess: onCreated,
+  });
+
+  const autoSlug = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60);
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>New team</DialogTitle>
+          <DialogDescription>
+            The owner joins as team owner; the team lands in the default group.
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (name.trim() && ownerId) mutation.mutate();
+          }}
+        >
+          <Field>
+            <FieldLabel htmlFor="new-team-name">Team name</FieldLabel>
+            <Input
+              id="new-team-name"
+              value={name}
+              onChange={(event) => {
+                setName(event.target.value);
+                if (!slugTouched) setSlug(autoSlug(event.target.value));
+              }}
+              required
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="new-team-slug">Slug</FieldLabel>
+            <Input
+              id="new-team-slug"
+              value={slug}
+              onChange={(event) => {
+                setSlugTouched(true);
+                setSlug(event.target.value);
+              }}
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="new-team-owner">Owner</FieldLabel>
+            <Select value={ownerId} onValueChange={setOwnerId}>
+              <SelectTrigger id="new-team-owner">
+                <SelectValue placeholder="Select a user" />
+              </SelectTrigger>
+              <SelectContent>
+                {usersQuery.data?.users
+                  .filter((user) => user.status === "active")
+                  .map((user) => (
+                    <SelectItem key={user.id} value={user.id}>
+                      {user.display_name ? `${user.display_name} (${user.email})` : user.email}
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          {mutation.isError && (
+            <p role="alert" className="text-sm text-destructive">
+              {mutation.error instanceof Error ? mutation.error.message : "Unable to create."}
+            </p>
+          )}
+          <DialogFooter>
+            <Button type="submit" disabled={mutation.isPending || !ownerId}>
+              {mutation.isPending ? "Creating…" : "Create team"}
             </Button>
           </DialogFooter>
         </form>

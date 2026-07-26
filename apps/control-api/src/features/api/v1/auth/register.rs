@@ -287,7 +287,7 @@ fn map_invitation_error(error: InvitationError) -> AppError {
     }
 }
 
-fn personal_team_slug(email: &str) -> String {
+pub(crate) fn personal_team_slug(email: &str) -> String {
     let slug = email
         .split('@')
         .next()
