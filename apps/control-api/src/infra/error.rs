@@ -23,6 +23,8 @@ pub enum AppError {
     #[allow(dead_code)]
     #[error("{message}")]
     TooManyRequests { op: &'static str, message: String },
+    #[error("{message}")]
+    QuotaExceeded { op: &'static str, message: String },
     #[error("infrastructure service unavailable")]
     Infrastructure {
         op: &'static str,
@@ -59,6 +61,7 @@ impl AppError {
             Self::Gone { .. } => StatusCode::GONE,
             Self::Conflict { .. } => StatusCode::CONFLICT,
             Self::TooManyRequests { .. } => StatusCode::TOO_MANY_REQUESTS,
+            Self::QuotaExceeded { .. } => StatusCode::TOO_MANY_REQUESTS,
             Self::Infrastructure { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             Self::Internal { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             Self::SetupNotAllowed { .. } => StatusCode::FORBIDDEN,
@@ -74,6 +77,7 @@ impl AppError {
             Self::Gone { op, .. } => op,
             Self::Conflict { op, .. } => op,
             Self::TooManyRequests { op, .. } => op,
+            Self::QuotaExceeded { op, .. } => op,
             Self::Infrastructure { op, .. } => op,
             Self::Internal { op, .. } => op,
             Self::SetupNotAllowed { op, .. } => op,
@@ -93,6 +97,7 @@ impl AppError {
             Self::Gone { .. } => 41001,
             Self::Conflict { .. } => 40901,
             Self::TooManyRequests { .. } => 42901,
+            Self::QuotaExceeded { .. } => 42902,
             Self::Infrastructure { .. } => 50001,
             Self::Internal { .. } => 50099,
             Self::SetupNotAllowed { .. } => 40302,
