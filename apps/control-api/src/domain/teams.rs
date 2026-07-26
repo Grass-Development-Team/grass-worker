@@ -140,6 +140,70 @@ pub async fn list_for_user(
         .map_err(Into::into)
 }
 
+pub struct TeamListFilter {
+    pub query: Option<String>,
+    pub limit: u64,
+}
+
+/// Platform-wide team listing for administrators, newest first, with an
+/// optional case-insensitive slug / name search.
+pub async fn list_all(
+    db: &DatabaseConnection,
+    filter: TeamListFilter,
+) -> anyhow::Result<Vec<team::Model>> {
+    use sea_orm::QueryOrder;
+
+    let mut query = team::Entity::find().filter(team::Column::DeletedAt.is_null());
+    if let Some(term) = filter
+        .query
+        .as_deref()
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+    {
+        let pattern = format!(
+            "%{}%",
+            term.replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        );
+        query = query.filter(
+            sea_orm::Condition::any()
+                .add(team::Column::Slug.like(pattern.clone()))
+                .add(team::Column::Name.like(pattern)),
+        );
+    }
+    query
+        .order_by_desc(team::Column::CreatedAt)
+        .limit(filter.limit.clamp(1, 500))
+        .all(db)
+        .await
+        .map_err(Into::into)
+}
+
+/// Live member counts for a set of teams in one grouped query.
+pub async fn member_counts(
+    db: &DatabaseConnection,
+    team_ids: &[Uuid],
+) -> anyhow::Result<std::collections::HashMap<Uuid, i64>> {
+    use sea_orm::QueryOrder;
+
+    if team_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let rows: Vec<(Uuid, i64)> = team_member::Entity::find()
+        .select_only()
+        .column(team_member::Column::TeamId)
+        .column_as(team_member::Column::Id.count(), "count")
+        .filter(team_member::Column::TeamId.is_in(team_ids.iter().copied()))
+        .filter(team_member::Column::DeletedAt.is_null())
+        .group_by(team_member::Column::TeamId)
+        .order_by_asc(team_member::Column::TeamId)
+        .into_tuple()
+        .all(db)
+        .await?;
+    Ok(rows.into_iter().collect())
+}
+
 pub async fn get_by_id(
     db: &DatabaseConnection,
     team_id: Uuid,

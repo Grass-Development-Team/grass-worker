@@ -28,6 +28,40 @@ impl PlatformRole {
             Self::Admin => "admin",
         }
     }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "user" => Some(Self::User),
+            "admin" => Some(Self::Admin),
+            _ => None,
+        }
+    }
+}
+
+impl UserStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Disabled => "disabled",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "active" => Some(Self::Active),
+            "disabled" => Some(Self::Disabled),
+            _ => None,
+        }
+    }
+}
+
+impl TeamKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Personal => "personal",
+            Self::Team => "team",
+        }
+    }
 }
 
 string_active_enum!(TeamKind, "team_kind", {

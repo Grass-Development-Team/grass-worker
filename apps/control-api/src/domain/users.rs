@@ -101,6 +101,120 @@ pub async fn update_last_login(db: &DatabaseConnection, user_id: Uuid) -> anyhow
     Ok(())
 }
 
+pub struct UserListFilter {
+    pub query: Option<String>,
+    pub limit: u64,
+}
+
+/// Platform-wide user listing for administrators, newest first, with an
+/// optional case-insensitive email / display name search.
+pub async fn list_users<C: ConnectionTrait>(
+    db: &C,
+    filter: UserListFilter,
+) -> anyhow::Result<Vec<user::Model>> {
+    use sea_orm::{QueryOrder, QuerySelect};
+
+    let mut query = user::Entity::find().filter(user::Column::DeletedAt.is_null());
+    if let Some(term) = filter
+        .query
+        .as_deref()
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+    {
+        let pattern = format!("%{}%", escape_like(term));
+        query = query.filter(
+            sea_orm::Condition::any()
+                .add(user::Column::Email.like(pattern.clone()))
+                .add(user::Column::DisplayName.like(pattern)),
+        );
+    }
+    query
+        .order_by_desc(user::Column::CreatedAt)
+        .limit(filter.limit.clamp(1, 500))
+        .all(db)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to list users: {e}"))
+}
+
+fn escape_like(term: &str) -> String {
+    term.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+pub struct UpdateUserParams {
+    /// `Some(None)` clears the display name.
+    pub display_name: Option<Option<String>>,
+    pub status: Option<UserStatus>,
+    pub platform_role: Option<PlatformRole>,
+}
+
+pub async fn update_user<C: ConnectionTrait>(
+    db: &C,
+    user: user::Model,
+    params: UpdateUserParams,
+) -> anyhow::Result<user::Model> {
+    let mut active: user::ActiveModel = user.into();
+    if let Some(display_name) = params.display_name {
+        active.display_name = Set(display_name);
+    }
+    if let Some(status) = params.status {
+        active.status = Set(status);
+    }
+    if let Some(role) = params.platform_role {
+        active.platform_role = Set(role);
+    }
+    active.update(db).await.map_err(Into::into)
+}
+
+/// Active platform administrators — the count that must never reach zero.
+pub async fn count_active_admins<C: ConnectionTrait>(db: &C) -> anyhow::Result<u64> {
+    use sea_orm::PaginatorTrait;
+
+    user::Entity::find()
+        .filter(user::Column::DeletedAt.is_null())
+        .filter(user::Column::Status.eq(UserStatus::Active))
+        .filter(user::Column::PlatformRole.eq(PlatformRole::Admin))
+        .count(db)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to count platform administrators: {e}"))
+}
+
+/// Replaces (or creates) the password credential for a user.
+pub async fn set_password<C: ConnectionTrait>(
+    db: &C,
+    user_id: Uuid,
+    password_hash: String,
+) -> anyhow::Result<()> {
+    let existing = user_password_credential::Entity::find()
+        .filter(user_password_credential::Column::UserId.eq(user_id))
+        .one(db)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to query password credential: {e}"))?;
+
+    match existing {
+        Some(credential) => {
+            let mut active: user_password_credential::ActiveModel = credential.into();
+            active.password_hash = Set(password_hash);
+            active.update(db).await?;
+        }
+        None => {
+            let now = OffsetDateTime::now_utc();
+            user_password_credential::ActiveModel {
+                id: Set(Uuid::now_v7()),
+                user_id: Set(user_id),
+                password_hash: Set(password_hash),
+                must_change_password: Set(false),
+                created_at: Set(now),
+                updated_at: Set(now),
+            }
+            .insert(db)
+            .await?;
+        }
+    }
+    Ok(())
+}
+
 pub async fn verify_user_password(
     db: &DatabaseConnection,
     email: &str,
