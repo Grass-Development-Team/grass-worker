@@ -3,6 +3,7 @@ pub mod detail;
 pub mod invitations;
 pub mod list;
 pub mod members;
+pub mod quota;
 pub mod update;
 
 use axum::{
@@ -21,6 +22,8 @@ pub fn router() -> Router<ControlApiState> {
             get(detail::handler).patch(update::handler),
         )
         .route("/teams/{team_id}/members", get(members::list))
+        .route("/teams/{team_id}/quota", get(quota::plan))
+        .route("/teams/{team_id}/quota/usage", get(quota::usage))
         .route(
             "/teams/{team_id}/members/{user_id}",
             patch(members::update_role).delete(members::remove),
@@ -36,6 +39,16 @@ pub(crate) fn database<'a>(
     state.try_database().ok_or_else(|| AppError::Internal {
         op,
         message: "database not available".to_owned(),
+    })
+}
+
+pub(crate) fn cache<'a>(
+    state: &'a ControlApiState,
+    op: &'static str,
+) -> Result<&'a grass_cache::CacheStore, AppError> {
+    state.try_cache().ok_or_else(|| AppError::Internal {
+        op,
+        message: "cache not available".to_owned(),
     })
 }
 

@@ -259,6 +259,18 @@ pub fn invitation_token_hash(token: &str) -> String {
     grass_token::hash_token(token)
 }
 
+pub async fn invitation_team_by_token_hash(
+    db: &DatabaseConnection,
+    token_hash: &str,
+) -> anyhow::Result<Option<Uuid>> {
+    team_invitation::Entity::find()
+        .filter(team_invitation::Column::TokenHash.eq(token_hash))
+        .one(db)
+        .await
+        .map(|invitation| invitation.map(|i| i.team_id))
+        .map_err(Into::into)
+}
+
 pub fn validate_invitation_acceptance(
     status: &TeamInvitationStatus,
     expires_at: OffsetDateTime,

@@ -212,5 +212,38 @@ mod tests {
         ) -> anyhow::Result<bool> {
             unreachable!()
         }
+
+        async fn set_if_absent(
+            &self,
+            _key: &str,
+            _value: &str,
+            _ttl: Duration,
+        ) -> anyhow::Result<bool> {
+            unreachable!()
+        }
+
+        async fn check_and_consume(
+            &self,
+            _checks: &[grass_cache::QuotaCounterCheck],
+        ) -> anyhow::Result<grass_cache::QuotaCheckOutcome> {
+            unreachable!()
+        }
+
+        async fn adjust_counter(&self, _key: &str, _amount: i64) -> anyhow::Result<i64> {
+            unreachable!()
+        }
+
+        async fn acquire_slot(
+            &self,
+            _key: &str,
+            _max: i64,
+            _ttl: Duration,
+        ) -> anyhow::Result<bool> {
+            unreachable!()
+        }
+
+        async fn release_slot(&self, _key: &str) -> anyhow::Result<()> {
+            unreachable!()
+        }
     }
 }
