@@ -12,8 +12,39 @@ pub enum CheckoutError {
     CommitCheckoutFailed(String),
     #[error("root directory {0} is invalid")]
     InvalidRootDirectory(String),
+    #[error("repository url {0} is not allowed")]
+    InvalidRepositoryUrl(String),
+    #[error("git ref {0} is not allowed")]
+    InvalidRef(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+}
+
+/// Rejects repository URLs whose scheme is not http(s). The control plane
+/// validates this too, but the build node re-checks so a compromised or
+/// older control plane cannot make host-side git use file/ssh/ext/git
+/// transports.
+fn validate_repository_url(url: &str) -> Result<(), CheckoutError> {
+    match url::Url::parse(url) {
+        Ok(parsed) if matches!(parsed.scheme(), "http" | "https") => Ok(()),
+        _ => Err(CheckoutError::InvalidRepositoryUrl(url.to_owned())),
+    }
+}
+
+/// Rejects branch/commit refs that could be read by git as options or that
+/// contain shell/path metacharacters. Refs are limited to a conservative
+/// charset and must not start with `-`.
+fn validate_ref(value: &str) -> Result<(), CheckoutError> {
+    let ok = !value.is_empty()
+        && !value.starts_with('-')
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-'));
+    if ok {
+        Ok(())
+    } else {
+        Err(CheckoutError::InvalidRef(value.to_owned()))
+    }
 }
 
 pub struct CheckoutResult {
@@ -28,6 +59,9 @@ async fn run_git(args: &[&str], cwd: &Path) -> Result<String, String> {
         .args(args)
         .current_dir(cwd)
         .env("GIT_TERMINAL_PROMPT", "0")
+        // Defense in depth: never let a remote helper transport (ext, file,
+        // ssh, git) run, even if a repository url slipped past validation.
+        .env("GIT_ALLOW_PROTOCOL", "http:https")
         .output()
         .await
         .map_err(|error| format!("failed to spawn git: {error}"))?;
@@ -47,6 +81,16 @@ pub async fn checkout(
     root_directory: Option<&str>,
     destination: &Path,
 ) -> Result<CheckoutResult, CheckoutError> {
+    validate_repository_url(repository_url)?;
+    let branch = branch.filter(|branch| !branch.trim().is_empty());
+    if let Some(branch) = branch {
+        validate_ref(branch)?;
+    }
+    let commit = commit.filter(|commit| !commit.trim().is_empty());
+    if let Some(commit) = commit {
+        validate_ref(commit)?;
+    }
+
     let source_dir = destination.join("source");
     if source_dir.exists() {
         tokio::fs::remove_dir_all(&source_dir).await?;
@@ -54,7 +98,7 @@ pub async fn checkout(
     tokio::fs::create_dir_all(destination).await?;
 
     let source_str = source_dir.display().to_string();
-    match commit.filter(|commit| !commit.trim().is_empty()) {
+    match commit {
         Some(commit) => {
             // Fetch just the requested commit when the server allows it,
             // falling back to a full branch clone.
@@ -78,7 +122,7 @@ pub async fn checkout(
         }
         None => {
             let mut args = vec!["clone", "--depth", "1", "--quiet"];
-            if let Some(branch) = branch.filter(|branch| !branch.trim().is_empty()) {
+            if let Some(branch) = branch {
                 args.extend(["--branch", branch]);
             }
             args.push(repository_url);
