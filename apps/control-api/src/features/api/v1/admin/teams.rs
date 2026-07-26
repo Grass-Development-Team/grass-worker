@@ -382,3 +382,90 @@ pub async fn set_quota_plan(
         },
     })))
 }
+
+#[derive(Deserialize)]
+pub struct CreateTeamRequest {
+    pub name: String,
+    #[serde(default)]
+    pub slug: Option<String>,
+    pub owner_user_id: Uuid,
+}
+
+/// POST /api/v1/admin/teams — creates a standard team owned by an existing
+/// active user.
+pub async fn create(
+    State(state): State<ControlApiState>,
+    Session { data, .. }: Session,
+    Json(body): Json<CreateTeamRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "admin.teams.create";
+    let db = super::database(&state, OP)?;
+
+    let name = body.name.trim().to_owned();
+    if name.is_empty() || name.chars().count() > 120 {
+        return Err(AppError::Validation {
+            op: OP,
+            message: "team name must contain between 1 and 120 characters".to_owned(),
+        });
+    }
+    let slug_source = body.slug.filter(|slug| !slug.trim().is_empty());
+    let slug = grass_validator::normalize_slug(slug_source.as_deref().unwrap_or(&name)).map_err(
+        |error| AppError::Validation {
+            op: OP,
+            message: error.to_string(),
+        },
+    )?;
+
+    let owner = crate::domain::users::get_user_by_id(db, body.owner_user_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .ok_or_else(|| AppError::Validation {
+            op: OP,
+            message: "owner user not found".to_owned(),
+        })?;
+    if owner.status != crate::infra::database::entity::UserStatus::Active {
+        return Err(AppError::Validation {
+            op: OP,
+            message: "owner account is disabled".to_owned(),
+        });
+    }
+
+    let team = teams::create_team(
+        db,
+        crate::domain::teams::CreateTeamParams {
+            slug,
+            name,
+            kind: TeamKind::Team,
+            owner_user_id: owner.id,
+            group_id: None,
+        },
+    )
+    .await
+    .map_err(|source| {
+        if crate::infra::database::is_unique_violation(&source) {
+            AppError::Conflict {
+                op: OP,
+                message: "team slug is already in use".to_owned(),
+            }
+        } else {
+            AppError::Infrastructure { op: OP, source }
+        }
+    })?;
+
+    let _ = audits::create_audit_event(
+        db,
+        CreateAuditEventParams {
+            actor_user_id: Some(data.user_id),
+            team_id: Some(team.id),
+            action: "team.created".to_owned(),
+            target_type: "team".to_owned(),
+            target_id: Some(team.id),
+            result: AuditEventResult::Success,
+            reason: Some("created by platform administrator".to_owned()),
+            metadata: json!({ "slug": team.slug, "owner": owner.email }),
+        },
+    )
+    .await;
+
+    Ok(ok_response(json!({ "team": team_view(&team, None, 1) })))
+}
