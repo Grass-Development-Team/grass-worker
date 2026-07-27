@@ -26,7 +26,7 @@ import {
   type DeploymentDetail,
 } from "./deployments.api";
 import { LogViewer } from "./components/log-viewer";
-import { BuildStatusBadge, ReleaseStatusBadge } from "./components/status-badges";
+import { BuildStatusBadge, ReleaseStatusBadge, ServeStatusBadge } from "./components/status-badges";
 
 export function DeploymentDetailRoute() {
   const { projectId, deploymentId } = useParams<{ projectId: string; deploymentId: string }>();
@@ -123,7 +123,9 @@ export function DeploymentDetailRoute() {
               {deployment.environment}
             </Badge>
             <BuildStatusBadge status={deployment.build_status} />
+            <ServeStatusBadge status={deployment.serve_status} />
             <ReleaseStatusBadge status={deployment.release_status} />
+            {deployment.overcommitted && <Badge variant="warning">Overflow placement</Badge>}
           </div>
           <p className="text-sm text-muted-foreground">
             Created {new Date(deployment.created_at).toLocaleString()}
@@ -241,6 +243,12 @@ export function DeploymentDetailRoute() {
               />
               <OverviewRow label="Duration" value={formatDuration(deployment.duration_seconds)} />
               <OverviewRow label="Stage" value={deployment.build_stage ?? "—"} />
+              <OverviewRow label="Build node" value={deployment.build_node?.name ?? "Unassigned"} />
+              <OverviewRow label="Serve node" value={deployment.serve_node?.name ?? "Unassigned"} />
+              <OverviewRow
+                label="Serve resources"
+                value={`${deployment.serve_resources.cpu_millicores}m · ${deployment.serve_resources.memory_mb} MB · ${deployment.serve_resources.disk_mb} MB disk`}
+              />
               {url && (
                 <div className="flex justify-between gap-2">
                   <span className="text-muted-foreground">URL</span>
@@ -261,6 +269,14 @@ export function DeploymentDetailRoute() {
                     {deployment.failure_code ?? "failed"}
                   </p>
                   <p className="text-destructive">{deployment.failure_message}</p>
+                </div>
+              )}
+              {deployment.serve_failure_message && (
+                <div className="rounded-md border border-destructive/40 bg-destructive/5 p-2">
+                  <p className="font-medium text-destructive">
+                    {deployment.serve_failure_code ?? "serve_failed"}
+                  </p>
+                  <p className="text-destructive">{deployment.serve_failure_message}</p>
                 </div>
               )}
             </CardContent>

@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, collections::HashMap};
 
 use grass_node_protocol::{NodeResources, ServeResources};
 use rand::{Rng, seq::SliceRandom};
@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 const PLACEMENT_LOCK_ID: i32 = 1_196_575_564;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
 pub struct NodeUsage {
     pub cpu_millicores: u64,
     pub memory_mb: u64,
@@ -215,13 +215,50 @@ pub async fn place_deployment(
     requested: ServeResources,
     selected_node_id: Option<Uuid>,
 ) -> Result<Placement, ScheduleError> {
+    lock_placement(transaction).await?;
+    let candidates = eligible_candidates(transaction).await?;
+    choose_candidate(&candidates, requested, selected_node_id)
+}
+
+/// Serializes operations that can change whether a Serve Node has room for
+/// another deployment, including placement and administrative capacity edits.
+pub async fn lock_placement(transaction: &DatabaseTransaction) -> Result<(), ScheduleError> {
     transaction
         .execute_unprepared(&format!(
             "SELECT pg_advisory_xact_lock({PLACEMENT_LOCK_ID})"
         ))
         .await?;
-    let candidates = eligible_candidates(transaction).await?;
-    choose_candidate(&candidates, requested, selected_node_id)
+    Ok(())
+}
+
+pub async fn node_usage<C: ConnectionTrait>(
+    db: &C,
+) -> Result<HashMap<Uuid, NodeUsage>, ScheduleError> {
+    let rows = NodeUsageRow::find_by_statement(Statement::from_string(
+        DatabaseBackend::Postgres,
+        r#"
+SELECT
+    d.serve_node_id AS node_id,
+    COALESCE(SUM(d.serve_cpu_millicores), 0)::BIGINT AS used_cpu_millicores,
+    COALESCE(SUM(d.serve_memory_mb), 0)::BIGINT AS used_memory_mb,
+    COALESCE(SUM(d.serve_disk_mb), 0)::BIGINT AS used_disk_mb,
+    COUNT(d.id)::BIGINT AS used_deployments
+FROM deployments d
+WHERE d.serve_node_id IS NOT NULL
+    AND d.deleted_at IS NULL
+    AND d.build_status NOT IN ('failed', 'canceled')
+GROUP BY d.serve_node_id
+"#,
+    ))
+    .all(db)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            let node_id = row.node_id;
+            Ok((node_id, row.try_into()?))
+        })
+        .collect()
 }
 
 pub async fn eligible_candidates<C: ConnectionTrait>(
@@ -275,6 +312,40 @@ struct CandidateRow {
     used_memory_mb: i64,
     used_disk_mb: i64,
     used_deployments: i64,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct NodeUsageRow {
+    node_id: Uuid,
+    used_cpu_millicores: i64,
+    used_memory_mb: i64,
+    used_disk_mb: i64,
+    used_deployments: i64,
+}
+
+impl TryFrom<NodeUsageRow> for NodeUsage {
+    type Error = ScheduleError;
+
+    fn try_from(row: NodeUsageRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            cpu_millicores: row
+                .used_cpu_millicores
+                .try_into()
+                .map_err(|_| ScheduleError::InvalidData)?,
+            memory_mb: row
+                .used_memory_mb
+                .try_into()
+                .map_err(|_| ScheduleError::InvalidData)?,
+            disk_mb: row
+                .used_disk_mb
+                .try_into()
+                .map_err(|_| ScheduleError::InvalidData)?,
+            deployments: row
+                .used_deployments
+                .try_into()
+                .map_err(|_| ScheduleError::InvalidData)?,
+        })
+    }
 }
 
 impl TryFrom<CandidateRow> for Candidate {

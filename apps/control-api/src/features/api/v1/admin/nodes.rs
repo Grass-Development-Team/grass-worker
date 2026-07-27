@@ -3,6 +3,8 @@ use axum::{
     extract::{Path, State},
     response::IntoResponse,
 };
+use grass_node_protocol::NodeResources;
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, TransactionTrait};
 use serde::Deserialize;
 use serde_json::json;
 use time::OffsetDateTime;
@@ -13,6 +15,7 @@ use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
         nodes::{self, CreateNodeParams},
+        scheduler::{self, NodeUsage},
         settings,
     },
     infra::{
@@ -27,7 +30,16 @@ use crate::{
 /// Heartbeats older than this mark a Node unhealthy.
 pub const HEARTBEAT_STALE_SECONDS: i64 = 90;
 
-fn node_view(node: &node::Model, now: OffsetDateTime) -> serde_json::Value {
+fn node_view(node: &node::Model, usage: NodeUsage, now: OffsetDateTime) -> serde_json::Value {
+    let capacity = NodeResources {
+        cpu_millicores: node.capacity_cpu_millicores.max(0) as u64,
+        memory_mb: node.capacity_memory_mb.max(0) as u64,
+        disk_mb: node.capacity_disk_mb.max(0) as u64,
+        max_deployments: node.max_deployments.max(0) as u32,
+    };
+    let overflow_count = usage
+        .deployments
+        .saturating_sub(u64::from(capacity.max_deployments));
     json!({
         "id": node.id,
         "name": node.name,
@@ -39,6 +51,9 @@ fn node_view(node: &node::Model, now: OffsetDateTime) -> serde_json::Value {
         "base_url": node.base_url,
         "work_root": node.work_root,
         "version": node.metadata.get("version"),
+        "capacity": capacity,
+        "usage": usage,
+        "overflow_count": overflow_count,
         "last_heartbeat_at": ts(node.last_heartbeat_at),
         "created_at": ts(node.created_at),
     })
@@ -56,10 +71,19 @@ pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoRespo
     let nodes = nodes::list(db)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let usage = scheduler::node_usage(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     let now = OffsetDateTime::now_utc();
 
     Ok(ok_response(json!({
-        "nodes": nodes.iter().map(|node| node_view(node, now)).collect::<Vec<_>>(),
+        "nodes": nodes
+            .iter()
+            .map(|node| node_view(node, usage.get(&node.id).copied().unwrap_or_default(), now))
+            .collect::<Vec<_>>(),
         "local_process": local_process_view(&state).await,
     })))
 }
@@ -95,9 +119,172 @@ pub async fn detail(
             op: OP,
             message: "node not found".to_owned(),
         })?;
+    let usage = scheduler::node_usage(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?
+        .remove(&node_id)
+        .unwrap_or_default();
 
     Ok(ok_response(json!({
-        "node": node_view(&node, OffsetDateTime::now_utc()),
+        "node": node_view(&node, usage, OffsetDateTime::now_utc()),
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateNodeCapacityRequest {
+    pub capacity_cpu_millicores: u64,
+    pub capacity_memory_mb: u64,
+    pub capacity_disk_mb: u64,
+    pub max_deployments: u32,
+}
+
+fn validate_capacity(
+    body: &UpdateNodeCapacityRequest,
+    usage: NodeUsage,
+) -> Result<NodeResources, String> {
+    if body.capacity_cpu_millicores == 0
+        || body.capacity_memory_mb == 0
+        || body.capacity_disk_mb == 0
+        || body.max_deployments == 0
+    {
+        return Err("capacity values must be positive integers".to_owned());
+    }
+    if body.capacity_cpu_millicores > i64::MAX as u64
+        || body.capacity_memory_mb > i64::MAX as u64
+        || body.capacity_disk_mb > i64::MAX as u64
+        || body.max_deployments > i32::MAX as u32
+    {
+        return Err("capacity values exceed the supported range".to_owned());
+    }
+    if body.capacity_cpu_millicores < usage.cpu_millicores {
+        return Err(format!(
+            "CPU capacity cannot be lower than current usage ({}m)",
+            usage.cpu_millicores
+        ));
+    }
+    if body.capacity_memory_mb < usage.memory_mb {
+        return Err(format!(
+            "memory capacity cannot be lower than current usage ({} MB)",
+            usage.memory_mb
+        ));
+    }
+    if body.capacity_disk_mb < usage.disk_mb {
+        return Err(format!(
+            "disk capacity cannot be lower than current usage ({} MB)",
+            usage.disk_mb
+        ));
+    }
+    if u64::from(body.max_deployments) < usage.deployments {
+        return Err(format!(
+            "deployment capacity cannot be lower than current usage ({})",
+            usage.deployments
+        ));
+    }
+    Ok(NodeResources {
+        cpu_millicores: body.capacity_cpu_millicores,
+        memory_mb: body.capacity_memory_mb,
+        disk_mb: body.capacity_disk_mb,
+        max_deployments: body.max_deployments,
+    })
+}
+
+/// PATCH /api/v1/admin/nodes/{node_id}
+pub async fn update_capacity(
+    State(state): State<ControlApiState>,
+    crate::infra::http::extractors::Session { data, .. }: crate::infra::http::extractors::Session,
+    Path(node_id): Path<Uuid>,
+    Json(body): Json<UpdateNodeCapacityRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "admin.nodes.update_capacity";
+    let db = super::database(&state, OP)?;
+    let transaction = db
+        .begin()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    scheduler::lock_placement(&transaction)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let node = nodes::get_by_id(&transaction, node_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "node not found".to_owned(),
+        })?;
+    if !node.serve_enabled {
+        return Err(AppError::Validation {
+            op: OP,
+            message: "capacity can only be configured for a Serve Node".to_owned(),
+        });
+    }
+    let usage = scheduler::node_usage(&transaction)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?
+        .remove(&node_id)
+        .unwrap_or_default();
+    let capacity = validate_capacity(&body, usage)
+        .map_err(|message| AppError::Validation { op: OP, message })?;
+    let old = json!({
+        "capacity_cpu_millicores": node.capacity_cpu_millicores,
+        "capacity_memory_mb": node.capacity_memory_mb,
+        "capacity_disk_mb": node.capacity_disk_mb,
+        "max_deployments": node.max_deployments,
+    });
+    let new = json!({
+        "capacity_cpu_millicores": capacity.cpu_millicores,
+        "capacity_memory_mb": capacity.memory_mb,
+        "capacity_disk_mb": capacity.disk_mb,
+        "max_deployments": capacity.max_deployments,
+    });
+    let mut active: node::ActiveModel = node.into();
+    active.capacity_cpu_millicores = Set(capacity.cpu_millicores as i64);
+    active.capacity_memory_mb = Set(capacity.memory_mb as i64);
+    active.capacity_disk_mb = Set(capacity.disk_mb as i64);
+    active.max_deployments = Set(capacity.max_deployments as i32);
+    let node = active
+        .update(&transaction)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+
+    let _ = audits::create_audit_event(
+        db,
+        CreateAuditEventParams {
+            actor_user_id: Some(data.user_id),
+            team_id: None,
+            action: "node.capacity_updated".to_owned(),
+            target_type: "node".to_owned(),
+            target_id: Some(node.id),
+            result: AuditEventResult::Success,
+            reason: None,
+            metadata: json!({ "old": old, "new": new }),
+        },
+    )
+    .await;
+
+    Ok(ok_response(json!({
+        "node": node_view(&node, usage, OffsetDateTime::now_utc()),
     })))
 }
 
@@ -238,7 +425,7 @@ pub async fn create(
     }
 
     Ok(ok_response(json!({
-        "node": node_view(&node, OffsetDateTime::now_utc()),
+        "node": node_view(&node, NodeUsage::default(), OffsetDateTime::now_utc()),
         // Shown exactly once; only the hash is stored.
         "token": token,
         "local_process": local_process,
@@ -371,4 +558,90 @@ pub async fn rotate_token(
         "node_id": node.id,
         "token": token,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::{domain::scheduler::NodeUsage, infra::database::entity::NodeStatus};
+
+    fn serve_node() -> node::Model {
+        let now = OffsetDateTime::now_utc();
+        node::Model {
+            id: Uuid::nil(),
+            name: "serve-node-1".to_owned(),
+            token_hash: String::new(),
+            status: NodeStatus::Active,
+            build_enabled: false,
+            serve_enabled: true,
+            build_concurrency: 0,
+            base_url: Some("http://node-1:8080".to_owned()),
+            work_root: None,
+            capacity_cpu_millicores: 1_200,
+            capacity_memory_mb: 1_536,
+            capacity_disk_mb: 8_192,
+            max_deployments: 10,
+            metadata: json!({ "version": "0.1.0" }),
+            last_heartbeat_at: Some(now),
+            deleted_at: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn request() -> UpdateNodeCapacityRequest {
+        UpdateNodeCapacityRequest {
+            capacity_cpu_millicores: 1_600,
+            capacity_memory_mb: 2_048,
+            capacity_disk_mb: 16_384,
+            max_deployments: 20,
+        }
+    }
+
+    #[test]
+    fn capacity_request_requires_positive_values() {
+        let mut body = request();
+        body.capacity_cpu_millicores = 0;
+
+        let error = validate_capacity(&body, NodeUsage::default()).unwrap_err();
+
+        assert_eq!(error, "capacity values must be positive integers");
+    }
+
+    #[test]
+    fn capacity_request_cannot_drop_below_current_usage() {
+        let body = request();
+        let usage = NodeUsage {
+            cpu_millicores: 1_601,
+            memory_mb: 256,
+            disk_mb: 512,
+            deployments: 1,
+        };
+
+        let error = validate_capacity(&body, usage).unwrap_err();
+
+        assert_eq!(
+            error,
+            "CPU capacity cannot be lower than current usage (1601m)"
+        );
+    }
+
+    #[test]
+    fn node_view_reports_capacity_usage_and_overflow() {
+        let node = serve_node();
+        let usage = NodeUsage {
+            cpu_millicores: 1_400,
+            memory_mb: 512,
+            disk_mb: 1_024,
+            deployments: 12,
+        };
+
+        let view = node_view(&node, usage, OffsetDateTime::now_utc());
+
+        assert_eq!(view["capacity"]["cpu_millicores"], 1_200);
+        assert_eq!(view["usage"]["deployments"], 12);
+        assert_eq!(view["overflow_count"], 2);
+    }
 }

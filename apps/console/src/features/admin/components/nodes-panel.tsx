@@ -5,6 +5,7 @@ import {
   RefreshCwIcon,
   RotateCcwIcon,
   ServerIcon,
+  SlidersHorizontalIcon,
   SquareIcon,
 } from "lucide-react";
 import { useState } from "react";
@@ -20,7 +21,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Field, FieldLabel } from "@/components/ui/field";
+import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -31,8 +32,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-import { adminApi, type AdminLocalProcessInfo, type AdminNode } from "../admin.api";
+import {
+  adminApi,
+  type AdminLocalProcessInfo,
+  type AdminNode,
+  type UpdateNodeCapacityInput,
+} from "../admin.api";
 
 function healthBadge(node: AdminNode) {
   if (node.healthy) return <Badge variant="success">Healthy</Badge>;
@@ -228,6 +235,7 @@ export function NodesPanel() {
                 <TableHead>Name</TableHead>
                 <TableHead>Health</TableHead>
                 <TableHead>Capabilities</TableHead>
+                <TableHead>Serve load</TableHead>
                 <TableHead>Version</TableHead>
                 <TableHead>Last heartbeat</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -243,8 +251,34 @@ export function NodesPanel() {
                     )}
                   </TableCell>
                   <TableCell>{healthBadge(node)}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    build ×{node.build_concurrency} · serve
+                  <TableCell>
+                    <div className="flex flex-wrap gap-1">
+                      {node.build_enabled && (
+                        <Badge variant="outline">Build ×{node.build_concurrency}</Badge>
+                      )}
+                      {node.serve_enabled && <Badge variant="secondary">Serve</Badge>}
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-xs tabular-nums text-muted-foreground">
+                    {node.serve_enabled ? (
+                      <div className="space-y-0.5 whitespace-nowrap">
+                        <p>
+                          CPU {node.usage.cpu_millicores}/{node.capacity.cpu_millicores}m
+                        </p>
+                        <p>
+                          Memory {node.usage.memory_mb}/{node.capacity.memory_mb} MB
+                        </p>
+                        <p>
+                          Disk {node.usage.disk_mb}/{node.capacity.disk_mb} MB
+                        </p>
+                        <p>
+                          Deployments {node.usage.deployments}/{node.capacity.max_deployments}
+                          {node.overflow_count > 0 ? ` (+${node.overflow_count} overflow)` : ""}
+                        </p>
+                      </div>
+                    ) : (
+                      "—"
+                    )}
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     {node.version ?? "—"}
@@ -255,14 +289,23 @@ export function NodesPanel() {
                       : "Never"}
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => rotateMutation.mutate(node.id)}
-                      disabled={rotateMutation.isPending}
-                    >
-                      <RefreshCwIcon /> Rotate token
-                    </Button>
+                    <div className="flex justify-end gap-1">
+                      {node.serve_enabled && <EditCapacityDialog node={node} />}
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            size="icon"
+                            variant="outline"
+                            aria-label={`Rotate token for ${node.name}`}
+                            onClick={() => rotateMutation.mutate(node.id)}
+                            disabled={rotateMutation.isPending}
+                          >
+                            <RefreshCwIcon />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Rotate token</TooltipContent>
+                      </Tooltip>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -270,6 +313,145 @@ export function NodesPanel() {
           </Table>
         ))}
     </div>
+  );
+}
+
+function EditCapacityDialog({ node }: { node: AdminNode }) {
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [cpu, setCpu] = useState(String(node.capacity.cpu_millicores));
+  const [memory, setMemory] = useState(String(node.capacity.memory_mb));
+  const [disk, setDisk] = useState(String(node.capacity.disk_mb));
+  const [deployments, setDeployments] = useState(String(node.capacity.max_deployments));
+  const [validationError, setValidationError] = useState<string | null>(null);
+
+  const updateMutation = useMutation({
+    mutationFn: (input: UpdateNodeCapacityInput) => adminApi.updateNodeCapacity(node.id, input),
+    onSuccess: () => {
+      setOpen(false);
+      setValidationError(null);
+      queryClient.invalidateQueries({ queryKey: ["admin", "nodes"] });
+    },
+  });
+
+  const openDialog = () => {
+    setCpu(String(node.capacity.cpu_millicores));
+    setMemory(String(node.capacity.memory_mb));
+    setDisk(String(node.capacity.disk_mb));
+    setDeployments(String(node.capacity.max_deployments));
+    setValidationError(null);
+    updateMutation.reset();
+    setOpen(true);
+  };
+
+  const submit = () => {
+    const values = [cpu, memory, disk, deployments].map(Number);
+    if (values.some((value) => !Number.isSafeInteger(value) || value <= 0)) {
+      setValidationError("Capacity values must be positive integers.");
+      return;
+    }
+    setValidationError(null);
+    updateMutation.mutate({
+      capacity_cpu_millicores: values[0],
+      capacity_memory_mb: values[1],
+      capacity_disk_mb: values[2],
+      max_deployments: values[3],
+    });
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            size="icon"
+            variant="outline"
+            aria-label={`Edit capacity for ${node.name}`}
+            onClick={openDialog}
+          >
+            <SlidersHorizontalIcon />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Edit capacity</TooltipContent>
+      </Tooltip>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Edit Serve capacity</DialogTitle>
+          <DialogDescription>{node.name}</DialogDescription>
+        </DialogHeader>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            submit();
+          }}
+        >
+          <FieldGroup className="gap-4">
+            <Field>
+              <FieldLabel htmlFor={`node-${node.id}-cpu`}>CPU millicores</FieldLabel>
+              <Input
+                id={`node-${node.id}-cpu`}
+                type="number"
+                min={1}
+                step={1}
+                value={cpu}
+                onChange={(event) => setCpu(event.target.value)}
+                required
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor={`node-${node.id}-memory`}>Memory MB</FieldLabel>
+              <Input
+                id={`node-${node.id}-memory`}
+                type="number"
+                min={1}
+                step={1}
+                value={memory}
+                onChange={(event) => setMemory(event.target.value)}
+                required
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor={`node-${node.id}-disk`}>Artifact disk MB</FieldLabel>
+              <Input
+                id={`node-${node.id}-disk`}
+                type="number"
+                min={1}
+                step={1}
+                value={disk}
+                onChange={(event) => setDisk(event.target.value)}
+                required
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor={`node-${node.id}-deployments`}>Max deployments</FieldLabel>
+              <Input
+                id={`node-${node.id}-deployments`}
+                type="number"
+                min={1}
+                step={1}
+                value={deployments}
+                onChange={(event) => setDeployments(event.target.value)}
+                required
+              />
+            </Field>
+            <FieldError>
+              {validationError ??
+                (updateMutation.isError
+                  ? updateMutation.error instanceof Error
+                    ? updateMutation.error.message
+                    : "Unable to update capacity."
+                  : null)}
+            </FieldError>
+          </FieldGroup>
+          <DialogFooter className="mt-5">
+            <Button type="submit" disabled={updateMutation.isPending}>
+              {updateMutation.isPending ? "Saving…" : "Save capacity"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

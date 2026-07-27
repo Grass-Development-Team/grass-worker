@@ -1,6 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 
-import type { BuildStatus, ReleaseStatus } from "../deployments.api";
+import type { BuildStatus, ReleaseStatus, ServeStatus } from "../deployments.api";
 
 export function BuildStatusBadge({ status }: { status: BuildStatus }) {
   switch (status) {
@@ -17,6 +17,19 @@ export function BuildStatusBadge({ status }: { status: BuildStatus }) {
       return <Badge variant="warning">{status === "queued" ? "Queued" : "Claimed"}</Badge>;
     default:
       return <Badge variant="outline">Pending</Badge>;
+  }
+}
+
+export function ServeStatusBadge({ status }: { status: ServeStatus }) {
+  switch (status) {
+    case "ready":
+      return <Badge variant="success">Serve ready</Badge>;
+    case "failed":
+      return <Badge variant="destructive">Serve failed</Badge>;
+    case "syncing":
+      return <Badge variant="warning">Syncing</Badge>;
+    default:
+      return <Badge variant="outline">Serve pending</Badge>;
   }
 }
 

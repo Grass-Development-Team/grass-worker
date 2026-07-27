@@ -20,8 +20,32 @@ export interface AdminNode {
   base_url: string | null;
   work_root: string | null;
   version: string | null;
+  capacity: AdminNodeResources;
+  usage: AdminNodeUsage;
+  overflow_count: number;
   last_heartbeat_at: string | null;
   created_at: string;
+}
+
+export interface AdminNodeResources {
+  cpu_millicores: number;
+  memory_mb: number;
+  disk_mb: number;
+  max_deployments: number;
+}
+
+export interface AdminNodeUsage {
+  cpu_millicores: number;
+  memory_mb: number;
+  disk_mb: number;
+  deployments: number;
+}
+
+export interface UpdateNodeCapacityInput {
+  capacity_cpu_millicores: number;
+  capacity_memory_mb: number;
+  capacity_disk_mb: number;
+  max_deployments: number;
 }
 
 export type LocalProcessState = "stopped" | "running" | "backoff" | "failed";
@@ -242,6 +266,12 @@ export const adminApi = {
   rotateNodeToken: (nodeId: string) =>
     request<{ node_id: string; token: string }>(`/api/v1/admin/nodes/${nodeId}/rotate-token`, {
       method: "POST",
+    }),
+
+  updateNodeCapacity: (nodeId: string, input: UpdateNodeCapacityInput) =>
+    request<{ node: AdminNode }>(`/api/v1/admin/nodes/${nodeId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
     }),
 
   listUsers: (q?: string) =>
