@@ -20,6 +20,7 @@ import { canManageMembers } from "@/features/teams/team-permissions";
 
 import {
   deploymentsApi,
+  deploymentRefetchInterval,
   formatDuration,
   isBuildRunning,
   shortCommit,
@@ -38,8 +39,7 @@ export function DeploymentDetailRoute() {
     queryKey: ["deployment", projectId, deploymentId],
     queryFn: () => deploymentsApi.detail(projectId as string, deploymentId as string),
     enabled: Boolean(projectId && deploymentId),
-    refetchInterval: (query) =>
-      query.state.data && isBuildRunning(query.state.data.deployment.build_status) ? 4000 : false,
+    refetchInterval: (query) => deploymentRefetchInterval(query.state.data?.deployment),
   });
 
   const invalidate = useCallback(
@@ -97,21 +97,26 @@ export function DeploymentDetailRoute() {
   const running = isBuildRunning(deployment.build_status);
   const isAdmin = activeRole ? canManageMembers(activeRole) : false;
   const url = deployment.production_url ?? deployment.preview_url;
+  const buildReady = deployment.build_status === "ready";
+  const lifecycleReady = buildReady && deployment.serve_status === "ready";
 
-  const canPromote =
-    deployment.build_status === "ready" &&
+  const showPromote =
+    buildReady &&
     deployment.release_status !== "active" &&
     (!detail.review_required || deployment.release_status === "approved");
-  const canRequestReview =
+  const canPromote = showPromote && lifecycleReady;
+  const showRequestReview =
     detail.review_required &&
-    deployment.build_status === "ready" &&
+    buildReady &&
     ["draft", "rejected"].includes(deployment.release_status);
+  const canRequestReview = showRequestReview && lifecycleReady;
   const hasPendingReview = deployment.release_status === "pending_review";
   const canRetry = ["failed", "canceled"].includes(deployment.build_status);
-  const canRollback =
-    deployment.build_status === "ready" &&
+  const showRollback =
+    buildReady &&
     deployment.release_status === "approved" &&
     detail.events.some((event) => event.kind === "release");
+  const canRollback = showRollback && lifecycleReady;
 
   return (
     <div className="space-y-6">
@@ -164,11 +169,11 @@ export function DeploymentDetailRoute() {
             <RotateCcwIcon /> Retry
           </Button>
         )}
-        {canRequestReview && (
+        {showRequestReview && (
           <Button
             variant="outline"
             onClick={() => act(requestReviewMutation.mutateAsync)}
-            disabled={requestReviewMutation.isPending}
+            disabled={!canRequestReview || requestReviewMutation.isPending}
           >
             Request review
           </Button>
@@ -177,32 +182,32 @@ export function DeploymentDetailRoute() {
           <>
             <Button
               onClick={() => act(approveMutation.mutateAsync)}
-              disabled={approveMutation.isPending}
+              disabled={!lifecycleReady || approveMutation.isPending}
             >
               <CheckIcon /> Approve
             </Button>
             <Button
               variant="destructive"
               onClick={() => act(rejectMutation.mutateAsync)}
-              disabled={rejectMutation.isPending}
+              disabled={!lifecycleReady || rejectMutation.isPending}
             >
               <XIcon /> Reject
             </Button>
           </>
         )}
-        {canPromote && isAdmin && (
+        {showPromote && isAdmin && (
           <Button
             onClick={() => act(promoteMutation.mutateAsync)}
-            disabled={promoteMutation.isPending}
+            disabled={!canPromote || promoteMutation.isPending}
           >
             <RocketIcon /> Promote
           </Button>
         )}
-        {canRollback && isAdmin && (
+        {showRollback && isAdmin && (
           <Button
             variant="outline"
             onClick={() => act(rollbackMutation.mutateAsync)}
-            disabled={rollbackMutation.isPending}
+            disabled={!canRollback || rollbackMutation.isPending}
           >
             <UndoIcon /> Roll back to this deployment
           </Button>

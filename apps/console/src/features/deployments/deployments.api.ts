@@ -210,6 +210,17 @@ export function isBuildRunning(status: BuildStatus): boolean {
   return ["pending", "claimed", "queued", "building"].includes(status);
 }
 
+export function deploymentRefetchInterval(
+  deployment: Pick<Deployment, "build_status" | "serve_status"> | null | undefined,
+): 4000 | false {
+  if (!deployment) return false;
+  if (isBuildRunning(deployment.build_status)) return 4000;
+  return deployment.build_status === "ready" &&
+    ["pending", "syncing"].includes(deployment.serve_status)
+    ? 4000
+    : false;
+}
+
 export function formatDuration(seconds: number | null): string {
   if (seconds === null) return "—";
   if (seconds < 60) return `${seconds}s`;

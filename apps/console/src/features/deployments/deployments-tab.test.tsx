@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 
+import { deploymentRefetchInterval, type Deployment } from "./deployments.api";
 import { DeploymentsTab } from "./deployments-tab";
 
 function jsonResponse(data: unknown): Response {
@@ -25,6 +26,70 @@ function renderDeployments() {
 }
 
 afterEach(() => vi.restoreAllMocks());
+
+function deploymentFixture(overrides: Partial<Deployment> = {}): Deployment {
+  return {
+    id: "deployment-1",
+    project_id: "project-1",
+    team_id: "team-1",
+    build_node: { id: "build-node-1", name: "builder-1" },
+    serve_node: { id: "serve-node-1", name: "serve-node-1" },
+    environment: "production",
+    runtime_kind: "static",
+    build_status: "ready",
+    serve_status: "failed",
+    release_status: "draft",
+    serve_resources: { cpu_millicores: 50, memory_mb: 64, disk_mb: 256 },
+    overcommitted: false,
+    build_stage: null,
+    source: {
+      repository_url: "https://example.com/repository.git",
+      branch: "main",
+      commit_hash: "1234567890abcdef",
+      commit_message: "Deploy application",
+    },
+    triggered_by: null,
+    failure_code: null,
+    failure_message: null,
+    serve_failure_code: "artifact_checksum_mismatch",
+    serve_failure_message: "Artifact checksum mismatch",
+    duration_seconds: 12,
+    claimed_at: null,
+    build_started_at: null,
+    build_finished_at: "2026-07-27T00:00:10Z",
+    serve_started_at: "2026-07-27T00:00:11Z",
+    serve_finished_at: "2026-07-27T00:00:12Z",
+    created_at: "2026-07-27T00:00:00Z",
+    preview_url: null,
+    production_url: null,
+    ...overrides,
+  };
+}
+
+it("keeps polling while build or serve work is in progress", () => {
+  expect(deploymentRefetchInterval({ build_status: "building", serve_status: "pending" })).toBe(
+    4000,
+  );
+  expect(deploymentRefetchInterval({ build_status: "ready", serve_status: "pending" })).toBe(4000);
+  expect(deploymentRefetchInterval({ build_status: "ready", serve_status: "syncing" })).toBe(4000);
+  expect(deploymentRefetchInterval({ build_status: "ready", serve_status: "ready" })).toBe(false);
+  expect(deploymentRefetchInterval({ build_status: "failed", serve_status: "pending" })).toBe(
+    false,
+  );
+});
+
+it("shows serve placement and serve failures in the serve column", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    jsonResponse({ deployments: [deploymentFixture()] }),
+  );
+
+  renderDeployments();
+
+  expect(await screen.findByText("Serve failed")).toBeInTheDocument();
+  expect(screen.getByText("serve-node-1")).toBeInTheDocument();
+  expect(screen.getByText("50m · 64MB · 256 MB disk")).toBeInTheDocument();
+  expect(screen.getByText("Artifact checksum mismatch")).toBeInTheDocument();
+});
 
 it("creates with automatic placement by default and sends a selected serve node", async () => {
   const calls: { url: string; init?: RequestInit }[] = [];

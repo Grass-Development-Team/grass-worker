@@ -33,6 +33,7 @@ import {
 
 import {
   deploymentsApi,
+  deploymentRefetchInterval,
   formatDuration,
   isBuildRunning,
   shortCommit,
@@ -58,7 +59,9 @@ export function DeploymentsTab({ projectId }: { projectId: string }) {
         environmentFilter === "all" ? undefined : { environment: environmentFilter },
       ),
     refetchInterval: (query) =>
-      query.state.data?.deployments.some((deployment) => isBuildRunning(deployment.build_status))
+      query.state.data?.deployments.some(
+        (deployment) => deploymentRefetchInterval(deployment) !== false,
+      )
         ? 4000
         : false,
   });
@@ -280,6 +283,11 @@ export function DeploymentsTab({ projectId }: { projectId: string }) {
                         {deployment.serve_resources.memory_mb}
                         MB · {deployment.serve_resources.disk_mb} MB disk
                       </p>
+                      {deployment.serve_failure_message && (
+                        <p className="max-w-64 truncate text-xs text-destructive">
+                          {deployment.serve_failure_message}
+                        </p>
+                      )}
                     </TableCell>
                     <TableCell>
                       <ReleaseStatusBadge status={deployment.release_status} />
