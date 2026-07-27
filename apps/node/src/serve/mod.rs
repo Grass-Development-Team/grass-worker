@@ -8,6 +8,7 @@
 
 pub mod routes;
 pub mod ssr;
+pub mod static_files;
 pub mod sync;
 
 use std::collections::HashMap;
@@ -417,6 +418,8 @@ async fn serve_local(
             spa_fallback,
             not_found,
         } => {
+            let method = request.method().clone();
+            let range = request.headers().get(header::RANGE).cloned();
             let Some(segments) = normalize_public_path(request.uri().path()) else {
                 return error_page(
                     StatusCode::BAD_REQUEST,
@@ -425,7 +428,7 @@ async fn serve_local(
             };
 
             match resolve_static_file(&static_dir, &segments, spa_fallback) {
-                Some(file) => serve_file(&file, StatusCode::OK).await,
+                Some(file) => serve_file(&file, StatusCode::OK, &method, range.as_ref()).await,
                 None => {
                     if let Some(not_found) = &not_found {
                         let mut custom = static_dir.clone();
@@ -433,12 +436,24 @@ async fn serve_local(
                             custom.push(segment);
                         }
                         if custom.is_file() {
-                            return serve_file(&custom, StatusCode::NOT_FOUND).await;
+                            return serve_file(
+                                &custom,
+                                StatusCode::NOT_FOUND,
+                                &method,
+                                range.as_ref(),
+                            )
+                            .await;
                         }
                     }
                     let fallback_404 = static_dir.join("404.html");
                     if fallback_404.is_file() {
-                        return serve_file(&fallback_404, StatusCode::NOT_FOUND).await;
+                        return serve_file(
+                            &fallback_404,
+                            StatusCode::NOT_FOUND,
+                            &method,
+                            range.as_ref(),
+                        )
+                        .await;
                     }
                     error_page(StatusCode::NOT_FOUND, "This page could not be found.")
                 }
@@ -615,22 +630,14 @@ async fn forward_to_gateway(
         .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response()))
 }
 
-async fn serve_file(path: &Path, status: StatusCode) -> Response {
-    match tokio::fs::read(path).await {
-        Ok(bytes) => {
-            let mime = mime_guess::from_path(path).first_or_octet_stream();
-            let cache_control = if mime == mime_guess::mime::TEXT_HTML {
-                "public, max-age=0, must-revalidate"
-            } else {
-                "public, max-age=3600"
-            };
-            Response::builder()
-                .status(status)
-                .header(header::CONTENT_TYPE, mime.as_ref())
-                .header(header::CACHE_CONTROL, cache_control)
-                .body(Body::from(bytes))
-                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
-        }
+async fn serve_file(
+    path: &Path,
+    status: StatusCode,
+    method: &axum::http::Method,
+    range: Option<&axum::http::HeaderValue>,
+) -> Response {
+    match static_files::serve_file(path, method, range, status).await {
+        Ok(response) => response,
         Err(_) => error_page(StatusCode::NOT_FOUND, "This page could not be found."),
     }
 }
