@@ -250,19 +250,16 @@ pub fn generate_grass_output(
         ));
     }
 
-    // SPA fallback: single-page frameworks route on the client, so unknown
-    // paths return index.html. Prerendered multi-page outputs (Next export,
-    // Astro, SvelteKit prerender) should 404 unless a 200.html exists.
+    // `200.html` is the explicit history-SPA fallback signal for ordinary
+    // static outputs. Hash routers need no fallback because fragments never
+    // reach the server. Nuxt SPA mode is explicit framework configuration.
     let spa_fallback = match detection.framework {
-        Framework::Vite => true,
         Framework::Nuxt => detection.static_signal == Some(true),
-        Framework::SvelteKit | Framework::Astro | Framework::Next => {
-            static_directory.join("200.html").is_file()
-        }
-        Framework::Unknown => {
-            static_directory.join("200.html").is_file()
-                || !static_directory.join("404.html").is_file()
-        }
+        Framework::Vite
+        | Framework::SvelteKit
+        | Framework::Astro
+        | Framework::Next
+        | Framework::Unknown => static_directory.join("200.html").is_file(),
     };
 
     let output_root = project_root.join(".grass/output");
@@ -428,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn vite_spa_output_generates_static_grass_output() {
+    fn vite_output_without_200_html_does_not_enable_spa_fallback() {
         let dir = project(&[
             ("package.json", r#"{"devDependencies":{"vite":"^6.0.0"}}"#),
             ("dist/index.html", "<html>app</html>"),
@@ -437,7 +434,7 @@ mod tests {
 
         let generated = generate_grass_output(&dir, None, Some("npm run build")).unwrap();
         assert_eq!(generated.framework_name, "vite");
-        assert!(generated.spa_fallback);
+        assert!(!generated.spa_fallback);
         assert!(generated.output_root.join("output.toml").is_file());
         assert!(generated.output_root.join("static/index.html").is_file());
         assert!(generated.output_root.join("static/assets/app.js").is_file());
@@ -449,6 +446,42 @@ mod tests {
         );
 
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn vite_output_with_200_html_enables_spa_fallback() {
+        let dir = project(&[
+            ("package.json", r#"{"devDependencies":{"vite":"^6.0.0"}}"#),
+            ("dist/index.html", "<html>app</html>"),
+            ("dist/200.html", "<html>fallback signal</html>"),
+        ]);
+
+        let generated = generate_grass_output(&dir, None, None).unwrap();
+        assert_eq!(generated.framework_name, "vite");
+        assert!(generated.spa_fallback);
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn vanilla_output_requires_200_html_for_spa_fallback() {
+        let without_signal = project(&[
+            ("package.json", "{}"),
+            ("dist/index.html", "<html>vanilla</html>"),
+        ]);
+        let generated = generate_grass_output(&without_signal, None, None).unwrap();
+        assert_eq!(generated.framework_name, "unknown");
+        assert!(!generated.spa_fallback);
+        std::fs::remove_dir_all(without_signal).unwrap();
+
+        let with_signal = project(&[
+            ("package.json", "{}"),
+            ("dist/index.html", "<html>vanilla</html>"),
+            ("dist/200.html", "<html>fallback signal</html>"),
+        ]);
+        let generated = generate_grass_output(&with_signal, None, None).unwrap();
+        assert!(generated.spa_fallback);
+        std::fs::remove_dir_all(with_signal).unwrap();
     }
 
     #[test]

@@ -187,6 +187,21 @@ pub fn resolve_static_file(
     None
 }
 
+fn resolve_not_found_file(static_dir: &Path, configured: Option<&str>) -> Option<PathBuf> {
+    if let Some(configured) = configured {
+        let mut candidate = static_dir.to_path_buf();
+        for segment in configured.trim_start_matches('/').split('/') {
+            candidate.push(segment);
+        }
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    let root_404 = static_dir.join("404.html");
+    root_404.is_file().then_some(root_404)
+}
+
 fn host_from_headers(headers: &HeaderMap) -> Option<String> {
     let raw = headers.get(header::HOST)?.to_str().ok()?;
     let without_port = raw.rsplit_once(':').map_or(raw, |(host, port)| {
@@ -244,18 +259,10 @@ async fn handle_request(
             match resolve_static_file(&static_dir, &segments, spa_fallback) {
                 Some(file) => serve_file(&file, StatusCode::OK).await,
                 None => {
-                    if let Some(not_found) = &not_found {
-                        let mut custom = static_dir.clone();
-                        for segment in not_found.trim_start_matches('/').split('/') {
-                            custom.push(segment);
-                        }
-                        if custom.is_file() {
-                            return serve_file(&custom, StatusCode::NOT_FOUND).await;
-                        }
-                    }
-                    let fallback_404 = static_dir.join("404.html");
-                    if fallback_404.is_file() {
-                        return serve_file(&fallback_404, StatusCode::NOT_FOUND).await;
+                    if let Some(not_found_file) =
+                        resolve_not_found_file(&static_dir, not_found.as_deref())
+                    {
+                        return serve_file(&not_found_file, StatusCode::NOT_FOUND).await;
                     }
                     error_page(StatusCode::NOT_FOUND, "This page could not be found.")
                 }
@@ -567,6 +574,27 @@ mod tests {
             None
         );
 
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn missing_static_paths_select_custom_then_root_404() {
+        let dir = static_site(false);
+        std::fs::create_dir_all(dir.join("errors")).unwrap();
+        std::fs::write(dir.join("errors/not-found.html"), "custom").unwrap();
+        std::fs::write(dir.join("404.html"), "root").unwrap();
+
+        assert_eq!(
+            resolve_not_found_file(&dir, Some("errors/not-found.html")),
+            Some(dir.join("errors/not-found.html"))
+        );
+        assert_eq!(
+            resolve_not_found_file(&dir, Some("missing.html")),
+            Some(dir.join("404.html"))
+        );
+
+        std::fs::remove_file(dir.join("404.html")).unwrap();
+        assert_eq!(resolve_not_found_file(&dir, None), None);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
