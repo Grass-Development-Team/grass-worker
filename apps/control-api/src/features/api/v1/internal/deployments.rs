@@ -55,7 +55,7 @@ async fn team_for(
         })
 }
 
-async fn owned_deployment(
+async fn build_owned_deployment(
     db: &sea_orm::DatabaseConnection,
     node: &node::Model,
     deployment_id: Uuid,
@@ -71,7 +71,7 @@ async fn owned_deployment(
     if deployment.build_node_id != Some(node.id) {
         return Err(AppError::Forbidden {
             op,
-            message: "deployment is not assigned to this node".to_owned(),
+            message: "deployment build is not assigned to this node".to_owned(),
         });
     }
     Ok(deployment)
@@ -88,6 +88,13 @@ pub async fn claim(
     const OP: &str = "internal.deployments.claim";
     let db = super::database(&state, OP)?;
     let cache = super::cache(&state, OP)?;
+
+    if !node.build_enabled {
+        return Err(AppError::Forbidden {
+            op: OP,
+            message: "node does not have build capability".to_owned(),
+        });
+    }
 
     if body.capacity == 0 {
         return Ok(ok_response(ClaimResponse { deployment: None }));
@@ -210,7 +217,7 @@ pub async fn claim(
             candidate.id,
             crate::infra::database::entity::DeploymentEventKind::Build,
             "build status changed to claimed",
-            json!({ "status": "claimed", "node_id": node.id }),
+            json!({ "status": "claimed", "build_node_id": node.id }),
         )
         .await
         {
@@ -261,7 +268,7 @@ pub async fn redeem_source_credential(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "internal.deployments.source_credential";
     let db = super::database(&state, OP)?;
-    owned_deployment(db, &node, deployment_id, OP).await?;
+    build_owned_deployment(db, &node, deployment_id, OP).await?;
     let keyring = state.config.read().unwrap().secrets.git_credentials.clone();
     let redeemed =
         source_credentials::redeem_lease(db, &keyring, node.id, deployment_id, &body.lease)
@@ -305,7 +312,7 @@ pub async fn observe_ssh_host_key(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "internal.deployments.ssh_host_key";
     let db = super::database(&state, OP)?;
-    let deployment = owned_deployment(db, &node, deployment_id, OP).await?;
+    let deployment = build_owned_deployment(db, &node, deployment_id, OP).await?;
     let endpoint = deployment
         .source_repository_url
         .as_deref()
@@ -367,7 +374,7 @@ pub async fn stage(
     const OP: &str = "internal.deployments.stage";
     let db = super::database(&state, OP)?;
     let cache = super::cache(&state, OP)?;
-    let deployment = owned_deployment(db, &node, deployment_id, OP).await?;
+    let deployment = build_owned_deployment(db, &node, deployment_id, OP).await?;
     let quota = QuotaService::new(db, cache);
 
     // A user cancel wins over any progress report: tell the Node to stop.
@@ -465,7 +472,7 @@ pub async fn stage(
                         target_id: Some(updated.id),
                         result: AuditEventResult::Success,
                         reason: None,
-                        metadata: json!({ "node_id": node.id }),
+                        metadata: json!({ "build_node_id": node.id }),
                     },
                 )
                 .await;
@@ -630,7 +637,7 @@ pub async fn append_build_log(
     const OP: &str = "internal.deployments.build_log";
     let db = super::database(&state, OP)?;
     let cache = super::cache(&state, OP)?;
-    let deployment = owned_deployment(db, &node, deployment_id, OP).await?;
+    let deployment = build_owned_deployment(db, &node, deployment_id, OP).await?;
 
     if body.lines.is_empty() {
         return Ok(ok_response(AppendBuildLogResponse { last_seq: 0 }));
@@ -679,7 +686,7 @@ pub async fn upload_static_site(
     const OP: &str = "internal.deployments.static_site";
     let db = super::database(&state, OP)?;
     let cache = super::cache(&state, OP)?;
-    let deployment = owned_deployment(db, &node, deployment_id, OP).await?;
+    let deployment = build_owned_deployment(db, &node, deployment_id, OP).await?;
 
     if bytes.is_empty() {
         return Err(AppError::Validation {

@@ -6,6 +6,7 @@
 //! `deployment_events`, and activation switches are transactional so one
 //! project environment never has two active deployments.
 
+use grass_node_protocol::ServeResources;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter,
     QueryOrder, QuerySelect,
@@ -13,6 +14,7 @@ use sea_orm::{
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::domain::scheduler::Placement;
 use crate::infra::database::entity::{
     DeploymentBuildStatus, DeploymentEnvironment, DeploymentEventKind, DeploymentReleaseStatus,
     DeploymentReviewStatus, DeploymentServeStatus, ProjectRuntime, ReleaseReason, deployment,
@@ -72,6 +74,9 @@ pub enum DeploymentStateError {
     InvalidBuildTransition { from: String, to: String },
     #[error("invalid release status transition from {from} to {to}")]
     InvalidReleaseTransition { from: String, to: String },
+    #[error("invalid serve status transition from {from} to {to}")]
+    #[allow(dead_code)] // Constructed by the P3.2 Serve status endpoint.
+    InvalidServeTransition { from: String, to: String },
     #[error("only ready deployments can enter the release flow")]
     BuildNotReady,
     #[error(transparent)]
@@ -107,6 +112,38 @@ pub fn environment_value(environment: &DeploymentEnvironment) -> &'static str {
     }
 }
 
+pub fn can_transition_serve(from: &DeploymentServeStatus, to: &DeploymentServeStatus) -> bool {
+    use DeploymentServeStatus as S;
+    matches!(
+        (from, to),
+        (S::Pending, S::Syncing) | (S::Syncing, S::Ready | S::Failed) | (S::Failed, S::Syncing)
+    )
+}
+
+pub fn serve_status_value(status: &DeploymentServeStatus) -> &'static str {
+    match status {
+        DeploymentServeStatus::Pending => "pending",
+        DeploymentServeStatus::Syncing => "syncing",
+        DeploymentServeStatus::Ready => "ready",
+        DeploymentServeStatus::Failed => "failed",
+    }
+}
+
+pub fn runtime_serve_resources(runtime: &ProjectRuntime) -> ServeResources {
+    match runtime {
+        ProjectRuntime::Ssr => ServeResources {
+            cpu_millicores: 200,
+            memory_mb: 256,
+            disk_mb: 512,
+        },
+        _ => ServeResources {
+            cpu_millicores: 50,
+            memory_mb: 64,
+            disk_mb: 256,
+        },
+    }
+}
+
 // --- Creation ---------------------------------------------------------------
 
 pub struct CreateDeploymentParams {
@@ -125,29 +162,27 @@ pub struct CreateDeploymentParams {
 pub async fn create_deployment<C: ConnectionTrait>(
     db: &C,
     params: CreateDeploymentParams,
+    placement: Placement,
 ) -> anyhow::Result<deployment::Model> {
     let now = OffsetDateTime::now_utc();
     let project = params.project;
-    let (serve_cpu_millicores, serve_memory_mb, serve_disk_mb) = match project.runtime {
-        ProjectRuntime::Ssr => (200, 256, 512),
-        _ => (50, 64, 256),
-    };
+    let serve_resources = runtime_serve_resources(&project.runtime);
 
     let deployment = deployment::ActiveModel {
         id: Set(Uuid::now_v7()),
         project_id: Set(project.id),
         team_id: Set(project.team_id),
         build_node_id: Set(None),
-        serve_node_id: Set(None),
+        serve_node_id: Set(Some(placement.node_id)),
         environment: Set(params.environment),
         runtime_kind: Set(project.runtime.clone()),
         build_status: Set(DeploymentBuildStatus::Pending),
         serve_status: Set(DeploymentServeStatus::Pending),
         release_status: Set(DeploymentReleaseStatus::Draft),
-        serve_cpu_millicores: Set(serve_cpu_millicores),
-        serve_memory_mb: Set(serve_memory_mb),
-        serve_disk_mb: Set(serve_disk_mb),
-        overcommitted: Set(false),
+        serve_cpu_millicores: Set(i64::try_from(serve_resources.cpu_millicores)?),
+        serve_memory_mb: Set(i64::try_from(serve_resources.memory_mb)?),
+        serve_disk_mb: Set(i64::try_from(serve_resources.disk_mb)?),
+        overcommitted: Set(placement.overcommitted),
         source_repository_url: Set(project.repository_url.clone()),
         source_credential_version_id: Set(params.source_credential_version_id),
         source_branch: Set(params
@@ -320,6 +355,69 @@ pub struct BuildTransition {
     pub failure_code: Option<String>,
     pub failure_message: Option<String>,
     pub build_node_id: Option<Uuid>,
+}
+
+#[allow(dead_code)] // Constructed by the P3.2 Serve status endpoint.
+pub struct ServeTransition {
+    pub to: DeploymentServeStatus,
+    pub failure_code: Option<String>,
+    pub failure_message: Option<String>,
+}
+
+#[allow(dead_code)] // Called by the P3.2 Serve status endpoint.
+pub async fn transition_serve<C: ConnectionTrait>(
+    db: &C,
+    deployment: deployment::Model,
+    transition: ServeTransition,
+) -> Result<deployment::Model, DeploymentStateError> {
+    if !can_transition_serve(&deployment.serve_status, &transition.to) {
+        return Err(DeploymentStateError::InvalidServeTransition {
+            from: serve_status_value(&deployment.serve_status).to_owned(),
+            to: serve_status_value(&transition.to).to_owned(),
+        });
+    }
+
+    let now = OffsetDateTime::now_utc();
+    let deployment_id = deployment.id;
+    let to_value = serve_status_value(&transition.to);
+    let mut active: deployment::ActiveModel = deployment.into();
+    active.serve_status = Set(transition.to.clone());
+    match transition.to {
+        DeploymentServeStatus::Syncing => {
+            active.serve_started_at = Set(Some(now));
+            active.serve_finished_at = Set(None);
+            active.serve_failure_code = Set(None);
+            active.serve_failure_message = Set(None);
+        }
+        DeploymentServeStatus::Ready => {
+            active.serve_finished_at = Set(Some(now));
+            active.serve_failure_code = Set(None);
+            active.serve_failure_message = Set(None);
+        }
+        DeploymentServeStatus::Failed => {
+            active.serve_finished_at = Set(Some(now));
+            active.serve_failure_code = Set(transition.failure_code.clone());
+            active.serve_failure_message = Set(transition.failure_message.clone());
+        }
+        DeploymentServeStatus::Pending => {}
+    }
+
+    let updated = active.update(db).await?;
+    append_event(
+        db,
+        deployment_id,
+        DeploymentEventKind::Serve,
+        &format!("serve status changed to {to_value}"),
+        serde_json::json!({
+            "status": to_value,
+            "failure_code": transition.failure_code,
+            "failure_message": transition.failure_message,
+        }),
+    )
+    .await
+    .map_err(|error| DeploymentStateError::Database(sea_orm::DbErr::Custom(error.to_string())))?;
+
+    Ok(updated)
 }
 
 /// Applies a validated build status transition, maintaining lifecycle
@@ -725,6 +823,19 @@ mod tests {
         assert!(!can_transition_release(&R::Draft, &R::Approved));
         assert!(!can_transition_release(&R::Active, &R::Draft));
         assert!(!can_transition_release(&R::Approved, &R::Rejected));
+    }
+
+    #[test]
+    fn serve_transitions_require_sync_and_allow_failed_recovery() {
+        use DeploymentServeStatus as S;
+
+        assert!(can_transition_serve(&S::Pending, &S::Syncing));
+        assert!(can_transition_serve(&S::Syncing, &S::Ready));
+        assert!(can_transition_serve(&S::Syncing, &S::Failed));
+        assert!(can_transition_serve(&S::Failed, &S::Syncing));
+        assert!(!can_transition_serve(&S::Pending, &S::Ready));
+        assert!(!can_transition_serve(&S::Failed, &S::Ready));
+        assert!(!can_transition_serve(&S::Ready, &S::Syncing));
     }
 
     #[test]

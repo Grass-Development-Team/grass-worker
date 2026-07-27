@@ -23,13 +23,14 @@ use crate::{
         },
         hosts, projects,
         quotas::QuotaDimension,
+        scheduler::{self, PlacementMode, ScheduleError},
         source_credentials,
     },
     infra::{
         database::entity::{
             AuditEventResult, DeploymentBuildStatus, DeploymentEnvironment,
             DeploymentReleaseStatus, HostBindingEnvironment, HostBindingStatus, ReleaseReason,
-            deployment, project_host_binding, user,
+            deployment, node, project_host_binding, user,
         },
         error::{AppError, ok_response},
         http::extractors::Session,
@@ -42,6 +43,7 @@ pub(crate) fn map_state_error(error: DeploymentStateError, op: &'static str) -> 
     match error {
         DeploymentStateError::InvalidBuildTransition { .. }
         | DeploymentStateError::InvalidReleaseTransition { .. }
+        | DeploymentStateError::InvalidServeTransition { .. }
         | DeploymentStateError::BuildNotReady => AppError::Conflict {
             op,
             message: error.to_string(),
@@ -141,6 +143,7 @@ pub(crate) fn deployment_view(
     deployment: &deployment::Model,
     urls: &UrlContext,
     users: &HashMap<Uuid, user::Model>,
+    nodes: &HashMap<Uuid, node::Model>,
 ) -> serde_json::Value {
     let duration_seconds = match (deployment.build_started_at, deployment.build_finished_at) {
         (Some(started), Some(finished)) => Some((finished - started).whole_seconds().max(0)),
@@ -156,16 +159,34 @@ pub(crate) fn deployment_view(
                 "display_name": user.display_name,
             })
         });
+    let node_view = |node_id: Option<Uuid>| {
+        node_id.and_then(|node_id| {
+            nodes.get(&node_id).map(|node| {
+                json!({
+                    "id": node.id,
+                    "name": node.name,
+                })
+            })
+        })
+    };
 
     let mut view = json!({
         "id": deployment.id,
         "project_id": deployment.project_id,
         "team_id": deployment.team_id,
-        "node_id": deployment.build_node_id,
+        "build_node": node_view(deployment.build_node_id),
+        "serve_node": node_view(deployment.serve_node_id),
         "environment": deployments::environment_value(&deployment.environment),
         "runtime_kind": projects::runtime_value(&deployment.runtime_kind),
         "build_status": deployments::build_status_value(&deployment.build_status),
+        "serve_status": deployments::serve_status_value(&deployment.serve_status),
         "release_status": deployments::release_status_value(&deployment.release_status),
+        "serve_resources": {
+            "cpu_millicores": deployment.serve_cpu_millicores,
+            "memory_mb": deployment.serve_memory_mb,
+            "disk_mb": deployment.serve_disk_mb,
+        },
+        "overcommitted": deployment.overcommitted,
         "build_stage": deployment.build_stage,
         "source": {
             "repository_url": deployment.source_repository_url,
@@ -176,10 +197,14 @@ pub(crate) fn deployment_view(
         "triggered_by": triggered_by,
         "failure_code": deployment.failure_code,
         "failure_message": deployment.failure_message,
+        "serve_failure_code": deployment.serve_failure_code,
+        "serve_failure_message": deployment.serve_failure_message,
         "duration_seconds": duration_seconds,
         "claimed_at": ts(deployment.claimed_at),
         "build_started_at": ts(deployment.build_started_at),
         "build_finished_at": ts(deployment.build_finished_at),
+        "serve_started_at": ts(deployment.serve_started_at),
+        "serve_finished_at": ts(deployment.serve_finished_at),
         "created_at": ts(deployment.created_at),
     });
     if let serde_json::Value::Object(map) = urls.urls(deployment)
@@ -207,6 +232,27 @@ pub(crate) async fn load_users(
         .await?
         .into_iter()
         .map(|user| (user.id, user))
+        .collect())
+}
+
+pub(crate) async fn load_nodes(
+    db: &sea_orm::DatabaseConnection,
+    deployments: &[deployment::Model],
+) -> anyhow::Result<HashMap<Uuid, node::Model>> {
+    let node_ids: Vec<Uuid> = deployments
+        .iter()
+        .flat_map(|deployment| [deployment.build_node_id, deployment.serve_node_id])
+        .flatten()
+        .collect();
+    if node_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    Ok(node::Entity::find()
+        .filter(node::Column::Id.is_in(node_ids))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|node| (node.id, node))
         .collect())
 }
 
@@ -244,10 +290,90 @@ pub struct CreateDeploymentRequest {
     pub commit_hash: Option<String>,
     #[serde(default)]
     pub commit_message: Option<String>,
+    #[serde(default)]
+    pub serve_node_id: Option<Uuid>,
 }
 
 fn default_environment() -> String {
     "production".to_owned()
+}
+
+fn map_schedule_error(error: ScheduleError, op: &'static str) -> AppError {
+    match error {
+        ScheduleError::Database(source) => AppError::Infrastructure {
+            op,
+            source: source.into(),
+        },
+        error @ ScheduleError::InvalidData => AppError::Infrastructure {
+            op,
+            source: anyhow::Error::new(error),
+        },
+        other => AppError::Conflict {
+            op,
+            message: other.to_string(),
+        },
+    }
+}
+
+async fn create_placed_deployment(
+    db: &sea_orm::DatabaseConnection,
+    params: CreateDeploymentParams,
+    selected_node_id: Option<Uuid>,
+    op: &'static str,
+) -> Result<deployment::Model, AppError> {
+    let requested = deployments::runtime_serve_resources(&params.project.runtime);
+    let transaction = db
+        .begin()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op,
+            source: source.into(),
+        })?;
+    let placement =
+        match scheduler::place_deployment(&transaction, requested, selected_node_id).await {
+            Ok(placement) => placement,
+            Err(error) => {
+                let error = map_schedule_error(error, op);
+                let _ = transaction.rollback().await;
+                return Err(error);
+            }
+        };
+    let deployment = match deployments::create_deployment(&transaction, params, placement).await {
+        Ok(deployment) => deployment,
+        Err(source) => {
+            let _ = transaction.rollback().await;
+            return Err(AppError::Infrastructure { op, source });
+        }
+    };
+    let mode = match placement.mode {
+        PlacementMode::Automatic => "automatic",
+        PlacementMode::Manual => "manual",
+    };
+    if let Err(source) = deployments::append_event(
+        &transaction,
+        deployment.id,
+        crate::infra::database::entity::DeploymentEventKind::Serve,
+        "deployment assigned to serve node",
+        json!({
+            "mode": mode,
+            "serve_node_id": placement.node_id,
+            "resources": requested,
+            "overcommitted": placement.overcommitted,
+        }),
+    )
+    .await
+    {
+        let _ = transaction.rollback().await;
+        return Err(AppError::Infrastructure { op, source });
+    }
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op,
+            source: source.into(),
+        })?;
+    Ok(deployment)
 }
 
 /// POST /api/v1/projects/{project_id}/deployments
@@ -325,7 +451,7 @@ pub async fn create(
         });
     }
 
-    let deployment = match deployments::create_deployment(
+    let deployment = match create_placed_deployment(
         db,
         CreateDeploymentParams {
             project: access.project.clone(),
@@ -337,13 +463,15 @@ pub async fn create(
             preview_host,
             source_credential_version_id,
         },
+        body.serve_node_id,
+        OP,
     )
     .await
     {
         Ok(deployment) => deployment,
-        Err(source) => {
+        Err(error) => {
             quota.rollback(reservation).await;
-            return Err(AppError::Infrastructure { op: OP, source });
+            return Err(error);
         }
     };
     quota
@@ -394,9 +522,12 @@ pub async fn create(
     let users = load_users(db, std::slice::from_ref(&deployment))
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let nodes = load_nodes(db, std::slice::from_ref(&deployment))
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
     Ok(ok_response(json!({
-        "deployment": deployment_view(&deployment, &urls, &users),
+        "deployment": deployment_view(&deployment, &urls, &users, &nodes),
     })))
 }
 
@@ -474,11 +605,14 @@ pub async fn list(
     let users = load_users(db, &deployments)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let nodes = load_nodes(db, &deployments)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
     Ok(ok_response(json!({
         "deployments": deployments
             .iter()
-            .map(|deployment| deployment_view(deployment, &urls, &users))
+            .map(|deployment| deployment_view(deployment, &urls, &users, &nodes))
             .collect::<Vec<_>>(),
     })))
 }
@@ -499,6 +633,69 @@ fn parse_build_status(value: &str, op: &'static str) -> Result<DeploymentBuildSt
     }
 }
 
+/// GET /api/v1/projects/{project_id}/serve-nodes
+pub async fn serve_nodes(
+    State(state): State<ControlApiState>,
+    session: Session,
+    Path(project_id): Path<Uuid>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "deployments.serve_nodes";
+    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    let db = super::database(&state, OP)?;
+    let requested = deployments::runtime_serve_resources(&access.project.runtime);
+    let candidates = scheduler::eligible_candidates(db)
+        .await
+        .map_err(|error| map_schedule_error(error, OP))?;
+    let node_ids: Vec<Uuid> = candidates
+        .iter()
+        .map(|candidate| candidate.node_id)
+        .collect();
+    let nodes: HashMap<Uuid, node::Model> = if node_ids.is_empty() {
+        HashMap::new()
+    } else {
+        node::Entity::find()
+            .filter(node::Column::Id.is_in(node_ids))
+            .all(db)
+            .await
+            .map_err(|source| AppError::Infrastructure {
+                op: OP,
+                source: source.into(),
+            })?
+            .into_iter()
+            .map(|node| (node.id, node))
+            .collect()
+    };
+
+    let views = candidates
+        .iter()
+        .filter_map(|candidate| {
+            let node = nodes.get(&candidate.node_id)?;
+            let placement = scheduler::choose_candidate(
+                std::slice::from_ref(candidate),
+                requested,
+                None,
+            )
+            .ok();
+            let max_deployments = u64::from(candidate.capacity.max_deployments);
+            let overflow_used = candidate.usage.deployments.saturating_sub(max_deployments);
+            Some(json!({
+                "id": node.id,
+                "name": node.name,
+                "healthy": true,
+                "capacity": candidate.capacity,
+                "usage": candidate.usage,
+                "normal_available": placement.is_some_and(|placement| !placement.overcommitted),
+                "schedulable": placement.is_some(),
+                "overflow_only": placement.is_some_and(|placement| placement.overcommitted),
+                "disk_available_mb": candidate.capacity.disk_mb.saturating_sub(candidate.usage.disk_mb),
+                "remaining_overflow_slots": 2_u64.saturating_sub(overflow_used),
+            }))
+        })
+        .collect::<Vec<_>>();
+
+    Ok(ok_response(json!({ "serve_nodes": views })))
+}
+
 /// GET /api/v1/projects/{project_id}/deployments/{deployment_id}
 pub async fn detail(
     State(state): State<ControlApiState>,
@@ -516,6 +713,9 @@ pub async fn detail(
     let users = load_users(db, std::slice::from_ref(&deployment))
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let nodes = load_nodes(db, std::slice::from_ref(&deployment))
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     let events = deployments::list_events(db, deployment.id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
@@ -530,7 +730,7 @@ pub async fn detail(
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
     Ok(ok_response(json!({
-        "deployment": deployment_view(&deployment, &urls, &users),
+        "deployment": deployment_view(&deployment, &urls, &users, &nodes),
         "events": events.iter().map(|event| json!({
             "id": event.id,
             "kind": event_kind_value(&event.kind),
@@ -728,8 +928,11 @@ pub async fn cancel(
     let urls = UrlContext::load(db, access.project.id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let nodes = load_nodes(db, std::slice::from_ref(&deployment))
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     Ok(ok_response(json!({
-        "deployment": deployment_view(&deployment, &urls, &HashMap::new()),
+        "deployment": deployment_view(&deployment, &urls, &HashMap::new(), &nodes),
     })))
 }
 
@@ -779,7 +982,7 @@ pub async fn retry(
         None
     };
 
-    let new_deployment = match deployments::create_deployment(
+    let new_deployment = match create_placed_deployment(
         db,
         CreateDeploymentParams {
             project: access.project.clone(),
@@ -791,13 +994,15 @@ pub async fn retry(
             preview_host,
             source_credential_version_id: source_deployment.source_credential_version_id,
         },
+        None,
+        OP,
     )
     .await
     {
         Ok(deployment) => deployment,
-        Err(source) => {
+        Err(error) => {
             quota.rollback(reservation).await;
-            return Err(AppError::Infrastructure { op: OP, source });
+            return Err(error);
         }
     };
     quota
@@ -834,8 +1039,11 @@ pub async fn retry(
     let urls = UrlContext::load(db, access.project.id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let nodes = load_nodes(db, std::slice::from_ref(&new_deployment))
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     Ok(ok_response(json!({
-        "deployment": deployment_view(&new_deployment, &urls, &HashMap::new()),
+        "deployment": deployment_view(&new_deployment, &urls, &HashMap::new(), &nodes),
     })))
 }
 
@@ -982,8 +1190,11 @@ async fn activate_deployment(
     let urls = UrlContext::load(db, access.project.id)
         .await
         .map_err(|source| AppError::Infrastructure { op, source })?;
+    let nodes = load_nodes(db, std::slice::from_ref(&activated))
+        .await
+        .map_err(|source| AppError::Infrastructure { op, source })?;
     Ok(ok_response(json!({
-        "deployment": deployment_view(&activated, &urls, &HashMap::new()),
+        "deployment": deployment_view(&activated, &urls, &HashMap::new(), &nodes),
     }))
     .into_response())
 }
@@ -991,6 +1202,38 @@ async fn activate_deployment(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deployment_request_defaults_to_automatic_placement() {
+        let request: CreateDeploymentRequest =
+            serde_json::from_str(r#"{"environment":"preview"}"#).unwrap();
+
+        assert_eq!(request.serve_node_id, None);
+    }
+
+    #[test]
+    fn static_and_ssr_requests_use_fixed_first_phase_resources() {
+        assert_eq!(
+            deployments::runtime_serve_resources(
+                &crate::infra::database::entity::ProjectRuntime::Static
+            ),
+            grass_node_protocol::ServeResources {
+                cpu_millicores: 50,
+                memory_mb: 64,
+                disk_mb: 256,
+            }
+        );
+        assert_eq!(
+            deployments::runtime_serve_resources(
+                &crate::infra::database::entity::ProjectRuntime::Ssr
+            ),
+            grass_node_protocol::ServeResources {
+                cpu_millicores: 200,
+                memory_mb: 256,
+                disk_mb: 512,
+            }
+        );
+    }
 
     #[test]
     fn user_cancel_owns_the_single_slot_release() {
