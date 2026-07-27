@@ -68,7 +68,7 @@ async fn owned_deployment(
             op,
             message: "deployment not found".to_owned(),
         })?;
-    if deployment.node_id != Some(node.id) {
+    if deployment.build_node_id != Some(node.id) {
         return Err(AppError::Forbidden {
             op,
             message: "deployment is not assigned to this node".to_owned(),
@@ -139,7 +139,7 @@ pub async fn claim(
                 sea_orm::ActiveEnum::as_enum(&DeploymentBuildStatus::Claimed),
             )
             .col_expr(
-                deployment::Column::NodeId,
+                deployment::Column::BuildNodeId,
                 sea_orm::sea_query::Expr::value(node.id),
             )
             .col_expr(
@@ -177,7 +177,7 @@ pub async fn claim(
                                 sea_orm::ActiveEnum::as_enum(&DeploymentBuildStatus::Pending),
                             )
                             .col_expr(
-                                deployment::Column::NodeId,
+                                deployment::Column::BuildNodeId,
                                 sea_orm::sea_query::Expr::value(Option::<Uuid>::None),
                             )
                             .col_expr(
@@ -187,7 +187,7 @@ pub async fn claim(
                                 ),
                             )
                             .filter(deployment::Column::Id.eq(candidate.id))
-                            .filter(deployment::Column::NodeId.eq(node.id))
+                            .filter(deployment::Column::BuildNodeId.eq(node.id))
                             .filter(
                                 deployment::Column::BuildStatus.eq(DeploymentBuildStatus::Claimed),
                             )
@@ -446,7 +446,7 @@ pub async fn stage(
                     stage: body.stage.clone(),
                     failure_code: body.failure_code.clone(),
                     failure_message: body.failure_message.clone(),
-                    node_id: Some(node.id),
+                    build_node_id: Some(node.id),
                 },
             )
             .await

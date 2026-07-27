@@ -18,6 +18,7 @@ impl MigratorTrait for Migrator {
             Box::new(migration::m20260726_000007_deployment_stage::Migration),
             Box::new(migration::m20260726_000008_audit_team_scope::Migration),
             Box::new(migration::m20260727_000009_git_source_access::Migration),
+            Box::new(migration::m20260727_000010_node_scheduling::Migration),
         ]
     }
 }
@@ -27,4 +28,20 @@ pub async fn run(database: &DatabaseConnection) -> anyhow::Result<()> {
         .await
         .map(|_| ())
         .map_err(|error| anyhow::anyhow!("failed to run database migrations: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn registers_node_scheduling_migration() {
+        let migrations = Migrator::migrations();
+
+        assert_eq!(migrations.len(), 10);
+        assert_eq!(
+            migrations.last().expect("last migration").name(),
+            "m20260727_000010_node_scheduling"
+        );
+    }
 }

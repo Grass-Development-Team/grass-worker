@@ -5,6 +5,7 @@ use clap::Parser;
 use tracing::info;
 
 mod build;
+mod capacity;
 mod cli;
 mod client;
 mod config;
@@ -27,6 +28,7 @@ async fn main() -> anyhow::Result<()> {
     }
     let config = NodeConfig::load(cli.config_path())
         .with_context(|| format!("failed to load Node config from {}", cli.config_path()))?;
+    config.validate()?;
 
     config.init_tracing()?;
 
@@ -36,10 +38,19 @@ async fn main() -> anyhow::Result<()> {
     if config.node.control_api.trim().is_empty() {
         anyhow::bail!("control api URL is not configured");
     }
-    build::git::ensure_supported_git().await?;
+    if config.node.capabilities.build {
+        build::git::ensure_supported_git().await?;
+    }
 
     let client = ControlApiClient::new(&config.node.control_api, &config.node.node_token)?;
-    let node_id = lifecycle::register(&client, &config).await?;
+    let resources = if config.node.capabilities.serve {
+        Some(capacity::detect(&config.serve)?)
+    } else {
+        None
+    };
+    let registration = lifecycle::register(&client, &config, resources).await?;
+    let node_id = registration.node_id;
+    let _gateway_token = registration.gateway_token;
 
     info!(
         operation = "node.start",
@@ -62,25 +73,39 @@ async fn main() -> anyhow::Result<()> {
             None
         }
     };
-    let build_loop = runtime.clone().map(|runtime| {
-        build::BuildLoop {
-            client: client.clone(),
-            config: config.clone(),
-            runtime,
-            active_builds: active_builds.clone(),
-        }
-        .spawn()
-    });
+    let build_loop = config
+        .node
+        .capabilities
+        .build
+        .then(|| runtime.clone())
+        .flatten()
+        .map(|runtime| {
+            build::BuildLoop {
+                client: client.clone(),
+                config: config.clone(),
+                runtime,
+                active_builds: active_builds.clone(),
+            }
+            .spawn()
+        });
 
-    let ssr_manager = Arc::new(serve::ssr::SsrManager::new(runtime, &config));
-    let ssr_reaper = ssr_manager.clone().spawn_reaper();
-    let serve_state = Arc::new(serve::ServeState::new(client.clone(), &config, ssr_manager));
-    let serve_task = serve::spawn(serve_state, &config);
+    let (ssr_reaper, serve_task) = if config.node.capabilities.serve {
+        let ssr_manager = Arc::new(serve::ssr::SsrManager::new(runtime, &config));
+        let ssr_reaper = ssr_manager.clone().spawn_reaper();
+        let serve_state = Arc::new(serve::ServeState::new(client.clone(), &config, ssr_manager));
+        (Some(ssr_reaper), Some(serve::spawn(serve_state, &config)))
+    } else {
+        (None, None)
+    };
 
     wait_for_shutdown().await;
 
-    serve_task.abort();
-    ssr_reaper.abort();
+    if let Some(serve_task) = serve_task {
+        serve_task.abort();
+    }
+    if let Some(ssr_reaper) = ssr_reaper {
+        ssr_reaper.abort();
+    }
 
     if let Some(build_loop) = build_loop {
         build_loop.abort();

@@ -28,6 +28,7 @@ subtle = "2"
 mime_guess.workspace = true
 rand.workspace = true
 reqwest.workspace = true
+ring.workspace = true
 sea-orm.workspace = true
 sea-orm-migration.workspace = true
 serde.workspace = true

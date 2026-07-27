@@ -1,3 +1,4 @@
+use grass_node_protocol::NodeResources;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
     EntityTrait, QueryFilter,
@@ -31,6 +32,10 @@ pub async fn create_node(
         work_root: Set(params
             .storage_root
             .or_else(|| Some("/data/node".to_string()))),
+        capacity_cpu_millicores: Set(0),
+        capacity_memory_mb: Set(0),
+        capacity_disk_mb: Set(0),
+        max_deployments: Set(10),
         metadata: Set(json!({})),
         last_heartbeat_at: Set(None),
         deleted_at: Set(None),
@@ -106,34 +111,73 @@ pub struct RegisterNodeParams {
     pub serve_enabled: bool,
     pub build_concurrency: i32,
     pub base_url: Option<String>,
+    pub resources: Option<NodeResources>,
 }
 
 /// Applies a Node registration: capabilities, version metadata, base URL,
-/// and an immediate heartbeat. The first stage forces build and serve on.
+/// initial Serve capacity, and an immediate heartbeat.
 pub async fn apply_registration<C: ConnectionTrait>(
     db: &C,
     node: node::Model,
     params: RegisterNodeParams,
 ) -> anyhow::Result<node::Model> {
+    let first_resource_report = node.metadata.get("reported_resources").is_none();
     let mut metadata = node.metadata.clone();
     if let Some(map) = metadata.as_object_mut() {
         map.insert("version".to_owned(), json!(params.version));
         map.insert(
-            "requested_capabilities".to_owned(),
+            "reported_capabilities".to_owned(),
             json!({ "build": params.build_enabled, "serve": params.serve_enabled }),
         );
+        map.insert("reported_resources".to_owned(), json!(params.resources));
     } else {
-        metadata = json!({ "version": params.version });
+        metadata = json!({
+            "version": params.version,
+            "reported_capabilities": {
+                "build": params.build_enabled,
+                "serve": params.serve_enabled,
+            },
+            "reported_resources": params.resources,
+        });
     }
 
+    let resources = match (params.serve_enabled, params.resources) {
+        (true, Some(resources)) => Some((
+            i64::try_from(resources.cpu_millicores)?,
+            i64::try_from(resources.memory_mb)?,
+            i64::try_from(resources.disk_mb)?,
+            i32::try_from(resources.max_deployments)?,
+        )),
+        (true, None) => anyhow::bail!("serve-capable node registration is missing resources"),
+        (false, _) => None,
+    };
+    let initialize_cpu = node.capacity_cpu_millicores == 0;
+    let initialize_memory = node.capacity_memory_mb == 0;
+    let initialize_disk = node.capacity_disk_mb == 0;
+    let initialize_deployments = first_resource_report;
     let mut active: node::ActiveModel = node.into();
     active.name = Set(params.name);
-    // First stage: every Node builds and serves.
-    active.build_enabled = Set(true);
-    active.serve_enabled = Set(true);
-    active.build_concurrency = Set(params.build_concurrency.max(1));
-    if params.base_url.is_some() {
-        active.base_url = Set(params.base_url);
+    active.build_enabled = Set(params.build_enabled);
+    active.serve_enabled = Set(params.serve_enabled);
+    active.build_concurrency = Set(if params.build_enabled {
+        params.build_concurrency
+    } else {
+        0
+    });
+    active.base_url = Set(params.serve_enabled.then_some(params.base_url).flatten());
+    if let Some((cpu, memory, disk, deployments)) = resources {
+        if initialize_cpu {
+            active.capacity_cpu_millicores = Set(cpu);
+        }
+        if initialize_memory {
+            active.capacity_memory_mb = Set(memory);
+        }
+        if initialize_disk {
+            active.capacity_disk_mb = Set(disk);
+        }
+        if initialize_deployments {
+            active.max_deployments = Set(deployments);
+        }
     }
     active.metadata = Set(metadata);
     active.status = Set(NodeStatus::Active);
@@ -219,6 +263,10 @@ mod tests {
             build_concurrency: 1,
             base_url: None,
             work_root: None,
+            capacity_cpu_millicores: 0,
+            capacity_memory_mb: 0,
+            capacity_disk_mb: 0,
+            max_deployments: 10,
             metadata: json!({}),
             last_heartbeat_at: Some(
                 OffsetDateTime::now_utc() - time::Duration::seconds(age_seconds),

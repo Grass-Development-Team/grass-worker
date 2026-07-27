@@ -161,7 +161,7 @@ pub(crate) fn deployment_view(
         "id": deployment.id,
         "project_id": deployment.project_id,
         "team_id": deployment.team_id,
-        "node_id": deployment.node_id,
+        "node_id": deployment.build_node_id,
         "environment": deployments::environment_value(&deployment.environment),
         "runtime_kind": projects::runtime_value(&deployment.runtime_kind),
         "build_status": deployments::build_status_value(&deployment.build_status),
@@ -380,7 +380,7 @@ pub async fn create(
                 stage: None,
                 failure_code: Some(code.to_owned()),
                 failure_message: Some(message.to_owned()),
-                node_id: None,
+                build_node_id: None,
             },
         )
         .await
@@ -564,6 +564,7 @@ fn event_kind_value(kind: &crate::infra::database::entity::DeploymentEventKind) 
     match kind {
         K::System => "system",
         K::Build => "build",
+        K::Serve => "serve",
         K::Release => "release",
         K::Review => "review",
         K::Host => "host",
@@ -668,7 +669,7 @@ pub(crate) async fn cancel_deployment_core(
             stage: None,
             failure_code: None,
             failure_message: Some("canceled by user".to_owned()),
-            node_id: None,
+            build_node_id: None,
         },
     )
     .await
@@ -822,7 +823,7 @@ pub async fn retry(
                 stage: None,
                 failure_code: Some(code.to_owned()),
                 failure_message: Some(message.to_owned()),
-                node_id: None,
+                build_node_id: None,
             },
         )
         .await

@@ -15,8 +15,8 @@ use uuid::Uuid;
 
 use crate::infra::database::entity::{
     DeploymentBuildStatus, DeploymentEnvironment, DeploymentEventKind, DeploymentReleaseStatus,
-    DeploymentReviewStatus, ProjectRuntime, ReleaseReason, deployment, deployment_artifact,
-    deployment_event, deployment_review, project, release,
+    DeploymentReviewStatus, DeploymentServeStatus, ProjectRuntime, ReleaseReason, deployment,
+    deployment_artifact, deployment_event, deployment_review, project, release,
 };
 
 // --- State machine ----------------------------------------------------------
@@ -128,16 +128,26 @@ pub async fn create_deployment<C: ConnectionTrait>(
 ) -> anyhow::Result<deployment::Model> {
     let now = OffsetDateTime::now_utc();
     let project = params.project;
+    let (serve_cpu_millicores, serve_memory_mb, serve_disk_mb) = match project.runtime {
+        ProjectRuntime::Ssr => (200, 256, 512),
+        _ => (50, 64, 256),
+    };
 
     let deployment = deployment::ActiveModel {
         id: Set(Uuid::now_v7()),
         project_id: Set(project.id),
         team_id: Set(project.team_id),
-        node_id: Set(None),
+        build_node_id: Set(None),
+        serve_node_id: Set(None),
         environment: Set(params.environment),
         runtime_kind: Set(project.runtime.clone()),
         build_status: Set(DeploymentBuildStatus::Pending),
+        serve_status: Set(DeploymentServeStatus::Pending),
         release_status: Set(DeploymentReleaseStatus::Draft),
+        serve_cpu_millicores: Set(serve_cpu_millicores),
+        serve_memory_mb: Set(serve_memory_mb),
+        serve_disk_mb: Set(serve_disk_mb),
+        overcommitted: Set(false),
         source_repository_url: Set(project.repository_url.clone()),
         source_credential_version_id: Set(params.source_credential_version_id),
         source_branch: Set(params
@@ -155,9 +165,13 @@ pub async fn create_deployment<C: ConnectionTrait>(
         build_stage: Set(None),
         failure_code: Set(None),
         failure_message: Set(None),
+        serve_failure_code: Set(None),
+        serve_failure_message: Set(None),
         claimed_at: Set(None),
         build_started_at: Set(None),
         build_finished_at: Set(None),
+        serve_started_at: Set(None),
+        serve_finished_at: Set(None),
         deleted_at: Set(None),
         created_at: Set(now),
         updated_at: Set(now),
@@ -305,7 +319,7 @@ pub struct BuildTransition {
     pub stage: Option<String>,
     pub failure_code: Option<String>,
     pub failure_message: Option<String>,
-    pub node_id: Option<Uuid>,
+    pub build_node_id: Option<Uuid>,
 }
 
 /// Applies a validated build status transition, maintaining lifecycle
@@ -333,8 +347,8 @@ pub async fn transition_build<C: ConnectionTrait>(
     match transition.to {
         DeploymentBuildStatus::Claimed => {
             active.claimed_at = Set(Some(now));
-            if let Some(node_id) = transition.node_id {
-                active.node_id = Set(Some(node_id));
+            if let Some(node_id) = transition.build_node_id {
+                active.build_node_id = Set(Some(node_id));
             }
         }
         DeploymentBuildStatus::Building => {
