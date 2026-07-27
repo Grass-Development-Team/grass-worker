@@ -204,3 +204,24 @@ string_active_enum!(AuditEventResult, "audit_event_result", {
     Failure => "failure",
     Denied => "denied",
 });
+
+string_active_enum!(SourceCredentialKind, "source_credential_kind", {
+    Https => "https",
+    Ssh => "ssh",
+});
+
+impl SourceCredentialKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Https => "https",
+            Self::Ssh => "ssh",
+        }
+    }
+}
+
+string_active_enum!(SshHostKeyStatus, "ssh_host_key_status", {
+    Pending => "pending",
+    Approved => "approved",
+    Rejected => "rejected",
+    Superseded => "superseded",
+});

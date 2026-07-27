@@ -300,6 +300,21 @@ impl<'a> QuotaService<'a> {
         }
     }
 
+    /// Releases the slot owned by one deployment at most once. The marker is
+    /// atomic in both cache backends, so a user cancel racing a terminal Node
+    /// report cannot decrement the team's counter twice.
+    pub async fn release_build_slot_once(&self, team_id: Uuid, deployment_id: Uuid) {
+        if let Err(error) = release_build_slot_once(self.cache, team_id, deployment_id).await {
+            tracing::warn!(
+                operation = "quota.release_build_slot_once",
+                %error,
+                team_id = %team_id,
+                deployment_id = %deployment_id,
+                "failed to release concurrent build slot"
+            );
+        }
+    }
+
     /// Refreshes the TTL of a team's build-slot counter while a build is
     /// still running.
     #[allow(dead_code)] // Wired by the Node stage flow in Milestone 6.
@@ -434,6 +449,24 @@ fn slot_key(team_id: Uuid) -> String {
     format!("quota:team:{team_id}:concurrent_builds")
 }
 
+fn slot_release_key(deployment_id: Uuid) -> String {
+    format!("quota:deployment:{deployment_id}:build_slot_released")
+}
+
+async fn release_build_slot_once(
+    cache: &CacheStore,
+    team_id: Uuid,
+    deployment_id: Uuid,
+) -> anyhow::Result<bool> {
+    let owns_release = cache
+        .set_if_absent(&slot_release_key(deployment_id), "1", STATIC_COUNTER_TTL)
+        .await?;
+    if owns_release {
+        cache.release_slot(&slot_key(team_id)).await?;
+    }
+    Ok(owns_release)
+}
+
 fn counter_ttl(dimension: QuotaDimension) -> Duration {
     match dimension.period() {
         QuotaPeriod::Monthly => MONTHLY_COUNTER_TTL,
@@ -463,5 +496,22 @@ mod tests {
             error.to_string(),
             "quota exceeded: deployments.monthly limit reached"
         );
+    }
+
+    #[tokio::test]
+    async fn deployment_slot_release_is_atomic() {
+        let cache = CacheStore::Moka(grass_cache::MokaCache::connect());
+        let team_id = Uuid::now_v7();
+        let deployment_id = Uuid::now_v7();
+        let key = slot_key(team_id);
+        assert!(cache.acquire_slot(&key, 10, BUILD_SLOT_TTL).await.unwrap());
+        assert!(cache.acquire_slot(&key, 10, BUILD_SLOT_TTL).await.unwrap());
+
+        let (first, second) = tokio::join!(
+            release_build_slot_once(&cache, team_id, deployment_id),
+            release_build_slot_once(&cache, team_id, deployment_id),
+        );
+        assert_ne!(first.unwrap(), second.unwrap());
+        assert_eq!(cache.get(&key).await.unwrap().as_deref(), Some("1"));
     }
 }

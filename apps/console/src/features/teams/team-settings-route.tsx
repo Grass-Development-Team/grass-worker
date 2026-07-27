@@ -9,6 +9,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { canEditTeam } from "./team-permissions";
 import { teamKeys, useTeam } from "./team-context";
 import { teamsApi } from "./teams.api";
+import { SourceAccessSettings } from "./source-access-settings";
 
 export function TeamSettingsRoute() {
   const { activeTeam, activeRole, refreshTeams } = useTeam();
@@ -90,6 +91,7 @@ export function TeamSettingsRoute() {
           </FieldGroup>
         </SettingsCard>
       </form>
+      <SourceAccessSettings />
     </div>
   );
 }

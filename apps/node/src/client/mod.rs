@@ -5,8 +5,9 @@ use std::time::Duration;
 use anyhow::Context;
 use grass_node_protocol::{
     AppendBuildLogRequest, AppendBuildLogResponse, ClaimRequest, ClaimResponse, HeartbeatRequest,
-    HeartbeatResponse, RegisterRequest, RegisterResponse, ResolveHostResponse, StageRequest,
-    StageResponse, UploadArtifactResponse, artifact_headers,
+    HeartbeatResponse, ObserveSshHostKeyRequest, ObserveSshHostKeyResponse,
+    RedeemGitCredentialRequest, RedeemGitCredentialResponse, RegisterRequest, RegisterResponse,
+    ResolveHostResponse, StageRequest, StageResponse, UploadArtifactResponse, artifact_headers,
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -55,7 +56,7 @@ impl ControlApiClient {
             .await
             .with_context(|| format!("{operation}: failed to read response body"))?;
         let envelope: Envelope<T> = serde_json::from_str(&body)
-            .with_context(|| format!("{operation}: invalid response ({status}): {body}"))?;
+            .with_context(|| format!("{operation}: invalid response ({status})"))?;
         if envelope.code != 200 {
             anyhow::bail!(
                 "{operation}: control api error {}: {}",
@@ -111,6 +112,32 @@ impl ControlApiClient {
             &format!("/deployments/{deployment_id}/stage"),
             request,
             "deployment.stage",
+        )
+        .await
+    }
+
+    pub async fn redeem_source_credential(
+        &self,
+        deployment_id: Uuid,
+        lease: String,
+    ) -> anyhow::Result<RedeemGitCredentialResponse> {
+        self.post_json(
+            &format!("/deployments/{deployment_id}/source-credential"),
+            &RedeemGitCredentialRequest { lease },
+            "deployment.source_credential",
+        )
+        .await
+    }
+
+    pub async fn observe_ssh_host_key(
+        &self,
+        deployment_id: Uuid,
+        request: &ObserveSshHostKeyRequest,
+    ) -> anyhow::Result<ObserveSshHostKeyResponse> {
+        self.post_json(
+            &format!("/deployments/{deployment_id}/ssh-host-key"),
+            request,
+            "deployment.ssh_host_key",
         )
         .await
     }

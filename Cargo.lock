@@ -1402,11 +1402,13 @@ dependencies = [
  "anyhow",
  "axum",
  "axum-extra",
+ "base64",
  "clap",
  "grass-assets",
  "grass-cache",
  "grass-config",
  "grass-crypto",
+ "grass-git-source",
  "grass-node-protocol",
  "grass-session",
  "grass-token",
@@ -1438,7 +1440,19 @@ name = "grass-crypto"
 version = "0.1.0"
 dependencies = [
  "argon2",
+ "base64",
+ "ring",
+ "serde",
  "thiserror",
+]
+
+[[package]]
+name = "grass-git-source"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror",
+ "url",
 ]
 
 [[package]]
@@ -1447,11 +1461,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64",
  "bollard",
  "clap",
  "futures-util",
  "grass-archive",
  "grass-config",
+ "grass-git-source",
  "grass-node-protocol",
  "grass-validator",
  "hex",

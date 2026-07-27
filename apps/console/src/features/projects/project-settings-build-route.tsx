@@ -1,16 +1,25 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { SettingsCard } from "@/components/settings-card";
+import { canManageMembers } from "../teams/team-permissions";
+import { teamsApi, type SourceCredential } from "../teams/teams.api";
 
 import { projectsApi, type UpdateProjectInput } from "./projects.api";
 import { useProject } from "./project-layout";
 
 export function ProjectSettingsBuildRoute() {
-  const { project } = useProject();
+  const { project, role } = useProject();
   const queryClient = useQueryClient();
 
   const [repositoryUrl, setRepositoryUrl] = useState(project.repository_url ?? "");
@@ -21,6 +30,21 @@ export function ProjectSettingsBuildRoute() {
   const [outputDirectory, setOutputDirectory] = useState(project.output_directory ?? "");
   const [gitError, setGitError] = useState<string | null>(null);
   const [buildError, setBuildError] = useState<string | null>(null);
+  const [selectedCredentialId, setSelectedCredentialId] = useState("none");
+  const canManageCredentials = canManageMembers(role);
+
+  const boundCredential = useQuery({
+    queryKey: ["project-source-credential", project.id],
+    queryFn: () => projectsApi.getSourceCredential(project.id),
+  });
+  const credentials = useQuery({
+    queryKey: ["source-credentials", project.team_id],
+    queryFn: () => teamsApi.listSourceCredentials(project.team_id),
+    enabled: canManageCredentials,
+  });
+  useEffect(() => {
+    setSelectedCredentialId(boundCredential.data?.credential?.id ?? "none");
+  }, [boundCredential.data]);
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["project", project.id] });
 
@@ -54,6 +78,25 @@ export function ProjectSettingsBuildRoute() {
       setBuildError(cause instanceof Error ? cause.message : "Unable to save build settings."),
   });
 
+  const credentialMutation = useMutation({
+    mutationFn: () =>
+      selectedCredentialId === "none"
+        ? projectsApi.unbindSourceCredential(project.id)
+        : projectsApi.bindSourceCredential(project.id, selectedCredentialId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["project-source-credential", project.id] }),
+        invalidate(),
+      ]);
+    },
+  });
+
+  const compatibleCredentials = (credentials.data?.credentials ?? []).filter(
+    (credential) =>
+      !credential.revoked_at && credentialMatchesRepository(credential, project.repository_url),
+  );
+  const repositoryChanged = repositoryUrl.trim() !== (project.repository_url ?? "");
+
   return (
     <div className="space-y-6">
       <form
@@ -65,7 +108,7 @@ export function ProjectSettingsBuildRoute() {
         <SettingsCard
           title="Git Repository"
           description="Deployments clone this repository at build time."
-          hint="Public repositories only in the first stage."
+          hint="HTTP, HTTPS, SSH, scp-like SSH, and git:// URLs are supported; bind a credential for private HTTPS or SSH access."
           action={
             <Button type="submit" size="sm" disabled={gitMutation.isPending}>
               {gitMutation.isPending ? "Saving…" : "Save"}
@@ -97,6 +140,54 @@ export function ProjectSettingsBuildRoute() {
               {gitError}
             </p>
           )}
+          <div className="mt-6 border-t pt-4">
+            <Field>
+              <FieldLabel>Private repository credential</FieldLabel>
+              {canManageCredentials ? (
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Select value={selectedCredentialId} onValueChange={setSelectedCredentialId}>
+                    <SelectTrigger className="w-full sm:max-w-md">
+                      <SelectValue placeholder="Anonymous access" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Anonymous access</SelectItem>
+                      {compatibleCredentials.map((credential) => (
+                        <SelectItem key={credential.id} value={credential.id}>
+                          {credential.name} · {credential.username}@{credential.host}:
+                          {credential.port}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={credentialMutation.isPending || repositoryChanged}
+                    onClick={() => credentialMutation.mutate()}
+                  >
+                    {credentialMutation.isPending ? "Binding…" : "Save binding"}
+                  </Button>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {boundCredential.data?.credential
+                    ? `${boundCredential.data.credential.name} (${boundCredential.data.credential.host}:${boundCredential.data.credential.port})`
+                    : "Anonymous access"}
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Only active credentials matching this repository&apos;s scheme, host, and port are
+                available. Save URL changes before updating the binding.
+              </p>
+              {credentialMutation.error && (
+                <p role="alert" className="text-sm text-destructive">
+                  {credentialMutation.error instanceof Error
+                    ? credentialMutation.error.message
+                    : "Unable to update credential binding."}
+                </p>
+              )}
+            </Field>
+          </div>
         </SettingsCard>
       </form>
 
@@ -163,4 +254,29 @@ export function ProjectSettingsBuildRoute() {
       </form>
     </div>
   );
+}
+
+export function credentialMatchesRepository(
+  credential: Pick<SourceCredential, "kind" | "host" | "port">,
+  repositoryUrl: string | null,
+) {
+  if (!repositoryUrl) return false;
+  const value = repositoryUrl.trim();
+  if (!value.includes("://")) {
+    const match = /^(?:[^@]+@)?(?:\[([^\]]+)\]|([^:]+)):(.+)$/.exec(value);
+    const host = (match?.[1] ?? match?.[2])?.toLowerCase().replace(/\.$/, "");
+    return credential.kind === "ssh" && credential.port === 22 && credential.host === host;
+  }
+  try {
+    const parsed = new URL(value);
+    const kind = parsed.protocol === "https:" ? "https" : parsed.protocol === "ssh:" ? "ssh" : null;
+    if (!kind || credential.kind !== kind) return false;
+    const port = parsed.port ? Number(parsed.port) : kind === "https" ? 443 : 22;
+    return (
+      credential.host === parsed.hostname.toLowerCase().replace(/\.$/, "") &&
+      credential.port === port
+    );
+  } catch {
+    return false;
+  }
 }

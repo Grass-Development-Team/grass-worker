@@ -10,11 +10,16 @@ pub mod host_source;
 pub mod node;
 pub mod project;
 pub mod project_host_binding;
+pub mod project_source_credential;
 pub mod quota_event;
 pub mod quota_limit;
 pub mod quota_plan;
 pub mod quota_usage_counter;
 pub mod release;
+pub mod source_credential;
+pub mod source_credential_lease;
+pub mod source_credential_version;
+pub mod ssh_host_key;
 pub mod system_setting;
 pub mod team;
 pub mod team_group;
@@ -48,6 +53,8 @@ pub use project::Entity as Project;
 #[allow(unused_imports)]
 pub use project_host_binding::Entity as ProjectHostBinding;
 #[allow(unused_imports)]
+pub use project_source_credential::Entity as ProjectSourceCredential;
+#[allow(unused_imports)]
 pub use quota_event::Entity as QuotaEvent;
 #[allow(unused_imports)]
 pub use quota_limit::Entity as QuotaLimit;
@@ -57,6 +64,14 @@ pub use quota_plan::Entity as QuotaPlan;
 pub use quota_usage_counter::Entity as QuotaUsageCounter;
 #[allow(unused_imports)]
 pub use release::Entity as Release;
+#[allow(unused_imports)]
+pub use source_credential::Entity as SourceCredential;
+#[allow(unused_imports)]
+pub use source_credential_lease::Entity as SourceCredentialLease;
+#[allow(unused_imports)]
+pub use source_credential_version::Entity as SourceCredentialVersion;
+#[allow(unused_imports)]
+pub use ssh_host_key::Entity as SshHostKey;
 #[allow(unused_imports)]
 pub use system_setting::Entity as SystemSetting;
 #[allow(unused_imports)]

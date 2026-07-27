@@ -65,13 +65,13 @@ pub struct ClaimRequest {
     pub capacity: u16,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ClaimResponse {
     #[serde(default)]
     pub deployment: Option<ClaimedDeployment>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ClaimedDeployment {
     pub deployment_id: Uuid,
     pub project_id: Uuid,
@@ -90,6 +90,53 @@ pub struct ClaimedDeployment {
     pub build_timeout_seconds: Option<i64>,
     /// Preview host assigned at creation time, if any.
     pub preview_host: Option<String>,
+    /// Opaque, short-lived, one-time token. The Node exchanges it separately
+    /// so credential material never appears in deployment snapshots.
+    #[serde(default)]
+    pub source_credential_lease: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct RedeemGitCredentialRequest {
+    pub lease: String,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GitCredential {
+    Https {
+        username: String,
+        secret: String,
+    },
+    Ssh {
+        username: String,
+        private_key: String,
+        #[serde(default)]
+        passphrase: Option<String>,
+    },
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct RedeemGitCredentialResponse {
+    pub credential: GitCredential,
+    pub host: String,
+    pub port: u16,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ObserveSshHostKeyRequest {
+    pub host: String,
+    pub port: u16,
+    pub key_type: String,
+    pub public_key: String,
+    pub fingerprint_sha256: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ObserveSshHostKeyResponse {
+    pub approved: bool,
+    #[serde(default)]
+    pub known_hosts_line: Option<String>,
 }
 
 // --- Stage reports ----------------------------------------------------------

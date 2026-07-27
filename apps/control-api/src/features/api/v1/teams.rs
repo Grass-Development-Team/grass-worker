@@ -5,6 +5,8 @@ pub mod invitations;
 pub mod list;
 pub mod members;
 pub mod quota;
+pub mod source_credentials;
+pub mod ssh_host_keys;
 pub mod update;
 
 use axum::{
@@ -26,6 +28,27 @@ pub fn router() -> Router<ControlApiState> {
         .route("/teams/{team_id}/audit-events", get(audit::list))
         .route("/teams/{team_id}/quota", get(quota::plan))
         .route("/teams/{team_id}/quota/usage", get(quota::usage))
+        .route(
+            "/teams/{team_id}/source-credentials",
+            get(source_credentials::list).post(source_credentials::create),
+        )
+        .route(
+            "/teams/{team_id}/source-credentials/{credential_id}/rotate",
+            post(source_credentials::rotate),
+        )
+        .route(
+            "/teams/{team_id}/source-credentials/{credential_id}/revoke",
+            post(source_credentials::revoke),
+        )
+        .route("/teams/{team_id}/ssh-host-keys", get(ssh_host_keys::list))
+        .route(
+            "/teams/{team_id}/ssh-host-keys/{key_id}/approve",
+            post(ssh_host_keys::approve),
+        )
+        .route(
+            "/teams/{team_id}/ssh-host-keys/{key_id}/reject",
+            post(ssh_host_keys::reject),
+        )
         .route(
             "/teams/{team_id}/members/{user_id}",
             patch(members::update_role).delete(members::remove),

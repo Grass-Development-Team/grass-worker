@@ -82,4 +82,39 @@ describe("teamsApi", () => {
       }),
     );
   });
+
+  it("creates private source credentials through the team-scoped endpoint", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      response({
+        credential: {
+          id: "credential-1",
+          team_id: "team-1",
+          name: "deploy",
+          kind: "https",
+          host: "example.com",
+          port: 443,
+          username: "git",
+          current_version_id: "version-1",
+          revoked_at: null,
+        },
+      }),
+    );
+
+    const input = {
+      name: "deploy",
+      repository_url: "https://example.com/acme/repo.git",
+      username: "git",
+      secret: "write-only-token",
+    };
+    await teamsApi.createSourceCredential("team-1", input);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/teams/team-1/source-credentials",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        body: JSON.stringify(input),
+      }),
+    );
+  });
 });

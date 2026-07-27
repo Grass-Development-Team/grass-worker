@@ -5,6 +5,7 @@ use std::{
 
 use anyhow::Context;
 use grass_config::{ConfigError, load_toml_or_default, overlay_string, overlay_u16, overlay_u64};
+use grass_git_source::PrivateTargetException;
 use serde::Deserialize;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -194,10 +195,30 @@ impl Default for RuntimeResourcesConfig {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct PrivateRepositoryTargetConfig {
+    pub host: String,
+    pub ip: IpAddr,
+    pub port: u16,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
 pub struct SecurityConfig {
     #[serde(default)]
-    pub allow_private_repository: bool,
+    pub private_repository_targets: Vec<PrivateRepositoryTargetConfig>,
+}
+
+impl SecurityConfig {
+    pub fn repository_exceptions(&self) -> Vec<PrivateTargetException> {
+        self.private_repository_targets
+            .iter()
+            .map(|target| PrivateTargetException {
+                host: target.host.trim_end_matches('.').to_ascii_lowercase(),
+                ip: target.ip,
+                port: target.port,
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
@@ -396,5 +417,25 @@ mod tests {
         assert_eq!(listen.ip().to_string(), "0.0.0.0");
         assert_eq!(listen.port(), 8080);
         assert!(parse_listen("GWNODE_SERVE_LISTEN", "localhost").is_err());
+    }
+
+    #[test]
+    fn private_repository_exceptions_require_exact_host_ip_and_port() {
+        let config: NodeConfig = toml::from_str(
+            r#"
+            [security]
+            [[security.private_repository_targets]]
+            host = "git.internal"
+            ip = "10.0.0.8"
+            port = 2222
+            "#,
+        )
+        .unwrap();
+
+        let exceptions = config.security.repository_exceptions();
+        assert_eq!(exceptions.len(), 1);
+        assert_eq!(exceptions[0].host, "git.internal");
+        assert_eq!(exceptions[0].ip.to_string(), "10.0.0.8");
+        assert_eq!(exceptions[0].port, 2222);
     }
 }

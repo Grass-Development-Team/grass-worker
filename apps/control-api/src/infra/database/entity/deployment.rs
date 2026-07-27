@@ -18,6 +18,7 @@ pub struct Model {
     pub build_status: DeploymentBuildStatus,
     pub release_status: DeploymentReleaseStatus,
     pub source_repository_url: Option<String>,
+    pub source_credential_version_id: Option<Uuid>,
     pub source_branch: Option<String>,
     pub commit_hash: Option<String>,
     pub commit_message: Option<String>,
