@@ -1,6 +1,6 @@
 //! HTTP client for the Control API internal protocol.
 
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
 use anyhow::Context;
 use grass_node_protocol::{
@@ -11,6 +11,7 @@ use grass_node_protocol::{
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 /// Control API response envelope.
@@ -159,31 +160,79 @@ impl ControlApiClient {
         Self::unwrap_envelope(response, "deployment.build_log").await
     }
 
-    #[allow(dead_code)] // Wired by the build loop in Milestone 7.
-    pub async fn upload_artifact(
+    #[allow(clippy::too_many_arguments)]
+    async fn artifact_upload_request(
         &self,
         deployment_id: Uuid,
-        bytes: Vec<u8>,
+        artifact_path: &Path,
+        packed_size_bytes: u64,
+        unpacked_size_bytes: u64,
+        checksum_sha256: &str,
         runtime_kind: &str,
         output_api_version: &str,
         framework_name: Option<&str>,
         framework_version: Option<&str>,
-    ) -> anyhow::Result<UploadArtifactResponse> {
+    ) -> anyhow::Result<reqwest::RequestBuilder> {
+        let file = tokio::fs::File::open(artifact_path)
+            .await
+            .with_context(|| format!("failed to open artifact {}", artifact_path.display()))?;
+        let actual_size = file
+            .metadata()
+            .await
+            .context("failed to read artifact metadata")?
+            .len();
+        if actual_size != packed_size_bytes {
+            anyhow::bail!(
+                "artifact size changed before upload: expected {packed_size_bytes}, found {actual_size}"
+            );
+        }
         let mut request = self
             .http
             .put(self.url(&format!("/deployments/{deployment_id}/static-site")))
             .bearer_auth(&self.token)
             .header(artifact_headers::RUNTIME_KIND, runtime_kind)
             .header(artifact_headers::OUTPUT_API_VERSION, output_api_version)
+            .header(artifact_headers::CHECKSUM_SHA256, checksum_sha256)
+            .header(artifact_headers::PACKED_SIZE_BYTES, packed_size_bytes)
+            .header(artifact_headers::UNPACKED_SIZE_BYTES, unpacked_size_bytes)
             .timeout(Duration::from_secs(600))
-            .body(bytes);
+            .body(reqwest::Body::wrap_stream(ReaderStream::new(file)));
         if let Some(name) = framework_name {
             request = request.header(artifact_headers::FRAMEWORK_NAME, name);
         }
         if let Some(version) = framework_version {
             request = request.header(artifact_headers::FRAMEWORK_VERSION, version);
         }
-        let response = request
+        Ok(request)
+    }
+
+    #[allow(dead_code)] // Wired by the build loop in Milestone 7.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn upload_artifact(
+        &self,
+        deployment_id: Uuid,
+        artifact_path: &Path,
+        packed_size_bytes: u64,
+        unpacked_size_bytes: u64,
+        checksum_sha256: &str,
+        runtime_kind: &str,
+        output_api_version: &str,
+        framework_name: Option<&str>,
+        framework_version: Option<&str>,
+    ) -> anyhow::Result<UploadArtifactResponse> {
+        let response = self
+            .artifact_upload_request(
+                deployment_id,
+                artifact_path,
+                packed_size_bytes,
+                unpacked_size_bytes,
+                checksum_sha256,
+                runtime_kind,
+                output_api_version,
+                framework_name,
+                framework_version,
+            )
+            .await?
             .send()
             .await
             .context("deployment.upload_artifact: request failed")?;
@@ -234,5 +283,46 @@ impl ControlApiClient {
         Self::unwrap_envelope(response, "serve.resolve_host")
             .await
             .map(Some)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn artifact_upload_request_streams_file_and_sets_size_headers() {
+        let path = std::env::temp_dir().join(format!("grass-upload-{}.zip", Uuid::now_v7()));
+        tokio::fs::write(&path, b"zip-bytes").await.unwrap();
+        let client = ControlApiClient::new("http://127.0.0.1:9", "node-token").unwrap();
+
+        let request = client
+            .artifact_upload_request(
+                Uuid::nil(),
+                &path,
+                9,
+                1025,
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "static",
+                "1",
+                Some("vite"),
+                None,
+            )
+            .await
+            .unwrap()
+            .build()
+            .unwrap();
+
+        assert!(request.body().unwrap().as_bytes().is_none());
+        assert_eq!(request.headers()[artifact_headers::PACKED_SIZE_BYTES], "9");
+        assert_eq!(
+            request.headers()[artifact_headers::UNPACKED_SIZE_BYTES],
+            "1025"
+        );
+        assert_eq!(
+            request.headers()[artifact_headers::CHECKSUM_SHA256],
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        );
+        tokio::fs::remove_file(path).await.unwrap();
     }
 }
