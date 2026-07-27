@@ -1093,13 +1093,10 @@ pub async fn download_artifact(
         op: OP,
         message: "artifact checksum metadata is missing".to_owned(),
     })?;
-    let unpacked_size_bytes = artifact
-        .manifest
-        .get("unpacked_size_bytes")
-        .and_then(serde_json::Value::as_u64)
+    let unpacked_size_bytes = deployments::artifact_unpacked_size_bytes(&artifact.manifest)
         .ok_or_else(|| AppError::Internal {
             op: OP,
-            message: "artifact unpacked size metadata is missing".to_owned(),
+            message: "artifact unpacked size metadata is invalid".to_owned(),
         })?;
     let mut response = Response::new(Body::from_stream(ReaderStream::new(opened.file)));
     let response_headers = response.headers_mut();

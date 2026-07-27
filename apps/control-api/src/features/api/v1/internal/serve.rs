@@ -165,10 +165,7 @@ pub async fn assignments(
                     .size_bytes
                     .and_then(|value| u64::try_from(value).ok())
                     .ok_or_else(metadata_error)?,
-                unpacked_size_bytes: artifact
-                    .manifest
-                    .get("unpacked_size_bytes")
-                    .and_then(serde_json::Value::as_u64)
+                unpacked_size_bytes: deployments::artifact_unpacked_size_bytes(&artifact.manifest)
                     .ok_or_else(metadata_error)?,
             },
             resources: ServeResources {
@@ -471,7 +468,33 @@ mod tests {
     };
     use uuid::Uuid;
 
-    use super::{route_revision, validate_status_report};
+    use super::{deployments, route_revision, validate_status_report};
+
+    #[test]
+    fn legacy_artifact_metadata_uses_unknown_unpacked_size() {
+        let legacy = serde_json::json!({
+            "runtime_kind": "static",
+            "output_api_version": "1",
+        });
+
+        assert_eq!(
+            deployments::artifact_unpacked_size_bytes(&legacy).unwrap(),
+            0
+        );
+        assert_eq!(
+            deployments::artifact_unpacked_size_bytes(&serde_json::json!({
+                "unpacked_size_bytes": 12_345,
+            }))
+            .unwrap(),
+            12_345
+        );
+        assert!(
+            deployments::artifact_unpacked_size_bytes(&serde_json::json!({
+                "unpacked_size_bytes": "invalid",
+            }))
+            .is_none()
+        );
+    }
 
     #[test]
     fn serve_failure_reports_require_bounded_stable_details() {

@@ -118,7 +118,9 @@ pub fn stage_archive(
     let result = (|| {
         verify_archive_file(assignment, archive_path)?;
         let unpacked = grass_archive::unpack_zip(archive_path, &staging_path)?;
-        if unpacked.unpacked_size_bytes != assignment.artifact.unpacked_size_bytes {
+        if assignment.artifact.unpacked_size_bytes != 0
+            && unpacked.unpacked_size_bytes != assignment.artifact.unpacked_size_bytes
+        {
             anyhow::bail!(
                 "artifact unpacked size mismatch: expected {}, found {}",
                 assignment.artifact.unpacked_size_bytes,
@@ -406,6 +408,20 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(!entries.iter().any(|entry| entry.starts_with(".staging-")));
 
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stages_legacy_artifact_with_unknown_unpacked_size() {
+        let root = temp_dir("legacy-size");
+        let cache_root = root.join("cache");
+        let (mut assignment, archive_path) = artifact_fixture(&root);
+        assignment.artifact.unpacked_size_bytes = 0;
+
+        let staged = stage_archive(&cache_root, &assignment, &archive_path).unwrap();
+
+        assert!(staged.join("output.toml").is_file());
+        assert!(staged.join(".artifact.json").is_file());
         std::fs::remove_dir_all(root).unwrap();
     }
 

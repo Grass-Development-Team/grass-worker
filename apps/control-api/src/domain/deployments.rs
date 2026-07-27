@@ -170,6 +170,15 @@ pub fn runtime_serve_resources(runtime: &ProjectRuntime) -> ServeResources {
     }
 }
 
+/// Artifacts uploaded before Serve scheduling did not record unpacked bytes.
+/// Zero is reserved as the wire-level sentinel for that legacy metadata.
+pub fn artifact_unpacked_size_bytes(manifest: &serde_json::Value) -> Option<u64> {
+    match manifest.get("unpacked_size_bytes") {
+        Some(value) => value.as_u64(),
+        None => Some(0),
+    }
+}
+
 // --- Creation ---------------------------------------------------------------
 
 pub struct CreateDeploymentParams {
