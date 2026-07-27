@@ -14,6 +14,14 @@ root = "/data"
 [secrets]
 secret_key = "change-me"
 
+# Private Git credentials use a separate 32-byte AEAD master key. Prefer the
+# GWAPI_GIT_CREDENTIAL_MASTER_KEY and GWAPI_GIT_CREDENTIAL_KEY_ID environment
+# variables. To configure a keyring in TOML instead, uncomment and replace:
+# [secrets.git_credentials]
+# active_key_id = "primary"
+# [secrets.git_credentials.keys]
+# primary = "BASE64URL_ENCODED_32_BYTE_KEY"
+
 [session]
 cookie_secure = false
 idle_ttl_seconds = 900

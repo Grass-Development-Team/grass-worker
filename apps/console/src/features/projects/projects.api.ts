@@ -78,6 +78,16 @@ export interface UpdateProjectInput {
   framework_hint?: string;
 }
 
+export interface BoundSourceCredential {
+  id: string;
+  name: string;
+  kind: "https" | "ssh";
+  host: string;
+  port: number;
+  username: string | null;
+  revoked: boolean;
+}
+
 export const projectsApi = {
   list: (teamId: string) =>
     request<{ projects: Project[] }>(`/api/v1/projects?team_id=${encodeURIComponent(teamId)}`),
@@ -97,6 +107,22 @@ export const projectsApi = {
     request<{ project: Project }>(`/api/v1/projects/${projectId}`, {
       method: "PATCH",
       body: JSON.stringify(input),
+    }),
+
+  getSourceCredential: (projectId: string) =>
+    request<{ credential: BoundSourceCredential | null }>(
+      `/api/v1/projects/${projectId}/source-credential`,
+    ),
+
+  bindSourceCredential: (projectId: string, credentialId: string) =>
+    request<{ credential_id: string }>(`/api/v1/projects/${projectId}/source-credential`, {
+      method: "POST",
+      body: JSON.stringify({ credential_id: credentialId }),
+    }),
+
+  unbindSourceCredential: (projectId: string) =>
+    request<{ unbound: true }>(`/api/v1/projects/${projectId}/source-credential`, {
+      method: "DELETE",
     }),
 
   archive: (projectId: string) =>

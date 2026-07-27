@@ -13,11 +13,18 @@ mod output;
 mod runtime;
 mod serve;
 
-use crate::{cli::Cli, client::ControlApiClient, config::NodeConfig};
+use crate::{
+    cli::{Cli, Command},
+    client::ControlApiClient,
+    config::NodeConfig,
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    if let Some(Command::GitProxy { ip, port }) = &cli.command {
+        return cli::run_git_proxy(*ip, *port).await;
+    }
     let config = NodeConfig::load(cli.config_path())
         .with_context(|| format!("failed to load Node config from {}", cli.config_path()))?;
 
@@ -29,6 +36,7 @@ async fn main() -> anyhow::Result<()> {
     if config.node.control_api.trim().is_empty() {
         anyhow::bail!("control api URL is not configured");
     }
+    build::git::ensure_supported_git().await?;
 
     let client = ControlApiClient::new(&config.node.control_api, &config.node.node_token)?;
     let node_id = lifecycle::register(&client, &config).await?;

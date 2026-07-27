@@ -109,6 +109,18 @@ fn apply_env(config: &mut ControlApiConfig) -> Result<(), ConfigError> {
     overlay_string("GWAPI_REDIS_URL", &mut config.redis.url);
     overlay_string("GWAPI_STORAGE_ROOT", &mut config.storage.root);
     overlay_string("GWAPI_SECRET_KEY", &mut config.secrets.secret_key);
+    if let Ok(master_key) = env::var("GWAPI_GIT_CREDENTIAL_MASTER_KEY") {
+        let key_id = env::var("GWAPI_GIT_CREDENTIAL_KEY_ID")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "primary".to_owned());
+        config.secrets.git_credentials.active_key_id = key_id.clone();
+        config
+            .secrets
+            .git_credentials
+            .keys
+            .insert(key_id, master_key);
+    }
     overlay_bool(
         "GWAPI_NODE_MANAGER_AUTO_START_LOCAL_NODE",
         &mut config.node_manager.auto_start_local_node,

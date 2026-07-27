@@ -120,16 +120,37 @@ const MAX_ENTRIES: usize = 50_000;
 const MAX_TOTAL_UNPACKED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_ENTRY_UNPACKED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
+#[derive(Clone, Copy)]
+struct UnpackLimits {
+    entries: usize,
+    entry_bytes: u64,
+    total_bytes: u64,
+}
+
+const DEFAULT_UNPACK_LIMITS: UnpackLimits = UnpackLimits {
+    entries: MAX_ENTRIES,
+    entry_bytes: MAX_ENTRY_UNPACKED_BYTES,
+    total_bytes: MAX_TOTAL_UNPACKED_BYTES,
+};
+
 fn unpack_zip_reader<R: Read + std::io::Seek>(
     reader: R,
     destination: &Path,
 ) -> anyhow::Result<usize> {
+    unpack_zip_reader_with_limits(reader, destination, DEFAULT_UNPACK_LIMITS)
+}
+
+fn unpack_zip_reader_with_limits<R: Read + std::io::Seek>(
+    reader: R,
+    destination: &Path,
+    limits: UnpackLimits,
+) -> anyhow::Result<usize> {
     let mut archive = ZipArchive::new(reader)?;
-    if archive.len() > MAX_ENTRIES {
+    if archive.len() > limits.entries {
         anyhow::bail!(
             "archive has {} entries, exceeding the {} entry limit",
             archive.len(),
-            MAX_ENTRIES
+            limits.entries
         );
     }
     std::fs::create_dir_all(destination)?;
@@ -146,6 +167,13 @@ fn unpack_zip_reader<R: Read + std::io::Seek>(
             continue;
         }
 
+        if entry.size() > limits.entry_bytes {
+            anyhow::bail!("archive entry {name} exceeds the per-entry unpack size limit");
+        }
+        if entry.size() > limits.total_bytes.saturating_sub(total_written) {
+            anyhow::bail!("archive exceeds the total unpack size limit");
+        }
+
         let safe = sanitize_entry_name(&name)?;
         let target = destination.join(&safe);
         if let Some(parent) = target.parent() {
@@ -154,13 +182,14 @@ fn unpack_zip_reader<R: Read + std::io::Seek>(
         let mut output = File::create(&target)?;
         // Bound each entry independently, then re-check the running total so
         // neither one huge entry nor many small entries can overrun the caps.
-        let remaining_total = MAX_TOTAL_UNPACKED_BYTES.saturating_sub(total_written);
-        let entry_cap = MAX_ENTRY_UNPACKED_BYTES.min(remaining_total);
+        let remaining_total = limits.total_bytes.saturating_sub(total_written);
+        let entry_cap = limits.entry_bytes.min(remaining_total);
         let written = std::io::copy(&mut entry.by_ref().take(entry_cap + 1), &mut output)?;
-        if written > entry_cap {
-            anyhow::bail!(
-                "archive entry {name} exceeds the unpack size limit; refusing decompression bomb"
-            );
+        if written > limits.entry_bytes {
+            anyhow::bail!("archive entry {name} exceeds the per-entry unpack size limit");
+        }
+        if written > remaining_total {
+            anyhow::bail!("archive exceeds the total unpack size limit");
         }
         total_written += written;
         extracted += 1;
@@ -180,6 +209,21 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn zip_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = ZipWriter::new(&mut bytes);
+            for (name, contents) in entries {
+                writer
+                    .start_file(*name, SimpleFileOptions::default())
+                    .unwrap();
+                writer.write_all(contents).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        bytes.into_inner()
     }
 
     #[test]
@@ -257,5 +301,59 @@ mod tests {
 
         std::fs::remove_dir_all(source).unwrap();
         std::fs::remove_dir_all(archive_dir).unwrap();
+    }
+
+    #[test]
+    fn rejects_archives_over_the_entry_count_limit() {
+        let bytes = zip_bytes(&[("one", b""), ("two", b""), ("three", b"")]);
+        let destination = temp_dir("entry-count-limit");
+        let error = unpack_zip_reader_with_limits(
+            std::io::Cursor::new(bytes),
+            &destination,
+            UnpackLimits {
+                entries: 2,
+                entry_bytes: 100,
+                total_bytes: 100,
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("entry limit"));
+        std::fs::remove_dir_all(destination).unwrap();
+    }
+
+    #[test]
+    fn rejects_archives_over_the_per_entry_byte_limit() {
+        let bytes = zip_bytes(&[("large", b"12345")]);
+        let destination = temp_dir("entry-byte-limit");
+        let error = unpack_zip_reader_with_limits(
+            std::io::Cursor::new(bytes),
+            &destination,
+            UnpackLimits {
+                entries: 10,
+                entry_bytes: 4,
+                total_bytes: 100,
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("per-entry"));
+        std::fs::remove_dir_all(destination).unwrap();
+    }
+
+    #[test]
+    fn rejects_archives_over_the_total_byte_limit() {
+        let bytes = zip_bytes(&[("one", b"1234"), ("two", b"5678")]);
+        let destination = temp_dir("total-byte-limit");
+        let error = unpack_zip_reader_with_limits(
+            std::io::Cursor::new(bytes),
+            &destination,
+            UnpackLimits {
+                entries: 10,
+                entry_bytes: 10,
+                total_bytes: 7,
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("total unpack"));
+        std::fs::remove_dir_all(destination).unwrap();
     }
 }

@@ -23,6 +23,7 @@ use crate::{
         },
         hosts, projects,
         quotas::QuotaDimension,
+        source_credentials,
     },
     infra::{
         database::entity::{
@@ -66,6 +67,22 @@ fn parse_environment(value: &str, op: &'static str) -> Result<DeploymentEnvironm
 /// Cache key checked by Nodes to learn a build was canceled server-side.
 pub(crate) fn cancel_flag_key(deployment_id: Uuid) -> String {
     format!("deployment:{deployment_id}:cancel")
+}
+
+pub(crate) fn cancellation_was_requested(
+    status: &DeploymentBuildStatus,
+    cancel_flagged: bool,
+) -> bool {
+    matches!(status, DeploymentBuildStatus::Canceled) || cancel_flagged
+}
+
+fn cancellation_releases_build_slot(status: &DeploymentBuildStatus) -> bool {
+    matches!(
+        status,
+        DeploymentBuildStatus::Claimed
+            | DeploymentBuildStatus::Queued
+            | DeploymentBuildStatus::Building
+    )
 }
 
 // --- DTO --------------------------------------------------------------------
@@ -282,6 +299,31 @@ pub async fn create(
     } else {
         None
     };
+    let source_credential_version_id =
+        match source_credentials::current_version_for_project(db, &access.project).await {
+            Ok(version_id) => version_id,
+            Err(error) => {
+                quota.rollback(reservation).await;
+                return Err(AppError::Conflict {
+                    op: OP,
+                    message: error.to_string(),
+                });
+            }
+        };
+    if access
+        .project
+        .repository_url
+        .as_deref()
+        .and_then(|url| grass_git_source::parse_repository_url(url).ok())
+        .is_some_and(|endpoint| endpoint.transport == grass_git_source::GitTransport::Ssh)
+        && source_credential_version_id.is_none()
+    {
+        quota.rollback(reservation).await;
+        return Err(AppError::Validation {
+            op: OP,
+            message: "SSH repositories require a bound source credential".to_owned(),
+        });
+    }
 
     let deployment = match deployments::create_deployment(
         db,
@@ -293,6 +335,7 @@ pub async fn create(
             commit_hash: super::optional_trimmed(body.commit_hash),
             commit_message: super::optional_trimmed(body.commit_message),
             preview_host,
+            source_credential_version_id,
         },
     )
     .await
@@ -614,12 +657,7 @@ pub(crate) async fn cancel_deployment_core(
     actor_user_id: Uuid,
     op: &'static str,
 ) -> Result<deployment::Model, AppError> {
-    let was_running = matches!(
-        deployment.build_status,
-        DeploymentBuildStatus::Claimed
-            | DeploymentBuildStatus::Queued
-            | DeploymentBuildStatus::Building
-    );
+    let was_running = cancellation_releases_build_slot(&deployment.build_status);
     let team_id = deployment.team_id;
 
     let deployment = deployments::transition_build(
@@ -648,7 +686,7 @@ pub(crate) async fn cancel_deployment_core(
             )
             .await;
         QuotaService::new(db, cache)
-            .release_build_slot(team_id)
+            .release_build_slot_once(team_id, deployment.id)
             .await;
     }
 
@@ -750,6 +788,7 @@ pub async fn retry(
             commit_hash: source_deployment.commit_hash.clone(),
             commit_message: source_deployment.commit_message.clone(),
             preview_host,
+            source_credential_version_id: source_deployment.source_credential_version_id,
         },
     )
     .await
@@ -946,4 +985,44 @@ async fn activate_deployment(
         "deployment": deployment_view(&activated, &urls, &HashMap::new()),
     }))
     .into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_cancel_owns_the_single_slot_release() {
+        for status in [
+            DeploymentBuildStatus::Claimed,
+            DeploymentBuildStatus::Queued,
+            DeploymentBuildStatus::Building,
+        ] {
+            assert!(cancellation_releases_build_slot(&status));
+        }
+
+        // After cancel_deployment_core transitions the row, every later Node
+        // report takes the early cancellation branch and cannot reach the
+        // terminal-stage slot release.
+        assert!(cancellation_was_requested(
+            &DeploymentBuildStatus::Canceled,
+            false
+        ));
+        assert!(cancellation_was_requested(
+            &DeploymentBuildStatus::Building,
+            true
+        ));
+    }
+
+    #[test]
+    fn canceling_a_non_running_deployment_does_not_release_a_slot() {
+        for status in [
+            DeploymentBuildStatus::Pending,
+            DeploymentBuildStatus::Ready,
+            DeploymentBuildStatus::Failed,
+            DeploymentBuildStatus::Canceled,
+        ] {
+            assert!(!cancellation_releases_build_slot(&status));
+        }
+    }
 }

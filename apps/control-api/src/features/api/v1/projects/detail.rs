@@ -93,19 +93,27 @@ pub async fn update(
     if let Some(url) = &body.repository_url {
         let trimmed = url.trim();
         if !trimmed.is_empty() {
-            let parsed = url::Url::parse(trimmed).map_err(|_| AppError::Validation {
+            super::validate_repository_url(trimmed).map_err(|message| AppError::Validation {
                 op: OP,
-                message: "repository_url must be a valid URL".to_owned(),
+                message: message.to_owned(),
             })?;
-            // Only http(s) is fetched by the build node; other schemes
-            // (file, ssh, ext, git) are rejected so a project setting cannot
-            // steer host-side git at a local path or command transport.
-            if !matches!(parsed.scheme(), "http" | "https") {
-                return Err(AppError::Validation {
-                    op: OP,
-                    message: "repository_url must use http or https".to_owned(),
-                });
-            }
+        }
+        let bound = crate::domain::source_credentials::bound_credential(db, access.project.id)
+            .await
+            .map_err(|error| AppError::Infrastructure {
+                op: OP,
+                source: anyhow::Error::new(error),
+            })?;
+        if bound.is_some_and(|credential| {
+            trimmed.is_empty()
+                || !crate::domain::source_credentials::matches_repository_url(&credential, trimmed)
+        }) {
+            return Err(AppError::Conflict {
+                op: OP,
+                message:
+                    "unbind the source credential before changing repository scheme, host, or port"
+                        .to_owned(),
+            });
         }
     }
 

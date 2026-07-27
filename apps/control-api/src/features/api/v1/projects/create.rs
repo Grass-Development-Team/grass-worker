@@ -104,19 +104,10 @@ pub async fn handler(
     if let Some(url) = &body.repository_url {
         let trimmed = url.trim();
         if !trimmed.is_empty() {
-            let parsed = url::Url::parse(trimmed).map_err(|_| AppError::Validation {
+            super::validate_repository_url(trimmed).map_err(|message| AppError::Validation {
                 op: OP,
-                message: "repository_url must be a valid URL".to_owned(),
+                message: message.to_owned(),
             })?;
-            // Only http(s) is fetched by the build node; other schemes
-            // (file, ssh, ext, git) are rejected so a project setting cannot
-            // steer host-side git at a local path or command transport.
-            if !matches!(parsed.scheme(), "http" | "https") {
-                return Err(AppError::Validation {
-                    op: OP,
-                    message: "repository_url must use http or https".to_owned(),
-                });
-            }
         }
     }
 

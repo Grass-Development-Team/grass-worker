@@ -17,6 +17,7 @@ impl MigratorTrait for Migrator {
             Box::new(migration::m20260726_000006_project_host_columns::Migration),
             Box::new(migration::m20260726_000007_deployment_stage::Migration),
             Box::new(migration::m20260726_000008_audit_team_scope::Migration),
+            Box::new(migration::m20260727_000009_git_source_access::Migration),
         ]
     }
 }

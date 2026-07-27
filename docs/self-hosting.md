@@ -9,7 +9,8 @@ logs, review, activation, and public access.
 - PostgreSQL 15+
 - Redis 7+ (recommended; an in-memory fallback exists for evaluation)
 - A container engine socket: Podman (rootless works) or Docker
-- `git` available to the Node process
+- Git 2.49+ plus OpenSSH client tools (`ssh` and `ssh-keyscan`) available to
+  the Node process
 - Rust 1.85+ and [Vite+](https://viteplus.dev/) when building from source
 
 ## 1. Build
@@ -120,9 +121,50 @@ A **Manual** source assigns domains without touching DNS; bindings stay
 New projects automatically receive `slug.apps.example.com`; preview
 deployments receive unique `slug-xxxxxxxx.apps.example.com` hosts.
 
-## 5. Deploy
+## 5. Configure Git source access
 
-1. Create a project with a public Git repository URL and build settings.
+Public repositories can use HTTP, HTTPS, SSH, scp-like SSH, or `git://` URLs.
+HTTP and `git://` are always anonymous. A custom SSH port uses an `ssh://`
+URL; scp-like syntax uses port 22.
+
+Private credentials require an independent 32-byte master key. Generate a
+base64url value and provide it to the Control API without committing it:
+
+```sh
+openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
+export GWAPI_GIT_CREDENTIAL_KEY_ID=primary
+export GWAPI_GIT_CREDENTIAL_MASTER_KEY='<generated value>'
+```
+
+Team owners and admins can then add HTTPS username/token credentials or SSH
+private keys under Team settings → Git credentials and bind a compatible
+credential under Project → Settings → Build & Deployment. Credentials are
+scoped to scheme, normalized host, and effective port; secrets are encrypted,
+write-only, and never placed in repository URLs. Normal rotation keeps queued
+deployments on their fixed version, while revocation invalidates old versions.
+
+The first SSH checkout reports a fingerprint and stops. Verify it out of band,
+then approve it under Team settings → SSH host keys. A changed key blocks future
+checkouts until the new fingerprint is explicitly approved.
+
+Nodes reject loopback, link-local, private, documentation, multicast, and other
+non-public targets after resolving every address. A Node administrator may add
+an exact exception in `node.toml`; all three fields must match:
+
+```toml
+[[security.private_repository_targets]]
+host = "git.internal.example"
+ip = "10.0.0.8"
+port = 2222
+```
+
+CIDRs, wildcard hosts, and host-only exceptions are not supported. HTTP(S),
+SSH, and `git://` connections are pinned to an address that passed this policy.
+
+## 6. Deploy
+
+1. Create a project with a Git repository URL and build settings; bind a team
+   credential first when the repository is private.
 2. Open the project → Deployments → **Deploy preview** or **Deploy
    production**.
 3. Watch the realtime build log. Builds run inside the configured container

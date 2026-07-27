@@ -8,7 +8,9 @@ use axum::{
 use grass_cache::Cache;
 use grass_node_protocol::{
     AppendBuildLogRequest, AppendBuildLogResponse, ClaimRequest, ClaimResponse, ClaimedDeployment,
-    ReportedStatus, StageRequest, StageResponse, UploadArtifactResponse, artifact_headers,
+    ObserveSshHostKeyRequest, ObserveSshHostKeyResponse, RedeemGitCredentialRequest,
+    RedeemGitCredentialResponse, ReportedStatus, StageRequest, StageResponse,
+    UploadArtifactResponse, artifact_headers,
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait};
 use serde_json::json;
@@ -19,7 +21,7 @@ use crate::{
         audits::{self, CreateAuditEventParams},
         deployments::{self, BuildTransition, ReviewMode},
         quotas::QuotaDimension,
-        teams,
+        source_credentials, ssh_host_keys, teams,
     },
     infra::{
         database::entity::{
@@ -164,6 +166,44 @@ pub async fn claim(
             continue;
         }
 
+        let source_credential_lease = match candidate.source_credential_version_id {
+            Some(version_id) => {
+                match source_credentials::issue_lease(db, node.id, candidate.id, version_id).await {
+                    Ok(lease) => Some(lease),
+                    Err(error) => {
+                        let _ = deployment::Entity::update_many()
+                            .col_expr(
+                                deployment::Column::BuildStatus,
+                                sea_orm::ActiveEnum::as_enum(&DeploymentBuildStatus::Pending),
+                            )
+                            .col_expr(
+                                deployment::Column::NodeId,
+                                sea_orm::sea_query::Expr::value(Option::<Uuid>::None),
+                            )
+                            .col_expr(
+                                deployment::Column::ClaimedAt,
+                                sea_orm::sea_query::Expr::value(
+                                    Option::<time::OffsetDateTime>::None,
+                                ),
+                            )
+                            .filter(deployment::Column::Id.eq(candidate.id))
+                            .filter(deployment::Column::NodeId.eq(node.id))
+                            .filter(
+                                deployment::Column::BuildStatus.eq(DeploymentBuildStatus::Claimed),
+                            )
+                            .exec(db)
+                            .await;
+                        quota.release_build_slot(team.id).await;
+                        return Err(AppError::Infrastructure {
+                            op: OP,
+                            source: anyhow::Error::new(error),
+                        });
+                    }
+                }
+            }
+            None => None,
+        };
+
         // The claim is committed; a missing timeline event must not fail it.
         if let Err(error) = deployments::append_event(
             db,
@@ -204,11 +244,115 @@ pub async fn claim(
                 output_directory: candidate.output_directory.clone(),
                 build_timeout_seconds,
                 preview_host: candidate.preview_host.clone(),
+                source_credential_lease,
             }),
         }));
     }
 
     Ok(ok_response(ClaimResponse { deployment: None }))
+}
+
+/// POST /api/v1/internal/deployments/{deployment_id}/source-credential
+pub async fn redeem_source_credential(
+    State(state): State<ControlApiState>,
+    Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
+    Path(deployment_id): Path<Uuid>,
+    Json(body): Json<RedeemGitCredentialRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "internal.deployments.source_credential";
+    let db = super::database(&state, OP)?;
+    owned_deployment(db, &node, deployment_id, OP).await?;
+    let keyring = state.config.read().unwrap().secrets.git_credentials.clone();
+    let redeemed =
+        source_credentials::redeem_lease(db, &keyring, node.id, deployment_id, &body.lease)
+            .await
+            .map_err(|error| match error {
+                source_credentials::SourceCredentialError::InvalidLease => AppError::Unauthorized {
+                    op: OP,
+                    message: "source credential lease is invalid or expired".to_owned(),
+                },
+                source_credentials::SourceCredentialError::Revoked => AppError::Conflict {
+                    op: OP,
+                    message: "source credential has been revoked".to_owned(),
+                },
+                source_credentials::SourceCredentialError::Database(source) => {
+                    AppError::Infrastructure {
+                        op: OP,
+                        source: source.into(),
+                    }
+                }
+                source_credentials::SourceCredentialError::Other(source) => {
+                    AppError::Infrastructure { op: OP, source }
+                }
+                _ => AppError::Internal {
+                    op: OP,
+                    message: "source credential could not be decrypted".to_owned(),
+                },
+            })?;
+    Ok(ok_response(RedeemGitCredentialResponse {
+        credential: redeemed.credential,
+        host: redeemed.host,
+        port: redeemed.port,
+    }))
+}
+
+/// POST /api/v1/internal/deployments/{deployment_id}/ssh-host-key
+pub async fn observe_ssh_host_key(
+    State(state): State<ControlApiState>,
+    Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
+    Path(deployment_id): Path<Uuid>,
+    Json(body): Json<ObserveSshHostKeyRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "internal.deployments.ssh_host_key";
+    let db = super::database(&state, OP)?;
+    let deployment = owned_deployment(db, &node, deployment_id, OP).await?;
+    let endpoint = deployment
+        .source_repository_url
+        .as_deref()
+        .and_then(|url| grass_git_source::parse_repository_url(url).ok())
+        .filter(|endpoint| endpoint.transport == grass_git_source::GitTransport::Ssh)
+        .ok_or_else(|| AppError::Validation {
+            op: OP,
+            message: "deployment does not use an SSH repository".to_owned(),
+        })?;
+    if !endpoint.host.eq_ignore_ascii_case(&body.host) || endpoint.port != body.port {
+        return Err(AppError::Validation {
+            op: OP,
+            message: "SSH host key endpoint does not match deployment".to_owned(),
+        });
+    }
+    let key = ssh_host_keys::observe(
+        db,
+        ssh_host_keys::ObserveHostKeyParams {
+            team_id: deployment.team_id,
+            host: endpoint.host,
+            port: endpoint.port,
+            key_type: body.key_type,
+            public_key: body.public_key,
+            fingerprint_sha256: body.fingerprint_sha256,
+            node_id: node.id,
+        },
+    )
+    .await
+    .map_err(|error| match error {
+        ssh_host_keys::SshHostKeyError::Invalid => AppError::Validation {
+            op: OP,
+            message: "SSH host key payload is invalid".to_owned(),
+        },
+        ssh_host_keys::SshHostKeyError::NotFound => AppError::NotFound {
+            op: OP,
+            message: "SSH host key not found".to_owned(),
+        },
+        ssh_host_keys::SshHostKeyError::Database(source) => AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        },
+    })?;
+    let approved = key.status == crate::infra::database::entity::SshHostKeyStatus::Approved;
+    Ok(ok_response(ObserveSshHostKeyResponse {
+        approved,
+        known_hosts_line: approved.then(|| ssh_host_keys::known_hosts_line(&key)),
+    }))
 }
 
 // --- Stage reports ----------------------------------------------------------
@@ -233,7 +377,10 @@ pub async fn stage(
         .ok()
         .flatten()
         .is_some();
-    if matches!(deployment.build_status, DeploymentBuildStatus::Canceled) || cancel_flagged {
+    if crate::features::api::v1::projects::deployments::cancellation_was_requested(
+        &deployment.build_status,
+        cancel_flagged,
+    ) {
         // The Node acknowledges by reporting canceled; account build minutes
         // when it does. The concurrency slot was already released by
         // cancel_deployment_core when the cancel was issued, so we must not
@@ -325,7 +472,7 @@ pub async fn stage(
             }
 
             if is_terminal {
-                quota.release_build_slot(team_id).await;
+                quota.release_build_slot_once(team_id, updated.id).await;
                 if let Some(minutes) = body.build_minutes.filter(|minutes| *minutes > 0) {
                     quota
                         .charge_unchecked(

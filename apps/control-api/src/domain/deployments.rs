@@ -117,6 +117,7 @@ pub struct CreateDeploymentParams {
     pub commit_hash: Option<String>,
     pub commit_message: Option<String>,
     pub preview_host: Option<String>,
+    pub source_credential_version_id: Option<Uuid>,
 }
 
 /// Creates a deployment snapshotting the project's source and build
@@ -138,6 +139,7 @@ pub async fn create_deployment<C: ConnectionTrait>(
         build_status: Set(DeploymentBuildStatus::Pending),
         release_status: Set(DeploymentReleaseStatus::Draft),
         source_repository_url: Set(project.repository_url.clone()),
+        source_credential_version_id: Set(params.source_credential_version_id),
         source_branch: Set(params
             .branch
             .or_else(|| project.default_branch.clone())
