@@ -50,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
     };
     let registration = lifecycle::register(&client, &config, resources).await?;
     let node_id = registration.node_id;
-    let _gateway_token = registration.gateway_token;
+    let gateway_token = registration.gateway_token;
 
     info!(
         operation = "node.start",
@@ -96,6 +96,9 @@ async fn main() -> anyhow::Result<()> {
         let route_refresh = serve::routes::spawn(client.clone(), route_table.clone());
         let serve_state = Arc::new(serve::ServeState::new(
             node_id,
+            gateway_token
+                .clone()
+                .expect("Serve registration requires a gateway token"),
             route_table,
             &config,
             ssr_manager,

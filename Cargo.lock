@@ -1480,6 +1480,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "subtle",
  "sysinfo",
  "tar",
  "thiserror",

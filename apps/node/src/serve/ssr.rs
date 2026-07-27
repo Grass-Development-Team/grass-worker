@@ -12,6 +12,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use grass_node_protocol::ServeResources;
 use tokio::sync::{Mutex, mpsc};
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -38,8 +39,6 @@ pub struct SsrManager {
     runtime: Option<Arc<BuildRuntime>>,
     image: String,
     network: String,
-    cpu_limit: u32,
-    memory_mb: u64,
     idle_stop: Duration,
     startup_timeout: Duration,
     services: Mutex<HashMap<Uuid, ServiceEntry>>,
@@ -82,12 +81,31 @@ impl SsrManager {
             runtime,
             image: config.runtime.default_serve_image.clone(),
             network: config.runtime.network.clone(),
-            cpu_limit: config.runtime.resources.cpu_limit,
-            memory_mb: config.runtime.resources.memory_mb,
             idle_stop: Duration::from_secs(config.serve.ssr.idle_stop_seconds),
             startup_timeout: Duration::from_secs(config.serve.ssr.startup_timeout_seconds.max(5)),
             services: Mutex::new(HashMap::new()),
             start_locks: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn service_input(
+        &self,
+        name: String,
+        app_dir: std::path::PathBuf,
+        start_command: String,
+        server: &ServerSection,
+        resources: ServeResources,
+    ) -> RunServiceInput {
+        RunServiceInput {
+            name,
+            image: self.image.clone(),
+            app_dir,
+            start_command,
+            env: service_env(server, SSR_CONTAINER_PORT),
+            container_port: SSR_CONTAINER_PORT,
+            cpu_millicores: resources.cpu_millicores,
+            memory_mb: resources.memory_mb,
+            network: self.network.clone(),
         }
     }
 
@@ -98,6 +116,7 @@ impl SsrManager {
         deployment_id: Uuid,
         deployment_dir: &Path,
         server: &ServerSection,
+        resources: ServeResources,
     ) -> anyhow::Result<String> {
         if let Some(upstream) = self.known_upstream(deployment_id).await {
             return Ok(upstream);
@@ -143,17 +162,13 @@ impl SsrManager {
 
         let name = container_name(deployment_id);
         let running = runtime
-            .run_service(RunServiceInput {
-                name: name.clone(),
-                image: self.image.clone(),
+            .run_service(self.service_input(
+                name.clone(),
                 app_dir,
                 start_command,
-                env: service_env(server, SSR_CONTAINER_PORT),
-                container_port: SSR_CONTAINER_PORT,
-                cpu_limit: self.cpu_limit,
-                memory_mb: self.memory_mb,
-                network: self.network.clone(),
-            })
+                server,
+                resources,
+            ))
             .await
             .map_err(|error| anyhow::anyhow!("ssr service start failed: {error}"))?;
 
@@ -265,6 +280,7 @@ async fn wait_ready(upstream: &str, timeout: Duration) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use grass_node_protocol::ServeResources;
 
     fn server_section(port_env: &str, host_env: &str) -> ServerSection {
         ServerSection {
@@ -297,6 +313,29 @@ mod tests {
         let id = Uuid::now_v7();
         assert_eq!(container_name(id), container_name(id));
         assert!(container_name(id).starts_with("grass-ssr-"));
+    }
+
+    #[test]
+    fn service_input_uses_assigned_serve_resources() {
+        let mut config = NodeConfig::default();
+        config.runtime.resources.cpu_limit = 4;
+        config.runtime.resources.memory_mb = 4_096;
+        let manager = SsrManager::new(None, &config);
+
+        let input = manager.service_input(
+            "grass-ssr-test".to_owned(),
+            Path::new("/tmp/app").to_path_buf(),
+            "node server.mjs".to_owned(),
+            &server_section("PORT", "HOST"),
+            ServeResources {
+                cpu_millicores: 200,
+                memory_mb: 256,
+                disk_mb: 512,
+            },
+        );
+
+        assert_eq!(input.cpu_millicores, 200);
+        assert_eq!(input.memory_mb, 256);
     }
 
     #[tokio::test]
