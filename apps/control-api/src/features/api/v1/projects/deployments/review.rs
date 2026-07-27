@@ -15,6 +15,7 @@ use crate::{
     infra::{
         database::entity::{
             AuditEventResult, DeploymentBuildStatus, DeploymentEventKind, DeploymentReleaseStatus,
+            DeploymentServeStatus,
         },
         error::{AppError, ok_response},
         http::extractors::Session,
@@ -88,10 +89,13 @@ pub async fn request(
     access.require_member(OP)?;
     let db = crate::features::api::v1::projects::database(&state, OP)?;
 
-    if !matches!(deployment.build_status, DeploymentBuildStatus::Ready) {
+    if !matches!(deployment.build_status, DeploymentBuildStatus::Ready)
+        || !matches!(deployment.serve_status, DeploymentServeStatus::Ready)
+    {
         return Err(AppError::Conflict {
             op: OP,
-            message: "only ready deployments can request review".to_owned(),
+            message: "only deployments with ready build and Serve artifact can request review"
+                .to_owned(),
         });
     }
 
@@ -157,6 +161,16 @@ async fn decide(
     // Approvals are a governance action: team admin or owner only.
     access.require_admin(op)?;
     let db = crate::features::api::v1::projects::database(&state, op)?;
+
+    if !matches!(deployment.build_status, DeploymentBuildStatus::Ready)
+        || !matches!(deployment.serve_status, DeploymentServeStatus::Ready)
+    {
+        return Err(AppError::Conflict {
+            op,
+            message: "only deployments with ready build and Serve artifact can be reviewed"
+                .to_owned(),
+        });
+    }
 
     let review = deployments::latest_pending_review(db, deployment.id)
         .await

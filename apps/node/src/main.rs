@@ -89,19 +89,30 @@ async fn main() -> anyhow::Result<()> {
             .spawn()
         });
 
-    let (ssr_reaper, serve_task) = if config.node.capabilities.serve {
+    let (artifact_sync, ssr_reaper, serve_task) = if config.node.capabilities.serve {
         let ssr_manager = Arc::new(serve::ssr::SsrManager::new(runtime, &config));
         let ssr_reaper = ssr_manager.clone().spawn_reaper();
         let serve_state = Arc::new(serve::ServeState::new(client.clone(), &config, ssr_manager));
-        (Some(ssr_reaper), Some(serve::spawn(serve_state, &config)))
+        let artifact_sync = serve::sync::spawn(
+            client.clone(),
+            std::path::PathBuf::from(&config.serve.artifact_cache_root),
+        );
+        (
+            Some(artifact_sync),
+            Some(ssr_reaper),
+            Some(serve::spawn(serve_state, &config)),
+        )
     } else {
-        (None, None)
+        (None, None, None)
     };
 
     wait_for_shutdown().await;
 
     if let Some(serve_task) = serve_task {
         serve_task.abort();
+    }
+    if let Some(artifact_sync) = artifact_sync {
+        artifact_sync.abort();
     }
     if let Some(ssr_reaper) = ssr_reaper {
         ssr_reaper.abort();

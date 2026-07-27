@@ -19,6 +19,12 @@ pub struct PackedArchive {
     pub file_count: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnpackedArchive {
+    pub file_count: usize,
+    pub unpacked_size_bytes: u64,
+}
+
 /// Packs `source_dir` into a zip at `destination`. Entry names are relative
 /// paths with forward slashes; symlinks and other non-regular files are
 /// skipped so archives never capture host files through links.
@@ -115,14 +121,14 @@ pub fn sanitize_entry_name(name: &str) -> anyhow::Result<PathBuf> {
 }
 
 /// Unpacks a zip archive into `destination`, refusing entries that would
-/// escape it. Returns the number of extracted files.
-pub fn unpack_zip(archive_path: &Path, destination: &Path) -> anyhow::Result<usize> {
+/// escape it. Returns the extracted file count and total unpacked bytes.
+pub fn unpack_zip(archive_path: &Path, destination: &Path) -> anyhow::Result<UnpackedArchive> {
     let file = File::open(archive_path)?;
     unpack_zip_reader(file, destination)
 }
 
 /// Unpacks zip bytes into `destination` with the same entry validation.
-pub fn unpack_zip_bytes(bytes: &[u8], destination: &Path) -> anyhow::Result<usize> {
+pub fn unpack_zip_bytes(bytes: &[u8], destination: &Path) -> anyhow::Result<UnpackedArchive> {
     unpack_zip_reader(std::io::Cursor::new(bytes), destination)
 }
 
@@ -149,7 +155,7 @@ const DEFAULT_UNPACK_LIMITS: UnpackLimits = UnpackLimits {
 fn unpack_zip_reader<R: Read + std::io::Seek>(
     reader: R,
     destination: &Path,
-) -> anyhow::Result<usize> {
+) -> anyhow::Result<UnpackedArchive> {
     unpack_zip_reader_with_limits(reader, destination, DEFAULT_UNPACK_LIMITS)
 }
 
@@ -157,7 +163,7 @@ fn unpack_zip_reader_with_limits<R: Read + std::io::Seek>(
     reader: R,
     destination: &Path,
     limits: UnpackLimits,
-) -> anyhow::Result<usize> {
+) -> anyhow::Result<UnpackedArchive> {
     let mut archive = ZipArchive::new(reader)?;
     if archive.len() > limits.entries {
         anyhow::bail!(
@@ -208,7 +214,10 @@ fn unpack_zip_reader_with_limits<R: Read + std::io::Seek>(
         extracted += 1;
     }
 
-    Ok(extracted)
+    Ok(UnpackedArchive {
+        file_count: extracted,
+        unpacked_size_bytes: total_written,
+    })
 }
 
 #[cfg(test)]
@@ -257,8 +266,12 @@ mod tests {
         assert_eq!(packed.checksum_sha256.len(), 64);
 
         let dest = temp_dir("dest");
-        let extracted = unpack_zip(&archive_path, &dest).unwrap();
-        assert_eq!(extracted, 3);
+        let unpacked = unpack_zip(&archive_path, &dest).unwrap();
+        assert_eq!(unpacked.file_count, 3);
+        assert_eq!(
+            unpacked.unpacked_size_bytes,
+            ("version = 1\n".len() + "<html></html>".len() + "console.log(1)".len()) as u64
+        );
         assert_eq!(
             std::fs::read_to_string(dest.join("static/index.html")).unwrap(),
             "<html></html>"

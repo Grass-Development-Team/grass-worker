@@ -23,8 +23,9 @@ use crate::{
     },
     infra::{
         database::entity::{
-            AuditEventResult, DeploymentEventKind, DeploymentReleaseStatus, DeploymentReviewStatus,
-            ReleaseReason, deployment, deployment_review, project, team, user,
+            AuditEventResult, DeploymentBuildStatus, DeploymentEventKind, DeploymentReleaseStatus,
+            DeploymentReviewStatus, DeploymentServeStatus, ReleaseReason, deployment,
+            deployment_review, project, team, user,
         },
         error::{AppError, ok_response},
         http::extractors::Session,
@@ -225,6 +226,16 @@ async fn decide(
             op,
             message: "project not found".to_owned(),
         })?;
+
+    if !matches!(deployment.build_status, DeploymentBuildStatus::Ready)
+        || !matches!(deployment.serve_status, DeploymentServeStatus::Ready)
+    {
+        return Err(AppError::Conflict {
+            op,
+            message: "only deployments with ready build and Serve artifact can be reviewed"
+                .to_owned(),
+        });
+    }
 
     let review = deployments::latest_pending_review(db, deployment.id)
         .await

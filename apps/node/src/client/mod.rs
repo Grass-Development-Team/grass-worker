@@ -3,14 +3,19 @@
 use std::{path::Path, time::Duration};
 
 use anyhow::Context;
+use futures_util::StreamExt;
 use grass_node_protocol::{
     AppendBuildLogRequest, AppendBuildLogResponse, ClaimRequest, ClaimResponse, HeartbeatRequest,
     HeartbeatResponse, ObserveSshHostKeyRequest, ObserveSshHostKeyResponse,
     RedeemGitCredentialRequest, RedeemGitCredentialResponse, RegisterRequest, RegisterResponse,
-    ResolveHostResponse, StageRequest, StageResponse, UploadArtifactResponse, artifact_headers,
+    ReportServeStatusRequest, ReportServeStatusResponse, ResolveHostResponse, ServeAssignment,
+    ServeAssignmentsResponse, StageRequest, StageResponse, UploadArtifactResponse,
+    artifact_headers,
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use sha2::{Digest, Sha256};
+use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
@@ -239,32 +244,118 @@ impl ControlApiClient {
         Self::unwrap_envelope(response, "deployment.upload_artifact").await
     }
 
-    /// Downloads the grass-output archive for serving; `None` when the
-    /// artifact does not exist.
-    #[allow(dead_code)] // Wired by the serve resolver in Milestone 10.
-    pub async fn download_artifact(&self, deployment_id: Uuid) -> anyhow::Result<Option<Vec<u8>>> {
+    pub async fn download_artifact_to(
+        &self,
+        assignment: &ServeAssignment,
+        destination: &Path,
+    ) -> anyhow::Result<()> {
         let response = self
             .http
-            .get(self.url(&format!("/deployments/{deployment_id}/artifact")))
+            .get(self.url(&format!(
+                "/deployments/{}/artifact",
+                assignment.deployment_id
+            )))
             .bearer_auth(&self.token)
             .timeout(Duration::from_secs(600))
             .send()
             .await
             .context("deployment.download_artifact: request failed")?;
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
         if !response.status().is_success() {
             anyhow::bail!(
                 "deployment.download_artifact: control api returned {}",
                 response.status()
             );
         }
-        let bytes = response
-            .bytes()
+        let header = |name: &'static str| -> anyhow::Result<&str> {
+            response
+                .headers()
+                .get(name)
+                .ok_or_else(|| anyhow::anyhow!("artifact response missing {name} header"))?
+                .to_str()
+                .with_context(|| format!("artifact response has invalid {name} header"))
+        };
+        let packed_size = header(artifact_headers::PACKED_SIZE_BYTES)?
+            .parse::<u64>()
+            .context("artifact response has invalid packed size")?;
+        let unpacked_size = header(artifact_headers::UNPACKED_SIZE_BYTES)?
+            .parse::<u64>()
+            .context("artifact response has invalid unpacked size")?;
+        let checksum = header(artifact_headers::CHECKSUM_SHA256)?.to_owned();
+        if packed_size != assignment.artifact.packed_size_bytes
+            || unpacked_size != assignment.artifact.unpacked_size_bytes
+            || checksum != assignment.artifact.checksum_sha256
+        {
+            anyhow::bail!("artifact response metadata does not match assignment");
+        }
+
+        if let Some(parent) = destination.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(destination)
+            .await?;
+        let mut stream = response.bytes_stream();
+        let result = async {
+            let mut actual_size = 0_u64;
+            let mut hasher = Sha256::new();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.context("artifact response body failed")?;
+                actual_size = actual_size
+                    .checked_add(chunk.len() as u64)
+                    .ok_or_else(|| anyhow::anyhow!("artifact response is too large"))?;
+                if actual_size > packed_size {
+                    anyhow::bail!("artifact response exceeds its packed size");
+                }
+                file.write_all(&chunk).await?;
+                hasher.update(&chunk);
+            }
+            file.flush().await?;
+            file.sync_all().await?;
+            if actual_size != packed_size {
+                anyhow::bail!(
+                    "artifact response size mismatch: expected {packed_size}, found {actual_size}"
+                );
+            }
+            let actual_checksum = hex::encode(hasher.finalize());
+            if actual_checksum != checksum {
+                anyhow::bail!(
+                    "artifact response checksum mismatch: expected {checksum}, found {actual_checksum}"
+                );
+            }
+            Ok(())
+        }
+        .await;
+        drop(file);
+        if result.is_err() {
+            let _ = tokio::fs::remove_file(destination).await;
+        }
+        result
+    }
+
+    pub async fn serve_assignments(&self) -> anyhow::Result<ServeAssignmentsResponse> {
+        let response = self
+            .http
+            .get(self.url("/serve/assignments"))
+            .bearer_auth(&self.token)
+            .send()
             .await
-            .context("deployment.download_artifact: failed to read body")?;
-        Ok(Some(bytes.to_vec()))
+            .context("serve.assignments: request failed")?;
+        Self::unwrap_envelope(response, "serve.assignments").await
+    }
+
+    pub async fn report_serve_status(
+        &self,
+        deployment_id: Uuid,
+        request: &ReportServeStatusRequest,
+    ) -> anyhow::Result<ReportServeStatusResponse> {
+        self.post_json(
+            &format!("/serve/deployments/{deployment_id}/status"),
+            request,
+            "serve.report_status",
+        )
+        .await
     }
 
     #[allow(dead_code)] // Wired by the serve resolver in Milestone 10.
@@ -288,6 +379,12 @@ impl ControlApiClient {
 
 #[cfg(test)]
 mod tests {
+    use axum::{Router, body::Body, response::Response, routing::get};
+    use grass_node_protocol::{
+        ServeArtifact, ServeAssignment, ServeAssignmentStatus, ServeResources,
+    };
+    use sha2::{Digest, Sha256};
+
     use super::*;
 
     #[tokio::test]
@@ -324,5 +421,113 @@ mod tests {
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         );
         tokio::fs::remove_file(path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn artifact_download_streams_and_verifies_metadata() {
+        let body = b"zip-bytes";
+        let checksum = hex::encode(Sha256::digest(body));
+        let assignment = ServeAssignment {
+            deployment_id: Uuid::now_v7(),
+            project_id: Uuid::now_v7(),
+            runtime_kind: "static".to_owned(),
+            status: ServeAssignmentStatus::Pending,
+            artifact: ServeArtifact {
+                artifact_id: Uuid::now_v7(),
+                checksum_sha256: checksum.clone(),
+                packed_size_bytes: body.len() as u64,
+                unpacked_size_bytes: 99,
+            },
+            resources: ServeResources {
+                cpu_millicores: 50,
+                memory_mb: 64,
+                disk_mb: 256,
+            },
+        };
+        let response_checksum = checksum.clone();
+        let app = Router::new().route(
+            "/api/v1/internal/deployments/{deployment_id}/artifact",
+            get(move || {
+                let checksum = response_checksum.clone();
+                async move {
+                    Response::builder()
+                        .header(artifact_headers::PACKED_SIZE_BYTES, "9")
+                        .header(artifact_headers::UNPACKED_SIZE_BYTES, "99")
+                        .header(artifact_headers::CHECKSUM_SHA256, checksum)
+                        .body(Body::from(body.as_slice()))
+                        .unwrap()
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = ControlApiClient::new(&format!("http://{address}"), "node-token").unwrap();
+        let destination =
+            std::env::temp_dir().join(format!("grass-download-{}.zip", Uuid::now_v7().simple()));
+
+        client
+            .download_artifact_to(&assignment, &destination)
+            .await
+            .unwrap();
+
+        assert_eq!(tokio::fs::read(&destination).await.unwrap(), body);
+        tokio::fs::remove_file(destination).await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn serve_assignment_and_status_calls_use_internal_protocol() {
+        use grass_node_protocol::{
+            ReportServeStatusRequest, ReportServeStatusResponse, ReportedServeStatus,
+            ServeAssignmentsResponse,
+        };
+
+        let deployment_id = Uuid::now_v7();
+        let app = Router::new()
+            .route(
+                "/api/v1/internal/serve/assignments",
+                get(|| async {
+                    axum::Json(serde_json::json!({
+                        "code": 200,
+                        "message": "OK",
+                        "data": { "assignments": [] }
+                    }))
+                }),
+            )
+            .route(
+                "/api/v1/internal/serve/deployments/{deployment_id}/status",
+                axum::routing::post(
+                    |axum::Json(report): axum::Json<ReportServeStatusRequest>| async move {
+                        assert_eq!(report.status, ReportedServeStatus::Syncing);
+                        axum::Json(serde_json::json!({
+                            "code": 200,
+                            "message": "OK",
+                            "data": { "acknowledged": true }
+                        }))
+                    },
+                ),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = ControlApiClient::new(&format!("http://{address}"), "node-token").unwrap();
+
+        let assignments: ServeAssignmentsResponse = client.serve_assignments().await.unwrap();
+        let status: ReportServeStatusResponse = client
+            .report_serve_status(
+                deployment_id,
+                &ReportServeStatusRequest {
+                    status: ReportedServeStatus::Syncing,
+                    failure_code: None,
+                    failure_message: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(assignments.assignments.is_empty());
+        assert!(status.acknowledged);
+        server.abort();
     }
 }

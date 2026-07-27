@@ -531,10 +531,6 @@ pub async fn stage(
                 {
                     let _ = record_build_log_artifact(db, &updated).await;
                 }
-
-                if matches!(target, DeploymentBuildStatus::Ready) {
-                    auto_activate_if_allowed(db, updated).await?;
-                }
             }
 
             StageResponse {
@@ -582,7 +578,7 @@ async fn record_build_log_artifact(
 /// Auto-activation after a successful build, controlled by the release
 /// review policy: `auto` environments activate immediately, `manual`
 /// environments wait for review and promote.
-async fn auto_activate_if_allowed(
+pub(crate) async fn auto_activate_if_allowed(
     db: &sea_orm::DatabaseConnection,
     deployment: deployment::Model,
 ) -> Result<(), AppError> {

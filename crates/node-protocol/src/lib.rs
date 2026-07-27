@@ -253,8 +253,18 @@ pub struct ServeAssignment {
     pub deployment_id: Uuid,
     pub project_id: Uuid,
     pub runtime_kind: String,
+    pub status: ServeAssignmentStatus,
     pub artifact: ServeArtifact,
     pub resources: ServeResources,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServeAssignmentStatus {
+    Pending,
+    Syncing,
+    Ready,
+    Failed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -391,6 +401,8 @@ mod tests {
 
         let status: ReportedServeStatus = serde_json::from_str("\"syncing\"").unwrap();
         assert_eq!(status, ReportedServeStatus::Syncing);
+        let assignment_status: ServeAssignmentStatus = serde_json::from_str("\"pending\"").unwrap();
+        assert_eq!(assignment_status, ServeAssignmentStatus::Pending);
 
         let route = ServeRoute {
             host: "app.example.com".to_owned(),

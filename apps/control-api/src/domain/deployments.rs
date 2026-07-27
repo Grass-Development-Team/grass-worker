@@ -79,6 +79,8 @@ pub enum DeploymentStateError {
     InvalidServeTransition { from: String, to: String },
     #[error("only ready deployments can enter the release flow")]
     BuildNotReady,
+    #[error("only deployments with a ready Serve artifact can enter the release flow")]
+    ServeNotReady,
     #[error(transparent)]
     Database(#[from] sea_orm::DbErr),
 }
@@ -116,7 +118,7 @@ pub fn can_transition_serve(from: &DeploymentServeStatus, to: &DeploymentServeSt
     use DeploymentServeStatus as S;
     matches!(
         (from, to),
-        (S::Pending, S::Syncing) | (S::Syncing, S::Ready | S::Failed) | (S::Failed, S::Syncing)
+        (S::Pending | S::Failed | S::Ready, S::Syncing) | (S::Syncing, S::Ready | S::Failed)
     )
 }
 
@@ -127,6 +129,30 @@ pub fn serve_status_value(status: &DeploymentServeStatus) -> &'static str {
         DeploymentServeStatus::Ready => "ready",
         DeploymentServeStatus::Failed => "failed",
     }
+}
+
+fn validate_release_readiness(
+    from: &DeploymentReleaseStatus,
+    to: &DeploymentReleaseStatus,
+    build_status: &DeploymentBuildStatus,
+    serve_status: &DeploymentServeStatus,
+) -> Result<(), DeploymentStateError> {
+    if matches!(
+        (from, to),
+        (
+            DeploymentReleaseStatus::Active,
+            DeploymentReleaseStatus::Approved
+        )
+    ) {
+        return Ok(());
+    }
+    if !matches!(build_status, DeploymentBuildStatus::Ready) {
+        return Err(DeploymentStateError::BuildNotReady);
+    }
+    if !matches!(serve_status, DeploymentServeStatus::Ready) {
+        return Err(DeploymentStateError::ServeNotReady);
+    }
+    Ok(())
 }
 
 pub fn runtime_serve_resources(runtime: &ProjectRuntime) -> ServeResources {
@@ -518,14 +544,12 @@ pub async fn transition_release<C: ConnectionTrait>(
             to: release_status_value(&to).to_owned(),
         });
     }
-    if !matches!(deployment.build_status, DeploymentBuildStatus::Ready)
-        && !matches!(to, DeploymentReleaseStatus::Approved)
-    {
-        // Only ready builds may move through the release flow. The exception
-        // is demotion of a previously active deployment, which stays ready
-        // by definition.
-        return Err(DeploymentStateError::BuildNotReady);
-    }
+    validate_release_readiness(
+        &deployment.release_status,
+        &to,
+        &deployment.build_status,
+        &deployment.serve_status,
+    )?;
 
     let deployment_id = deployment.id;
     let to_value = release_status_value(&to);
@@ -555,9 +579,12 @@ pub async fn activate<C: ConnectionTrait>(
     reason: ReleaseReason,
     actor_user_id: Option<Uuid>,
 ) -> Result<deployment::Model, DeploymentStateError> {
-    if !matches!(target.build_status, DeploymentBuildStatus::Ready) {
-        return Err(DeploymentStateError::BuildNotReady);
-    }
+    validate_release_readiness(
+        &target.release_status,
+        &DeploymentReleaseStatus::Active,
+        &target.build_status,
+        &target.serve_status,
+    )?;
 
     let previous = deployment::Entity::find()
         .filter(deployment::Column::ProjectId.eq(target.project_id))
@@ -826,6 +853,26 @@ mod tests {
     }
 
     #[test]
+    fn release_readiness_requires_build_and_serve() {
+        use DeploymentBuildStatus as B;
+        use DeploymentReleaseStatus as R;
+        use DeploymentServeStatus as S;
+
+        assert!(validate_release_readiness(&R::Draft, &R::Active, &B::Ready, &S::Ready).is_ok());
+        assert!(matches!(
+            validate_release_readiness(&R::Draft, &R::Active, &B::Ready, &S::Pending),
+            Err(DeploymentStateError::ServeNotReady)
+        ));
+        assert!(matches!(
+            validate_release_readiness(&R::Draft, &R::Active, &B::Building, &S::Ready),
+            Err(DeploymentStateError::BuildNotReady)
+        ));
+        assert!(
+            validate_release_readiness(&R::Active, &R::Approved, &B::Ready, &S::Syncing).is_ok()
+        );
+    }
+
+    #[test]
     fn serve_transitions_require_sync_and_allow_failed_recovery() {
         use DeploymentServeStatus as S;
 
@@ -833,9 +880,9 @@ mod tests {
         assert!(can_transition_serve(&S::Syncing, &S::Ready));
         assert!(can_transition_serve(&S::Syncing, &S::Failed));
         assert!(can_transition_serve(&S::Failed, &S::Syncing));
+        assert!(can_transition_serve(&S::Ready, &S::Syncing));
         assert!(!can_transition_serve(&S::Pending, &S::Ready));
         assert!(!can_transition_serve(&S::Failed, &S::Ready));
-        assert!(!can_transition_serve(&S::Ready, &S::Syncing));
     }
 
     #[test]

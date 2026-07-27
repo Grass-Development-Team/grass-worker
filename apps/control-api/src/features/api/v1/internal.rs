@@ -42,6 +42,11 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
             "/deployments/{deployment_id}/ssh-host-key",
             post(deployments::observe_ssh_host_key),
         )
+        .route("/serve/assignments", get(serve::assignments))
+        .route(
+            "/serve/deployments/{deployment_id}/status",
+            post(serve::report_status),
+        )
         .route("/serve/resolve-host", get(serve::resolve_host))
         .route("/log-stream", get(log_stream::ingest))
         .layer(middleware::from_fn_with_state(

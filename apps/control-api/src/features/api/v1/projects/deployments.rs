@@ -29,8 +29,8 @@ use crate::{
     infra::{
         database::entity::{
             AuditEventResult, DeploymentBuildStatus, DeploymentEnvironment,
-            DeploymentReleaseStatus, HostBindingEnvironment, HostBindingStatus, ReleaseReason,
-            deployment, node, project_host_binding, user,
+            DeploymentReleaseStatus, DeploymentServeStatus, HostBindingEnvironment,
+            HostBindingStatus, ReleaseReason, deployment, node, project_host_binding, user,
         },
         error::{AppError, ok_response},
         http::extractors::Session,
@@ -44,7 +44,8 @@ pub(crate) fn map_state_error(error: DeploymentStateError, op: &'static str) -> 
         DeploymentStateError::InvalidBuildTransition { .. }
         | DeploymentStateError::InvalidReleaseTransition { .. }
         | DeploymentStateError::InvalidServeTransition { .. }
-        | DeploymentStateError::BuildNotReady => AppError::Conflict {
+        | DeploymentStateError::BuildNotReady
+        | DeploymentStateError::ServeNotReady => AppError::Conflict {
             op,
             message: error.to_string(),
         },
@@ -1112,10 +1113,13 @@ async fn activate_deployment(
     let db = super::database(&state, op)?;
     let deployment = load_deployment(db, &access, deployment_id, op).await?;
 
-    if !matches!(deployment.build_status, DeploymentBuildStatus::Ready) {
+    if !matches!(deployment.build_status, DeploymentBuildStatus::Ready)
+        || !matches!(deployment.serve_status, DeploymentServeStatus::Ready)
+    {
         return Err(AppError::Conflict {
             op,
-            message: "only ready deployments can be activated".to_owned(),
+            message: "only deployments with ready build and Serve artifact can be activated"
+                .to_owned(),
         });
     }
     if matches!(deployment.release_status, DeploymentReleaseStatus::Active) {

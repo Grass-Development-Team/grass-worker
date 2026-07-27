@@ -8,6 +8,7 @@
 //! service container (started on demand by [`ssr::SsrManager`]).
 
 pub mod ssr;
+pub mod sync;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -444,30 +445,14 @@ async fn resolve_host(state: &ServeState, host: &str) -> anyhow::Result<Option<R
     Ok(target)
 }
 
-/// Ensures the deployment artifact is unpacked locally and returns the
-/// serve target described by its manifest.
+/// Loads the already staged deployment artifact and returns the serve target
+/// described by its manifest.
 async fn ensure_artifact(
     state: &ServeState,
     deployment_id: Uuid,
 ) -> anyhow::Result<ResolvedTarget> {
-    let deployment_dir = state.cache_root.join(deployment_id.to_string());
+    let deployment_dir = sync::staged_artifact_path(&state.cache_root, deployment_id)?;
     let manifest_path = deployment_dir.join("output.toml");
-
-    if !manifest_path.is_file() {
-        let bytes = state
-            .client
-            .download_artifact(deployment_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("artifact is not available yet"))?;
-        let unpack_dir = deployment_dir.clone();
-        tokio::task::spawn_blocking(move || {
-            if unpack_dir.exists() {
-                let _ = std::fs::remove_dir_all(&unpack_dir);
-            }
-            grass_archive::unpack_zip_bytes(&bytes, &unpack_dir)
-        })
-        .await??;
-    }
 
     let manifest_content = tokio::fs::read_to_string(&manifest_path).await?;
     let manifest = manifest::parse_manifest(&manifest_content)
