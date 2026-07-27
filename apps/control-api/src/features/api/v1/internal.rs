@@ -47,6 +47,7 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
             "/serve/deployments/{deployment_id}/status",
             post(serve::report_status),
         )
+        .route("/serve/routes", get(serve::routes))
         .route("/serve/resolve-host", get(serve::resolve_host))
         .route("/log-stream", get(log_stream::ingest))
         .layer(middleware::from_fn_with_state(

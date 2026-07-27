@@ -8,9 +8,9 @@ use grass_node_protocol::{
     AppendBuildLogRequest, AppendBuildLogResponse, ClaimRequest, ClaimResponse, HeartbeatRequest,
     HeartbeatResponse, ObserveSshHostKeyRequest, ObserveSshHostKeyResponse,
     RedeemGitCredentialRequest, RedeemGitCredentialResponse, RegisterRequest, RegisterResponse,
-    ReportServeStatusRequest, ReportServeStatusResponse, ResolveHostResponse, ServeAssignment,
-    ServeAssignmentsResponse, StageRequest, StageResponse, UploadArtifactResponse,
-    artifact_headers,
+    ReportServeStatusRequest, ReportServeStatusResponse, ResolveHostResponse,
+    RouteSnapshotResponse, ServeAssignment, ServeAssignmentsResponse, StageRequest, StageResponse,
+    UploadArtifactResponse, artifact_headers,
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -358,6 +358,17 @@ impl ControlApiClient {
         .await
     }
 
+    pub async fn route_snapshot(&self) -> anyhow::Result<RouteSnapshotResponse> {
+        let response = self
+            .http
+            .get(self.url("/serve/routes"))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .context("serve.routes: request failed")?;
+        Self::unwrap_envelope(response, "serve.routes").await
+    }
+
     #[allow(dead_code)] // Wired by the serve resolver in Milestone 10.
     pub async fn resolve_host(&self, host: &str) -> anyhow::Result<Option<ResolveHostResponse>> {
         let response = self
@@ -480,7 +491,7 @@ mod tests {
     async fn serve_assignment_and_status_calls_use_internal_protocol() {
         use grass_node_protocol::{
             ReportServeStatusRequest, ReportServeStatusResponse, ReportedServeStatus,
-            ServeAssignmentsResponse,
+            RouteSnapshotResponse, ServeAssignmentsResponse,
         };
 
         let deployment_id = Uuid::now_v7();
@@ -507,6 +518,16 @@ mod tests {
                         }))
                     },
                 ),
+            )
+            .route(
+                "/api/v1/internal/serve/routes",
+                get(|| async {
+                    axum::Json(serde_json::json!({
+                        "code": 200,
+                        "message": "OK",
+                        "data": { "revision": "abc123", "routes": [] }
+                    }))
+                }),
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -525,9 +546,12 @@ mod tests {
             )
             .await
             .unwrap();
+        let routes: RouteSnapshotResponse = client.route_snapshot().await.unwrap();
 
         assert!(assignments.assignments.is_empty());
         assert!(status.acknowledged);
+        assert_eq!(routes.revision, "abc123");
+        assert!(routes.routes.is_empty());
         server.abort();
     }
 }

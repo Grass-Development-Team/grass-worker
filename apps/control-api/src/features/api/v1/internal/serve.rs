@@ -7,11 +7,12 @@ use axum::{
 };
 use grass_node_protocol::{
     ReportServeStatusRequest, ReportServeStatusResponse, ReportedServeStatus, ResolveHostResponse,
-    ServeArtifact, ServeAssignment, ServeAssignmentStatus, ServeAssignmentsResponse,
-    ServeResources,
+    RouteSnapshotResponse, ServeArtifact, ServeAssignment, ServeAssignmentStatus,
+    ServeAssignmentsResponse, ServeResources, ServeRoute,
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
@@ -19,8 +20,9 @@ use crate::{
     infra::{
         database::entity::{
             DeploymentArtifactKind, DeploymentBuildStatus, DeploymentEnvironment,
-            DeploymentServeStatus, HostBindingEnvironment, HostBindingStatus, deployment,
-            deployment_artifact,
+            DeploymentReleaseStatus, DeploymentServeStatus, HostBindingEnvironment,
+            HostBindingStatus, NodeStatus, deployment, deployment_artifact, node,
+            project_host_binding,
         },
         error::{AppError, ok_response},
         http::middlewares::node_auth::AuthenticatedNode,
@@ -58,6 +60,27 @@ fn validate_status_report(report: &ReportServeStatusRequest) -> Result<(), &'sta
         return Err("failure_code must be a lowercase identifier of at most 64 bytes");
     }
     Ok(())
+}
+
+fn route_revision(routes: &[ServeRoute]) -> String {
+    let mut canonical = routes.iter().collect::<Vec<_>>();
+    canonical.sort_by(|left, right| {
+        (
+            &left.host,
+            left.deployment_id,
+            left.target_node_id,
+            &left.target_base_url,
+        )
+            .cmp(&(
+                &right.host,
+                right.deployment_id,
+                right.target_node_id,
+                &right.target_base_url,
+            ))
+    });
+    hex::encode(Sha256::digest(
+        serde_json::to_vec(&canonical).expect("Serve routes always serialize"),
+    ))
 }
 
 fn ensure_serve_node(
@@ -219,6 +242,129 @@ pub async fn report_status(
     }))
 }
 
+/// GET /api/v1/internal/serve/routes
+pub async fn routes(
+    State(state): State<ControlApiState>,
+    Extension(AuthenticatedNode(requesting_node)): Extension<AuthenticatedNode>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "internal.serve.routes";
+    ensure_serve_node(&requesting_node, OP)?;
+    let db = super::database(&state, OP)?;
+    let deployments = deployment::Entity::find()
+        .filter(deployment::Column::BuildStatus.eq(DeploymentBuildStatus::Ready))
+        .filter(deployment::Column::ServeStatus.eq(DeploymentServeStatus::Ready))
+        .filter(deployment::Column::DeletedAt.is_null())
+        .filter(
+            Condition::any()
+                .add(deployment::Column::PreviewHost.is_not_null())
+                .add(deployment::Column::ReleaseStatus.eq(DeploymentReleaseStatus::Active)),
+        )
+        .all(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    if deployments.is_empty() {
+        return Ok(ok_response(RouteSnapshotResponse {
+            revision: route_revision(&[]),
+            routes: Vec::new(),
+        }));
+    }
+
+    let node_ids = deployments
+        .iter()
+        .filter_map(|deployment| deployment.serve_node_id)
+        .collect::<Vec<_>>();
+    let nodes = node::Entity::find()
+        .filter(node::Column::Id.is_in(node_ids))
+        .filter(node::Column::ServeEnabled.eq(true))
+        .filter(node::Column::Status.ne(NodeStatus::Disabled))
+        .filter(node::Column::DeletedAt.is_null())
+        .all(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?
+        .into_iter()
+        .map(|node| (node.id, node))
+        .collect::<HashMap<_, _>>();
+    let production_project_ids = deployments
+        .iter()
+        .filter(|deployment| {
+            matches!(deployment.environment, DeploymentEnvironment::Production)
+                && matches!(deployment.release_status, DeploymentReleaseStatus::Active)
+        })
+        .map(|deployment| deployment.project_id)
+        .collect::<Vec<_>>();
+    let bindings = project_host_binding::Entity::find()
+        .filter(project_host_binding::Column::ProjectId.is_in(production_project_ids))
+        .filter(project_host_binding::Column::Status.eq(HostBindingStatus::Active))
+        .filter(project_host_binding::Column::Environment.ne(HostBindingEnvironment::Preview))
+        .filter(project_host_binding::Column::DeletedAt.is_null())
+        .all(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let mut hosts_by_project = HashMap::<Uuid, Vec<String>>::new();
+    for binding in bindings {
+        hosts_by_project
+            .entry(binding.project_id)
+            .or_default()
+            .push(binding.host);
+    }
+
+    let mut routes = Vec::new();
+    for deployment in deployments {
+        let Some(node_id) = deployment.serve_node_id else {
+            continue;
+        };
+        let Some(target_node) = nodes.get(&node_id) else {
+            continue;
+        };
+        let target_base_url = target_node
+            .base_url
+            .clone()
+            .ok_or_else(|| AppError::Internal {
+                op: OP,
+                message: "assigned Serve Node has no public base URL".to_owned(),
+            })?;
+        let metadata_error = || AppError::Internal {
+            op: OP,
+            message: "assigned deployment has invalid Serve resource metadata".to_owned(),
+        };
+        let resources = ServeResources {
+            cpu_millicores: u64::try_from(deployment.serve_cpu_millicores)
+                .map_err(|_| metadata_error())?,
+            memory_mb: u64::try_from(deployment.serve_memory_mb).map_err(|_| metadata_error())?,
+            disk_mb: u64::try_from(deployment.serve_disk_mb).map_err(|_| metadata_error())?,
+        };
+        let mut deployment_hosts = deployment.preview_host.into_iter().collect::<Vec<_>>();
+        if matches!(deployment.environment, DeploymentEnvironment::Production)
+            && matches!(deployment.release_status, DeploymentReleaseStatus::Active)
+        {
+            deployment_hosts.extend(
+                hosts_by_project
+                    .remove(&deployment.project_id)
+                    .unwrap_or_default(),
+            );
+        }
+        routes.extend(deployment_hosts.into_iter().map(|host| ServeRoute {
+            host,
+            deployment_id: deployment.id,
+            target_node_id: node_id,
+            target_base_url: target_base_url.clone(),
+            resources,
+        }));
+    }
+    routes.sort_by(|left, right| left.host.cmp(&right.host));
+    let revision = route_revision(&routes);
+    Ok(ok_response(RouteSnapshotResponse { revision, routes }))
+}
+
 async fn artifact_available(
     db: &sea_orm::DatabaseConnection,
     deployment_id: Uuid,
@@ -320,9 +466,12 @@ pub async fn resolve_host(
 
 #[cfg(test)]
 mod tests {
-    use grass_node_protocol::{ReportServeStatusRequest, ReportedServeStatus};
+    use grass_node_protocol::{
+        ReportServeStatusRequest, ReportedServeStatus, ServeResources, ServeRoute,
+    };
+    use uuid::Uuid;
 
-    use super::validate_status_report;
+    use super::{route_revision, validate_status_report};
 
     #[test]
     fn serve_failure_reports_require_bounded_stable_details() {
@@ -367,5 +516,34 @@ mod tests {
             validate_status_report(&report).unwrap_err(),
             "failure details are only allowed for failed status"
         );
+    }
+
+    #[test]
+    fn route_revision_is_order_independent_and_content_addressed() {
+        let resources = ServeResources {
+            cpu_millicores: 50,
+            memory_mb: 64,
+            disk_mb: 256,
+        };
+        let first = ServeRoute {
+            host: "a.example.com".to_owned(),
+            deployment_id: Uuid::now_v7(),
+            target_node_id: Uuid::now_v7(),
+            target_base_url: "http://node-a:8080".to_owned(),
+            resources,
+        };
+        let second = ServeRoute {
+            host: "b.example.com".to_owned(),
+            deployment_id: Uuid::now_v7(),
+            target_node_id: Uuid::now_v7(),
+            target_base_url: "http://node-b:8080".to_owned(),
+            resources,
+        };
+
+        let original = route_revision(&[first.clone(), second.clone()]);
+        assert_eq!(original, route_revision(&[second.clone(), first.clone()]));
+        let mut changed = second;
+        changed.target_base_url = "http://node-b:9090".to_owned();
+        assert_ne!(original, route_revision(&[first, changed]));
     }
 }

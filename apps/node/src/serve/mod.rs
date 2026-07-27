@@ -7,6 +7,7 @@
 //! normalization; SSR outputs are reverse-proxied to the deployment's
 //! service container (started on demand by [`ssr::SsrManager`]).
 
+pub mod routes;
 pub mod ssr;
 pub mod sync;
 
@@ -14,7 +15,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::{
     body::Body,
@@ -26,7 +27,7 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::{client::ControlApiClient, config::NodeConfig, output::manifest};
+use crate::{config::NodeConfig, output::manifest};
 
 #[derive(Clone)]
 enum ResolvedTarget {
@@ -42,16 +43,11 @@ enum ResolvedTarget {
     },
 }
 
-struct CachedResolution {
-    target: Option<ResolvedTarget>,
-    fetched_at: Instant,
-}
-
 pub struct ServeState {
-    client: ControlApiClient,
+    node_id: Uuid,
+    routes: Arc<routes::RouteTable>,
     cache_root: PathBuf,
-    metadata_ttl: Duration,
-    resolutions: Mutex<HashMap<String, CachedResolution>>,
+    targets: Mutex<HashMap<Uuid, ResolvedTarget>>,
     ssr: Arc<ssr::SsrManager>,
     /// Proxy client for SSR upstreams: connect timeout only, so streamed
     /// responses (SSE, long polls) are never cut off by a total timeout.
@@ -59,12 +55,17 @@ pub struct ServeState {
 }
 
 impl ServeState {
-    pub fn new(client: ControlApiClient, config: &NodeConfig, ssr: Arc<ssr::SsrManager>) -> Self {
+    pub fn new(
+        node_id: Uuid,
+        routes: Arc<routes::RouteTable>,
+        config: &NodeConfig,
+        ssr: Arc<ssr::SsrManager>,
+    ) -> Self {
         Self {
-            client,
+            node_id,
+            routes,
             cache_root: PathBuf::from(&config.serve.artifact_cache_root),
-            metadata_ttl: Duration::from_secs(config.serve.metadata_cache_ttl_seconds.max(1)),
-            resolutions: Mutex::new(HashMap::new()),
+            targets: Mutex::new(HashMap::new()),
             ssr,
             proxy: reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(5))
@@ -408,41 +409,28 @@ fn error_page(status: StatusCode, message: &str) -> Response {
 }
 
 async fn resolve_host(state: &ServeState, host: &str) -> anyhow::Result<Option<ResolvedTarget>> {
-    {
-        let cache = state.resolutions.lock().await;
-        if let Some(entry) = cache.get(host)
-            && entry.fetched_at.elapsed() < state.metadata_ttl
-        {
-            return Ok(entry.target.clone());
-        }
-    }
-
-    let resolved = state.client.resolve_host(host).await?;
-    let target = match resolved {
-        Some(resolution) => match ensure_artifact(state, resolution.deployment_id).await {
-            Ok(target) => Some(target),
-            Err(error) => {
-                warn!(
-                    operation = "node.serve.artifact",
-                    %error,
-                    deployment_id = %resolution.deployment_id,
-                    "artifact preparation failed"
-                );
-                None
-            }
-        },
-        None => None,
+    let Some(route) = state.routes.lookup(host).await else {
+        return Ok(None);
     };
-
-    let mut cache = state.resolutions.lock().await;
-    cache.insert(
-        host.to_owned(),
-        CachedResolution {
-            target: target.clone(),
-            fetched_at: Instant::now(),
-        },
-    );
-    Ok(target)
+    if route.target_node_id != state.node_id {
+        return Ok(None);
+    }
+    if let Some(target) = state
+        .targets
+        .lock()
+        .await
+        .get(&route.deployment_id)
+        .cloned()
+    {
+        return Ok(Some(target));
+    }
+    let target = ensure_artifact(state, route.deployment_id).await?;
+    state
+        .targets
+        .lock()
+        .await
+        .insert(route.deployment_id, target.clone());
+    Ok(Some(target))
 }
 
 /// Loads the already staged deployment artifact and returns the serve target
