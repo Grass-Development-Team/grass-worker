@@ -13,52 +13,6 @@
 
 # 第二阶段
 
-## P0：Git 源码访问、存量数据与回归保护
-
-父跟踪 Issue：`#89`
-
-### S2-P0.1 Git transport 与私有源码凭据
-
-跟踪 Issue：`#90`
-
-- 通过统一 Git Source Adapter 支持 HTTP、HTTPS、SSH、scp-like SSH 和 `git://` 仓库地址；
-- 所有 transport 支持显式任意端口；
-- HTTP 和 `git://` 仅允许匿名公开仓库；
-- HTTPS 支持 username + PAT、部署令牌或服务端仍支持的密码；
-- SSH 支持私钥和可选 passphrase，不支持 SSH 密码登录；
-- 支持团队级凭据和项目专属凭据覆盖；
-- 只有团队 owner/admin 可以创建、轮换、撤销和绑定凭据；
-- 凭据按 scheme、host、port 约束，不得写入仓库 URL；
-- 凭据 payload 使用独立 master key 做版本化认证加密；
-- Deployment 创建时固定凭据版本，普通轮换不影响已排队 Deployment，主动撤销立即阻止旧版本使用；
-- Node 通过绑定 node、deployment 和 credential version 的一次性短期 lease 获取凭据；
-- SSH host key 首次使用时展示指纹并要求 owner/admin 明确批准，变化后必须重新批准；
-- 默认只允许全球可路由公网目标，非公网目标需要 Node 管理员按 host/IP + port 配置精确例外；
-- 所有 URL、DNS/IP、网络、凭据和 host-key 检查必须由 Control API 与 Node 分层执行；
-- 凭据不得出现在 URL、API 响应、Deployment 快照、日志或审计 metadata 中；
-- Console 提供团队凭据管理、项目绑定、host-key 审批和稳定错误提示。
-
-### S2-P0.2 repository_url 存量迁移与文档整合
-
-跟踪 Issue：`#91`
-
-- 保留合法 HTTP、HTTPS、SSH、scp-like SSH 和 `git://` 存量地址；
-- 清理 `file://`、`ext://`、本地路径和其他危险/不支持地址；
-- 在 `source_config` 中保存安全的迁移原因，Console 不回显危险原值；
-- 迁移必须幂等，并覆盖实际 PostgreSQL schema 验证；
-- 未完成内容只在本文档维护；
-- 仓库协议、版本与范围规则只引用本文档。
-
-### S2-P0.3 安全修复回归保护
-
-跟踪 Issue：`#92`
-
-- 覆盖 cancel 路径只释放一次并发构建槽；
-- 覆盖没有 per-build timeout 时回退到 Node `command_timeout_seconds`；
-- 覆盖 archive 解压条目数、单条目字节数和总字节数上限；
-- 增加 Git URL、网络策略、凭据加密、租约、权限、host-key 和迁移回归测试；
-- 完成后运行针对性测试和 `just quality`。
-
 ## P1：测试与工程质量
 
 - 补齐 Console 测试：setup、login、team switcher、deployment list/detail、quota、protected route；
