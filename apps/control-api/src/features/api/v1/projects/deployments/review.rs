@@ -3,6 +3,7 @@ use axum::{
     extract::{Path, State},
     response::IntoResponse,
 };
+use sea_orm::TransactionTrait;
 use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
@@ -95,27 +96,34 @@ pub async fn request(
         });
     }
 
-    let deployment = deployments::transition_release(
-        db,
-        deployment,
-        DeploymentReleaseStatus::PendingReview,
-        json!({ "requested_by": session.data.user_id }),
-    )
-    .await
-    .map_err(|error| map_state_error(error, OP))?;
-
-    let review = deployments::create_review(db, deployment.id)
+    let transaction = db
+        .begin()
         .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    deployments::append_event(
-        db,
-        deployment.id,
-        DeploymentEventKind::Review,
-        "review requested",
-        json!({ "review_id": review.id }),
-    )
-    .await
-    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let deployment = deployments::get_by_id_for_update(&transaction, deployment.id)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "deployment not found".to_owned(),
+        })?;
+    let (deployment, review) =
+        deployments::request_review(&transaction, deployment, Some(session.data.user_id))
+            .await
+            .map_err(|error| map_state_error(error, OP))?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     record_review_audit(
         db,
         session.data.user_id,

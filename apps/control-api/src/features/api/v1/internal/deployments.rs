@@ -19,15 +19,14 @@ use uuid::Uuid;
 use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
-        deployments::{self, BuildTransition, ReviewMode},
+        deployments::{self, BuildTransition, ReadyReleaseAction},
         quotas::QuotaDimension,
         source_credentials, ssh_host_keys, teams,
     },
     infra::{
         database::entity::{
-            AuditEventResult, DeploymentArtifactKind, DeploymentBuildStatus,
-            DeploymentReleaseStatus, ProjectRuntime, ReleaseReason, deployment,
-            deployment_artifact, node, team,
+            AuditEventResult, DeploymentArtifactKind, DeploymentBuildStatus, ProjectRuntime,
+            ReleaseReason, deployment, deployment_artifact, node, team,
         },
         error::{AppError, ok_response},
         http::middlewares::node_auth::AuthenticatedNode,
@@ -438,21 +437,26 @@ pub async fn stage(
 
             let was_started = matches!(status, ReportedStatus::Building)
                 && !matches!(deployment.build_status, DeploymentBuildStatus::Building);
-            let updated = deployments::transition_build(
-                db,
-                deployment,
-                BuildTransition {
-                    to: target.clone(),
-                    stage: body.stage.clone(),
-                    failure_code: body.failure_code.clone(),
-                    failure_message: body.failure_message.clone(),
-                    node_id: Some(node.id),
-                },
-            )
-            .await
-            .map_err(|error| {
-                crate::features::api::v1::projects::deployments::map_state_error(error, OP)
-            })?;
+            let transition = BuildTransition {
+                to: target.clone(),
+                stage: body.stage.clone(),
+                failure_code: body.failure_code.clone(),
+                failure_message: body.failure_message.clone(),
+                node_id: Some(node.id),
+            };
+            let (updated, build_transitioned, ready_action) =
+                if matches!(target, DeploymentBuildStatus::Ready) {
+                    finalize_ready(db, deployment, transition).await?
+                } else {
+                    let updated = deployments::transition_build(db, deployment, transition)
+                        .await
+                        .map_err(|error| {
+                            crate::features::api::v1::projects::deployments::map_state_error(
+                                error, OP,
+                            )
+                        })?;
+                    (updated, true, ReadyReleaseAction::None)
+                };
 
             if was_started {
                 let _ = audits::create_audit_event(
@@ -471,7 +475,7 @@ pub async fn stage(
                 .await;
             }
 
-            if is_terminal {
+            if is_terminal && build_transitioned {
                 quota.release_build_slot_once(team_id, updated.id).await;
                 if let Some(minutes) = body.build_minutes.filter(|minutes| *minutes > 0) {
                     quota
@@ -519,10 +523,23 @@ pub async fn stage(
                 {
                     let _ = record_build_log_artifact(db, &updated).await;
                 }
+            }
 
-                if matches!(target, DeploymentBuildStatus::Ready) {
-                    auto_activate_if_allowed(db, updated).await?;
-                }
+            if matches!(ready_action, ReadyReleaseAction::RequestReview) {
+                let _ = audits::create_audit_event(
+                    db,
+                    CreateAuditEventParams {
+                        actor_user_id: None,
+                        team_id: Some(team_id),
+                        action: "deployment.review_requested".to_owned(),
+                        target_type: "deployment".to_owned(),
+                        target_id: Some(updated.id),
+                        result: AuditEventResult::Success,
+                        reason: None,
+                        metadata: json!({ "automatic": true }),
+                    },
+                )
+                .await;
             }
 
             StageResponse {
@@ -567,24 +584,19 @@ async fn record_build_log_artifact(
     Ok(())
 }
 
-/// Auto-activation after a successful build, controlled by the release
-/// review policy: `auto` environments activate immediately, `manual`
-/// environments wait for review and promote.
-async fn auto_activate_if_allowed(
-    db: &sea_orm::DatabaseConnection,
-    deployment: deployment::Model,
-) -> Result<(), AppError> {
-    const OP: &str = "internal.deployments.auto_activate";
-    let policy = deployments::review_policy(db)
-        .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    if !matches!(policy.mode_for(&deployment.environment), ReviewMode::Auto) {
-        return Ok(());
-    }
-    if !matches!(deployment.release_status, DeploymentReleaseStatus::Draft) {
-        return Ok(());
-    }
+/// Commits a successful build and its initial release state atomically.
+/// Repeated Ready reports only repair historical Ready/Draft rows and do not
+/// repeat terminal accounting side effects.
+fn ready_report_needs_build_transition(status: &DeploymentBuildStatus) -> bool {
+    !matches!(status, DeploymentBuildStatus::Ready)
+}
 
+async fn finalize_ready(
+    db: &sea_orm::DatabaseConnection,
+    requested_deployment: deployment::Model,
+    transition: BuildTransition,
+) -> Result<(deployment::Model, bool, ReadyReleaseAction), AppError> {
+    const OP: &str = "internal.deployments.finalize_ready";
     let transaction = db
         .begin()
         .await
@@ -592,11 +604,54 @@ async fn auto_activate_if_allowed(
             op: OP,
             source: source.into(),
         })?;
-    let activated = deployments::activate(&transaction, deployment, ReleaseReason::Auto, None)
+
+    // Serialize retries for this deployment and make the decision from the
+    // latest row, not from the pre-transaction request snapshot.
+    let deployment = deployments::get_by_id_for_update(&transaction, requested_deployment.id)
         .await
-        .map_err(|error| {
-            crate::features::api::v1::projects::deployments::map_state_error(error, OP)
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "deployment not found".to_owned(),
         })?;
+    let build_transitioned = ready_report_needs_build_transition(&deployment.build_status);
+    let deployment = if build_transitioned {
+        deployments::transition_build(&transaction, deployment, transition)
+            .await
+            .map_err(|error| {
+                crate::features::api::v1::projects::deployments::map_state_error(error, OP)
+            })?
+    } else {
+        deployment
+    };
+    let policy = deployments::review_policy(&transaction)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let action = deployments::ready_release_action(
+        policy.mode_for(&deployment.environment),
+        &deployment.release_status,
+    );
+    let deployment = match action {
+        ReadyReleaseAction::Activate => {
+            deployments::activate(&transaction, deployment, ReleaseReason::Auto, None)
+                .await
+                .map_err(|error| {
+                    crate::features::api::v1::projects::deployments::map_state_error(error, OP)
+                })?
+        }
+        ReadyReleaseAction::RequestReview => {
+            deployments::request_review(&transaction, deployment, None)
+                .await
+                .map_err(|error| {
+                    crate::features::api::v1::projects::deployments::map_state_error(error, OP)
+                })?
+                .0
+        }
+        ReadyReleaseAction::None => deployment,
+    };
     transaction
         .commit()
         .await
@@ -605,13 +660,15 @@ async fn auto_activate_if_allowed(
             source: source.into(),
         })?;
 
-    tracing::info!(
-        operation = OP,
-        deployment_id = %activated.id,
-        environment = deployments::environment_value(&activated.environment),
-        "deployment auto-activated"
-    );
-    Ok(())
+    if matches!(action, ReadyReleaseAction::Activate) {
+        tracing::info!(
+            operation = OP,
+            deployment_id = %deployment.id,
+            environment = deployments::environment_value(&deployment.environment),
+            "deployment auto-activated"
+        );
+    }
+    Ok((deployment, build_transitioned, action))
 }
 
 // --- Build log --------------------------------------------------------------
@@ -823,4 +880,19 @@ pub async fn download_artifact(
         [(axum::http::header::CONTENT_TYPE, "application/zip")],
         bytes,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeated_ready_reports_skip_the_build_transition() {
+        assert!(ready_report_needs_build_transition(
+            &DeploymentBuildStatus::Building
+        ));
+        assert!(!ready_report_needs_build_transition(
+            &DeploymentBuildStatus::Ready
+        ));
+    }
 }

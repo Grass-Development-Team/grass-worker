@@ -227,6 +227,19 @@ pub async fn get_by_id<C: ConnectionTrait>(
         .map_err(Into::into)
 }
 
+/// Loads and locks a deployment for release/build finalization. Callers must
+/// pass a transaction so the lock is held through the complete state change.
+pub async fn get_by_id_for_update<C: ConnectionTrait>(
+    db: &C,
+    deployment_id: Uuid,
+) -> Result<Option<deployment::Model>, sea_orm::DbErr> {
+    deployment::Entity::find_by_id(deployment_id)
+        .filter(deployment::Column::DeletedAt.is_null())
+        .lock_exclusive()
+        .one(db)
+        .await
+}
+
 pub struct DeploymentListFilter {
     pub environment: Option<DeploymentEnvironment>,
     pub build_status: Option<DeploymentBuildStatus>,
@@ -536,7 +549,7 @@ pub async fn was_active<C: ConnectionTrait>(db: &C, deployment_id: Uuid) -> anyh
 pub async fn create_review<C: ConnectionTrait>(
     db: &C,
     deployment_id: Uuid,
-) -> anyhow::Result<deployment_review::Model> {
+) -> Result<deployment_review::Model, sea_orm::DbErr> {
     let now = OffsetDateTime::now_utc();
     deployment_review::ActiveModel {
         id: Set(Uuid::now_v7()),
@@ -550,7 +563,34 @@ pub async fn create_review<C: ConnectionTrait>(
     }
     .insert(db)
     .await
-    .map_err(Into::into)
+}
+
+/// Moves a ready deployment into review and creates its pending review and
+/// timeline entry as one connection-scoped operation. Callers that require
+/// atomicity must pass a transaction.
+pub async fn request_review<C: ConnectionTrait>(
+    db: &C,
+    deployment: deployment::Model,
+    requested_by: Option<Uuid>,
+) -> Result<(deployment::Model, deployment_review::Model), DeploymentStateError> {
+    let deployment = transition_release(
+        db,
+        deployment,
+        DeploymentReleaseStatus::PendingReview,
+        serde_json::json!({ "requested_by": requested_by }),
+    )
+    .await?;
+    let review = create_review(db, deployment.id).await?;
+    append_event(
+        db,
+        deployment.id,
+        DeploymentEventKind::Review,
+        "review requested",
+        serde_json::json!({ "review_id": review.id }),
+    )
+    .await
+    .map_err(|error| DeploymentStateError::Database(sea_orm::DbErr::Custom(error.to_string())))?;
+    Ok((deployment, review))
 }
 
 pub async fn latest_pending_review<C: ConnectionTrait>(
@@ -605,6 +645,26 @@ pub enum ReviewMode {
     Manual,
     /// Activation happens without review.
     Auto,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadyReleaseAction {
+    Activate,
+    RequestReview,
+    None,
+}
+
+pub fn ready_release_action(
+    mode: ReviewMode,
+    status: &DeploymentReleaseStatus,
+) -> ReadyReleaseAction {
+    if !matches!(status, DeploymentReleaseStatus::Draft) {
+        return ReadyReleaseAction::None;
+    }
+    match mode {
+        ReviewMode::Manual => ReadyReleaseAction::RequestReview,
+        ReviewMode::Auto => ReadyReleaseAction::Activate,
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -739,5 +799,36 @@ mod tests {
             policy.mode_for(&DeploymentEnvironment::Preview),
             ReviewMode::Auto
         );
+    }
+
+    #[test]
+    fn ready_drafts_follow_the_review_policy() {
+        assert_eq!(
+            ready_release_action(ReviewMode::Manual, &DeploymentReleaseStatus::Draft),
+            ReadyReleaseAction::RequestReview
+        );
+        assert_eq!(
+            ready_release_action(ReviewMode::Auto, &DeploymentReleaseStatus::Draft),
+            ReadyReleaseAction::Activate
+        );
+    }
+
+    #[test]
+    fn ready_finalization_is_idempotent_after_the_draft_state() {
+        for status in [
+            DeploymentReleaseStatus::PendingReview,
+            DeploymentReleaseStatus::Approved,
+            DeploymentReleaseStatus::Rejected,
+            DeploymentReleaseStatus::Active,
+        ] {
+            assert_eq!(
+                ready_release_action(ReviewMode::Manual, &status),
+                ReadyReleaseAction::None
+            );
+            assert_eq!(
+                ready_release_action(ReviewMode::Auto, &status),
+                ReadyReleaseAction::None
+            );
+        }
     }
 }
