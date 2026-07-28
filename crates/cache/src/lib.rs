@@ -52,6 +52,9 @@ pub enum QuotaCheckOutcome {
 #[async_trait::async_trait]
 pub trait Cache: Send + Sync + Clone + 'static {
     async fn get(&self, key: &str) -> anyhow::Result<Option<String>>;
+    /// Atomically reads and deletes a value. Used for one-time authorization
+    /// records that must reject concurrent replay.
+    async fn take(&self, key: &str) -> anyhow::Result<Option<String>>;
     async fn set(&self, key: &str, value: &str, ttl: Duration) -> anyhow::Result<()>;
     async fn update_if_present(
         &self,
@@ -112,6 +115,13 @@ impl Cache for CacheStore {
         match self {
             Self::Moka(c) => c.get(key).await,
             Self::Redis(c) => c.get(key).await,
+        }
+    }
+
+    async fn take(&self, key: &str) -> anyhow::Result<Option<String>> {
+        match self {
+            Self::Moka(c) => c.take(key).await,
+            Self::Redis(c) => c.take(key).await,
         }
     }
 

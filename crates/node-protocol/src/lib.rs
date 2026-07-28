@@ -215,13 +215,58 @@ pub struct UploadArtifactResponse {
 
 // --- Serve resolution -------------------------------------------------------
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServeAccess {
+    Public,
+    TeamMember,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolveHostResponse {
     pub deployment_id: Uuid,
     pub project_id: Uuid,
+    pub team_id: Uuid,
+    pub host: String,
     pub environment: String,
     /// Whether a grass-output artifact upload finished for this deployment.
     pub artifact_available: bool,
+    pub access: ServeAccess,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StartPreviewAuthorizationRequest {
+    pub host: String,
+    pub return_to: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StartPreviewAuthorizationResponse {
+    pub authorization_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExchangePreviewCodeRequest {
+    pub host: String,
+    pub code: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExchangePreviewCodeResponse {
+    pub grant: String,
+    pub return_to: String,
+    pub max_age_seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifyPreviewGrantRequest {
+    pub host: String,
+    pub grant: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifyPreviewGrantResponse {
+    pub allowed: bool,
 }
 
 // --- Realtime log stream (Node → Control API → Browser) ---------------------
@@ -291,5 +336,32 @@ mod tests {
         .unwrap();
         assert_eq!(terminal.status, Some(ReportedStatus::Failed));
         assert_eq!(terminal.build_minutes, Some(3));
+    }
+
+    #[test]
+    fn preview_access_protocol_uses_stable_wire_values() {
+        assert_eq!(
+            serde_json::to_string(&ServeAccess::TeamMember).unwrap(),
+            r#""team_member""#
+        );
+
+        let start: StartPreviewAuthorizationRequest =
+            serde_json::from_str(r#"{"host":"demo.example.test","return_to":"/docs?q=1"}"#)
+                .unwrap();
+        assert_eq!(start.host, "demo.example.test");
+        assert_eq!(start.return_to, "/docs?q=1");
+
+        let exchange: ExchangePreviewCodeResponse = serde_json::from_str(
+            r#"{"grant":"opaque","return_to":"/docs?q=1","max_age_seconds":43200}"#,
+        )
+        .unwrap();
+        assert_eq!(exchange.grant, "opaque");
+        assert_eq!(exchange.max_age_seconds, 43_200);
+
+        let verify = VerifyPreviewGrantResponse { allowed: true };
+        assert_eq!(
+            serde_json::to_string(&verify).unwrap(),
+            r#"{"allowed":true}"#
+        );
     }
 }

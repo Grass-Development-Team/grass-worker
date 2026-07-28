@@ -9,9 +9,50 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "./auth-context";
 
-export function LoginForm({ className, ...props }: React.ComponentPropsWithoutRef<"div">) {
+export function previewAuthorizationContinuation(
+  search: string,
+  origin = window.location.origin,
+): string | null {
+  const value = new URLSearchParams(search).get("continue");
+  if (
+    !value ||
+    value.length > 4096 ||
+    !value.startsWith("/api/v1/preview/authorize?") ||
+    value.startsWith("//") ||
+    value.includes("\\") ||
+    [...value].some((character) => {
+      const code = character.charCodeAt(0);
+      return code <= 0x1f || code === 0x7f;
+    })
+  ) {
+    return null;
+  }
+
+  const destination = new URL(value, origin);
+  if (
+    destination.origin !== origin ||
+    destination.pathname !== "/api/v1/preview/authorize" ||
+    destination.hash ||
+    destination.searchParams.getAll("state").length !== 1 ||
+    !destination.searchParams.get("state")
+  ) {
+    return null;
+  }
+  return `${destination.pathname}${destination.search}`;
+}
+
+type LoginFormProps = React.ComponentPropsWithoutRef<"div"> & {
+  documentNavigate?: (destination: string) => void;
+};
+
+export function LoginForm({
+  className,
+  documentNavigate = (destination) => window.location.assign(destination),
+  ...props
+}: LoginFormProps) {
   const navigate = useNavigate();
   const location = useLocation();
+  const previewContinuation = previewAuthorizationContinuation(location.search);
   const from = (location.state as { from?: string } | null)?.from;
   const redirectedInvitationToken = (() => {
     if (!from?.startsWith("/")) return null;
@@ -43,6 +84,10 @@ export function LoginForm({ className, ...props }: React.ComponentPropsWithoutRe
     setIsSubmitting(true);
     try {
       await login(email.trim(), password);
+      if (previewContinuation) {
+        documentNavigate(previewContinuation);
+        return;
+      }
       const destination =
         from ??
         (invitationToken

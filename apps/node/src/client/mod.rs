@@ -4,10 +4,13 @@ use std::time::Duration;
 
 use anyhow::Context;
 use grass_node_protocol::{
-    AppendBuildLogRequest, AppendBuildLogResponse, ClaimRequest, ClaimResponse, HeartbeatRequest,
-    HeartbeatResponse, ObserveSshHostKeyRequest, ObserveSshHostKeyResponse,
-    RedeemGitCredentialRequest, RedeemGitCredentialResponse, RegisterRequest, RegisterResponse,
-    ResolveHostResponse, StageRequest, StageResponse, UploadArtifactResponse, artifact_headers,
+    AppendBuildLogRequest, AppendBuildLogResponse, ClaimRequest, ClaimResponse,
+    ExchangePreviewCodeRequest, ExchangePreviewCodeResponse, HeartbeatRequest, HeartbeatResponse,
+    ObserveSshHostKeyRequest, ObserveSshHostKeyResponse, RedeemGitCredentialRequest,
+    RedeemGitCredentialResponse, RegisterRequest, RegisterResponse, ResolveHostResponse,
+    StageRequest, StageResponse, StartPreviewAuthorizationRequest,
+    StartPreviewAuthorizationResponse, UploadArtifactResponse, VerifyPreviewGrantRequest,
+    VerifyPreviewGrantResponse, artifact_headers,
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -19,6 +22,16 @@ struct Envelope<T> {
     code: u16,
     message: String,
     data: Option<T>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PreviewAuthError {
+    #[error("preview authorization is invalid or expired")]
+    Unauthorized,
+    #[error("preview access is forbidden")]
+    Forbidden,
+    #[error(transparent)]
+    Infrastructure(#[from] anyhow::Error),
 }
 
 #[derive(Clone)]
@@ -84,6 +97,30 @@ impl ControlApiClient {
             .await
             .with_context(|| format!("{operation}: request failed"))?;
         Self::unwrap_envelope(response, operation).await
+    }
+
+    async fn post_preview_json<Req: serde::Serialize, Res: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &Req,
+        operation: &str,
+    ) -> Result<Res, PreviewAuthError> {
+        let response = self
+            .http
+            .post(self.url(path))
+            .bearer_auth(&self.token)
+            .json(body)
+            .send()
+            .await
+            .with_context(|| format!("{operation}: request failed"))
+            .map_err(PreviewAuthError::Infrastructure)?;
+        match response.status() {
+            reqwest::StatusCode::UNAUTHORIZED => Err(PreviewAuthError::Unauthorized),
+            reqwest::StatusCode::FORBIDDEN => Err(PreviewAuthError::Forbidden),
+            _ => Self::unwrap_envelope(response, operation)
+                .await
+                .map_err(PreviewAuthError::Infrastructure),
+        }
     }
 
     pub async fn register(&self, request: &RegisterRequest) -> anyhow::Result<RegisterResponse> {
@@ -234,5 +271,53 @@ impl ControlApiClient {
         Self::unwrap_envelope(response, "serve.resolve_host")
             .await
             .map(Some)
+    }
+
+    pub async fn start_preview_authorization(
+        &self,
+        host: &str,
+        return_to: &str,
+    ) -> anyhow::Result<StartPreviewAuthorizationResponse> {
+        self.post_json(
+            "/serve/preview/authorize",
+            &StartPreviewAuthorizationRequest {
+                host: host.to_owned(),
+                return_to: return_to.to_owned(),
+            },
+            "serve.preview_authorize",
+        )
+        .await
+    }
+
+    pub async fn exchange_preview_code(
+        &self,
+        host: &str,
+        code: &str,
+    ) -> Result<ExchangePreviewCodeResponse, PreviewAuthError> {
+        self.post_preview_json(
+            "/serve/preview/exchange",
+            &ExchangePreviewCodeRequest {
+                host: host.to_owned(),
+                code: code.to_owned(),
+            },
+            "serve.preview_exchange",
+        )
+        .await
+    }
+
+    pub async fn verify_preview_grant(
+        &self,
+        host: &str,
+        grant: &str,
+    ) -> Result<VerifyPreviewGrantResponse, PreviewAuthError> {
+        self.post_preview_json(
+            "/serve/preview/verify",
+            &VerifyPreviewGrantRequest {
+                host: host.to_owned(),
+                grant: grant.to_owned(),
+            },
+            "serve.preview_verify",
+        )
+        .await
     }
 }

@@ -3,7 +3,7 @@ use axum::{
     extract::{Query, State},
     response::IntoResponse,
 };
-use grass_node_protocol::ResolveHostResponse;
+use grass_node_protocol::{ResolveHostResponse, ServeAccess};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Deserialize;
 use uuid::Uuid;
@@ -91,8 +91,11 @@ pub async fn resolve_host(
         return Ok(ok_response(ResolveHostResponse {
             deployment_id: active.id,
             project_id: active.project_id,
+            team_id: active.team_id,
+            host,
             environment: "production".to_owned(),
             artifact_available: available,
+            access: ServeAccess::Public,
         }));
     }
 
@@ -118,7 +121,10 @@ pub async fn resolve_host(
     Ok(ok_response(ResolveHostResponse {
         deployment_id: deployment.id,
         project_id: deployment.project_id,
+        team_id: deployment.team_id,
+        host,
         environment: "preview".to_owned(),
         artifact_available: available,
+        access: ServeAccess::TeamMember,
     }))
 }
