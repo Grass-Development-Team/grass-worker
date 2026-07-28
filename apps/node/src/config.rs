@@ -110,6 +110,8 @@ pub struct ServeConfig {
     #[serde(default = "default_artifact_cache_root")]
     pub artifact_cache_root: String,
     #[serde(default)]
+    pub capacity: ServeCapacityConfig,
+    #[serde(default)]
     pub ssr: SsrServeConfig,
 }
 
@@ -121,7 +123,31 @@ impl Default for ServeConfig {
             public_base_url: default_serve_public_base_url(),
             metadata_cache_ttl_seconds: default_metadata_cache_ttl_seconds(),
             artifact_cache_root: default_artifact_cache_root(),
+            capacity: ServeCapacityConfig::default(),
             ssr: SsrServeConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct ServeCapacityConfig {
+    #[serde(default)]
+    pub cpu_millicores: u64,
+    #[serde(default)]
+    pub memory_mb: u64,
+    #[serde(default)]
+    pub disk_mb: u64,
+    #[serde(default = "default_max_deployments")]
+    pub max_deployments: u32,
+}
+
+impl Default for ServeCapacityConfig {
+    fn default() -> Self {
+        Self {
+            cpu_millicores: 0,
+            memory_mb: 0,
+            disk_mb: 0,
+            max_deployments: default_max_deployments(),
         }
     }
 }
@@ -268,6 +294,24 @@ impl NodeConfig {
 
         Ok(())
     }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let capabilities = &self.node.capabilities;
+        if !capabilities.build && !capabilities.serve {
+            anyhow::bail!("node must enable build or serve");
+        }
+        if capabilities.build && self.build.concurrency == 0 {
+            anyhow::bail!("build concurrency must be positive when build capability is enabled");
+        }
+        if capabilities.serve {
+            let base_url = url::Url::parse(&self.serve.public_base_url)
+                .context("serve public_base_url must be an absolute HTTP(S) URL")?;
+            if !matches!(base_url.scheme(), "http" | "https") || !base_url.has_host() {
+                anyhow::bail!("serve public_base_url must be an absolute HTTP(S) URL");
+            }
+        }
+        Ok(())
+    }
 }
 
 fn apply_env(config: &mut NodeConfig) -> Result<(), ConfigError> {
@@ -355,6 +399,10 @@ fn default_serve_public_base_url() -> String {
 
 const fn default_metadata_cache_ttl_seconds() -> u64 {
     30
+}
+
+const fn default_max_deployments() -> u32 {
+    10
 }
 
 fn default_artifact_cache_root() -> String {

@@ -72,7 +72,7 @@ pub struct RunServiceInput {
     pub env: Vec<(String, String)>,
     /// Port the server listens on inside the container.
     pub container_port: u16,
-    pub cpu_limit: u32,
+    pub cpu_millicores: u64,
     pub memory_mb: u64,
     pub network: String,
 }
@@ -342,7 +342,7 @@ mod tests {
                 start_command: "node server.js".to_owned(),
                 env: Vec::new(),
                 container_port: 8321,
-                cpu_limit: 1,
+                cpu_millicores: 200,
                 memory_mb: 512,
                 network: "bridge".to_owned(),
             })

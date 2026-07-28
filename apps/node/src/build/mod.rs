@@ -611,21 +611,24 @@ if [ $rc -ne 0 ]; then echo \"build command failed with exit code $rc\"; exit 92
     collector.log(
         stage::ARCHIVE,
         format!(
-            "packed {} files ({} bytes, sha256 {})",
-            packed.file_count, packed.size_bytes, packed.checksum_sha256
+            "packed {} files ({} bytes packed, {} bytes unpacked, sha256 {})",
+            packed.file_count,
+            packed.size_bytes,
+            packed.unpacked_size_bytes,
+            packed.checksum_sha256
         ),
     );
 
     // --- Upload -------------------------------------------------------------
     report_stage_checked(client, deployment_id, &stage_report(None, stage::UPLOAD)).await?;
     collector.publish_stage(stage::UPLOAD);
-    let bytes = tokio::fs::read(&archive_path)
-        .await
-        .map_err(|error| BuildFailure::new("upload_failed", error.to_string()))?;
     let uploaded = client
         .upload_artifact(
             deployment_id,
-            bytes,
+            &archive_path,
+            packed.size_bytes,
+            packed.unpacked_size_bytes,
+            &packed.checksum_sha256,
             generated.runtime_kind,
             "1",
             Some(&generated.framework_name),
@@ -641,18 +644,6 @@ if [ $rc -ne 0 ]; then echo \"build command failed with exit code $rc\"; exit 92
             uploaded.size_bytes, uploaded.checksum_sha256
         ),
     );
-
-    // Keep a local unpacked copy for the serve path on this node.
-    let artifact_cache =
-        PathBuf::from(&config.serve.artifact_cache_root).join(deployment_id.to_string());
-    let cache_archive = archive_path.clone();
-    let _ = tokio::task::spawn_blocking(move || {
-        if artifact_cache.exists() {
-            let _ = std::fs::remove_dir_all(&artifact_cache);
-        }
-        grass_archive::unpack_zip(&cache_archive, &artifact_cache)
-    })
-    .await;
 
     Ok(())
 }

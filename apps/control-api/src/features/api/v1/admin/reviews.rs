@@ -1,6 +1,6 @@
-//! Platform-wide release review queue. Team admins review inside their
-//! team; platform administrators see every pending review and decide from
-//! here, optionally promoting production deployments in the same step.
+//! Platform-wide release review queue. Platform administrators see every
+//! pending review and decide here, optionally promoting production
+//! deployments in the same step.
 
 use std::collections::HashMap;
 
@@ -23,8 +23,9 @@ use crate::{
     },
     infra::{
         database::entity::{
-            AuditEventResult, DeploymentEventKind, DeploymentReleaseStatus, DeploymentReviewStatus,
-            ReleaseReason, deployment, deployment_review, project, team, user,
+            AuditEventResult, DeploymentBuildStatus, DeploymentEventKind, DeploymentReleaseStatus,
+            DeploymentReviewStatus, DeploymentServeStatus, ReleaseReason, deployment,
+            deployment_review, project, team, user,
         },
         error::{AppError, ok_response},
         http::extractors::Session,
@@ -156,6 +157,7 @@ pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoRespo
                     "id": deployment.id,
                     "environment": deployments::environment_value(&deployment.environment),
                     "build_status": deployments::build_status_value(&deployment.build_status),
+                    "serve_status": deployments::serve_status_value(&deployment.serve_status),
                     "release_status": deployments::release_status_value(&deployment.release_status),
                     "source_branch": deployment.source_branch,
                     "commit_hash": deployment.commit_hash,
@@ -225,6 +227,16 @@ async fn decide(
             op,
             message: "project not found".to_owned(),
         })?;
+
+    if !matches!(deployment.build_status, DeploymentBuildStatus::Ready)
+        || !matches!(deployment.serve_status, DeploymentServeStatus::Ready)
+    {
+        return Err(AppError::Conflict {
+            op,
+            message: "only deployments with ready build and Serve artifact can be reviewed"
+                .to_owned(),
+        });
+    }
 
     let review = deployments::latest_pending_review(db, deployment.id)
         .await

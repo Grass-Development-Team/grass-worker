@@ -42,6 +42,12 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
             "/deployments/{deployment_id}/ssh-host-key",
             post(deployments::observe_ssh_host_key),
         )
+        .route("/serve/assignments", get(serve::assignments))
+        .route(
+            "/serve/deployments/{deployment_id}/status",
+            post(serve::report_status),
+        )
+        .route("/serve/routes", get(serve::routes))
         .route("/serve/resolve-host", get(serve::resolve_host))
         .route("/serve/preview/authorize", post(super::preview_auth::start))
         .route(

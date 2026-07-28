@@ -6,6 +6,7 @@
 //! `deployment_events`, and activation switches are transactional so one
 //! project environment never has two active deployments.
 
+use grass_node_protocol::ServeResources;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter,
     QueryOrder, QuerySelect,
@@ -13,10 +14,11 @@ use sea_orm::{
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::domain::scheduler::Placement;
 use crate::infra::database::entity::{
     DeploymentBuildStatus, DeploymentEnvironment, DeploymentEventKind, DeploymentReleaseStatus,
-    DeploymentReviewStatus, ProjectRuntime, ReleaseReason, deployment, deployment_artifact,
-    deployment_event, deployment_review, project, release,
+    DeploymentReviewStatus, DeploymentServeStatus, ProjectRuntime, ReleaseReason, deployment,
+    deployment_artifact, deployment_event, deployment_review, project, release,
 };
 
 // --- State machine ----------------------------------------------------------
@@ -72,8 +74,13 @@ pub enum DeploymentStateError {
     InvalidBuildTransition { from: String, to: String },
     #[error("invalid release status transition from {from} to {to}")]
     InvalidReleaseTransition { from: String, to: String },
+    #[error("invalid serve status transition from {from} to {to}")]
+    #[allow(dead_code)] // Constructed by the P3.2 Serve status endpoint.
+    InvalidServeTransition { from: String, to: String },
     #[error("only ready deployments can enter the release flow")]
     BuildNotReady,
+    #[error("only deployments with a ready Serve artifact can enter the release flow")]
+    ServeNotReady,
     #[error(transparent)]
     Database(#[from] sea_orm::DbErr),
 }
@@ -107,6 +114,80 @@ pub fn environment_value(environment: &DeploymentEnvironment) -> &'static str {
     }
 }
 
+pub fn can_transition_serve(from: &DeploymentServeStatus, to: &DeploymentServeStatus) -> bool {
+    use DeploymentServeStatus as S;
+    matches!(
+        (from, to),
+        (S::Pending | S::Failed | S::Ready, S::Syncing) | (S::Syncing, S::Ready | S::Failed)
+    )
+}
+
+pub fn serve_status_value(status: &DeploymentServeStatus) -> &'static str {
+    match status {
+        DeploymentServeStatus::Pending => "pending",
+        DeploymentServeStatus::Syncing => "syncing",
+        DeploymentServeStatus::Ready => "ready",
+        DeploymentServeStatus::Failed => "failed",
+    }
+}
+
+fn validate_release_readiness(
+    from: &DeploymentReleaseStatus,
+    to: &DeploymentReleaseStatus,
+    build_status: &DeploymentBuildStatus,
+    serve_status: &DeploymentServeStatus,
+) -> Result<(), DeploymentStateError> {
+    if matches!(
+        (from, to),
+        (
+            DeploymentReleaseStatus::Active,
+            DeploymentReleaseStatus::Approved
+        )
+    ) {
+        return Ok(());
+    }
+    if !matches!(build_status, DeploymentBuildStatus::Ready) {
+        return Err(DeploymentStateError::BuildNotReady);
+    }
+    if matches!(
+        (from, to),
+        (
+            DeploymentReleaseStatus::Draft,
+            DeploymentReleaseStatus::PendingReview
+        )
+    ) {
+        return Ok(());
+    }
+    if !matches!(serve_status, DeploymentServeStatus::Ready) {
+        return Err(DeploymentStateError::ServeNotReady);
+    }
+    Ok(())
+}
+
+pub fn runtime_serve_resources(runtime: &ProjectRuntime) -> ServeResources {
+    match runtime {
+        ProjectRuntime::Ssr => ServeResources {
+            cpu_millicores: 200,
+            memory_mb: 256,
+            disk_mb: 512,
+        },
+        _ => ServeResources {
+            cpu_millicores: 50,
+            memory_mb: 64,
+            disk_mb: 256,
+        },
+    }
+}
+
+/// Artifacts uploaded before Serve scheduling did not record unpacked bytes.
+/// Zero is reserved as the wire-level sentinel for that legacy metadata.
+pub fn artifact_unpacked_size_bytes(manifest: &serde_json::Value) -> Option<u64> {
+    match manifest.get("unpacked_size_bytes") {
+        Some(value) => value.as_u64(),
+        None => Some(0),
+    }
+}
+
 // --- Creation ---------------------------------------------------------------
 
 pub struct CreateDeploymentParams {
@@ -125,19 +206,27 @@ pub struct CreateDeploymentParams {
 pub async fn create_deployment<C: ConnectionTrait>(
     db: &C,
     params: CreateDeploymentParams,
+    placement: Placement,
 ) -> anyhow::Result<deployment::Model> {
     let now = OffsetDateTime::now_utc();
     let project = params.project;
+    let serve_resources = runtime_serve_resources(&project.runtime);
 
     let deployment = deployment::ActiveModel {
         id: Set(Uuid::now_v7()),
         project_id: Set(project.id),
         team_id: Set(project.team_id),
-        node_id: Set(None),
+        build_node_id: Set(None),
+        serve_node_id: Set(Some(placement.node_id)),
         environment: Set(params.environment),
         runtime_kind: Set(project.runtime.clone()),
         build_status: Set(DeploymentBuildStatus::Pending),
+        serve_status: Set(DeploymentServeStatus::Pending),
         release_status: Set(DeploymentReleaseStatus::Draft),
+        serve_cpu_millicores: Set(i64::try_from(serve_resources.cpu_millicores)?),
+        serve_memory_mb: Set(i64::try_from(serve_resources.memory_mb)?),
+        serve_disk_mb: Set(i64::try_from(serve_resources.disk_mb)?),
+        overcommitted: Set(placement.overcommitted),
         source_repository_url: Set(project.repository_url.clone()),
         source_credential_version_id: Set(params.source_credential_version_id),
         source_branch: Set(params
@@ -155,9 +244,13 @@ pub async fn create_deployment<C: ConnectionTrait>(
         build_stage: Set(None),
         failure_code: Set(None),
         failure_message: Set(None),
+        serve_failure_code: Set(None),
+        serve_failure_message: Set(None),
         claimed_at: Set(None),
         build_started_at: Set(None),
         build_finished_at: Set(None),
+        serve_started_at: Set(None),
+        serve_finished_at: Set(None),
         deleted_at: Set(None),
         created_at: Set(now),
         updated_at: Set(now),
@@ -318,7 +411,70 @@ pub struct BuildTransition {
     pub stage: Option<String>,
     pub failure_code: Option<String>,
     pub failure_message: Option<String>,
-    pub node_id: Option<Uuid>,
+    pub build_node_id: Option<Uuid>,
+}
+
+#[allow(dead_code)] // Constructed by the P3.2 Serve status endpoint.
+pub struct ServeTransition {
+    pub to: DeploymentServeStatus,
+    pub failure_code: Option<String>,
+    pub failure_message: Option<String>,
+}
+
+#[allow(dead_code)] // Called by the P3.2 Serve status endpoint.
+pub async fn transition_serve<C: ConnectionTrait>(
+    db: &C,
+    deployment: deployment::Model,
+    transition: ServeTransition,
+) -> Result<deployment::Model, DeploymentStateError> {
+    if !can_transition_serve(&deployment.serve_status, &transition.to) {
+        return Err(DeploymentStateError::InvalidServeTransition {
+            from: serve_status_value(&deployment.serve_status).to_owned(),
+            to: serve_status_value(&transition.to).to_owned(),
+        });
+    }
+
+    let now = OffsetDateTime::now_utc();
+    let deployment_id = deployment.id;
+    let to_value = serve_status_value(&transition.to);
+    let mut active: deployment::ActiveModel = deployment.into();
+    active.serve_status = Set(transition.to.clone());
+    match transition.to {
+        DeploymentServeStatus::Syncing => {
+            active.serve_started_at = Set(Some(now));
+            active.serve_finished_at = Set(None);
+            active.serve_failure_code = Set(None);
+            active.serve_failure_message = Set(None);
+        }
+        DeploymentServeStatus::Ready => {
+            active.serve_finished_at = Set(Some(now));
+            active.serve_failure_code = Set(None);
+            active.serve_failure_message = Set(None);
+        }
+        DeploymentServeStatus::Failed => {
+            active.serve_finished_at = Set(Some(now));
+            active.serve_failure_code = Set(transition.failure_code.clone());
+            active.serve_failure_message = Set(transition.failure_message.clone());
+        }
+        DeploymentServeStatus::Pending => {}
+    }
+
+    let updated = active.update(db).await?;
+    append_event(
+        db,
+        deployment_id,
+        DeploymentEventKind::Serve,
+        &format!("serve status changed to {to_value}"),
+        serde_json::json!({
+            "status": to_value,
+            "failure_code": transition.failure_code,
+            "failure_message": transition.failure_message,
+        }),
+    )
+    .await
+    .map_err(|error| DeploymentStateError::Database(sea_orm::DbErr::Custom(error.to_string())))?;
+
+    Ok(updated)
 }
 
 /// Applies a validated build status transition, maintaining lifecycle
@@ -346,8 +502,8 @@ pub async fn transition_build<C: ConnectionTrait>(
     match transition.to {
         DeploymentBuildStatus::Claimed => {
             active.claimed_at = Set(Some(now));
-            if let Some(node_id) = transition.node_id {
-                active.node_id = Set(Some(node_id));
+            if let Some(node_id) = transition.build_node_id {
+                active.build_node_id = Set(Some(node_id));
             }
         }
         DeploymentBuildStatus::Building => {
@@ -419,14 +575,12 @@ pub async fn transition_release<C: ConnectionTrait>(
             to: release_status_value(&to).to_owned(),
         });
     }
-    if !matches!(deployment.build_status, DeploymentBuildStatus::Ready)
-        && !matches!(to, DeploymentReleaseStatus::Approved)
-    {
-        // Only ready builds may move through the release flow. The exception
-        // is demotion of a previously active deployment, which stays ready
-        // by definition.
-        return Err(DeploymentStateError::BuildNotReady);
-    }
+    validate_release_readiness(
+        &deployment.release_status,
+        &to,
+        &deployment.build_status,
+        &deployment.serve_status,
+    )?;
 
     let deployment_id = deployment.id;
     let to_value = release_status_value(&to);
@@ -456,9 +610,12 @@ pub async fn activate<C: ConnectionTrait>(
     reason: ReleaseReason,
     actor_user_id: Option<Uuid>,
 ) -> Result<deployment::Model, DeploymentStateError> {
-    if !matches!(target.build_status, DeploymentBuildStatus::Ready) {
-        return Err(DeploymentStateError::BuildNotReady);
-    }
+    validate_release_readiness(
+        &target.release_status,
+        &DeploymentReleaseStatus::Active,
+        &target.build_status,
+        &target.serve_status,
+    )?;
 
     let previous = deployment::Entity::find()
         .filter(deployment::Column::ProjectId.eq(target.project_id))
@@ -663,7 +820,17 @@ pub fn ready_release_action(
     }
     match mode {
         ReviewMode::Manual => ReadyReleaseAction::RequestReview,
-        ReviewMode::Auto => ReadyReleaseAction::Activate,
+        ReviewMode::Auto => ReadyReleaseAction::None,
+    }
+}
+
+pub fn serve_ready_release_action(
+    mode: ReviewMode,
+    status: &DeploymentReleaseStatus,
+) -> ReadyReleaseAction {
+    match (mode, status) {
+        (ReviewMode::Auto, DeploymentReleaseStatus::Draft) => ReadyReleaseAction::Activate,
+        _ => ReadyReleaseAction::None,
     }
 }
 
@@ -774,6 +941,47 @@ mod tests {
     }
 
     #[test]
+    fn release_readiness_requires_build_and_serve() {
+        use DeploymentBuildStatus as B;
+        use DeploymentReleaseStatus as R;
+        use DeploymentServeStatus as S;
+
+        assert!(validate_release_readiness(&R::Draft, &R::Active, &B::Ready, &S::Ready).is_ok());
+        assert!(
+            validate_release_readiness(&R::Draft, &R::PendingReview, &B::Ready, &S::Syncing)
+                .is_ok()
+        );
+        assert!(matches!(
+            validate_release_readiness(&R::Draft, &R::Active, &B::Ready, &S::Pending),
+            Err(DeploymentStateError::ServeNotReady)
+        ));
+        assert!(matches!(
+            validate_release_readiness(&R::PendingReview, &R::Approved, &B::Ready, &S::Syncing),
+            Err(DeploymentStateError::ServeNotReady)
+        ));
+        assert!(matches!(
+            validate_release_readiness(&R::Draft, &R::Active, &B::Building, &S::Ready),
+            Err(DeploymentStateError::BuildNotReady)
+        ));
+        assert!(
+            validate_release_readiness(&R::Active, &R::Approved, &B::Ready, &S::Syncing).is_ok()
+        );
+    }
+
+    #[test]
+    fn serve_transitions_require_sync_and_allow_failed_recovery() {
+        use DeploymentServeStatus as S;
+
+        assert!(can_transition_serve(&S::Pending, &S::Syncing));
+        assert!(can_transition_serve(&S::Syncing, &S::Ready));
+        assert!(can_transition_serve(&S::Syncing, &S::Failed));
+        assert!(can_transition_serve(&S::Failed, &S::Syncing));
+        assert!(can_transition_serve(&S::Ready, &S::Syncing));
+        assert!(!can_transition_serve(&S::Pending, &S::Ready));
+        assert!(!can_transition_serve(&S::Failed, &S::Ready));
+    }
+
+    #[test]
     fn static_and_ssr_runtimes_are_deployable() {
         assert!(runtime_failure(&ProjectRuntime::Static).is_none());
         assert!(runtime_failure(&ProjectRuntime::Ssr).is_none());
@@ -802,14 +1010,26 @@ mod tests {
     }
 
     #[test]
-    fn ready_drafts_follow_the_review_policy() {
+    fn build_ready_drafts_only_create_manual_reviews() {
         assert_eq!(
             ready_release_action(ReviewMode::Manual, &DeploymentReleaseStatus::Draft),
             ReadyReleaseAction::RequestReview
         );
         assert_eq!(
             ready_release_action(ReviewMode::Auto, &DeploymentReleaseStatus::Draft),
+            ReadyReleaseAction::None
+        );
+    }
+
+    #[test]
+    fn serve_ready_drafts_activate_only_under_auto_policy() {
+        assert_eq!(
+            serve_ready_release_action(ReviewMode::Auto, &DeploymentReleaseStatus::Draft),
             ReadyReleaseAction::Activate
+        );
+        assert_eq!(
+            serve_ready_release_action(ReviewMode::Manual, &DeploymentReleaseStatus::Draft),
+            ReadyReleaseAction::None
         );
     }
 

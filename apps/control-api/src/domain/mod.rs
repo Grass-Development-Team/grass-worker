@@ -4,6 +4,7 @@ pub mod hosts;
 pub mod nodes;
 pub mod projects;
 pub mod quotas;
+pub mod scheduler;
 pub mod settings;
 pub mod source_credentials;
 pub mod ssh_host_keys;

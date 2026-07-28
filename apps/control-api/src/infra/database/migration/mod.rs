@@ -7,3 +7,4 @@ pub mod m20260726_000006_project_host_columns;
 pub mod m20260726_000007_deployment_stage;
 pub mod m20260726_000008_audit_team_scope;
 pub mod m20260727_000009_git_source_access;
+pub mod m20260727_000010_node_scheduling;

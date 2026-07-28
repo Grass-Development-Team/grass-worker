@@ -1,13 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  BanIcon,
-  CheckIcon,
-  ExternalLinkIcon,
-  RotateCcwIcon,
-  RocketIcon,
-  UndoIcon,
-  XIcon,
-} from "lucide-react";
+import { BanIcon, ExternalLinkIcon, RotateCcwIcon, RocketIcon, UndoIcon } from "lucide-react";
 import { useCallback, useState } from "react";
 import { Link, useParams } from "react-router";
 
@@ -20,13 +12,14 @@ import { canManageMembers } from "@/features/teams/team-permissions";
 
 import {
   deploymentsApi,
+  deploymentRefetchInterval,
   formatDuration,
   isBuildRunning,
   shortCommit,
   type DeploymentDetail,
 } from "./deployments.api";
 import { LogViewer } from "./components/log-viewer";
-import { BuildStatusBadge, ReleaseStatusBadge } from "./components/status-badges";
+import { BuildStatusBadge, ReleaseStatusBadge, ServeStatusBadge } from "./components/status-badges";
 
 export function DeploymentDetailRoute() {
   const { projectId, deploymentId } = useParams<{ projectId: string; deploymentId: string }>();
@@ -38,8 +31,7 @@ export function DeploymentDetailRoute() {
     queryKey: ["deployment", projectId, deploymentId],
     queryFn: () => deploymentsApi.detail(projectId as string, deploymentId as string),
     enabled: Boolean(projectId && deploymentId),
-    refetchInterval: (query) =>
-      query.state.data && isBuildRunning(query.state.data.deployment.build_status) ? 4000 : false,
+    refetchInterval: (query) => deploymentRefetchInterval(query.state.data?.deployment),
   });
 
   const invalidate = useCallback(
@@ -69,15 +61,6 @@ export function DeploymentDetailRoute() {
   const rollbackMutation = useMutation({
     mutationFn: () => deploymentsApi.rollback(projectId as string, deploymentId as string),
   });
-  const requestReviewMutation = useMutation({
-    mutationFn: () => deploymentsApi.requestReview(projectId as string, deploymentId as string),
-  });
-  const approveMutation = useMutation({
-    mutationFn: () => deploymentsApi.approveReview(projectId as string, deploymentId as string),
-  });
-  const rejectMutation = useMutation({
-    mutationFn: () => deploymentsApi.rejectReview(projectId as string, deploymentId as string),
-  });
 
   if (detailQuery.isLoading) {
     return <Skeleton className="h-96 w-full" aria-busy="true" />;
@@ -97,21 +80,20 @@ export function DeploymentDetailRoute() {
   const running = isBuildRunning(deployment.build_status);
   const isAdmin = activeRole ? canManageMembers(activeRole) : false;
   const url = deployment.production_url ?? deployment.preview_url;
+  const buildReady = deployment.build_status === "ready";
+  const lifecycleReady = buildReady && deployment.serve_status === "ready";
 
-  const canPromote =
-    deployment.build_status === "ready" &&
+  const showPromote =
+    buildReady &&
     deployment.release_status !== "active" &&
     (!detail.review_required || deployment.release_status === "approved");
-  const canRequestReview =
-    detail.review_required &&
-    deployment.build_status === "ready" &&
-    ["draft", "rejected"].includes(deployment.release_status);
-  const hasPendingReview = deployment.release_status === "pending_review";
+  const canPromote = showPromote && lifecycleReady;
   const canRetry = ["failed", "canceled"].includes(deployment.build_status);
-  const canRollback =
-    deployment.build_status === "ready" &&
+  const showRollback =
+    buildReady &&
     deployment.release_status === "approved" &&
     detail.events.some((event) => event.kind === "release");
+  const canRollback = showRollback && lifecycleReady;
 
   return (
     <div className="space-y-6">
@@ -123,7 +105,9 @@ export function DeploymentDetailRoute() {
               {deployment.environment}
             </Badge>
             <BuildStatusBadge status={deployment.build_status} />
+            <ServeStatusBadge status={deployment.serve_status} />
             <ReleaseStatusBadge status={deployment.release_status} />
+            {deployment.overcommitted && <Badge variant="warning">Overflow placement</Badge>}
           </div>
           <p className="text-sm text-muted-foreground">
             Created {new Date(deployment.created_at).toLocaleString()}
@@ -162,45 +146,19 @@ export function DeploymentDetailRoute() {
             <RotateCcwIcon /> Retry
           </Button>
         )}
-        {canRequestReview && (
-          <Button
-            variant="outline"
-            onClick={() => act(requestReviewMutation.mutateAsync)}
-            disabled={requestReviewMutation.isPending}
-          >
-            Request review
-          </Button>
-        )}
-        {hasPendingReview && isAdmin && (
-          <>
-            <Button
-              onClick={() => act(approveMutation.mutateAsync)}
-              disabled={approveMutation.isPending}
-            >
-              <CheckIcon /> Approve
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => act(rejectMutation.mutateAsync)}
-              disabled={rejectMutation.isPending}
-            >
-              <XIcon /> Reject
-            </Button>
-          </>
-        )}
-        {canPromote && isAdmin && (
+        {showPromote && isAdmin && (
           <Button
             onClick={() => act(promoteMutation.mutateAsync)}
-            disabled={promoteMutation.isPending}
+            disabled={!canPromote || promoteMutation.isPending}
           >
             <RocketIcon /> Promote
           </Button>
         )}
-        {canRollback && isAdmin && (
+        {showRollback && isAdmin && (
           <Button
             variant="outline"
             onClick={() => act(rollbackMutation.mutateAsync)}
-            disabled={rollbackMutation.isPending}
+            disabled={!canRollback || rollbackMutation.isPending}
           >
             <UndoIcon /> Roll back to this deployment
           </Button>
@@ -241,6 +199,12 @@ export function DeploymentDetailRoute() {
               />
               <OverviewRow label="Duration" value={formatDuration(deployment.duration_seconds)} />
               <OverviewRow label="Stage" value={deployment.build_stage ?? "—"} />
+              <OverviewRow label="Build node" value={deployment.build_node?.name ?? "Unassigned"} />
+              <OverviewRow label="Serve node" value={deployment.serve_node?.name ?? "Unassigned"} />
+              <OverviewRow
+                label="Serve resources"
+                value={`${deployment.serve_resources.cpu_millicores}m · ${deployment.serve_resources.memory_mb} MB · ${deployment.serve_resources.disk_mb} MB disk`}
+              />
               {url && (
                 <div className="flex justify-between gap-2">
                   <span className="text-muted-foreground">URL</span>
@@ -261,6 +225,14 @@ export function DeploymentDetailRoute() {
                     {deployment.failure_code ?? "failed"}
                   </p>
                   <p className="text-destructive">{deployment.failure_message}</p>
+                </div>
+              )}
+              {deployment.serve_failure_message && (
+                <div className="rounded-md border border-destructive/40 bg-destructive/5 p-2">
+                  <p className="font-medium text-destructive">
+                    {deployment.serve_failure_code ?? "serve_failed"}
+                  </p>
+                  <p className="text-destructive">{deployment.serve_failure_message}</p>
                 </div>
               )}
             </CardContent>

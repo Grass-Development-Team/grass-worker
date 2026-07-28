@@ -95,6 +95,16 @@ fn upstream_address(
     Some(format!("{ip}:{port}"))
 }
 
+fn service_nano_cpus(cpu_millicores: u64) -> i64 {
+    i64::try_from(cpu_millicores)
+        .unwrap_or(i64::MAX)
+        .saturating_mul(1_000_000)
+}
+
+fn service_memory_bytes(memory_mb: u64) -> i64 {
+    memory_mb.saturating_mul(1024 * 1024).min(i64::MAX as u64) as i64
+}
+
 /// Unpacks an exported tar under `destination`; `unpack_in` rejects entries
 /// that would escape it.
 async fn unpack_export(destination: PathBuf, bytes: Vec<u8>) -> Result<(), ContainerRuntimeError> {
@@ -421,8 +431,8 @@ impl super::ContainerRuntime for SocketRuntime {
             working_dir: Some("/app".to_owned()),
             env: Some(env),
             host_config: Some(HostConfig {
-                memory: Some((input.memory_mb * 1024 * 1024) as i64),
-                nano_cpus: Some(i64::from(input.cpu_limit) * 1_000_000_000),
+                memory: Some(service_memory_bytes(input.memory_mb)),
+                nano_cpus: Some(service_nano_cpus(input.cpu_millicores)),
                 network_mode: Some(input.network.clone()),
                 restart_policy: Some(RestartPolicy {
                     name: Some(RestartPolicyNameEnum::ON_FAILURE),
@@ -504,5 +514,22 @@ impl super::ContainerRuntime for SocketRuntime {
             .await;
         self.remove_container(service_id).await;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_cpu_millicores_convert_to_docker_nano_cpus() {
+        assert_eq!(service_nano_cpus(200), 200_000_000);
+        assert_eq!(service_nano_cpus(50), 50_000_000);
+    }
+
+    #[test]
+    fn service_memory_megabytes_convert_without_overflow() {
+        assert_eq!(service_memory_bytes(256), 268_435_456);
+        assert_eq!(service_memory_bytes(u64::MAX), i64::MAX);
     }
 }

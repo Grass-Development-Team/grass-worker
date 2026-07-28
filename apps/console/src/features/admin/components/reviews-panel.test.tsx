@@ -21,11 +21,12 @@ const reviewFixture = {
     id: "deploy-1",
     environment: "production",
     build_status: "ready",
+    serve_status: "ready",
     release_status: "pending_review",
     source_branch: "main",
     commit_hash: "abcdef1234567890",
     commit_message: "Ship the landing page",
-    preview_host: null,
+    preview_host: "apple-banana-landing.cxcs.page",
     created_at: new Date().toISOString(),
   },
   project: { id: "project-1", name: "Landing", slug: "landing" },
@@ -77,4 +78,29 @@ it("approves a deployment through the admin decision endpoint", async () => {
     "/api/v1/admin/deployments/deploy-1/review/approve",
     expect.objectContaining({ method: "POST" }),
   );
+});
+
+it("links to the protected preview and disables decisions until Serve is ready", async () => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+    jsonResponse({
+      total: 1,
+      reviews: [
+        {
+          ...reviewFixture,
+          deployment: { ...reviewFixture.deployment, serve_status: "syncing" },
+        },
+      ],
+    }),
+  );
+
+  renderPanel();
+
+  expect(await screen.findByRole("link", { name: "Open preview" })).toHaveAttribute(
+    "href",
+    "//apple-banana-landing.cxcs.page",
+  );
+  expect(screen.getByText("Syncing")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^Approve$/ })).toBeDisabled();
+  expect(screen.getByRole("button", { name: /Approve & promote/ })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Reject" })).toBeDisabled();
 });

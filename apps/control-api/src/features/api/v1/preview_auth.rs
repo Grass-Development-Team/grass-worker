@@ -16,9 +16,11 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
-    domain::{deployments, settings, teams},
+    domain::{deployments, settings, teams, users},
     infra::{
-        database::entity::{DeploymentBuildStatus, DeploymentEnvironment},
+        database::entity::{
+            DeploymentBuildStatus, DeploymentServeStatus, PlatformRole, UserStatus,
+        },
         error::{AppError, ok_response},
         http::{extractors::session::OptionalSession, middlewares::node_auth::AuthenticatedNode},
     },
@@ -199,8 +201,8 @@ async fn resolve_preview_binding(
         .await
         .map_err(|source| AppError::Infrastructure { op, source })?
         .filter(|deployment| {
-            matches!(deployment.environment, DeploymentEnvironment::Preview)
-                && matches!(deployment.build_status, DeploymentBuildStatus::Ready)
+            matches!(deployment.build_status, DeploymentBuildStatus::Ready)
+                && matches!(deployment.serve_status, DeploymentServeStatus::Ready)
         })
         .ok_or_else(|| AppError::NotFound {
             op,
@@ -260,6 +262,30 @@ async fn user_is_member(
         .await
         .map(|role| role.is_some())
         .map_err(|source| AppError::Infrastructure { op, source })
+}
+
+fn preview_access_allowed(is_team_member: bool, is_active_platform_admin: bool) -> bool {
+    is_team_member || is_active_platform_admin
+}
+
+async fn user_can_access_preview(
+    db: &sea_orm::DatabaseConnection,
+    team_id: Uuid,
+    user_id: Uuid,
+    op: &'static str,
+) -> Result<bool, AppError> {
+    let is_team_member = user_is_member(db, team_id, user_id, op).await?;
+    let is_active_platform_admin = users::get_user_by_id(db, user_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op, source })?
+        .is_some_and(|user| {
+            matches!(user.status, UserStatus::Active)
+                && matches!(user.platform_role, PlatformRole::Admin)
+        });
+    Ok(preview_access_allowed(
+        is_team_member,
+        is_active_platform_admin,
+    ))
 }
 
 async fn validate_source_session(
@@ -415,7 +441,7 @@ pub async fn authorize(
             message: "preview authorization is invalid or expired".to_owned(),
         })?;
     require_current_binding(db, &record.binding, OP).await?;
-    if !user_is_member(db, record.binding.team_id, session.data.user_id, OP).await? {
+    if !user_can_access_preview(db, record.binding.team_id, session.data.user_id, OP).await? {
         return Ok(forbidden_page());
     }
 
@@ -470,10 +496,11 @@ pub async fn exchange(
             op: OP,
             message: "preview session is invalid or expired".to_owned(),
         })?;
-    if !user_is_member(db, record.binding.team_id, record.user_id, OP).await? {
+    if !user_can_access_preview(db, record.binding.team_id, record.user_id, OP).await? {
         return Err(AppError::Forbidden {
             op: OP,
-            message: "preview access requires team membership".to_owned(),
+            message: "preview access requires team membership or platform administration"
+                .to_owned(),
         });
     }
 
@@ -548,10 +575,11 @@ pub async fn verify(
             message: "preview session is invalid or expired".to_owned(),
         });
     }
-    if !user_is_member(db, record.binding.team_id, record.user_id, OP).await? {
+    if !user_can_access_preview(db, record.binding.team_id, record.user_id, OP).await? {
         return Err(AppError::Forbidden {
             op: OP,
-            message: "preview access requires team membership".to_owned(),
+            message: "preview access requires team membership or platform administration"
+                .to_owned(),
         });
     }
     Ok(ok_response(VerifyPreviewGrantResponse { allowed: true }).into_response())
@@ -592,6 +620,13 @@ mod tests {
             "http://preview.test/.grass/auth/callback?code=a+b"
         );
         assert!(preview_callback_url("file:///tmp", "preview.test", "code").is_err());
+    }
+
+    #[test]
+    fn protected_previews_allow_team_members_or_platform_admins() {
+        assert!(preview_access_allowed(true, false));
+        assert!(preview_access_allowed(false, true));
+        assert!(!preview_access_allowed(false, false));
     }
 
     #[test]
