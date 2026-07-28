@@ -28,6 +28,8 @@ export function ServeStatusBadge({ status }: { status: ServeStatus }) {
       return <Badge variant="destructive">Serve failed</Badge>;
     case "syncing":
       return <Badge variant="warning">Syncing to serve node</Badge>;
+    case "retired":
+      return <Badge variant="secondary">Retired</Badge>;
     default:
       return <Badge variant="outline">Serve pending</Badge>;
   }

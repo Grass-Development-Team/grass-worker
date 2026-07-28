@@ -23,6 +23,7 @@ use uuid::Uuid;
 use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
+        delivery,
         deployments::{self, BuildTransition, ReadyReleaseAction},
         quotas::QuotaDimension,
         scheduler::{self, NodeUsage},
@@ -459,6 +460,36 @@ pub async fn stage(
             let (updated, build_transitioned, ready_action) =
                 if matches!(target, DeploymentBuildStatus::Ready) {
                     finalize_ready(db, deployment, transition).await?
+                } else if matches!(
+                    target,
+                    DeploymentBuildStatus::Failed | DeploymentBuildStatus::Canceled
+                ) {
+                    let transaction =
+                        db.begin()
+                            .await
+                            .map_err(|source| AppError::Infrastructure {
+                                op: OP,
+                                source: source.into(),
+                            })?;
+                    let updated = delivery::transition_unsuccessful_build(
+                        &transaction,
+                        deployment,
+                        transition,
+                    )
+                    .await
+                    .map_err(|error| {
+                        crate::features::api::v1::projects::deployments::map_delivery_error(
+                            error, OP,
+                        )
+                    })?;
+                    transaction
+                        .commit()
+                        .await
+                        .map_err(|source| AppError::Infrastructure {
+                            op: OP,
+                            source: source.into(),
+                        })?;
+                    (updated, true, ReadyReleaseAction::None)
                 } else {
                     let updated = deployments::transition_build(db, deployment, transition)
                         .await
@@ -617,6 +648,13 @@ async fn finalize_ready(
             source: source.into(),
         })?;
 
+    scheduler::lock_placement(&transaction)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+
     // Serialize retries for this deployment and make the decision from the
     // latest row, not from the pre-transaction request snapshot.
     let deployment = deployments::get_by_id_for_update(&transaction, requested_deployment.id)
@@ -664,6 +702,16 @@ async fn finalize_ready(
         }
         ReadyReleaseAction::None => deployment,
     };
+    delivery::reconcile_environment(
+        &transaction,
+        deployment.project_id,
+        deployment.environment.clone(),
+    )
+    .await
+    .map_err(|source| AppError::Infrastructure {
+        op: OP,
+        source: source.into(),
+    })?;
     transaction
         .commit()
         .await
@@ -684,47 +732,39 @@ async fn finalize_ready(
 }
 
 pub(super) async fn auto_activate_if_allowed(
-    db: &sea_orm::DatabaseConnection,
-    requested_deployment: deployment::Model,
+    transaction: &sea_orm::DatabaseTransaction,
+    deployment: deployment::Model,
 ) -> Result<(), AppError> {
     const OP: &str = "internal.deployments.auto_activate";
-    let transaction = db
-        .begin()
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
-    let deployment = deployments::get_by_id_for_update(&transaction, requested_deployment.id)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?
-        .ok_or_else(|| AppError::NotFound {
-            op: OP,
-            message: "deployment not found".to_owned(),
-        })?;
-    let policy = deployments::review_policy(&transaction)
-        .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    let action = deployments::serve_ready_release_action(
-        policy.mode_for(&deployment.environment),
-        &deployment.release_status,
-    );
-    let activated = if matches!(action, ReadyReleaseAction::Activate) {
-        Some(
-            deployments::activate(&transaction, deployment, ReleaseReason::Auto, None)
-                .await
-                .map_err(|error| {
-                    crate::features::api::v1::projects::deployments::map_state_error(error, OP)
-                })?,
-        )
+    let project_id = deployment.project_id;
+    let environment = deployment.environment.clone();
+    let activated = if deployment.pending_release_reason.is_some() {
+        delivery::complete_pending_release(transaction, deployment)
+            .await
+            .map_err(|error| {
+                crate::features::api::v1::projects::deployments::map_delivery_error(error, OP)
+            })?
     } else {
-        None
+        let policy = deployments::review_policy(transaction)
+            .await
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+        let action = deployments::serve_ready_release_action(
+            policy.mode_for(&deployment.environment),
+            &deployment.release_status,
+        );
+        if matches!(action, ReadyReleaseAction::Activate) {
+            Some(
+                deployments::activate(transaction, deployment, ReleaseReason::Auto, None)
+                    .await
+                    .map_err(|error| {
+                        crate::features::api::v1::projects::deployments::map_state_error(error, OP)
+                    })?,
+            )
+        } else {
+            None
+        }
     };
-    transaction
-        .commit()
+    delivery::reconcile_environment(transaction, project_id, environment)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,

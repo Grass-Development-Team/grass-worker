@@ -93,7 +93,12 @@ async fn main() -> anyhow::Result<()> {
         let ssr_manager = Arc::new(serve::ssr::SsrManager::new(runtime, &config));
         let ssr_reaper = ssr_manager.clone().spawn_reaper();
         let route_table = Arc::new(serve::routes::RouteTable::default());
-        let route_refresh = serve::routes::spawn(client.clone(), route_table.clone());
+        let route_refresh = serve::routes::spawn(
+            client.clone(),
+            route_table.clone(),
+            node_id,
+            ssr_manager.clone(),
+        );
         let serve_state = Arc::new(serve::ServeState::new(
             client.clone(),
             node_id,

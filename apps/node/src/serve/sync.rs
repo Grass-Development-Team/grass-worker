@@ -210,6 +210,18 @@ pub async fn sync_assignment(
     cleanup_ephemeral(&deployment_root).await?;
     let final_path = deployment_root.join(&assignment.artifact.checksum_sha256);
     if marker_matches(&final_path, &ArtifactMarker::from_assignment(&assignment)) {
+        if matches!(
+            assignment.status,
+            ServeAssignmentStatus::Pending | ServeAssignmentStatus::Failed
+        ) {
+            report_status(
+                client,
+                assignment.deployment_id,
+                ReportedServeStatus::Syncing,
+                None,
+            )
+            .await?;
+        }
         if !matches!(assignment.status, ServeAssignmentStatus::Ready) {
             report_status(
                 client,
@@ -540,6 +552,49 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(!entries.iter().any(|entry| entry.starts_with(".download-")));
         assert!(!entries.iter().any(|entry| entry.starts_with(".staging-")));
+
+        server.abort();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cached_assignment_still_reports_syncing_before_ready() {
+        let root = temp_dir("cached-resync");
+        let cache_root = root.join("cache");
+        let (assignment, archive_path) = artifact_fixture(&root);
+        stage_archive(&cache_root, &assignment, &archive_path).unwrap();
+
+        let statuses = Arc::new(Mutex::new(Vec::new()));
+        let reported = statuses.clone();
+        let app = Router::new().route(
+            "/api/v1/internal/serve/deployments/{deployment_id}/status",
+            axum::routing::post(
+                move |axum::Json(report): axum::Json<ReportServeStatusRequest>| {
+                    let reported = reported.clone();
+                    async move {
+                        reported.lock().await.push(report.status);
+                        axum::Json(serde_json::json!({
+                            "code": 200,
+                            "message": "OK",
+                            "data": ReportServeStatusResponse { acknowledged: true }
+                        }))
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = ControlApiClient::new(&format!("http://{address}"), "node-token").unwrap();
+
+        sync_assignment(&client, &cache_root, assignment)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *statuses.lock().await,
+            vec![ReportedServeStatus::Syncing, ReportedServeStatus::Ready]
+        );
 
         server.abort();
         std::fs::remove_dir_all(root).unwrap();

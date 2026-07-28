@@ -119,6 +119,7 @@ string_active_enum!(DeploymentServeStatus, "deployment_serve_status", {
     Syncing => "syncing",
     Ready => "ready",
     Failed => "failed",
+    Retired => "retired",
 });
 
 string_active_enum!(DeploymentEventKind, "deployment_event_kind", {

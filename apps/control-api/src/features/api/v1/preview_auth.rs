@@ -16,7 +16,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
-    domain::{deployments, settings, teams, users},
+    domain::{delivery, deployments, projects, settings, teams, users},
     infra::{
         database::entity::{
             DeploymentBuildStatus, DeploymentServeStatus, PlatformRole, UserStatus,
@@ -208,10 +208,30 @@ async fn resolve_preview_binding(
             op,
             message: "preview deployment is not ready".to_owned(),
         })?;
+    let effective =
+        delivery::effective_preview(db, deployment.project_id, deployment.environment.clone())
+            .await
+            .map_err(|source| AppError::Infrastructure {
+                op,
+                source: source.into(),
+            })?;
+    if effective.as_ref().map(|item| item.id) != Some(deployment.id) {
+        return Err(AppError::NotFound {
+            op,
+            message: "preview deployment has been superseded".to_owned(),
+        });
+    }
+    let project = projects::get_by_id_any(db, deployment.project_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op, source })?
+        .ok_or_else(|| AppError::NotFound {
+            op,
+            message: "preview project not found".to_owned(),
+        })?;
     Ok(PreviewBinding {
         deployment_id: deployment.id,
         project_id: deployment.project_id,
-        team_id: deployment.team_id,
+        team_id: project.team_id,
         host,
     })
 }
@@ -264,8 +284,12 @@ async fn user_is_member(
         .map_err(|source| AppError::Infrastructure { op, source })
 }
 
-fn preview_access_allowed(is_team_member: bool, is_active_platform_admin: bool) -> bool {
-    is_team_member || is_active_platform_admin
+fn preview_access_allowed(
+    is_active_user: bool,
+    is_team_member: bool,
+    is_platform_admin: bool,
+) -> bool {
+    is_active_user && (is_team_member || is_platform_admin)
 }
 
 async fn user_can_access_preview(
@@ -274,17 +298,22 @@ async fn user_can_access_preview(
     user_id: Uuid,
     op: &'static str,
 ) -> Result<bool, AppError> {
-    let is_team_member = user_is_member(db, team_id, user_id, op).await?;
-    let is_active_platform_admin = users::get_user_by_id(db, user_id)
+    let Some(user) = users::get_user_by_id(db, user_id)
         .await
         .map_err(|source| AppError::Infrastructure { op, source })?
-        .is_some_and(|user| {
-            matches!(user.status, UserStatus::Active)
-                && matches!(user.platform_role, PlatformRole::Admin)
-        });
+    else {
+        return Ok(false);
+    };
+    let is_active_user = matches!(user.status, UserStatus::Active);
+    if !is_active_user {
+        return Ok(false);
+    }
+    let is_team_member = user_is_member(db, team_id, user_id, op).await?;
+    let is_platform_admin = matches!(user.platform_role, PlatformRole::Admin);
     Ok(preview_access_allowed(
+        is_active_user,
         is_team_member,
-        is_active_platform_admin,
+        is_platform_admin,
     ))
 }
 
@@ -624,9 +653,11 @@ mod tests {
 
     #[test]
     fn protected_previews_allow_team_members_or_platform_admins() {
-        assert!(preview_access_allowed(true, false));
-        assert!(preview_access_allowed(false, true));
-        assert!(!preview_access_allowed(false, false));
+        assert!(preview_access_allowed(true, true, false));
+        assert!(preview_access_allowed(true, false, true));
+        assert!(!preview_access_allowed(true, false, false));
+        assert!(!preview_access_allowed(false, true, false));
+        assert!(!preview_access_allowed(false, false, true));
     }
 
     #[test]

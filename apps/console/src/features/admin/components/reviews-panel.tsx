@@ -42,6 +42,8 @@ function serveBadge(status: AdminReview["deployment"]["serve_status"]) {
       return <Badge variant="destructive">Failed</Badge>;
     case "syncing":
       return <Badge variant="warning">Syncing</Badge>;
+    case "retired":
+      return <Badge variant="secondary">Retired</Badge>;
     default:
       return <Badge variant="outline">Pending</Badge>;
   }
@@ -78,7 +80,7 @@ export function ReviewsPanel() {
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
         Deployments waiting for release review across all teams. Approve unblocks the team's Promote
-        button; Approve &amp; promote publishes production immediately.
+        button; Approve &amp; promote publishes after the target is ready on a Serve Node.
       </p>
 
       {error && (
@@ -116,7 +118,10 @@ export function ReviewsPanel() {
             </TableHeader>
             <TableBody>
               {reviewsQuery.data.reviews.map((review) => {
-                const decisionsReady = review.deployment.serve_status === "ready";
+                const decisionsReady =
+                  review.deployment.serve_status === "ready" ||
+                  (review.deployment.serve_status === "retired" &&
+                    review.deployment.serve_was_ready);
                 return (
                   <TableRow key={review.id}>
                     <TableCell>
@@ -130,16 +135,17 @@ export function ReviewsPanel() {
                     <TableCell>
                       <div className="flex items-center gap-2">
                         {serveBadge(review.deployment.serve_status)}
-                        {review.deployment.preview_host && (
-                          <a
-                            href={`//${review.deployment.preview_host}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-                          >
-                            Open preview <ExternalLinkIcon className="size-3" />
-                          </a>
-                        )}
+                        {review.deployment.preview_host &&
+                          review.deployment.serve_status !== "retired" && (
+                            <a
+                              href={`//${review.deployment.preview_host}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                            >
+                              Open preview <ExternalLinkIcon className="size-3" />
+                            </a>
+                          )}
                       </div>
                     </TableCell>
                     <TableCell className="max-w-56">

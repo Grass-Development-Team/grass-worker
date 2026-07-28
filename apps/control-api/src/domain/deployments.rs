@@ -118,7 +118,10 @@ pub fn can_transition_serve(from: &DeploymentServeStatus, to: &DeploymentServeSt
     use DeploymentServeStatus as S;
     matches!(
         (from, to),
-        (S::Pending | S::Failed | S::Ready, S::Syncing) | (S::Syncing, S::Ready | S::Failed)
+        (S::Pending | S::Failed | S::Ready, S::Syncing)
+            | (S::Syncing, S::Ready | S::Failed)
+            | (S::Pending | S::Syncing | S::Failed | S::Ready, S::Retired)
+            | (S::Retired, S::Pending)
     )
 }
 
@@ -128,6 +131,7 @@ pub fn serve_status_value(status: &DeploymentServeStatus) -> &'static str {
         DeploymentServeStatus::Syncing => "syncing",
         DeploymentServeStatus::Ready => "ready",
         DeploymentServeStatus::Failed => "failed",
+        DeploymentServeStatus::Retired => "retired",
     }
 }
 
@@ -156,6 +160,17 @@ fn validate_release_readiness(
             DeploymentReleaseStatus::PendingReview
         )
     ) {
+        return Ok(());
+    }
+    if matches!(serve_status, DeploymentServeStatus::Retired)
+        && matches!(
+            (from, to),
+            (
+                DeploymentReleaseStatus::PendingReview,
+                DeploymentReleaseStatus::Approved | DeploymentReleaseStatus::Rejected
+            )
+        )
+    {
         return Ok(());
     }
     if !matches!(serve_status, DeploymentServeStatus::Ready) {
@@ -246,6 +261,9 @@ pub async fn create_deployment<C: ConnectionTrait>(
         failure_message: Set(None),
         serve_failure_code: Set(None),
         serve_failure_message: Set(None),
+        pending_release_reason: Set(None),
+        pending_release_actor_user_id: Set(None),
+        pending_release_requested_at: Set(None),
         claimed_at: Set(None),
         build_started_at: Set(None),
         build_finished_at: Set(None),
@@ -304,6 +322,24 @@ pub async fn list_events<C: ConnectionTrait>(
         .all(db)
         .await
         .map_err(Into::into)
+}
+
+pub async fn was_serve_ready<C: ConnectionTrait>(
+    db: &C,
+    deployment_id: Uuid,
+) -> anyhow::Result<bool> {
+    let events = deployment_event::Entity::find()
+        .filter(deployment_event::Column::DeploymentId.eq(deployment_id))
+        .filter(deployment_event::Column::Kind.eq(DeploymentEventKind::Serve))
+        .all(db)
+        .await?;
+    Ok(events.iter().any(|event| {
+        event
+            .metadata
+            .get("status")
+            .and_then(|value| value.as_str())
+            == Some("ready")
+    }))
 }
 
 // --- Queries ----------------------------------------------------------------
@@ -456,7 +492,7 @@ pub async fn transition_serve<C: ConnectionTrait>(
             active.serve_failure_code = Set(transition.failure_code.clone());
             active.serve_failure_message = Set(transition.failure_message.clone());
         }
-        DeploymentServeStatus::Pending => {}
+        DeploymentServeStatus::Pending | DeploymentServeStatus::Retired => {}
     }
 
     let updated = active.update(db).await?;
@@ -959,6 +995,10 @@ mod tests {
             validate_release_readiness(&R::PendingReview, &R::Approved, &B::Ready, &S::Syncing),
             Err(DeploymentStateError::ServeNotReady)
         ));
+        assert!(
+            validate_release_readiness(&R::PendingReview, &R::Approved, &B::Ready, &S::Retired)
+                .is_ok()
+        );
         assert!(matches!(
             validate_release_readiness(&R::Draft, &R::Active, &B::Building, &S::Ready),
             Err(DeploymentStateError::BuildNotReady)
@@ -977,8 +1017,15 @@ mod tests {
         assert!(can_transition_serve(&S::Syncing, &S::Failed));
         assert!(can_transition_serve(&S::Failed, &S::Syncing));
         assert!(can_transition_serve(&S::Ready, &S::Syncing));
+        assert!(can_transition_serve(&S::Pending, &S::Retired));
+        assert!(can_transition_serve(&S::Syncing, &S::Retired));
+        assert!(can_transition_serve(&S::Failed, &S::Retired));
+        assert!(can_transition_serve(&S::Ready, &S::Retired));
+        assert!(can_transition_serve(&S::Retired, &S::Pending));
+        assert_eq!(serve_status_value(&S::Retired), "retired");
         assert!(!can_transition_serve(&S::Pending, &S::Ready));
         assert!(!can_transition_serve(&S::Failed, &S::Ready));
+        assert!(!can_transition_serve(&S::Retired, &S::Ready));
     }
 
     #[test]

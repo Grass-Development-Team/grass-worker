@@ -191,6 +191,7 @@ export interface AdminReview {
     environment: "production" | "preview";
     build_status: BuildStatus;
     serve_status: ServeStatus;
+    serve_was_ready: boolean;
     release_status: ReleaseStatus;
     source_branch: string | null;
     commit_hash: string | null;
@@ -428,10 +429,15 @@ export const adminApi = {
   listReviews: () => request<{ total: number; reviews: AdminReview[] }>("/api/v1/admin/reviews"),
 
   approveReview: (deploymentId: string, opts?: { reason?: string; promote?: boolean }) =>
-    request<{ deployment_id: string; release_status: string; promoted: boolean }>(
-      `/api/v1/admin/deployments/${deploymentId}/review/approve`,
-      { method: "POST", body: JSON.stringify(opts ?? {}) },
-    ),
+    request<{
+      deployment_id: string;
+      release_status: string;
+      promoted: boolean;
+      release_pending: boolean;
+    }>(`/api/v1/admin/deployments/${deploymentId}/review/approve`, {
+      method: "POST",
+      body: JSON.stringify(opts ?? {}),
+    }),
 
   rejectReview: (deploymentId: string, reason?: string) =>
     request<{ deployment_id: string; release_status: string }>(

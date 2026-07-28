@@ -169,7 +169,11 @@ instead choose a specific Serve Node in the deployment dialog.
 When every Node is at normal capacity, the scheduler may place up to two
 additional deployments on each Serve Node. CPU, memory, or deployment slots
 may be overcommitted in this mode, but disk is never overcommitted. A
-deployment keeps its single assigned Serve Node for its lifetime.
+deployment keeps one assigned Serve Node while it is part of the effective
+delivery set. Superseded Preview deployments are retired after their
+replacement reaches Serve Ready and no longer consume scheduler capacity.
+Node-local cached files and Control API artifacts are retained until the
+separate artifact-retention policy removes them.
 
 ## 4. Configure a host source
 
@@ -249,20 +253,30 @@ SSH, and `git://` connections are pinned to an address that passed this policy.
 3. Watch the realtime build log. A Build Node runs the build inside its
    configured container runtime, produces Grass Output v1, and streams the
    artifact to Control API local storage.
-4. The assigned Serve Node downloads, verifies, and stages the artifact. A
-   deployment is not available for review, promotion, rollback, or public
-   access until both its Build and Serve states are ready.
+4. When the build becomes Ready, the Control API automatically creates any
+   review required by policy. The assigned Serve Node then downloads,
+   verifies, and stages the artifact. Platform administrators can inspect the
+   pending review immediately, but Approve and Reject remain disabled until
+   Serve is Ready.
 5. Preview deployments activate automatically (default policy) and become
    reachable at their preview URL after Serve staging is ready.
-6. Production deployments require review by default: request review, then
-   approve as a team admin on the deployment page — or platform-wide under
-   **Administration → Reviews**, where administrators see every pending
-   review and can **Approve**, **Approve & promote** (publish in the same
-   step), or **Reject** with a reason. After a plain approve, **Promote**
-   publishes. The stable domain now serves the deployment. **Roll back**
-   from any previously active deployment. The review requirement per
-   environment is configured under **Administration → Settings → Release
-   review** (production defaults to manual, preview to auto).
+6. Production deployments require review by default. Only platform
+   administrators decide reviews under **Administration → Reviews**; team
+   owners and administrators can inspect review state but cannot approve or
+   reject it. **Approve & promote** publishes once the target is Serve Ready;
+   plain **Approve** lets a team administrator Promote later. The review
+   policy is configured under **Administration → Settings → Release review**
+   (production defaults to manual, preview to auto).
+7. Delivery uses a rolling overlap. While a replacement is Pending, Syncing,
+   or Failed, the previous Ready Preview and current Active Production remain
+   assigned and keep serving. Routes switch only after the replacement is
+   Serve Ready; then superseded Preview assignments are retired. A cluster
+   without enough temporary capacity rejects the new placement instead of
+   stopping the old version.
+8. Promoting or rolling back to a retired Production deployment first queues
+   it for Serve synchronization. The current Production domain remains on the
+   active version until the target reports Ready, then activation and route
+   cutover happen atomically.
 
 ## Notes
 
@@ -270,6 +284,10 @@ SSH, and `git://` connections are pinned to an address that passed this policy.
   Nodes upload to its local storage and Serve Nodes download into their local
   artifact cache. Size the Control API storage for retained artifacts as well
   as logs and other platform data.
+- Every deployment receives a protected Preview host. Only active users in
+  the project's current team and active platform administrators can open it.
+  Project transfer, user disablement, or Preview replacement invalidates
+  existing Preview grants on their next verification.
 - After upgrading an existing cluster to this version, restart every Node at
   least once so it registers its exact capabilities and Serve capacity.
 - This phase runs exactly one Control API and assigns each deployment to one
@@ -293,6 +311,11 @@ SSH, and `git://` connections are pinned to an address that passed this policy.
   Hybrid, serverless, and edge outputs still fail with an explicit
   "not implemented yet" message. SSR project env vars are not implemented
   yet; SSR previews and reviews behave exactly like static ones.
+- Static serving resolves the requested path directly. A missing path serves
+  the deployment's `404.html` with status 404 when present, otherwise the
+  platform default 404. SPA fallback is opt-in by providing `200.html`; an
+  `index.html` alone is never used as a catch-all. HEAD and byte Range
+  requests use the same streaming file implementation.
 - Quota plans ship seeded (`free`, `student`, `plus`, `pro`, `ultra`);
   team groups map teams to plans, and usage appears under Usage.
 - **Administration → Projects** lists every project on the platform with

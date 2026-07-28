@@ -82,18 +82,18 @@ export function DeploymentDetailRoute() {
   const url = deployment.production_url ?? deployment.preview_url;
   const buildReady = deployment.build_status === "ready";
   const lifecycleReady = buildReady && deployment.serve_status === "ready";
+  const canQueueRelease = buildReady && deployment.serve_status === "retired";
 
   const showPromote =
     buildReady &&
     deployment.release_status !== "active" &&
     (!detail.review_required || deployment.release_status === "approved");
-  const canPromote = showPromote && lifecycleReady;
+  const canPromote =
+    showPromote && (lifecycleReady || canQueueRelease) && !deployment.release_pending;
   const canRetry = ["failed", "canceled"].includes(deployment.build_status);
-  const showRollback =
-    buildReady &&
-    deployment.release_status === "approved" &&
-    detail.events.some((event) => event.kind === "release");
-  const canRollback = showRollback && lifecycleReady;
+  const showRollback = buildReady && deployment.release_status === "approved" && detail.was_active;
+  const canRollback =
+    showRollback && (lifecycleReady || canQueueRelease) && !deployment.release_pending;
 
   return (
     <div className="space-y-6">
@@ -124,6 +124,12 @@ export function DeploymentDetailRoute() {
       {actionError && (
         <p role="alert" className="text-sm text-destructive">
           {actionError}
+        </p>
+      )}
+
+      {deployment.release_pending && (
+        <p role="status" className="text-sm text-muted-foreground">
+          Release queued. The current production version remains online until Serve is ready.
         </p>
       )}
 

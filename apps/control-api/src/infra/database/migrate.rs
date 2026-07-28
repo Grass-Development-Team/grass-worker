@@ -19,6 +19,7 @@ impl MigratorTrait for Migrator {
             Box::new(migration::m20260726_000008_audit_team_scope::Migration),
             Box::new(migration::m20260727_000009_git_source_access::Migration),
             Box::new(migration::m20260727_000010_node_scheduling::Migration),
+            Box::new(migration::m20260728_000011_delivery_rollout::Migration),
         ]
     }
 }
@@ -35,13 +36,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registers_node_scheduling_migration() {
+    fn registers_delivery_rollout_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 10);
+        assert_eq!(migrations.len(), 11);
         assert_eq!(
             migrations.last().expect("last migration").name(),
-            "m20260727_000010_node_scheduling"
+            "m20260728_000011_delivery_rollout"
         );
     }
 }
