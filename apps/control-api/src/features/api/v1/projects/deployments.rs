@@ -1299,16 +1299,8 @@ async fn activate_deployment(
         ReleaseRequestOutcome::Activated(deployment) => (deployment, false),
         ReleaseRequestOutcome::SyncQueued(deployment) => (deployment, true),
     };
-    transaction
-        .commit()
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op,
-            source: source.into(),
-        })?;
-
-    let _ = audits::create_audit_event(
-        db,
+    audits::create_audit_event(
+        &transaction,
         CreateAuditEventParams {
             actor_user_id: Some(session.data.user_id),
             team_id: Some(access.team.id),
@@ -1323,7 +1315,15 @@ async fn activate_deployment(
             }),
         },
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op,
+            source: source.into(),
+        })?;
 
     let urls = UrlContext::load(db, access.project.id)
         .await

@@ -351,6 +351,12 @@ pub struct ExchangePreviewCodeResponse {
     pub grant: String,
     pub return_to: String,
     pub max_age_seconds: u64,
+    #[serde(default = "secure_cookie_by_default")]
+    pub cookie_secure: bool,
+}
+
+fn secure_cookie_by_default() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -447,11 +453,16 @@ mod tests {
         assert_eq!(start.return_to, "/docs?q=1");
 
         let exchange: ExchangePreviewCodeResponse = serde_json::from_str(
-            r#"{"grant":"opaque","return_to":"/docs?q=1","max_age_seconds":43200}"#,
+            r#"{"grant":"opaque","return_to":"/docs?q=1","max_age_seconds":43200,"cookie_secure":false}"#,
         )
         .unwrap();
         assert_eq!(exchange.grant, "opaque");
         assert_eq!(exchange.max_age_seconds, 43_200);
+        assert!(!exchange.cookie_secure);
+        let legacy_exchange: ExchangePreviewCodeResponse =
+            serde_json::from_str(r#"{"grant":"opaque","return_to":"/","max_age_seconds":60}"#)
+                .unwrap();
+        assert!(legacy_exchange.cookie_secure);
 
         let verify = VerifyPreviewGrantResponse { allowed: true };
         assert_eq!(

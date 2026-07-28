@@ -287,7 +287,9 @@ SSH, and `git://` connections are pinned to an address that passed this policy.
 - Every deployment receives a protected Preview host. Only active users in
   the project's current team and active platform administrators can open it.
   Project transfer, user disablement, or Preview replacement invalidates
-  existing Preview grants on their next verification.
+  existing Preview grants on their next verification. HTTPS Preview callbacks
+  use a Secure `__Host-` cookie. Plain HTTP remains available for trusted local
+  development with a host-only cookie, but must not be exposed publicly.
 - After upgrading an existing cluster to this version, restart every Node at
   least once so it registers its exact capabilities and Serve capacity.
 - This phase runs exactly one Control API and assigns each deployment to one
@@ -307,7 +309,9 @@ SSH, and `git://` connections are pinned to an address that passed this policy.
   image defaults to `node:22` (`[runtime] default_serve_image`).
   Containerized nodes reach SSR containers by container IP, so both must
   share a network — set `[runtime] network` (or `GWNODE_RUNTIME_NETWORK`)
-  to the compose network when the node itself runs in a container.
+  to the compose network when the node itself runs in a container. SSR
+  service containers carry their owning Node label, so multiple Nodes may
+  safely share one Docker or Podman socket.
   Hybrid, serverless, and edge outputs still fail with an explicit
   "not implemented yet" message. SSR project env vars are not implemented
   yet; SSR previews and reviews behave exactly like static ones.

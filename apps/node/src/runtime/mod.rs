@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use tokio::sync::{mpsc, watch};
@@ -75,12 +76,19 @@ pub struct RunServiceInput {
     pub cpu_millicores: u64,
     pub memory_mb: u64,
     pub network: String,
+    pub labels: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct RunningService {
     /// `ip:port` address of the service reachable from this node process.
     pub upstream: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceContainer {
+    pub name: String,
+    pub labels: HashMap<String, String>,
 }
 
 pub trait ContainerRuntime: Send + Sync {
@@ -106,6 +114,12 @@ pub trait ContainerRuntime: Send + Sync {
         &self,
         input: RunServiceInput,
     ) -> impl Future<Output = Result<RunningService, ContainerRuntimeError>> + Send;
+
+    /// Lists service container names managed under a deterministic prefix.
+    fn list_services(
+        &self,
+        prefix: &str,
+    ) -> impl Future<Output = Result<Vec<ServiceContainer>, ContainerRuntimeError>> + Send;
 
     /// Stops and removes an SSR service container by name.
     fn stop_service(
@@ -181,6 +195,16 @@ impl ContainerRuntime for BuildRuntime {
             Self::Fake(runtime) => runtime.stop_service(service_id).await,
         }
     }
+
+    async fn list_services(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<ServiceContainer>, ContainerRuntimeError> {
+        match self {
+            Self::Socket(runtime) => runtime.list_services(prefix).await,
+            Self::Fake(runtime) => runtime.list_services(prefix).await,
+        }
+    }
 }
 
 /// Test backend: scripts map to canned exit codes and output lines, letting
@@ -194,6 +218,7 @@ pub struct FakeRuntime {
     pub output: Vec<String>,
     /// Simulated execution time, checked against timeout and cancel.
     pub delay: Option<Duration>,
+    services: Mutex<HashMap<String, HashMap<String, String>>>,
 }
 
 impl ContainerRuntime for FakeRuntime {
@@ -248,12 +273,39 @@ impl ContainerRuntime for FakeRuntime {
         &self,
         input: RunServiceInput,
     ) -> Result<RunningService, ContainerRuntimeError> {
+        self.services
+            .lock()
+            .map_err(|_| ContainerRuntimeError::Runtime("fake service lock poisoned".to_owned()))?
+            .insert(input.name, input.labels);
         Ok(RunningService {
             upstream: format!("127.0.0.1:{}", input.container_port),
         })
     }
 
-    async fn stop_service(&self, _service_id: &str) -> Result<(), ContainerRuntimeError> {
+    async fn list_services(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<ServiceContainer>, ContainerRuntimeError> {
+        let mut services = self
+            .services
+            .lock()
+            .map_err(|_| ContainerRuntimeError::Runtime("fake service lock poisoned".to_owned()))?
+            .iter()
+            .filter(|(name, _)| name.starts_with(prefix))
+            .map(|(name, labels)| ServiceContainer {
+                name: name.clone(),
+                labels: labels.clone(),
+            })
+            .collect::<Vec<_>>();
+        services.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(services)
+    }
+
+    async fn stop_service(&self, service_id: &str) -> Result<(), ContainerRuntimeError> {
+        self.services
+            .lock()
+            .map_err(|_| ContainerRuntimeError::Runtime("fake service lock poisoned".to_owned()))?
+            .remove(service_id);
         Ok(())
     }
 }
@@ -345,6 +397,7 @@ mod tests {
                 cpu_millicores: 200,
                 memory_mb: 512,
                 network: "bridge".to_owned(),
+                labels: HashMap::new(),
             })
             .await
             .unwrap();

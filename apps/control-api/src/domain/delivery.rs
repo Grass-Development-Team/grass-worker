@@ -410,7 +410,8 @@ mod tests {
             entity::{
                 DeploymentBuildStatus, DeploymentEnvironment, DeploymentReleaseStatus,
                 DeploymentServeStatus, NodeStatus, PlatformRole, ProjectRuntime, ReleaseReason,
-                TeamKind, UserStatus, deployment, node, project, team, user,
+                TeamKind, TeamMemberRole, UserStatus, deployment, node, project, release, team,
+                team_member, user,
             },
             migrate::Migrator,
         },
@@ -552,6 +553,20 @@ mod tests {
             group_id: Set(None),
             explicit_quota_plan_id: Set(None),
             owner_user_id: Set(Some(user.id)),
+            deleted_at: Set(None),
+            created_at: Set(now),
+            updated_at: Set(now),
+        }
+        .insert(db)
+        .await
+        .unwrap();
+        team_member::ActiveModel {
+            id: Set(Uuid::now_v7()),
+            team_id: Set(team.id),
+            user_id: Set(user.id),
+            role: Set(TeamMemberRole::Owner),
+            invited_by_user_id: Set(None),
+            joined_at: Set(now),
             deleted_at: Set(None),
             created_at: Set(now),
             updated_at: Set(now),
@@ -1112,6 +1127,72 @@ mod tests {
         .await;
         assert!(second.is_err());
         transaction.rollback().await.unwrap();
+
+        test_db.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn postgres_queued_release_rolls_back_when_audit_insert_fails() {
+        let Some(test_db) = PostgresTestDatabase::start().await else {
+            eprintln!("GRASS_TEST_DATABASE_URL is not configured; skipping PostgreSQL test");
+            return;
+        };
+        let fixture = seed_delivery_fixture(&test_db.db).await;
+        release::ActiveModel {
+            id: Set(Uuid::now_v7()),
+            project_id: Set(fixture.project.id),
+            deployment_id: Set(fixture.rollback_target.id),
+            environment: Set(DeploymentEnvironment::Production),
+            reason: Set(ReleaseReason::Rollback),
+            actor_user_id: Set(Some(fixture.user.id)),
+            previous_deployment_id: Set(None),
+            created_at: Set(OffsetDateTime::now_utc()),
+        }
+        .insert(&test_db.db)
+        .await
+        .unwrap();
+        test_db
+            .db
+            .execute_unprepared(
+                r#"
+CREATE FUNCTION reject_queued_release_audit() RETURNS trigger AS $$
+BEGIN
+    IF NEW.action = 'deployment.rollback_queued' THEN
+        RAISE EXCEPTION 'queued release audit rejected by test';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER reject_queued_release_audit
+    BEFORE INSERT ON audit_events
+    FOR EACH ROW EXECUTE FUNCTION reject_queued_release_audit();
+"#,
+            )
+            .await
+            .unwrap();
+
+        let state = ControlApiState::new(ControlApiConfig::default(), "unused.toml");
+        state.database.set(test_db.db.clone()).unwrap();
+        let now = OffsetDateTime::now_utc();
+        let result = crate::features::api::v1::projects::deployments::rollback(
+            State(state),
+            Session {
+                data: grass_session::SessionData {
+                    user_id: fixture.user.id,
+                    created_at: now,
+                    last_accessed_at: now,
+                },
+                session_id: "test-session".to_owned(),
+            },
+            Path((fixture.project.id, fixture.rollback_target.id)),
+        )
+        .await;
+
+        assert!(result.is_err());
+        let target = reload_deployment(&test_db.db, fixture.rollback_target.id).await;
+        assert_eq!(target.pending_release_reason, None);
+        assert_eq!(target.serve_status, DeploymentServeStatus::Retired);
+        assert_eq!(target.serve_node_id, None);
 
         test_db.cleanup().await;
     }

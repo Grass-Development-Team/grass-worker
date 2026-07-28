@@ -3,7 +3,10 @@
 //! Podman exposes a Docker-compatible API on its socket, so both backends
 //! share this implementation; only the socket path differs.
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use bollard::Docker;
 use bollard::models::{
@@ -11,15 +14,15 @@ use bollard::models::{
 };
 use bollard::query_parameters::{
     CreateContainerOptions, CreateImageOptions, DownloadFromContainerOptions,
-    InspectContainerOptions, LogsOptions, RemoveContainerOptions, StartContainerOptions,
-    StopContainerOptions, UploadToContainerOptions, WaitContainerOptions,
+    InspectContainerOptions, ListContainersOptions, LogsOptions, RemoveContainerOptions,
+    StartContainerOptions, StopContainerOptions, UploadToContainerOptions, WaitContainerOptions,
 };
 use futures_util::StreamExt;
 use tokio::sync::{mpsc, watch};
 
 use super::{
     BuildExecutionResult, ContainerRuntimeError, PrepareImageInput, RunBuildInput, RunServiceInput,
-    RunningService,
+    RunningService, ServiceContainer,
 };
 
 pub struct SocketRuntime {
@@ -407,7 +410,16 @@ impl super::ContainerRuntime for SocketRuntime {
                 .as_ref()
                 .and_then(|state| state.running)
                 .unwrap_or(false);
+            let labels_match = input.labels.iter().all(|(name, value)| {
+                existing
+                    .config
+                    .as_ref()
+                    .and_then(|config| config.labels.as_ref())
+                    .and_then(|labels| labels.get(name))
+                    == Some(value)
+            });
             if running
+                && labels_match
                 && let Some(upstream) =
                     upstream_address(&existing, &input.network, input.container_port)
             {
@@ -440,6 +452,7 @@ impl super::ContainerRuntime for SocketRuntime {
                 }),
                 ..Default::default()
             }),
+            labels: Some(input.labels.clone()),
             ..Default::default()
         };
         self.docker
@@ -514,6 +527,41 @@ impl super::ContainerRuntime for SocketRuntime {
             .await;
         self.remove_container(service_id).await;
         Ok(())
+    }
+
+    async fn list_services(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<ServiceContainer>, ContainerRuntimeError> {
+        let mut filters = HashMap::new();
+        filters.insert("name".to_owned(), vec![prefix.to_owned()]);
+        let containers = self
+            .docker
+            .list_containers(Some(ListContainersOptions {
+                all: true,
+                filters: Some(filters),
+                ..Default::default()
+            }))
+            .await
+            .map_err(|error| runtime_error("service list", error))?;
+        let mut services = containers
+            .into_iter()
+            .flat_map(|container| {
+                let labels = container.labels.unwrap_or_default();
+                container
+                    .names
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(move |name| ServiceContainer {
+                        name: name.trim_start_matches('/').to_owned(),
+                        labels: labels.clone(),
+                    })
+            })
+            .filter(|service| service.name.starts_with(prefix))
+            .collect::<Vec<_>>();
+        services.sort_by(|left, right| left.name.cmp(&right.name));
+        services.dedup_by(|left, right| left.name == right.name);
+        Ok(services)
     }
 }
 

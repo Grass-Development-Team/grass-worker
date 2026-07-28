@@ -90,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
         });
 
     let (artifact_sync, route_refresh, ssr_reaper, serve_task) = if config.node.capabilities.serve {
-        let ssr_manager = Arc::new(serve::ssr::SsrManager::new(runtime, &config));
+        let ssr_manager = Arc::new(serve::ssr::SsrManager::new(runtime, node_id, &config));
         let ssr_reaper = ssr_manager.clone().spawn_reaper();
         let route_table = Arc::new(serve::routes::RouteTable::default());
         let route_refresh = serve::routes::spawn(

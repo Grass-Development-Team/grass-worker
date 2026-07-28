@@ -61,6 +61,16 @@ impl RouteTable {
             .map(|route| route.deployment_id)
             .collect()
     }
+
+    pub async fn deployment_ids(&self) -> HashSet<uuid::Uuid> {
+        self.snapshot
+            .read()
+            .await
+            .routes
+            .values()
+            .map(|route| route.deployment_id)
+            .collect()
+    }
 }
 
 async fn refresh_routes(
@@ -81,21 +91,26 @@ pub fn spawn(
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;
-            let before = table.local_deployment_ids(node_id).await;
             match refresh_routes(&client, &table).await {
-                Ok(true) => {
-                    let after = table.local_deployment_ids(node_id).await;
-                    for deployment_id in before.difference(&after) {
-                        ssr.invalidate(*deployment_id).await;
+                Ok(changed) => {
+                    let routed_here = table.local_deployment_ids(node_id).await;
+                    let routed_anywhere = table.deployment_ids().await;
+                    if let Err(error) = ssr.reconcile_routes(&routed_here, &routed_anywhere).await {
+                        tracing::warn!(
+                            operation = "node.serve.routes.reconcile_failed",
+                            %error,
+                            "failed to reconcile SSR services with Serve routes"
+                        );
                     }
-                    let revision = table.revision().await;
-                    tracing::info!(
-                        operation = "node.serve.routes.updated",
-                        ?revision,
-                        "Serve route snapshot updated"
-                    );
+                    if changed {
+                        let revision = table.revision().await;
+                        tracing::info!(
+                            operation = "node.serve.routes.updated",
+                            ?revision,
+                            "Serve route snapshot updated"
+                        );
+                    }
                 }
-                Ok(false) => {}
                 Err(error) => {
                     tracing::warn!(
                         operation = "node.serve.routes.failed",

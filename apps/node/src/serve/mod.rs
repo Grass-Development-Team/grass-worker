@@ -37,7 +37,8 @@ use crate::{
     output::manifest,
 };
 
-const PREVIEW_COOKIE: &str = "__Host-gw_preview_access";
+const SECURE_PREVIEW_COOKIE: &str = "__Host-gw_preview_access";
+const INSECURE_PREVIEW_COOKIE: &str = "gw_preview_access";
 const PREVIEW_CALLBACK_PATH: &str = "/.grass/auth/callback";
 
 #[derive(Clone)]
@@ -312,10 +313,14 @@ fn request_destination(path_and_query: &str) -> String {
 }
 
 fn preview_cookie_value(cookie_header: &str) -> Option<&str> {
-    cookie_header.split(';').find_map(|pair| {
-        let (name, value) = pair.trim().split_once('=')?;
-        (name == PREVIEW_COOKIE).then_some(value)
-    })
+    [SECURE_PREVIEW_COOKIE, INSECURE_PREVIEW_COOKIE]
+        .into_iter()
+        .find_map(|expected| {
+            cookie_header.split(';').find_map(|pair| {
+                let (name, value) = pair.trim().split_once('=')?;
+                (name == expected).then_some(value)
+            })
+        })
 }
 
 fn strip_preview_cookie(cookie_header: &str) -> Option<String> {
@@ -324,20 +329,28 @@ fn strip_preview_cookie(cookie_header: &str) -> Option<String> {
         .filter_map(|pair| {
             let pair = pair.trim();
             let (name, _) = pair.split_once('=')?;
-            (name != PREVIEW_COOKIE).then_some(pair)
+            (![SECURE_PREVIEW_COOKIE, INSECURE_PREVIEW_COOKIE].contains(&name)).then_some(pair)
         })
         .collect::<Vec<_>>();
     (!cookies.is_empty()).then(|| cookies.join("; "))
 }
 
-fn preview_access_cookie(grant: &str, max_age_seconds: u64) -> String {
+fn preview_access_cookie(grant: &str, max_age_seconds: u64, secure: bool) -> String {
+    let (name, secure_attribute) = if secure {
+        (SECURE_PREVIEW_COOKIE, "; Secure")
+    } else {
+        (INSECURE_PREVIEW_COOKIE, "")
+    };
     format!(
-        "{PREVIEW_COOKIE}={grant}; Path=/; Max-Age={max_age_seconds}; Secure; HttpOnly; SameSite=Lax"
+        "{name}={grant}; Path=/; Max-Age={max_age_seconds}{secure_attribute}; HttpOnly; SameSite=Lax"
     )
 }
 
-fn clear_preview_cookie() -> String {
-    format!("{PREVIEW_COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax")
+fn clear_preview_cookies() -> Vec<String> {
+    vec![
+        format!("{SECURE_PREVIEW_COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax"),
+        format!("{INSECURE_PREVIEW_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"),
+    ]
 }
 
 fn preview_cache_key(host: &str, grant: &str) -> String {
@@ -360,7 +373,7 @@ fn callback_code(request: &Request) -> Option<String> {
     codes.next().is_none().then_some(code)
 }
 
-fn redirect_response(location: &str, cookie: Option<String>) -> Response {
+fn redirect_response(location: &str, cookies: Vec<String>) -> Response {
     let Ok(location) = HeaderValue::from_str(location) else {
         return error_page(
             StatusCode::BAD_GATEWAY,
@@ -372,7 +385,7 @@ fn redirect_response(location: &str, cookie: Option<String>) -> Response {
         .header(header::LOCATION, location)
         .header(header::CACHE_CONTROL, "no-store")
         .header(header::REFERRER_POLICY, "no-referrer");
-    if let Some(cookie) = cookie {
+    for cookie in cookies {
         let Ok(cookie) = HeaderValue::from_str(&cookie) else {
             return error_page(
                 StatusCode::BAD_GATEWAY,
@@ -399,7 +412,7 @@ async fn begin_preview_authorization(
     {
         Ok(started) => redirect_response(
             &started.authorization_url,
-            clear_cookie.then(clear_preview_cookie),
+            clear_cookie.then(clear_preview_cookies).unwrap_or_default(),
         ),
         Err(error) => {
             warn!(
@@ -423,10 +436,11 @@ async fn handle_preview_callback(state: &ServeState, host: &str, code: Option<St
     match state.client.exchange_preview_code(host, &code).await {
         Ok(exchanged) => redirect_response(
             &exchanged.return_to,
-            Some(preview_access_cookie(
+            vec![preview_access_cookie(
                 &exchanged.grant,
                 exchanged.max_age_seconds.min(12 * 60 * 60),
-            )),
+                exchanged.cookie_secure,
+            )],
         ),
         Err(PreviewAuthError::Unauthorized) => {
             begin_preview_authorization(state, host, "/", true).await
@@ -1072,20 +1086,40 @@ mod tests {
     #[test]
     fn preview_cookie_contract_and_ssr_filtering_are_host_scoped() {
         assert_eq!(
-            preview_access_cookie("opaque", 43_200),
+            preview_access_cookie("opaque", 43_200, true),
             "__Host-gw_preview_access=opaque; Path=/; Max-Age=43200; Secure; HttpOnly; SameSite=Lax"
         );
         assert_eq!(
-            preview_cookie_value("app=1; __Host-gw_preview_access=opaque; theme=dark"),
-            Some("opaque")
+            preview_access_cookie("opaque", 43_200, false),
+            "gw_preview_access=opaque; Path=/; Max-Age=43200; HttpOnly; SameSite=Lax"
         );
         assert_eq!(
-            strip_preview_cookie("app=1; __Host-gw_preview_access=opaque; theme=dark"),
+            preview_cookie_value(
+                "app=1; __Host-gw_preview_access=secure; gw_preview_access=plain; theme=dark"
+            ),
+            Some("secure")
+        );
+        assert_eq!(
+            preview_cookie_value("app=1; gw_preview_access=plain; theme=dark"),
+            Some("plain")
+        );
+        assert_eq!(
+            strip_preview_cookie(
+                "app=1; __Host-gw_preview_access=secure; gw_preview_access=plain; theme=dark"
+            ),
             Some("app=1; theme=dark".to_owned())
         );
         assert_eq!(
             strip_preview_cookie("__Host-gw_preview_access=opaque"),
             None
+        );
+        assert_eq!(
+            clear_preview_cookies(),
+            vec![
+                "__Host-gw_preview_access=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax"
+                    .to_owned(),
+                "gw_preview_access=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax".to_owned(),
+            ]
         );
     }
 
@@ -1102,6 +1136,19 @@ mod tests {
         let response = error_page(StatusCode::BAD_GATEWAY, "unavailable");
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         assert_eq!(response.headers()[header::REFERRER_POLICY], "no-referrer");
+    }
+
+    #[test]
+    fn preview_redirect_can_clear_secure_and_http_development_cookies() {
+        let response = redirect_response("/", clear_preview_cookies());
+        assert_eq!(
+            response
+                .headers()
+                .get_all(header::SET_COOKIE)
+                .iter()
+                .count(),
+            2
+        );
     }
 
     #[test]
@@ -1295,7 +1342,7 @@ mod tests {
     async fn peer_endpoint_requires_gateway_auth_before_route_lookup() {
         let config = NodeConfig::default();
         let routes = Arc::new(routes::RouteTable::default());
-        let ssr = Arc::new(ssr::SsrManager::new(None, &config));
+        let ssr = Arc::new(ssr::SsrManager::new(None, Uuid::now_v7(), &config));
         let state = Arc::new(ServeState::new(
             ControlApiClient::new("http://127.0.0.1:9", "node-token").unwrap(),
             Uuid::now_v7(),

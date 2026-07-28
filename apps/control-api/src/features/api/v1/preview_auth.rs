@@ -53,6 +53,8 @@ struct CallbackCodeRecord {
     session_id: String,
     user_id: Uuid,
     expires_at: i64,
+    #[serde(default = "secure_cookie_by_default")]
+    cookie_secure: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -154,6 +156,14 @@ fn parsed_site_url(site_url: &str) -> anyhow::Result<url::Url> {
         anyhow::bail!("site.url must be an absolute http or https URL");
     }
     Ok(url)
+}
+
+fn secure_cookie_by_default() -> bool {
+    true
+}
+
+fn preview_cookie_secure(site_url: &str) -> anyhow::Result<bool> {
+    Ok(parsed_site_url(site_url)?.scheme() == "https")
 }
 
 fn site_route_url(site_url: &str, path: &str, key: &str, value: &str) -> anyhow::Result<String> {
@@ -474,6 +484,9 @@ pub async fn authorize(
         return Ok(forbidden_page());
     }
 
+    let site_url = configured_site_url(db, OP).await?;
+    let cookie_secure = preview_cookie_secure(&site_url)
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     let code = grass_token::generate_token();
     store_record(
         cache,
@@ -485,12 +498,12 @@ pub async fn authorize(
             session_id: session.session_id,
             user_id: session.data.user_id,
             expires_at: expires_after(CALLBACK_CODE_TTL),
+            cookie_secure,
         },
         CALLBACK_CODE_TTL,
         OP,
     )
     .await?;
-    let site_url = configured_site_url(db, OP).await?;
     let callback = preview_callback_url(&site_url, &record.binding.host, &code)
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     redirect_response(callback)
@@ -565,6 +578,7 @@ pub async fn exchange(
         grant,
         return_to: record.return_to,
         max_age_seconds,
+        cookie_secure: record.cookie_secure,
     })
     .into_response())
 }
@@ -649,6 +663,12 @@ mod tests {
             "http://preview.test/.grass/auth/callback?code=a+b"
         );
         assert!(preview_callback_url("file:///tmp", "preview.test", "code").is_err());
+    }
+
+    #[test]
+    fn preview_cookie_security_follows_the_callback_scheme() {
+        assert!(preview_cookie_secure("https://cxcs.page").unwrap());
+        assert!(!preview_cookie_secure("http://localhost:7817").unwrap());
     }
 
     #[test]
