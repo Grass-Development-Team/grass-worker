@@ -112,18 +112,6 @@ pub fn router() -> Router<ControlApiState> {
             "/projects/{project_id}/deployments/{deployment_id}/rollback",
             post(deployments::rollback),
         )
-        .route(
-            "/projects/{project_id}/deployments/{deployment_id}/review/request",
-            post(deployments::review::request),
-        )
-        .route(
-            "/projects/{project_id}/deployments/{deployment_id}/review/approve",
-            post(deployments::review::approve),
-        )
-        .route(
-            "/projects/{project_id}/deployments/{deployment_id}/review/reject",
-            post(deployments::review::reject),
-        )
 }
 
 pub(crate) struct ProjectAccess {

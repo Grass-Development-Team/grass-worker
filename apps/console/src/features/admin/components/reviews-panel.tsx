@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckIcon, InboxIcon, RocketIcon, XIcon } from "lucide-react";
+import { CheckIcon, ExternalLinkIcon, InboxIcon, RocketIcon, XIcon } from "lucide-react";
 import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -34,6 +34,21 @@ function environmentBadge(environment: "production" | "preview") {
   );
 }
 
+function serveBadge(status: AdminReview["deployment"]["serve_status"]) {
+  switch (status) {
+    case "ready":
+      return <Badge variant="success">Ready</Badge>;
+    case "failed":
+      return <Badge variant="destructive">Failed</Badge>;
+    case "syncing":
+      return <Badge variant="warning">Syncing</Badge>;
+    case "retired":
+      return <Badge variant="secondary">Retired</Badge>;
+    default:
+      return <Badge variant="outline">Pending</Badge>;
+  }
+}
+
 export function ReviewsPanel() {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
@@ -65,7 +80,7 @@ export function ReviewsPanel() {
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
         Deployments waiting for release review across all teams. Approve unblocks the team's Promote
-        button; Approve &amp; promote publishes production immediately.
+        button; Approve &amp; promote publishes after the target is ready on a Serve Node.
       </p>
 
       {error && (
@@ -95,76 +110,101 @@ export function ReviewsPanel() {
               <TableRow>
                 <TableHead>Project</TableHead>
                 <TableHead>Environment</TableHead>
+                <TableHead>Serve</TableHead>
                 <TableHead>Commit</TableHead>
                 <TableHead>Requested</TableHead>
                 <TableHead className="text-right">Decision</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {reviewsQuery.data.reviews.map((review) => (
-                <TableRow key={review.id}>
-                  <TableCell>
-                    <span className="font-medium">{review.project.name}</span>
-                    <p className="text-xs text-muted-foreground">
-                      {review.team ? `${review.team.name} · ` : ""}
-                      {review.project.slug}
-                    </p>
-                  </TableCell>
-                  <TableCell>{environmentBadge(review.deployment.environment)}</TableCell>
-                  <TableCell className="max-w-56">
-                    <p className="truncate text-sm">
-                      {review.deployment.commit_message ?? "No commit message"}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {review.deployment.source_branch ?? "default branch"}
-                      {review.deployment.commit_hash
-                        ? ` · ${review.deployment.commit_hash.slice(0, 7)}`
-                        : ""}
-                    </p>
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {new Date(review.requested_at).toLocaleString()}
-                    {review.triggered_by && <p className="text-xs">{review.triggered_by.email}</p>}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-1">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() =>
-                          approveMutation.mutate({
-                            deploymentId: review.deployment.id,
-                            promote: false,
-                          })
-                        }
-                        disabled={approveMutation.isPending}
-                      >
-                        <CheckIcon /> Approve
-                      </Button>
-                      <Button
-                        size="sm"
-                        onClick={() =>
-                          approveMutation.mutate({
-                            deploymentId: review.deployment.id,
-                            promote: true,
-                          })
-                        }
-                        disabled={approveMutation.isPending}
-                      >
-                        <RocketIcon /> Approve &amp; promote
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setRejecting(review)}
-                        disabled={approveMutation.isPending}
-                      >
-                        <XIcon /> Reject
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {reviewsQuery.data.reviews.map((review) => {
+                const decisionsReady =
+                  review.deployment.serve_status === "ready" ||
+                  (review.deployment.serve_status === "retired" &&
+                    review.deployment.serve_was_ready);
+                return (
+                  <TableRow key={review.id}>
+                    <TableCell>
+                      <span className="font-medium">{review.project.name}</span>
+                      <p className="text-xs text-muted-foreground">
+                        {review.team ? `${review.team.name} · ` : ""}
+                        {review.project.slug}
+                      </p>
+                    </TableCell>
+                    <TableCell>{environmentBadge(review.deployment.environment)}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        {serveBadge(review.deployment.serve_status)}
+                        {review.deployment.preview_host &&
+                          review.deployment.serve_status !== "retired" && (
+                            <a
+                              href={`//${review.deployment.preview_host}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                            >
+                              Open preview <ExternalLinkIcon className="size-3" />
+                            </a>
+                          )}
+                      </div>
+                    </TableCell>
+                    <TableCell className="max-w-56">
+                      <p className="truncate text-sm">
+                        {review.deployment.commit_message ?? "No commit message"}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {review.deployment.source_branch ?? "default branch"}
+                        {review.deployment.commit_hash
+                          ? ` · ${review.deployment.commit_hash.slice(0, 7)}`
+                          : ""}
+                      </p>
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {new Date(review.requested_at).toLocaleString()}
+                      {review.triggered_by && (
+                        <p className="text-xs">{review.triggered_by.email}</p>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            approveMutation.mutate({
+                              deploymentId: review.deployment.id,
+                              promote: false,
+                            })
+                          }
+                          disabled={!decisionsReady || approveMutation.isPending}
+                        >
+                          <CheckIcon /> Approve
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={() =>
+                            approveMutation.mutate({
+                              deploymentId: review.deployment.id,
+                              promote: true,
+                            })
+                          }
+                          disabled={!decisionsReady || approveMutation.isPending}
+                        >
+                          <RocketIcon /> Approve &amp; promote
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setRejecting(review)}
+                          disabled={!decisionsReady || approveMutation.isPending}
+                        >
+                          <XIcon /> Reject
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         ))}
@@ -209,7 +249,7 @@ function RejectDialog({
           <DialogTitle>Reject deployment</DialogTitle>
           <DialogDescription>
             {review
-              ? `Reject the ${review.deployment.environment} deployment of ${review.project.name}. The team can fix and re-request review.`
+              ? `Reject the ${review.deployment.environment} deployment of ${review.project.name}. The team can fix it and retry the deployment; a new review is created after the build is ready.`
               : ""}
           </DialogDescription>
         </DialogHeader>

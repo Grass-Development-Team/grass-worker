@@ -68,7 +68,7 @@ export async function request<T>(url: string, options?: RequestInit): Promise<T>
     }
   }
 
-  if (response.ok && json?.code === 200) {
+  if (response.ok && json?.code === response.status) {
     return json.data;
   }
 

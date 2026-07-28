@@ -19,6 +19,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -69,6 +84,8 @@ jobs:
 
       - name: Test Rust workspace
         run: just test rust
+        env:
+          GRASS_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
 
       - name: Test Console workspace
         run: just test console

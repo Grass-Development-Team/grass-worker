@@ -2,6 +2,7 @@ pub mod admin;
 pub mod auth;
 pub mod internal;
 pub mod me;
+pub mod preview_auth;
 pub mod projects;
 pub mod setup;
 pub mod teams;
@@ -34,6 +35,17 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
                 state.clone(),
                 require_ready_mode,
             )),
+        )
+        .route(
+            "/preview/authorize",
+            get(preview_auth::authorize)
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    require_ready_mode,
+                ))
+                .layer(middleware::map_response(
+                    preview_auth::browser_authorization_headers,
+                )),
         )
         .route(
             "/me",
@@ -88,6 +100,30 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn preview_authorization_responses_are_not_cached_or_referred() {
+        let state = ControlApiState::new(ControlApiConfig::default(), "config.toml");
+        let response = router(state.clone())
+            .with_state(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/preview/authorize?state=opaque")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response.headers()[axum::http::header::CACHE_CONTROL],
+            "no-store"
+        );
+        assert_eq!(
+            response.headers()[axum::http::header::REFERRER_POLICY],
+            "no-referrer"
+        );
     }
 
     #[tokio::test]

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use axum::{
     Extension, Json,
@@ -7,16 +7,16 @@ use axum::{
 };
 use grass_node_protocol::{
     ReportServeStatusRequest, ReportServeStatusResponse, ReportedServeStatus, ResolveHostResponse,
-    RouteSnapshotResponse, ServeArtifact, ServeAssignment, ServeAssignmentStatus,
+    RouteSnapshotResponse, ServeAccess, ServeArtifact, ServeAssignment, ServeAssignmentStatus,
     ServeAssignmentsResponse, ServeResources, ServeRoute,
 };
-use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, TransactionTrait};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
-    domain::{deployments, hosts, projects},
+    domain::{delivery, deployments, hosts, projects, scheduler},
     infra::{
         database::entity::{
             DeploymentArtifactKind, DeploymentBuildStatus, DeploymentEnvironment,
@@ -107,6 +107,7 @@ pub async fn assignments(
     let assigned = deployment::Entity::find()
         .filter(deployment::Column::ServeNodeId.eq(node.id))
         .filter(deployment::Column::BuildStatus.eq(DeploymentBuildStatus::Ready))
+        .filter(deployment::Column::ServeStatus.ne(DeploymentServeStatus::Retired))
         .filter(deployment::Column::DeletedAt.is_null())
         .order_by_asc(deployment::Column::CreatedAt)
         .all(db)
@@ -154,6 +155,7 @@ pub async fn assignments(
                 DeploymentServeStatus::Syncing => ServeAssignmentStatus::Syncing,
                 DeploymentServeStatus::Ready => ServeAssignmentStatus::Ready,
                 DeploymentServeStatus::Failed => ServeAssignmentStatus::Failed,
+                DeploymentServeStatus::Retired => continue,
             },
             artifact: ServeArtifact {
                 artifact_id: artifact.id,
@@ -194,9 +196,25 @@ pub async fn report_status(
         message: message.to_owned(),
     })?;
     let db = super::database(&state, OP)?;
-    let deployment = deployments::get_by_id(db, deployment_id)
+    let transaction = db
+        .begin()
         .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    scheduler::lock_placement(&transaction)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let deployment = deployments::get_by_id_for_update(&transaction, deployment_id)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?
         .ok_or_else(|| AppError::NotFound {
             op: OP,
             message: "deployment not found".to_owned(),
@@ -220,7 +238,7 @@ pub async fn report_status(
         ReportedServeStatus::Failed => DeploymentServeStatus::Failed,
     };
     let updated = deployments::transition_serve(
-        db,
+        &transaction,
         deployment,
         deployments::ServeTransition {
             to: target.clone(),
@@ -231,8 +249,15 @@ pub async fn report_status(
     .await
     .map_err(|error| crate::features::api::v1::projects::deployments::map_state_error(error, OP))?;
     if matches!(target, DeploymentServeStatus::Ready) {
-        super::deployments::auto_activate_if_allowed(db, updated).await?;
+        super::deployments::auto_activate_if_allowed(&transaction, updated).await?;
     }
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     Ok(ok_response(ReportServeStatusResponse {
         acknowledged: true,
@@ -314,6 +339,23 @@ pub async fn routes(
             .push(binding.host);
     }
 
+    let mut preview_groups = HashMap::<(Uuid, bool), Vec<delivery::DeliveryCandidate>>::new();
+    for deployment in &deployments {
+        if deployment.preview_host.is_some() {
+            preview_groups
+                .entry((
+                    deployment.project_id,
+                    matches!(deployment.environment, DeploymentEnvironment::Production),
+                ))
+                .or_default()
+                .push(delivery::candidate_from_model(deployment));
+        }
+    }
+    let effective_preview_ids = preview_groups
+        .values()
+        .filter_map(|candidates| delivery::effective_preview_id(candidates))
+        .collect::<HashSet<_>>();
+
     let mut routes = Vec::new();
     for deployment in deployments {
         let Some(node_id) = deployment.serve_node_id else {
@@ -339,23 +381,38 @@ pub async fn routes(
             memory_mb: u64::try_from(deployment.serve_memory_mb).map_err(|_| metadata_error())?,
             disk_mb: u64::try_from(deployment.serve_disk_mb).map_err(|_| metadata_error())?,
         };
-        let mut deployment_hosts = deployment.preview_host.into_iter().collect::<Vec<_>>();
+        let mut deployment_hosts = if effective_preview_ids.contains(&deployment.id) {
+            deployment
+                .preview_host
+                .into_iter()
+                .map(|host| (host, ServeAccess::TeamOrPlatformAdmin))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         if matches!(deployment.environment, DeploymentEnvironment::Production)
             && matches!(deployment.release_status, DeploymentReleaseStatus::Active)
         {
             deployment_hosts.extend(
                 hosts_by_project
                     .remove(&deployment.project_id)
-                    .unwrap_or_default(),
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|host| (host, ServeAccess::Public)),
             );
         }
-        routes.extend(deployment_hosts.into_iter().map(|host| ServeRoute {
-            host,
-            deployment_id: deployment.id,
-            target_node_id: node_id,
-            target_base_url: target_base_url.clone(),
-            resources,
-        }));
+        routes.extend(
+            deployment_hosts
+                .into_iter()
+                .map(|(host, access)| ServeRoute {
+                    host,
+                    deployment_id: deployment.id,
+                    target_node_id: node_id,
+                    target_base_url: target_base_url.clone(),
+                    resources,
+                    access,
+                }),
+        );
     }
     routes.sort_by(|left, right| left.host.cmp(&right.host));
     let revision = route_revision(&routes);
@@ -378,7 +435,8 @@ async fn artifact_available(
 ///
 /// Maps a public Host header to the deployment that should serve it:
 /// production bindings resolve to the active production deployment only;
-/// preview hosts resolve to their ready preview deployment.
+/// preview hosts resolve to their ready deployment, including production
+/// deployments waiting for moderation.
 pub async fn resolve_host(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(_node)): Extension<AuthenticatedNode>,
@@ -427,12 +485,15 @@ pub async fn resolve_host(
         return Ok(ok_response(ResolveHostResponse {
             deployment_id: active.id,
             project_id: active.project_id,
+            team_id: active.team_id,
+            host,
             environment: "production".to_owned(),
             artifact_available: available,
+            access: ServeAccess::Public,
         }));
     }
 
-    // Preview hosts are stored directly on the deployment row.
+    // Protected preview hosts are stored directly on the deployment row.
     let deployment = deployments::find_by_preview_host(db, &host)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?
@@ -449,6 +510,19 @@ pub async fn resolve_host(
             message: "preview deployment is not ready".to_owned(),
         });
     }
+    let effective =
+        delivery::effective_preview(db, deployment.project_id, deployment.environment.clone())
+            .await
+            .map_err(|source| AppError::Infrastructure {
+                op: OP,
+                source: source.into(),
+            })?;
+    if effective.as_ref().map(|item| item.id) != Some(deployment.id) {
+        return Err(AppError::NotFound {
+            op: OP,
+            message: "preview deployment has been superseded".to_owned(),
+        });
+    }
 
     let available = artifact_available(db, deployment.id)
         .await
@@ -456,15 +530,18 @@ pub async fn resolve_host(
     Ok(ok_response(ResolveHostResponse {
         deployment_id: deployment.id,
         project_id: deployment.project_id,
-        environment: "preview".to_owned(),
+        team_id: deployment.team_id,
+        host,
+        environment: deployments::environment_value(&deployment.environment).to_owned(),
         artifact_available: available,
+        access: ServeAccess::TeamOrPlatformAdmin,
     }))
 }
 
 #[cfg(test)]
 mod tests {
     use grass_node_protocol::{
-        ReportServeStatusRequest, ReportedServeStatus, ServeResources, ServeRoute,
+        ReportServeStatusRequest, ReportedServeStatus, ServeAccess, ServeResources, ServeRoute,
     };
     use uuid::Uuid;
 
@@ -554,6 +631,7 @@ mod tests {
             target_node_id: Uuid::now_v7(),
             target_base_url: "http://node-a:8080".to_owned(),
             resources,
+            access: ServeAccess::Public,
         };
         let second = ServeRoute {
             host: "b.example.com".to_owned(),
@@ -561,6 +639,7 @@ mod tests {
             target_node_id: Uuid::now_v7(),
             target_base_url: "http://node-b:8080".to_owned(),
             resources,
+            access: ServeAccess::TeamOrPlatformAdmin,
         };
 
         let original = route_revision(&[first.clone(), second.clone()]);

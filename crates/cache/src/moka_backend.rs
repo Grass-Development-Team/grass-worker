@@ -116,6 +116,17 @@ impl super::Cache for MokaCache {
         }))
     }
 
+    async fn take(&self, key: &str) -> anyhow::Result<Option<String>> {
+        let _guard = self.atomic_mutex.lock().await;
+        let raw = self.inner.get(key).await;
+        self.inner.invalidate(key).await;
+        Ok(raw.map(|value| {
+            extract_value(&value)
+                .map(|(_, stored)| stored.to_owned())
+                .unwrap_or(value)
+        }))
+    }
+
     async fn set(&self, key: &str, value: &str, ttl: Duration) -> anyhow::Result<()> {
         let expiry = time::OffsetDateTime::now_utc().unix_timestamp() + ttl.as_secs() as i64;
         let stored = format!("{expiry}:{value}");
@@ -305,6 +316,31 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(cache.get("session:test").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn take_returns_a_value_to_only_one_concurrent_caller() {
+        let cache = MokaCache::connect();
+        cache
+            .set("one-time:test", "value", Duration::from_secs(60))
+            .await
+            .unwrap();
+
+        let first_cache = cache.clone();
+        let second_cache = cache.clone();
+        let (first, second) = tokio::join!(
+            first_cache.take("one-time:test"),
+            second_cache.take("one-time:test")
+        );
+        let values = [first.unwrap(), second.unwrap()];
+        assert_eq!(
+            values
+                .iter()
+                .filter(|value| value.as_deref() == Some("value"))
+                .count(),
+            1
+        );
+        assert_eq!(values.iter().filter(|value| value.is_none()).count(), 1);
     }
 
     #[tokio::test]

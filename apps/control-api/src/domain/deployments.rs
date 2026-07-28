@@ -118,7 +118,10 @@ pub fn can_transition_serve(from: &DeploymentServeStatus, to: &DeploymentServeSt
     use DeploymentServeStatus as S;
     matches!(
         (from, to),
-        (S::Pending | S::Failed | S::Ready, S::Syncing) | (S::Syncing, S::Ready | S::Failed)
+        (S::Pending | S::Failed | S::Ready, S::Syncing)
+            | (S::Syncing, S::Ready | S::Failed)
+            | (S::Pending | S::Syncing | S::Failed | S::Ready, S::Retired)
+            | (S::Retired, S::Pending)
     )
 }
 
@@ -128,6 +131,7 @@ pub fn serve_status_value(status: &DeploymentServeStatus) -> &'static str {
         DeploymentServeStatus::Syncing => "syncing",
         DeploymentServeStatus::Ready => "ready",
         DeploymentServeStatus::Failed => "failed",
+        DeploymentServeStatus::Retired => "retired",
     }
 }
 
@@ -148,6 +152,26 @@ fn validate_release_readiness(
     }
     if !matches!(build_status, DeploymentBuildStatus::Ready) {
         return Err(DeploymentStateError::BuildNotReady);
+    }
+    if matches!(
+        (from, to),
+        (
+            DeploymentReleaseStatus::Draft,
+            DeploymentReleaseStatus::PendingReview
+        )
+    ) {
+        return Ok(());
+    }
+    if matches!(serve_status, DeploymentServeStatus::Retired)
+        && matches!(
+            (from, to),
+            (
+                DeploymentReleaseStatus::PendingReview,
+                DeploymentReleaseStatus::Approved | DeploymentReleaseStatus::Rejected
+            )
+        )
+    {
+        return Ok(());
     }
     if !matches!(serve_status, DeploymentServeStatus::Ready) {
         return Err(DeploymentStateError::ServeNotReady);
@@ -237,6 +261,9 @@ pub async fn create_deployment<C: ConnectionTrait>(
         failure_message: Set(None),
         serve_failure_code: Set(None),
         serve_failure_message: Set(None),
+        pending_release_reason: Set(None),
+        pending_release_actor_user_id: Set(None),
+        pending_release_requested_at: Set(None),
         claimed_at: Set(None),
         build_started_at: Set(None),
         build_finished_at: Set(None),
@@ -297,6 +324,24 @@ pub async fn list_events<C: ConnectionTrait>(
         .map_err(Into::into)
 }
 
+pub async fn was_serve_ready<C: ConnectionTrait>(
+    db: &C,
+    deployment_id: Uuid,
+) -> anyhow::Result<bool> {
+    let events = deployment_event::Entity::find()
+        .filter(deployment_event::Column::DeploymentId.eq(deployment_id))
+        .filter(deployment_event::Column::Kind.eq(DeploymentEventKind::Serve))
+        .all(db)
+        .await?;
+    Ok(events.iter().any(|event| {
+        event
+            .metadata
+            .get("status")
+            .and_then(|value| value.as_str())
+            == Some("ready")
+    }))
+}
+
 // --- Queries ----------------------------------------------------------------
 
 pub async fn get_by_id<C: ConnectionTrait>(
@@ -309,6 +354,19 @@ pub async fn get_by_id<C: ConnectionTrait>(
         .one(db)
         .await
         .map_err(Into::into)
+}
+
+/// Loads and locks a deployment for release/build finalization. Callers must
+/// pass a transaction so the lock is held through the complete state change.
+pub async fn get_by_id_for_update<C: ConnectionTrait>(
+    db: &C,
+    deployment_id: Uuid,
+) -> Result<Option<deployment::Model>, sea_orm::DbErr> {
+    deployment::Entity::find_by_id(deployment_id)
+        .filter(deployment::Column::DeletedAt.is_null())
+        .lock_exclusive()
+        .one(db)
+        .await
 }
 
 pub struct DeploymentListFilter {
@@ -434,7 +492,7 @@ pub async fn transition_serve<C: ConnectionTrait>(
             active.serve_failure_code = Set(transition.failure_code.clone());
             active.serve_failure_message = Set(transition.failure_message.clone());
         }
-        DeploymentServeStatus::Pending => {}
+        DeploymentServeStatus::Pending | DeploymentServeStatus::Retired => {}
     }
 
     let updated = active.update(db).await?;
@@ -684,7 +742,7 @@ pub async fn was_active<C: ConnectionTrait>(db: &C, deployment_id: Uuid) -> anyh
 pub async fn create_review<C: ConnectionTrait>(
     db: &C,
     deployment_id: Uuid,
-) -> anyhow::Result<deployment_review::Model> {
+) -> Result<deployment_review::Model, sea_orm::DbErr> {
     let now = OffsetDateTime::now_utc();
     deployment_review::ActiveModel {
         id: Set(Uuid::now_v7()),
@@ -698,7 +756,34 @@ pub async fn create_review<C: ConnectionTrait>(
     }
     .insert(db)
     .await
-    .map_err(Into::into)
+}
+
+/// Moves a ready deployment into review and creates its pending review and
+/// timeline entry as one connection-scoped operation. Callers that require
+/// atomicity must pass a transaction.
+pub async fn request_review<C: ConnectionTrait>(
+    db: &C,
+    deployment: deployment::Model,
+    requested_by: Option<Uuid>,
+) -> Result<(deployment::Model, deployment_review::Model), DeploymentStateError> {
+    let deployment = transition_release(
+        db,
+        deployment,
+        DeploymentReleaseStatus::PendingReview,
+        serde_json::json!({ "requested_by": requested_by }),
+    )
+    .await?;
+    let review = create_review(db, deployment.id).await?;
+    append_event(
+        db,
+        deployment.id,
+        DeploymentEventKind::Review,
+        "review requested",
+        serde_json::json!({ "review_id": review.id }),
+    )
+    .await
+    .map_err(|error| DeploymentStateError::Database(sea_orm::DbErr::Custom(error.to_string())))?;
+    Ok((deployment, review))
 }
 
 pub async fn latest_pending_review<C: ConnectionTrait>(
@@ -753,6 +838,36 @@ pub enum ReviewMode {
     Manual,
     /// Activation happens without review.
     Auto,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadyReleaseAction {
+    Activate,
+    RequestReview,
+    None,
+}
+
+pub fn ready_release_action(
+    mode: ReviewMode,
+    status: &DeploymentReleaseStatus,
+) -> ReadyReleaseAction {
+    if !matches!(status, DeploymentReleaseStatus::Draft) {
+        return ReadyReleaseAction::None;
+    }
+    match mode {
+        ReviewMode::Manual => ReadyReleaseAction::RequestReview,
+        ReviewMode::Auto => ReadyReleaseAction::None,
+    }
+}
+
+pub fn serve_ready_release_action(
+    mode: ReviewMode,
+    status: &DeploymentReleaseStatus,
+) -> ReadyReleaseAction {
+    match (mode, status) {
+        (ReviewMode::Auto, DeploymentReleaseStatus::Draft) => ReadyReleaseAction::Activate,
+        _ => ReadyReleaseAction::None,
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -868,10 +983,22 @@ mod tests {
         use DeploymentServeStatus as S;
 
         assert!(validate_release_readiness(&R::Draft, &R::Active, &B::Ready, &S::Ready).is_ok());
+        assert!(
+            validate_release_readiness(&R::Draft, &R::PendingReview, &B::Ready, &S::Syncing)
+                .is_ok()
+        );
         assert!(matches!(
             validate_release_readiness(&R::Draft, &R::Active, &B::Ready, &S::Pending),
             Err(DeploymentStateError::ServeNotReady)
         ));
+        assert!(matches!(
+            validate_release_readiness(&R::PendingReview, &R::Approved, &B::Ready, &S::Syncing),
+            Err(DeploymentStateError::ServeNotReady)
+        ));
+        assert!(
+            validate_release_readiness(&R::PendingReview, &R::Approved, &B::Ready, &S::Retired)
+                .is_ok()
+        );
         assert!(matches!(
             validate_release_readiness(&R::Draft, &R::Active, &B::Building, &S::Ready),
             Err(DeploymentStateError::BuildNotReady)
@@ -890,8 +1017,15 @@ mod tests {
         assert!(can_transition_serve(&S::Syncing, &S::Failed));
         assert!(can_transition_serve(&S::Failed, &S::Syncing));
         assert!(can_transition_serve(&S::Ready, &S::Syncing));
+        assert!(can_transition_serve(&S::Pending, &S::Retired));
+        assert!(can_transition_serve(&S::Syncing, &S::Retired));
+        assert!(can_transition_serve(&S::Failed, &S::Retired));
+        assert!(can_transition_serve(&S::Ready, &S::Retired));
+        assert!(can_transition_serve(&S::Retired, &S::Pending));
+        assert_eq!(serve_status_value(&S::Retired), "retired");
         assert!(!can_transition_serve(&S::Pending, &S::Ready));
         assert!(!can_transition_serve(&S::Failed, &S::Ready));
+        assert!(!can_transition_serve(&S::Retired, &S::Ready));
     }
 
     #[test]
@@ -920,5 +1054,48 @@ mod tests {
             policy.mode_for(&DeploymentEnvironment::Preview),
             ReviewMode::Auto
         );
+    }
+
+    #[test]
+    fn build_ready_drafts_only_create_manual_reviews() {
+        assert_eq!(
+            ready_release_action(ReviewMode::Manual, &DeploymentReleaseStatus::Draft),
+            ReadyReleaseAction::RequestReview
+        );
+        assert_eq!(
+            ready_release_action(ReviewMode::Auto, &DeploymentReleaseStatus::Draft),
+            ReadyReleaseAction::None
+        );
+    }
+
+    #[test]
+    fn serve_ready_drafts_activate_only_under_auto_policy() {
+        assert_eq!(
+            serve_ready_release_action(ReviewMode::Auto, &DeploymentReleaseStatus::Draft),
+            ReadyReleaseAction::Activate
+        );
+        assert_eq!(
+            serve_ready_release_action(ReviewMode::Manual, &DeploymentReleaseStatus::Draft),
+            ReadyReleaseAction::None
+        );
+    }
+
+    #[test]
+    fn ready_finalization_is_idempotent_after_the_draft_state() {
+        for status in [
+            DeploymentReleaseStatus::PendingReview,
+            DeploymentReleaseStatus::Approved,
+            DeploymentReleaseStatus::Rejected,
+            DeploymentReleaseStatus::Active,
+        ] {
+            assert_eq!(
+                ready_release_action(ReviewMode::Manual, &status),
+                ReadyReleaseAction::None
+            );
+            assert_eq!(
+                ready_release_action(ReviewMode::Auto, &status),
+                ReadyReleaseAction::None
+            );
+        }
     }
 }

@@ -2,7 +2,10 @@ use axum::{extract::FromRequestParts, http::request::Parts};
 
 use crate::{
     domain::users,
-    infra::{database::entity::PlatformRole, error::AppError},
+    infra::{
+        database::entity::{PlatformRole, UserStatus},
+        error::AppError,
+    },
     state::ControlApiState,
 };
 
@@ -10,14 +13,15 @@ use super::Session;
 
 pub struct PlatformAdmin;
 
-pub(crate) fn require_platform_admin_role(
+pub(crate) fn require_active_platform_admin(
+    status: &UserStatus,
     role: &PlatformRole,
     op: &'static str,
 ) -> Result<(), AppError> {
-    if role != &PlatformRole::Admin {
+    if status != &UserStatus::Active || role != &PlatformRole::Admin {
         return Err(AppError::Forbidden {
             op,
-            message: "platform administrator role required".to_owned(),
+            message: "active platform administrator role required".to_owned(),
         });
     }
     Ok(())
@@ -46,7 +50,11 @@ impl FromRequestParts<ControlApiState> for PlatformAdmin {
                 message: "authenticated user not found".to_owned(),
             })?;
 
-        require_platform_admin_role(&user.platform_role, "platform_admin.role_required")?;
+        require_active_platform_admin(
+            &user.status,
+            &user.platform_role,
+            "platform_admin.role_required",
+        )?;
 
         Ok(Self)
     }
@@ -54,13 +62,27 @@ impl FromRequestParts<ControlApiState> for PlatformAdmin {
 
 #[cfg(test)]
 mod tests {
-    use crate::infra::database::entity::PlatformRole;
+    use crate::infra::database::entity::{PlatformRole, UserStatus};
 
-    use super::require_platform_admin_role;
+    use super::require_active_platform_admin;
 
     #[test]
-    fn only_platform_administrators_are_authorized() {
-        assert!(require_platform_admin_role(&PlatformRole::Admin, "test.admin").is_ok());
-        assert!(require_platform_admin_role(&PlatformRole::User, "test.admin").is_err());
+    fn only_active_platform_administrators_are_authorized() {
+        assert!(
+            require_active_platform_admin(&UserStatus::Active, &PlatformRole::Admin, "test.admin")
+                .is_ok()
+        );
+        assert!(
+            require_active_platform_admin(
+                &UserStatus::Disabled,
+                &PlatformRole::Admin,
+                "test.admin"
+            )
+            .is_err()
+        );
+        assert!(
+            require_active_platform_admin(&UserStatus::Active, &PlatformRole::User, "test.admin")
+                .is_err()
+        );
     }
 }

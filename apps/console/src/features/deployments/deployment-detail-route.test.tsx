@@ -63,6 +63,7 @@ function detailFixture(overrides: Partial<DeploymentDetail["deployment"]> = {}):
     artifacts: [],
     reviews: [],
     review_required: false,
+    was_active: false,
   };
 }
 
@@ -92,4 +93,79 @@ it("keeps promote disabled while the serve node is syncing", async () => {
   expect(screen.getByRole("button", { name: "Promote" })).toBeDisabled();
   expect(screen.getByText("serve-node-1")).toBeInTheDocument();
   expect(screen.getByText("200m · 256 MB · 512 MB disk")).toBeInTheDocument();
+});
+
+it("does not expose platform moderation controls to team administrators", async () => {
+  renderDetail(
+    detailFixture({
+      serve_status: "ready",
+      release_status: "pending_review",
+    }),
+  );
+
+  expect(await screen.findByText("Pending review")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Reject" })).not.toBeInTheDocument();
+});
+
+it("does not let team members request platform moderation", async () => {
+  renderDetail({
+    ...detailFixture({
+      serve_status: "ready",
+      release_status: "draft",
+    }),
+    review_required: true,
+  });
+
+  expect(await screen.findByText("Draft")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Request review" })).not.toBeInTheDocument();
+});
+
+it("allows an administrator to queue rollback for a retired deployment", async () => {
+  renderDetail({
+    ...detailFixture({
+      serve_node: null,
+      serve_status: "retired",
+      release_status: "approved",
+      preview_url: null,
+    }),
+    was_active: true,
+    events: [
+      {
+        id: "release-1",
+        kind: "release",
+        message: "previously active",
+        metadata: {},
+        created_at: "2026-07-27T00:00:20Z",
+      },
+    ],
+  });
+
+  expect(await screen.findByText("Retired")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Roll back to this deployment" })).toBeEnabled();
+  expect(screen.queryByRole("link", { name: "Open deployment" })).not.toBeInTheDocument();
+});
+
+it("does not offer rollback for an approved deployment that was never active", async () => {
+  renderDetail({
+    ...detailFixture({
+      serve_status: "ready",
+      release_status: "approved",
+    }),
+    was_active: false,
+    events: [
+      {
+        id: "release-approved",
+        kind: "release",
+        message: "release status changed to approved",
+        metadata: {},
+        created_at: "2026-07-27T00:00:20Z",
+      },
+    ],
+  });
+
+  expect(await screen.findByText("Approved")).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "Roll back to this deployment" }),
+  ).not.toBeInTheDocument();
 });

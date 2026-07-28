@@ -29,6 +29,15 @@ impl super::Cache for RedisCache {
         Ok(value)
     }
 
+    async fn take(&self, key: &str) -> anyhow::Result<Option<String>> {
+        let mut conn = self.conn.clone();
+        redis::cmd("GETDEL")
+            .arg(key)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| anyhow::anyhow!("redis getdel failed: {e}"))
+    }
+
     async fn set(&self, key: &str, value: &str, ttl: Duration) -> anyhow::Result<()> {
         let mut conn = self.conn.clone();
         let _: () = redis::AsyncCommands::set_ex(&mut conn, key, value, ttl.as_secs())
@@ -297,6 +306,31 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(cache.get(&key).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn take_returns_a_value_to_only_one_concurrent_caller() {
+        let Some(cache) = test_cache().await else {
+            return;
+        };
+        let key = unique_key("take");
+        cache
+            .set(&key, "value", Duration::from_secs(60))
+            .await
+            .unwrap();
+
+        let first_cache = cache.clone();
+        let second_cache = cache.clone();
+        let (first, second) = tokio::join!(first_cache.take(&key), second_cache.take(&key));
+        let values = [first.unwrap(), second.unwrap()];
+        assert_eq!(
+            values
+                .iter()
+                .filter(|value| value.as_deref() == Some("value"))
+                .count(),
+            1
+        );
+        assert_eq!(values.iter().filter(|value| value.is_none()).count(), 1);
     }
 
     #[tokio::test]

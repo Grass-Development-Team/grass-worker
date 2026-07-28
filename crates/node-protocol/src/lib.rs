@@ -240,6 +240,13 @@ pub struct UploadArtifactResponse {
 
 // --- Serve resolution -------------------------------------------------------
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServeAccess {
+    Public,
+    TeamOrPlatformAdmin,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServeArtifact {
     pub artifact_id: Uuid,
@@ -301,6 +308,7 @@ pub struct ServeRoute {
     pub target_node_id: Uuid,
     pub target_base_url: String,
     pub resources: ServeResources,
+    pub access: ServeAccess,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -313,9 +321,53 @@ pub struct RouteSnapshotResponse {
 pub struct ResolveHostResponse {
     pub deployment_id: Uuid,
     pub project_id: Uuid,
+    pub team_id: Uuid,
+    pub host: String,
     pub environment: String,
     /// Whether a grass-output artifact upload finished for this deployment.
     pub artifact_available: bool,
+    pub access: ServeAccess,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StartPreviewAuthorizationRequest {
+    pub host: String,
+    pub return_to: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StartPreviewAuthorizationResponse {
+    pub authorization_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExchangePreviewCodeRequest {
+    pub host: String,
+    pub code: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExchangePreviewCodeResponse {
+    pub grant: String,
+    pub return_to: String,
+    pub max_age_seconds: u64,
+    #[serde(default = "secure_cookie_by_default")]
+    pub cookie_secure: bool,
+}
+
+fn secure_cookie_by_default() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifyPreviewGrantRequest {
+    pub host: String,
+    pub grant: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifyPreviewGrantResponse {
+    pub allowed: bool,
 }
 
 // --- Realtime log stream (Node → Control API → Browser) ---------------------
@@ -388,6 +440,38 @@ mod tests {
     }
 
     #[test]
+    fn preview_access_protocol_uses_stable_wire_values() {
+        assert_eq!(
+            serde_json::to_string(&ServeAccess::TeamOrPlatformAdmin).unwrap(),
+            r#""team_or_platform_admin""#
+        );
+
+        let start: StartPreviewAuthorizationRequest =
+            serde_json::from_str(r#"{"host":"demo.example.test","return_to":"/docs?q=1"}"#)
+                .unwrap();
+        assert_eq!(start.host, "demo.example.test");
+        assert_eq!(start.return_to, "/docs?q=1");
+
+        let exchange: ExchangePreviewCodeResponse = serde_json::from_str(
+            r#"{"grant":"opaque","return_to":"/docs?q=1","max_age_seconds":43200,"cookie_secure":false}"#,
+        )
+        .unwrap();
+        assert_eq!(exchange.grant, "opaque");
+        assert_eq!(exchange.max_age_seconds, 43_200);
+        assert!(!exchange.cookie_secure);
+        let legacy_exchange: ExchangePreviewCodeResponse =
+            serde_json::from_str(r#"{"grant":"opaque","return_to":"/","max_age_seconds":60}"#)
+                .unwrap();
+        assert!(legacy_exchange.cookie_secure);
+
+        let verify = VerifyPreviewGrantResponse { allowed: true };
+        assert_eq!(
+            serde_json::to_string(&verify).unwrap(),
+            r#"{"allowed":true}"#
+        );
+    }
+
+    #[test]
     fn serve_protocol_round_trips_resources_status_and_routes() {
         let resources = ServeResources {
             cpu_millicores: 200,
@@ -410,10 +494,12 @@ mod tests {
             target_node_id: Uuid::nil(),
             target_base_url: "http://node-1:8080".to_owned(),
             resources,
+            access: ServeAccess::TeamOrPlatformAdmin,
         };
         let parsed: ServeRoute =
             serde_json::from_slice(&serde_json::to_vec(&route).unwrap()).unwrap();
         assert_eq!(parsed.host, "app.example.com");
         assert_eq!(parsed.resources, resources);
+        assert_eq!(parsed.access, ServeAccess::TeamOrPlatformAdmin);
     }
 }

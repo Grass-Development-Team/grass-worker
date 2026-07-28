@@ -10,7 +10,7 @@ export type BuildStatus =
   | "canceled";
 
 export type ReleaseStatus = "draft" | "pending_review" | "approved" | "rejected" | "active";
-export type ServeStatus = "pending" | "syncing" | "ready" | "failed";
+export type ServeStatus = "pending" | "syncing" | "ready" | "failed" | "retired";
 export type DeploymentEnvironment = "production" | "preview";
 
 export interface NodeRef {
@@ -56,6 +56,9 @@ export interface Deployment {
   build_status: BuildStatus;
   serve_status: ServeStatus;
   release_status: ReleaseStatus;
+  release_pending: boolean;
+  pending_release_reason: "promote" | "rollback" | null;
+  pending_release_requested_at: string | null;
   serve_resources: ServeResources;
   overcommitted: boolean;
   build_stage: string | null;
@@ -114,6 +117,7 @@ export interface DeploymentDetail {
   artifacts: DeploymentArtifact[];
   reviews: DeploymentReview[];
   review_required: boolean;
+  was_active: boolean;
 }
 
 export interface BuildLogLine {
@@ -166,33 +170,15 @@ export const deploymentsApi = {
     ),
 
   promote: (projectId: string, deploymentId: string) =>
-    request<{ deployment: Deployment }>(
+    request<{ deployment: Deployment; release_pending: boolean }>(
       `/api/v1/projects/${projectId}/deployments/${deploymentId}/promote`,
       { method: "POST" },
     ),
 
   rollback: (projectId: string, deploymentId: string) =>
-    request<{ deployment: Deployment }>(
+    request<{ deployment: Deployment; release_pending: boolean }>(
       `/api/v1/projects/${projectId}/deployments/${deploymentId}/rollback`,
       { method: "POST" },
-    ),
-
-  requestReview: (projectId: string, deploymentId: string) =>
-    request<{ deployment_id: string; release_status: ReleaseStatus }>(
-      `/api/v1/projects/${projectId}/deployments/${deploymentId}/review/request`,
-      { method: "POST" },
-    ),
-
-  approveReview: (projectId: string, deploymentId: string, reason?: string) =>
-    request<{ deployment_id: string; release_status: ReleaseStatus }>(
-      `/api/v1/projects/${projectId}/deployments/${deploymentId}/review/approve`,
-      { method: "POST", body: JSON.stringify({ reason }) },
-    ),
-
-  rejectReview: (projectId: string, deploymentId: string, reason?: string) =>
-    request<{ deployment_id: string; release_status: ReleaseStatus }>(
-      `/api/v1/projects/${projectId}/deployments/${deploymentId}/review/reject`,
-      { method: "POST", body: JSON.stringify({ reason }) },
     ),
 };
 
@@ -211,10 +197,14 @@ export function isBuildRunning(status: BuildStatus): boolean {
 }
 
 export function deploymentRefetchInterval(
-  deployment: Pick<Deployment, "build_status" | "serve_status"> | null | undefined,
+  deployment:
+    | Pick<Deployment, "build_status" | "serve_status" | "release_pending">
+    | null
+    | undefined,
 ): 4000 | false {
   if (!deployment) return false;
   if (isBuildRunning(deployment.build_status)) return 4000;
+  if (deployment.release_pending) return 4000;
   return deployment.build_status === "ready" &&
     ["pending", "syncing"].includes(deployment.serve_status)
     ? 4000

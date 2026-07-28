@@ -49,6 +49,12 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
         )
         .route("/serve/routes", get(serve::routes))
         .route("/serve/resolve-host", get(serve::resolve_host))
+        .route("/serve/preview/authorize", post(super::preview_auth::start))
+        .route(
+            "/serve/preview/exchange",
+            post(super::preview_auth::exchange),
+        )
+        .route("/serve/preview/verify", post(super::preview_auth::verify))
         .route("/log-stream", get(log_stream::ingest))
         .layer(middleware::from_fn_with_state(
             state,

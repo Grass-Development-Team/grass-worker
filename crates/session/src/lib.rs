@@ -172,6 +172,10 @@ mod tests {
             Ok(self.value.lock().unwrap().take())
         }
 
+        async fn take(&self, _key: &str) -> anyhow::Result<Option<String>> {
+            Ok(self.value.lock().unwrap().take())
+        }
+
         async fn set(&self, _key: &str, value: &str, _ttl: Duration) -> anyhow::Result<()> {
             *self.value.lock().unwrap() = Some(value.to_owned());
             Ok(())

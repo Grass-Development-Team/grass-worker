@@ -15,22 +15,31 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::{
     body::Body,
     extract::{ConnectInfo, Request, State},
-    http::{HeaderMap, HeaderName, StatusCode, header},
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::any,
 };
-use grass_node_protocol::ServeRoute;
+use grass_node_protocol::{ServeAccess, ServeRoute};
+use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::{config::NodeConfig, output::manifest};
+use crate::{
+    client::{ControlApiClient, PreviewAuthError},
+    config::NodeConfig,
+    output::manifest,
+};
+
+const SECURE_PREVIEW_COOKIE: &str = "__Host-gw_preview_access";
+const INSECURE_PREVIEW_COOKIE: &str = "gw_preview_access";
+const PREVIEW_CALLBACK_PATH: &str = "/.grass/auth/callback";
 
 #[derive(Clone)]
 enum ResolvedTarget {
@@ -47,11 +56,14 @@ enum ResolvedTarget {
 }
 
 pub struct ServeState {
+    client: ControlApiClient,
     node_id: Uuid,
     gateway_token: String,
     routes: Arc<routes::RouteTable>,
     cache_root: PathBuf,
     targets: Mutex<HashMap<Uuid, ResolvedTarget>>,
+    preview_access_ttl: Duration,
+    preview_grants: Mutex<HashMap<String, Instant>>,
     ssr: Arc<ssr::SsrManager>,
     /// Proxy client for peer Nodes and SSR upstreams: connect timeout only,
     /// so streamed responses are never cut off by a total timeout.
@@ -60,6 +72,7 @@ pub struct ServeState {
 
 impl ServeState {
     pub fn new(
+        client: ControlApiClient,
         node_id: Uuid,
         gateway_token: String,
         routes: Arc<routes::RouteTable>,
@@ -67,11 +80,16 @@ impl ServeState {
         ssr: Arc<ssr::SsrManager>,
     ) -> Self {
         Self {
+            client,
             node_id,
             gateway_token,
             routes,
             cache_root: PathBuf::from(&config.serve.artifact_cache_root),
             targets: Mutex::new(HashMap::new()),
+            preview_access_ttl: Duration::from_secs(
+                config.serve.metadata_cache_ttl_seconds.clamp(1, 30),
+            ),
+            preview_grants: Mutex::new(HashMap::new()),
             ssr,
             proxy: reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(5))
@@ -201,6 +219,21 @@ pub fn resolve_static_file(
     None
 }
 
+fn resolve_not_found_file(static_dir: &Path, configured: Option<&str>) -> Option<PathBuf> {
+    if let Some(configured) = configured {
+        let mut candidate = static_dir.to_path_buf();
+        for segment in configured.trim_start_matches('/').split('/') {
+            candidate.push(segment);
+        }
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    let root_404 = static_dir.join("404.html");
+    root_404.is_file().then_some(root_404)
+}
+
 const GATEWAY_TOKEN_HEADER: &str = "x-grass-gateway-token";
 const GATEWAY_HOP_HEADER: &str = "x-grass-gateway-hop";
 const PEER_PROXY_PREFIX: &str = "/_grass/internal/proxy";
@@ -265,6 +298,237 @@ fn host_from_headers(headers: &HeaderMap) -> Option<String> {
         }
     });
     grass_validator::normalize_host(without_port).ok()
+}
+
+fn is_preview_callback(path: &str) -> bool {
+    path == PREVIEW_CALLBACK_PATH
+}
+
+fn request_destination(path_and_query: &str) -> String {
+    if path_and_query.is_empty() {
+        "/".to_owned()
+    } else {
+        path_and_query.to_owned()
+    }
+}
+
+fn preview_cookie_value(cookie_header: &str) -> Option<&str> {
+    [SECURE_PREVIEW_COOKIE, INSECURE_PREVIEW_COOKIE]
+        .into_iter()
+        .find_map(|expected| {
+            cookie_header.split(';').find_map(|pair| {
+                let (name, value) = pair.trim().split_once('=')?;
+                (name == expected).then_some(value)
+            })
+        })
+}
+
+fn strip_preview_cookie(cookie_header: &str) -> Option<String> {
+    let cookies = cookie_header
+        .split(';')
+        .filter_map(|pair| {
+            let pair = pair.trim();
+            let (name, _) = pair.split_once('=')?;
+            (![SECURE_PREVIEW_COOKIE, INSECURE_PREVIEW_COOKIE].contains(&name)).then_some(pair)
+        })
+        .collect::<Vec<_>>();
+    (!cookies.is_empty()).then(|| cookies.join("; "))
+}
+
+fn preview_access_cookie(grant: &str, max_age_seconds: u64, secure: bool) -> String {
+    let (name, secure_attribute) = if secure {
+        (SECURE_PREVIEW_COOKIE, "; Secure")
+    } else {
+        (INSECURE_PREVIEW_COOKIE, "")
+    };
+    format!(
+        "{name}={grant}; Path=/; Max-Age={max_age_seconds}{secure_attribute}; HttpOnly; SameSite=Lax"
+    )
+}
+
+fn clear_preview_cookies() -> Vec<String> {
+    vec![
+        format!("{SECURE_PREVIEW_COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax"),
+        format!("{INSECURE_PREVIEW_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"),
+    ]
+}
+
+fn preview_cache_key(host: &str, grant: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(host.as_bytes());
+    digest.update([0]);
+    digest.update(grant.as_bytes());
+    hex::encode(digest.finalize())
+}
+
+fn callback_code(request: &Request) -> Option<String> {
+    let mut codes = request
+        .uri()
+        .query()
+        .into_iter()
+        .flat_map(|query| url::form_urlencoded::parse(query.as_bytes()))
+        .filter(|(key, _)| key == "code")
+        .map(|(_, value)| value.into_owned());
+    let code = codes.next().filter(|code| !code.is_empty())?;
+    codes.next().is_none().then_some(code)
+}
+
+fn redirect_response(location: &str, cookies: Vec<String>) -> Response {
+    let Ok(location) = HeaderValue::from_str(location) else {
+        return error_page(
+            StatusCode::BAD_GATEWAY,
+            "The control plane returned an invalid authorization redirect.",
+        );
+    };
+    let mut response = Response::builder()
+        .status(StatusCode::FOUND)
+        .header(header::LOCATION, location)
+        .header(header::CACHE_CONTROL, "no-store")
+        .header(header::REFERRER_POLICY, "no-referrer");
+    for cookie in cookies {
+        let Ok(cookie) = HeaderValue::from_str(&cookie) else {
+            return error_page(
+                StatusCode::BAD_GATEWAY,
+                "The control plane returned an invalid preview grant.",
+            );
+        };
+        response = response.header(header::SET_COOKIE, cookie);
+    }
+    response
+        .body(Body::empty())
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+async fn begin_preview_authorization(
+    state: &ServeState,
+    host: &str,
+    return_to: &str,
+    clear_cookie: bool,
+) -> Response {
+    match state
+        .client
+        .start_preview_authorization(host, return_to)
+        .await
+    {
+        Ok(started) => redirect_response(
+            &started.authorization_url,
+            clear_cookie.then(clear_preview_cookies).unwrap_or_default(),
+        ),
+        Err(error) => {
+            warn!(
+                operation = "node.serve.preview_authorize",
+                %error,
+                host = %host,
+                "preview authorization could not start"
+            );
+            error_page(
+                StatusCode::BAD_GATEWAY,
+                "The control plane could not authorize this preview.",
+            )
+        }
+    }
+}
+
+async fn handle_preview_callback(state: &ServeState, host: &str, code: Option<String>) -> Response {
+    let Some(code) = code else {
+        return begin_preview_authorization(state, host, "/", true).await;
+    };
+    match state.client.exchange_preview_code(host, &code).await {
+        Ok(exchanged) => redirect_response(
+            &exchanged.return_to,
+            vec![preview_access_cookie(
+                &exchanged.grant,
+                exchanged.max_age_seconds.min(12 * 60 * 60),
+                exchanged.cookie_secure,
+            )],
+        ),
+        Err(PreviewAuthError::Unauthorized) => {
+            begin_preview_authorization(state, host, "/", true).await
+        }
+        Err(PreviewAuthError::Forbidden) => error_page(
+            StatusCode::FORBIDDEN,
+            "Your account is not a member of the team that owns this preview.",
+        ),
+        Err(PreviewAuthError::Infrastructure(error)) => {
+            warn!(
+                operation = "node.serve.preview_exchange",
+                %error,
+                host = %host,
+                "preview callback exchange failed"
+            );
+            error_page(
+                StatusCode::BAD_GATEWAY,
+                "The control plane could not complete preview authorization.",
+            )
+        }
+    }
+}
+
+async fn require_preview_access(
+    state: &ServeState,
+    host: &str,
+    destination: String,
+    grant: Option<String>,
+) -> Result<(), Response> {
+    let Some(grant) = grant else {
+        return Err(begin_preview_authorization(state, host, &destination, false).await);
+    };
+
+    let cache_key = preview_cache_key(host, &grant);
+    {
+        let mut grants = state.preview_grants.lock().await;
+        if grants
+            .get(&cache_key)
+            .is_some_and(|expires_at| *expires_at > Instant::now())
+        {
+            return Ok(());
+        }
+        grants.remove(&cache_key);
+    }
+
+    match state.client.verify_preview_grant(host, &grant).await {
+        Ok(verification) if verification.allowed => {
+            let mut grants = state.preview_grants.lock().await;
+            let now = Instant::now();
+            grants.retain(|_, expires_at| *expires_at > now);
+            grants.insert(cache_key, now + state.preview_access_ttl);
+            Ok(())
+        }
+        Ok(_) | Err(PreviewAuthError::Forbidden) => Err(error_page(
+            StatusCode::FORBIDDEN,
+            "Your account is not a member of the team that owns this preview.",
+        )),
+        Err(PreviewAuthError::Unauthorized) => {
+            Err(begin_preview_authorization(state, host, &destination, true).await)
+        }
+        Err(PreviewAuthError::Infrastructure(error)) => {
+            warn!(
+                operation = "node.serve.preview_verify",
+                %error,
+                host = %host,
+                "preview grant verification failed"
+            );
+            Err(error_page(
+                StatusCode::BAD_GATEWAY,
+                "The control plane could not verify preview access.",
+            ))
+        }
+    }
+}
+
+fn strip_preview_cookie_header(headers: &mut HeaderMap) {
+    let filtered = headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(strip_preview_cookie);
+    match filtered.and_then(|value| HeaderValue::from_str(&value).ok()) {
+        Some(value) => {
+            headers.insert(header::COOKIE, value);
+        }
+        None => {
+            headers.remove(header::COOKIE);
+        }
+    }
 }
 
 fn strip_peer_proxy_prefix(request: &mut Request) -> Result<(), &'static str> {
@@ -412,6 +676,31 @@ async fn serve_local(
         }
     };
 
+    let requires_preview_access = matches!(route.access, ServeAccess::TeamOrPlatformAdmin);
+    if requires_preview_access {
+        if is_preview_callback(request.uri().path()) {
+            let code = callback_code(&request);
+            return handle_preview_callback(&state, &route.host, code).await;
+        }
+        let destination = request_destination(
+            request
+                .uri()
+                .path_and_query()
+                .map(|value| value.as_str())
+                .unwrap_or("/"),
+        );
+        let grant = request
+            .headers()
+            .get(header::COOKIE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(preview_cookie_value)
+            .map(str::to_owned);
+        if let Err(response) = require_preview_access(&state, &route.host, destination, grant).await
+        {
+            return response;
+        }
+    }
+
     match target {
         ResolvedTarget::Static {
             static_dir,
@@ -430,25 +719,11 @@ async fn serve_local(
             match resolve_static_file(&static_dir, &segments, spa_fallback) {
                 Some(file) => serve_file(&file, StatusCode::OK, &method, range.as_ref()).await,
                 None => {
-                    if let Some(not_found) = &not_found {
-                        let mut custom = static_dir.clone();
-                        for segment in not_found.trim_start_matches('/').split('/') {
-                            custom.push(segment);
-                        }
-                        if custom.is_file() {
-                            return serve_file(
-                                &custom,
-                                StatusCode::NOT_FOUND,
-                                &method,
-                                range.as_ref(),
-                            )
-                            .await;
-                        }
-                    }
-                    let fallback_404 = static_dir.join("404.html");
-                    if fallback_404.is_file() {
+                    if let Some(not_found_file) =
+                        resolve_not_found_file(&static_dir, not_found.as_deref())
+                    {
                         return serve_file(
-                            &fallback_404,
+                            &not_found_file,
                             StatusCode::NOT_FOUND,
                             &method,
                             range.as_ref(),
@@ -464,6 +739,9 @@ async fn serve_local(
             deployment_dir,
             server,
         } => {
+            if requires_preview_access {
+                strip_preview_cookie_header(request.headers_mut());
+            }
             let upstream = match state
                 .ssr
                 .upstream_for(deployment_id, &deployment_dir, &server, route.resources)
@@ -653,6 +931,7 @@ fn error_page(status: StatusCode, message: &str) -> Response {
         .status(status)
         .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
         .header(header::CACHE_CONTROL, "no-store")
+        .header(header::REFERRER_POLICY, "no-referrer")
         .body(Body::from(body))
         .unwrap_or_else(|_| status.into_response())
 }
@@ -781,6 +1060,95 @@ mod tests {
         );
 
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn missing_static_paths_select_custom_then_root_404() {
+        let dir = static_site(false);
+        std::fs::create_dir_all(dir.join("errors")).unwrap();
+        std::fs::write(dir.join("errors/not-found.html"), "custom").unwrap();
+        std::fs::write(dir.join("404.html"), "root").unwrap();
+
+        assert_eq!(
+            resolve_not_found_file(&dir, Some("errors/not-found.html")),
+            Some(dir.join("errors/not-found.html"))
+        );
+        assert_eq!(
+            resolve_not_found_file(&dir, Some("missing.html")),
+            Some(dir.join("404.html"))
+        );
+
+        std::fs::remove_file(dir.join("404.html")).unwrap();
+        assert_eq!(resolve_not_found_file(&dir, None), None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn preview_cookie_contract_and_ssr_filtering_are_host_scoped() {
+        assert_eq!(
+            preview_access_cookie("opaque", 43_200, true),
+            "__Host-gw_preview_access=opaque; Path=/; Max-Age=43200; Secure; HttpOnly; SameSite=Lax"
+        );
+        assert_eq!(
+            preview_access_cookie("opaque", 43_200, false),
+            "gw_preview_access=opaque; Path=/; Max-Age=43200; HttpOnly; SameSite=Lax"
+        );
+        assert_eq!(
+            preview_cookie_value(
+                "app=1; __Host-gw_preview_access=secure; gw_preview_access=plain; theme=dark"
+            ),
+            Some("secure")
+        );
+        assert_eq!(
+            preview_cookie_value("app=1; gw_preview_access=plain; theme=dark"),
+            Some("plain")
+        );
+        assert_eq!(
+            strip_preview_cookie(
+                "app=1; __Host-gw_preview_access=secure; gw_preview_access=plain; theme=dark"
+            ),
+            Some("app=1; theme=dark".to_owned())
+        );
+        assert_eq!(
+            strip_preview_cookie("__Host-gw_preview_access=opaque"),
+            None
+        );
+        assert_eq!(
+            clear_preview_cookies(),
+            vec![
+                "__Host-gw_preview_access=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax"
+                    .to_owned(),
+                "gw_preview_access=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn preview_callback_is_reserved_and_destinations_keep_the_query() {
+        assert!(is_preview_callback("/.grass/auth/callback"));
+        assert!(!is_preview_callback("/.grass/auth/callback/child"));
+        assert_eq!(request_destination("/docs?q=1"), "/docs?q=1");
+        assert_eq!(request_destination(""), "/");
+    }
+
+    #[test]
+    fn platform_error_pages_do_not_send_authorization_urls_as_referrers() {
+        let response = error_page(StatusCode::BAD_GATEWAY, "unavailable");
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(response.headers()[header::REFERRER_POLICY], "no-referrer");
+    }
+
+    #[test]
+    fn preview_redirect_can_clear_secure_and_http_development_cookies() {
+        let response = redirect_response("/", clear_preview_cookies());
+        assert_eq!(
+            response
+                .headers()
+                .get_all(header::SET_COOKIE)
+                .iter()
+                .count(),
+            2
+        );
     }
 
     #[test]
@@ -974,8 +1342,9 @@ mod tests {
     async fn peer_endpoint_requires_gateway_auth_before_route_lookup() {
         let config = NodeConfig::default();
         let routes = Arc::new(routes::RouteTable::default());
-        let ssr = Arc::new(ssr::SsrManager::new(None, &config));
+        let ssr = Arc::new(ssr::SsrManager::new(None, Uuid::now_v7(), &config));
         let state = Arc::new(ServeState::new(
+            ControlApiClient::new("http://127.0.0.1:9", "node-token").unwrap(),
             Uuid::now_v7(),
             "shared-gateway-token".to_owned(),
             routes,

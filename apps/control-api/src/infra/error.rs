@@ -138,6 +138,17 @@ pub fn ok_response<T: Serialize>(data: T) -> impl IntoResponse {
     })
 }
 
+pub fn accepted_response<T: Serialize>(data: T) -> impl IntoResponse {
+    (
+        StatusCode::ACCEPTED,
+        Json(ApiResponse {
+            code: 202,
+            message: "Accepted".to_owned(),
+            data,
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,5 +161,12 @@ mod tests {
         };
 
         assert_eq!(error.to_string(), "infrastructure service unavailable");
+    }
+
+    #[test]
+    fn accepted_response_uses_http_and_envelope_code_202() {
+        let response = accepted_response(serde_json::json!({ "queued": true })).into_response();
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
     }
 }

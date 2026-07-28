@@ -9,6 +9,51 @@ use uuid::Uuid;
 
 const PLACEMENT_LOCK_ID: i32 = 1_196_575_564;
 
+const NODE_USAGE_SQL: &str = r#"
+SELECT
+    d.serve_node_id AS node_id,
+    COALESCE(SUM(d.serve_cpu_millicores), 0)::BIGINT AS used_cpu_millicores,
+    COALESCE(SUM(d.serve_memory_mb), 0)::BIGINT AS used_memory_mb,
+    COALESCE(SUM(d.serve_disk_mb), 0)::BIGINT AS used_disk_mb,
+    COUNT(d.id)::BIGINT AS used_deployments
+FROM deployments d
+WHERE d.serve_node_id IS NOT NULL
+    AND d.deleted_at IS NULL
+    AND d.build_status NOT IN ('failed', 'canceled')
+    AND d.serve_status <> 'retired'
+GROUP BY d.serve_node_id
+"#;
+
+const ELIGIBLE_CANDIDATES_SQL: &str = r#"
+SELECT
+    n.id AS node_id,
+    n.capacity_cpu_millicores,
+    n.capacity_memory_mb,
+    n.capacity_disk_mb,
+    n.max_deployments,
+    COALESCE(SUM(d.serve_cpu_millicores), 0)::BIGINT AS used_cpu_millicores,
+    COALESCE(SUM(d.serve_memory_mb), 0)::BIGINT AS used_memory_mb,
+    COALESCE(SUM(d.serve_disk_mb), 0)::BIGINT AS used_disk_mb,
+    COUNT(d.id)::BIGINT AS used_deployments
+FROM nodes n
+LEFT JOIN deployments d
+    ON d.serve_node_id = n.id
+    AND d.deleted_at IS NULL
+    AND d.build_status NOT IN ('failed', 'canceled')
+    AND d.serve_status <> 'retired'
+WHERE n.deleted_at IS NULL
+    AND n.status = 'active'
+    AND n.serve_enabled = TRUE
+    AND n.last_heartbeat_at >= NOW() - INTERVAL '90 seconds'
+    AND NULLIF(BTRIM(n.base_url), '') IS NOT NULL
+    AND n.capacity_cpu_millicores > 0
+    AND n.capacity_memory_mb > 0
+    AND n.capacity_disk_mb > 0
+    AND n.max_deployments > 0
+GROUP BY n.id
+ORDER BY n.id
+"#;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
 pub struct NodeUsage {
     pub cpu_millicores: u64,
@@ -236,19 +281,7 @@ pub async fn node_usage<C: ConnectionTrait>(
 ) -> Result<HashMap<Uuid, NodeUsage>, ScheduleError> {
     let rows = NodeUsageRow::find_by_statement(Statement::from_string(
         DatabaseBackend::Postgres,
-        r#"
-SELECT
-    d.serve_node_id AS node_id,
-    COALESCE(SUM(d.serve_cpu_millicores), 0)::BIGINT AS used_cpu_millicores,
-    COALESCE(SUM(d.serve_memory_mb), 0)::BIGINT AS used_memory_mb,
-    COALESCE(SUM(d.serve_disk_mb), 0)::BIGINT AS used_disk_mb,
-    COUNT(d.id)::BIGINT AS used_deployments
-FROM deployments d
-WHERE d.serve_node_id IS NOT NULL
-    AND d.deleted_at IS NULL
-    AND d.build_status NOT IN ('failed', 'canceled')
-GROUP BY d.serve_node_id
-"#,
+        NODE_USAGE_SQL,
     ))
     .all(db)
     .await?;
@@ -266,34 +299,7 @@ pub async fn eligible_candidates<C: ConnectionTrait>(
 ) -> Result<Vec<Candidate>, ScheduleError> {
     let rows = CandidateRow::find_by_statement(Statement::from_string(
         DatabaseBackend::Postgres,
-        r#"
-SELECT
-    n.id AS node_id,
-    n.capacity_cpu_millicores,
-    n.capacity_memory_mb,
-    n.capacity_disk_mb,
-    n.max_deployments,
-    COALESCE(SUM(d.serve_cpu_millicores), 0)::BIGINT AS used_cpu_millicores,
-    COALESCE(SUM(d.serve_memory_mb), 0)::BIGINT AS used_memory_mb,
-    COALESCE(SUM(d.serve_disk_mb), 0)::BIGINT AS used_disk_mb,
-    COUNT(d.id)::BIGINT AS used_deployments
-FROM nodes n
-LEFT JOIN deployments d
-    ON d.serve_node_id = n.id
-    AND d.deleted_at IS NULL
-    AND d.build_status NOT IN ('failed', 'canceled')
-WHERE n.deleted_at IS NULL
-    AND n.status = 'active'
-    AND n.serve_enabled = TRUE
-    AND n.last_heartbeat_at >= NOW() - INTERVAL '90 seconds'
-    AND NULLIF(BTRIM(n.base_url), '') IS NOT NULL
-    AND n.capacity_cpu_millicores > 0
-    AND n.capacity_memory_mb > 0
-    AND n.capacity_disk_mb > 0
-    AND n.max_deployments > 0
-GROUP BY n.id
-ORDER BY n.id
-"#,
+        ELIGIBLE_CANDIDATES_SQL,
     ))
     .all(db)
     .await?;
@@ -403,6 +409,12 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+
+    #[test]
+    fn capacity_queries_ignore_retired_deployments() {
+        assert!(NODE_USAGE_SQL.contains("d.serve_status <> 'retired'"));
+        assert!(ELIGIBLE_CANDIDATES_SQL.contains("d.serve_status <> 'retired'"));
+    }
 
     fn candidate(
         id: u128,

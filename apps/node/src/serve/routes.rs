@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -50,6 +50,27 @@ impl RouteTable {
     pub async fn revision(&self) -> Option<String> {
         self.snapshot.read().await.revision.clone()
     }
+
+    pub async fn local_deployment_ids(&self, node_id: uuid::Uuid) -> HashSet<uuid::Uuid> {
+        self.snapshot
+            .read()
+            .await
+            .routes
+            .values()
+            .filter(|route| route.target_node_id == node_id)
+            .map(|route| route.deployment_id)
+            .collect()
+    }
+
+    pub async fn deployment_ids(&self) -> HashSet<uuid::Uuid> {
+        self.snapshot
+            .read()
+            .await
+            .routes
+            .values()
+            .map(|route| route.deployment_id)
+            .collect()
+    }
 }
 
 async fn refresh_routes(
@@ -62,6 +83,8 @@ async fn refresh_routes(
 pub fn spawn(
     client: crate::client::ControlApiClient,
     table: Arc<RouteTable>,
+    node_id: uuid::Uuid,
+    ssr: Arc<super::ssr::SsrManager>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(ROUTE_REFRESH_INTERVAL);
@@ -69,15 +92,25 @@ pub fn spawn(
         loop {
             interval.tick().await;
             match refresh_routes(&client, &table).await {
-                Ok(true) => {
-                    let revision = table.revision().await;
-                    tracing::info!(
-                        operation = "node.serve.routes.updated",
-                        ?revision,
-                        "Serve route snapshot updated"
-                    );
+                Ok(changed) => {
+                    let routed_here = table.local_deployment_ids(node_id).await;
+                    let routed_anywhere = table.deployment_ids().await;
+                    if let Err(error) = ssr.reconcile_routes(&routed_here, &routed_anywhere).await {
+                        tracing::warn!(
+                            operation = "node.serve.routes.reconcile_failed",
+                            %error,
+                            "failed to reconcile SSR services with Serve routes"
+                        );
+                    }
+                    if changed {
+                        let revision = table.revision().await;
+                        tracing::info!(
+                            operation = "node.serve.routes.updated",
+                            ?revision,
+                            "Serve route snapshot updated"
+                        );
+                    }
                 }
-                Ok(false) => {}
                 Err(error) => {
                     tracing::warn!(
                         operation = "node.serve.routes.failed",
@@ -92,7 +125,7 @@ pub fn spawn(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{collections::HashSet, sync::Arc};
 
     use axum::{Router, routing::get};
     use grass_node_protocol::{RouteSnapshotResponse, ServeResources, ServeRoute};
@@ -113,6 +146,7 @@ mod tests {
                 memory_mb: 64,
                 disk_mb: 256,
             },
+            access: grass_node_protocol::ServeAccess::Public,
         }
     }
 
@@ -181,5 +215,42 @@ mod tests {
             deployment_id
         );
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn local_deployment_ids_follow_route_retargeting_without_host_duplicates() {
+        let table = RouteTable::default();
+        let local_node = Uuid::now_v7();
+        let remote_node = Uuid::now_v7();
+        let retained = Uuid::now_v7();
+        let removed = Uuid::now_v7();
+        let mut retained_preview = route("retained-preview.example.com", retained);
+        retained_preview.target_node_id = local_node;
+        let mut retained_production = route("retained.example.com", retained);
+        retained_production.target_node_id = local_node;
+        let mut removed_route = route("removed.example.com", removed);
+        removed_route.target_node_id = local_node;
+        table
+            .apply(RouteSnapshotResponse {
+                revision: "revision-1".to_owned(),
+                routes: vec![retained_preview, retained_production.clone(), removed_route],
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            table.local_deployment_ids(local_node).await,
+            HashSet::from([retained, removed])
+        );
+
+        retained_production.target_node_id = remote_node;
+        table
+            .apply(RouteSnapshotResponse {
+                revision: "revision-2".to_owned(),
+                routes: vec![retained_production],
+            })
+            .await
+            .unwrap();
+
+        assert!(table.local_deployment_ids(local_node).await.is_empty());
     }
 }

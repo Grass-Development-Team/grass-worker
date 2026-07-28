@@ -1,13 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  BanIcon,
-  CheckIcon,
-  ExternalLinkIcon,
-  RotateCcwIcon,
-  RocketIcon,
-  UndoIcon,
-  XIcon,
-} from "lucide-react";
+import { BanIcon, ExternalLinkIcon, RotateCcwIcon, RocketIcon, UndoIcon } from "lucide-react";
 import { useCallback, useState } from "react";
 import { Link, useParams } from "react-router";
 
@@ -69,15 +61,6 @@ export function DeploymentDetailRoute() {
   const rollbackMutation = useMutation({
     mutationFn: () => deploymentsApi.rollback(projectId as string, deploymentId as string),
   });
-  const requestReviewMutation = useMutation({
-    mutationFn: () => deploymentsApi.requestReview(projectId as string, deploymentId as string),
-  });
-  const approveMutation = useMutation({
-    mutationFn: () => deploymentsApi.approveReview(projectId as string, deploymentId as string),
-  });
-  const rejectMutation = useMutation({
-    mutationFn: () => deploymentsApi.rejectReview(projectId as string, deploymentId as string),
-  });
 
   if (detailQuery.isLoading) {
     return <Skeleton className="h-96 w-full" aria-busy="true" />;
@@ -99,24 +82,18 @@ export function DeploymentDetailRoute() {
   const url = deployment.production_url ?? deployment.preview_url;
   const buildReady = deployment.build_status === "ready";
   const lifecycleReady = buildReady && deployment.serve_status === "ready";
+  const canQueueRelease = buildReady && deployment.serve_status === "retired";
 
   const showPromote =
     buildReady &&
     deployment.release_status !== "active" &&
     (!detail.review_required || deployment.release_status === "approved");
-  const canPromote = showPromote && lifecycleReady;
-  const showRequestReview =
-    detail.review_required &&
-    buildReady &&
-    ["draft", "rejected"].includes(deployment.release_status);
-  const canRequestReview = showRequestReview && lifecycleReady;
-  const hasPendingReview = deployment.release_status === "pending_review";
+  const canPromote =
+    showPromote && (lifecycleReady || canQueueRelease) && !deployment.release_pending;
   const canRetry = ["failed", "canceled"].includes(deployment.build_status);
-  const showRollback =
-    buildReady &&
-    deployment.release_status === "approved" &&
-    detail.events.some((event) => event.kind === "release");
-  const canRollback = showRollback && lifecycleReady;
+  const showRollback = buildReady && deployment.release_status === "approved" && detail.was_active;
+  const canRollback =
+    showRollback && (lifecycleReady || canQueueRelease) && !deployment.release_pending;
 
   return (
     <div className="space-y-6">
@@ -150,6 +127,12 @@ export function DeploymentDetailRoute() {
         </p>
       )}
 
+      {deployment.release_pending && (
+        <p role="status" className="text-sm text-muted-foreground">
+          Release queued. The current production version remains online until Serve is ready.
+        </p>
+      )}
+
       <div className="flex flex-wrap gap-2">
         {running && (
           <Button
@@ -168,32 +151,6 @@ export function DeploymentDetailRoute() {
           >
             <RotateCcwIcon /> Retry
           </Button>
-        )}
-        {showRequestReview && (
-          <Button
-            variant="outline"
-            onClick={() => act(requestReviewMutation.mutateAsync)}
-            disabled={!canRequestReview || requestReviewMutation.isPending}
-          >
-            Request review
-          </Button>
-        )}
-        {hasPendingReview && isAdmin && (
-          <>
-            <Button
-              onClick={() => act(approveMutation.mutateAsync)}
-              disabled={!lifecycleReady || approveMutation.isPending}
-            >
-              <CheckIcon /> Approve
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => act(rejectMutation.mutateAsync)}
-              disabled={!lifecycleReady || rejectMutation.isPending}
-            >
-              <XIcon /> Reject
-            </Button>
-          </>
         )}
         {showPromote && isAdmin && (
           <Button
