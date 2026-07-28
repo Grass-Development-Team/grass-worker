@@ -46,11 +46,10 @@ pub struct ControlApiConfig {
 impl ControlApiConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let path = path.as_ref();
+        let config_exists = path.exists();
         let mut config = Self::load_persisted(path)?;
-        let has_environment_secret = env::var("GWAPI_SECRET_KEY")
-            .ok()
-            .is_some_and(|value| secret_key_is_strong(&value));
-        if !has_environment_secret && config.ensure_secret_key() {
+        if !config_exists {
+            config.ensure_secret_key();
             config.save(path)?;
         }
         apply_env(&mut config)?;
@@ -171,6 +170,24 @@ mod tests {
 
         assert_eq!(config.redis.backend, grass_cache::CacheBackend::Redis);
         assert_eq!(config.redis.url, "redis://cache.example/2");
+    }
+
+    #[test]
+    fn loading_an_existing_config_does_not_rewrite_it() {
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("grass-worker-config-{unique}.toml"));
+        let original = "# Keep operator edits intact.\n[redis]\nurl = \"redis://cache.example/2\"\n\n[secrets]\nsecret_key = \"change-me\"\n";
+        fs::write(&path, original).unwrap();
+
+        let config = ControlApiConfig::load(&path).unwrap();
+        let persisted = fs::read_to_string(&path).unwrap();
+        fs::remove_file(path).unwrap();
+
+        assert_eq!(config.redis.url, "redis://cache.example/2");
+        assert_eq!(persisted, original);
     }
 
     #[test]

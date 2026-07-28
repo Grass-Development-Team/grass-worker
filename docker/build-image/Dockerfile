@@ -5,6 +5,5 @@
 #
 # Point [runtime] default_build_image at the tag to use it.
 FROM docker.io/library/node:22
-RUN npm install -g bun \
-    && corepack enable \
-    && bun --version
+RUN npm install -g bun
+RUN corepack enable
