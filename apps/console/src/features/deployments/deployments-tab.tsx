@@ -6,6 +6,15 @@ import { Link } from "react-router";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Field, FieldLabel } from "@/components/ui/field";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -24,16 +33,22 @@ import {
 
 import {
   deploymentsApi,
+  deploymentRefetchInterval,
   formatDuration,
   isBuildRunning,
   shortCommit,
   type DeploymentEnvironment,
+  type ServeNodeTarget,
 } from "./deployments.api";
-import { BuildStatusBadge, ReleaseStatusBadge } from "./components/status-badges";
+import { BuildStatusBadge, ReleaseStatusBadge, ServeStatusBadge } from "./components/status-badges";
 
 export function DeploymentsTab({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
   const [environmentFilter, setEnvironmentFilter] = useState<"all" | DeploymentEnvironment>("all");
+  const [deploymentEnvironment, setDeploymentEnvironment] = useState<DeploymentEnvironment | null>(
+    null,
+  );
+  const [serveNodeId, setServeNodeId] = useState("automatic");
   const [error, setError] = useState<string | null>(null);
 
   const deploymentsQuery = useQuery({
@@ -44,21 +59,45 @@ export function DeploymentsTab({ projectId }: { projectId: string }) {
         environmentFilter === "all" ? undefined : { environment: environmentFilter },
       ),
     refetchInterval: (query) =>
-      query.state.data?.deployments.some((deployment) => isBuildRunning(deployment.build_status))
+      query.state.data?.deployments.some(
+        (deployment) => deploymentRefetchInterval(deployment) !== false,
+      )
         ? 4000
         : false,
   });
 
+  const serveNodesQuery = useQuery({
+    queryKey: ["serve-nodes", projectId],
+    queryFn: () => deploymentsApi.serveNodes(projectId),
+    enabled: deploymentEnvironment !== null,
+  });
+
   const createMutation = useMutation({
-    mutationFn: (environment: DeploymentEnvironment) =>
-      deploymentsApi.create(projectId, { environment }),
+    mutationFn: (input: { environment: DeploymentEnvironment; serve_node_id?: string }) =>
+      deploymentsApi.create(projectId, input),
     onSuccess: () => {
       setError(null);
+      setDeploymentEnvironment(null);
       queryClient.invalidateQueries({ queryKey: ["deployments", projectId] });
     },
     onError: (cause) =>
       setError(cause instanceof Error ? cause.message : "Unable to create the deployment."),
   });
+
+  const serveNodes = serveNodesQuery.data?.serve_nodes ?? [];
+  const selectedNode = serveNodes.find((node) => node.id === serveNodeId);
+  const canSubmit =
+    !serveNodesQuery.isLoading &&
+    !serveNodesQuery.isError &&
+    (serveNodeId === "automatic"
+      ? serveNodes.some((node) => node.schedulable)
+      : selectedNode?.schedulable === true);
+
+  const openDeploymentDialog = (environment: DeploymentEnvironment) => {
+    setServeNodeId("automatic");
+    setError(null);
+    setDeploymentEnvironment(environment);
+  };
 
   return (
     <div className="space-y-4">
@@ -79,25 +118,91 @@ export function DeploymentsTab({ projectId }: { projectId: string }) {
         <div className="flex gap-2">
           <Button
             variant="outline"
-            onClick={() => createMutation.mutate("preview")}
+            onClick={() => openDeploymentDialog("preview")}
             disabled={createMutation.isPending}
           >
             <RocketIcon /> Deploy preview
           </Button>
           <Button
-            onClick={() => createMutation.mutate("production")}
+            onClick={() => openDeploymentDialog("production")}
             disabled={createMutation.isPending}
           >
             <RocketIcon /> Deploy production
           </Button>
         </div>
       </div>
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-
+      <Dialog
+        open={deploymentEnvironment !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeploymentEnvironment(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="capitalize">Deploy {deploymentEnvironment}</DialogTitle>
+            <DialogDescription>Serve placement for this deployment.</DialogDescription>
+          </DialogHeader>
+          <form
+            className="space-y-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!deploymentEnvironment || !canSubmit) return;
+              createMutation.mutate({
+                environment: deploymentEnvironment,
+                ...(serveNodeId === "automatic" ? {} : { serve_node_id: serveNodeId }),
+              });
+            }}
+          >
+            <Field>
+              <FieldLabel htmlFor="serve-node">Serve node</FieldLabel>
+              <Select value={serveNodeId} onValueChange={setServeNodeId}>
+                <SelectTrigger id="serve-node" aria-label="Serve node" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem
+                    value="automatic"
+                    disabled={!serveNodes.some((node) => node.schedulable)}
+                  >
+                    Automatic · least loaded
+                  </SelectItem>
+                  {serveNodes.map((node) => (
+                    <SelectItem key={node.id} value={node.id} disabled={!node.schedulable}>
+                      {node.name} · {formatNodeUsage(node)}
+                      {node.overflow_only ? " · overflow" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            {serveNodesQuery.isLoading && (
+              <p className="text-sm text-muted-foreground">Loading Serve Nodes…</p>
+            )}
+            {serveNodesQuery.isError && (
+              <p role="alert" className="text-sm text-destructive">
+                {serveNodesQuery.error instanceof Error
+                  ? serveNodesQuery.error.message
+                  : "Unable to load Serve Nodes."}
+              </p>
+            )}
+            {serveNodesQuery.data && !serveNodes.some((node) => node.schedulable) && (
+              <p role="alert" className="text-sm text-destructive">
+                No Serve Node can accept this deployment.
+              </p>
+            )}
+            {createMutation.isError && error && (
+              <p role="alert" className="text-sm text-destructive">
+                {error}
+              </p>
+            )}
+            <DialogFooter>
+              <Button type="submit" disabled={!canSubmit || createMutation.isPending}>
+                {createMutation.isPending ? "Creating…" : "Create deployment"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
       {deploymentsQuery.isLoading && <Skeleton className="h-64 w-full" aria-busy="true" />}
       {deploymentsQuery.isError && (
         <p role="alert" className="text-sm text-destructive">
@@ -118,6 +223,7 @@ export function DeploymentsTab({ projectId }: { projectId: string }) {
                 <TableHead>Deployment</TableHead>
                 <TableHead>Environment</TableHead>
                 <TableHead>Build</TableHead>
+                <TableHead>Serve</TableHead>
                 <TableHead>Release</TableHead>
                 <TableHead>Source</TableHead>
                 <TableHead>Duration</TableHead>
@@ -155,8 +261,32 @@ export function DeploymentsTab({ projectId }: { projectId: string }) {
                     </TableCell>
                     <TableCell>
                       <BuildStatusBadge status={deployment.build_status} />
+                      {deployment.build_node && (
+                        <p className="text-xs text-muted-foreground">
+                          {deployment.build_node.name}
+                        </p>
+                      )}
                       {deployment.build_stage && isBuildRunning(deployment.build_status) && (
                         <p className="text-xs text-muted-foreground">{deployment.build_stage}</p>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <ServeStatusBadge status={deployment.serve_status} />
+                        {deployment.overcommitted && <Badge variant="warning">Overflow</Badge>}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {deployment.serve_node?.name ?? "Unassigned"}
+                      </p>
+                      <p className="whitespace-nowrap text-xs text-muted-foreground">
+                        {deployment.serve_resources.cpu_millicores}m ·{" "}
+                        {deployment.serve_resources.memory_mb}
+                        MB · {deployment.serve_resources.disk_mb} MB disk
+                      </p>
+                      {deployment.serve_failure_message && (
+                        <p className="max-w-64 truncate text-xs text-destructive">
+                          {deployment.serve_failure_message}
+                        </p>
                       )}
                     </TableCell>
                     <TableCell>
@@ -191,4 +321,8 @@ export function DeploymentsTab({ projectId }: { projectId: string }) {
         ))}
     </div>
   );
+}
+
+function formatNodeUsage(node: ServeNodeTarget): string {
+  return `${node.usage.cpu_millicores}/${node.capacity.cpu_millicores}m · ${node.usage.memory_mb}/${node.capacity.memory_mb} MB · ${node.usage.disk_mb}/${node.capacity.disk_mb} MB disk · ${node.usage.deployments}/${node.capacity.max_deployments} deployments`;
 }

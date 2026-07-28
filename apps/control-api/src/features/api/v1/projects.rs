@@ -73,6 +73,10 @@ pub fn router() -> Router<ControlApiState> {
             get(deployments::list).post(deployments::create),
         )
         .route(
+            "/projects/{project_id}/serve-nodes",
+            get(deployments::serve_nodes),
+        )
+        .route(
             "/projects/{project_id}/deployments/{deployment_id}",
             get(deployments::detail),
         )

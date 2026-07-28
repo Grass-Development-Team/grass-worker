@@ -13,6 +13,9 @@ logs, review, activation, and public access.
   the Node process
 - Rust 1.85+ and [Vite+](https://viteplus.dev/) when building from source
 
+PostgreSQL and Redis belong to the Control API. Nodes do not connect to
+either service directly; they use the authenticated Control API instead.
+
 ## 1. Build
 
 ```sh
@@ -95,15 +98,91 @@ just run node         # or: grass-node --config node.toml
 ```
 
 The Node registers, heartbeats every 30 seconds, and appears under
-Administration → Nodes. First-stage Nodes always build **and** serve; if the
-config disables either capability it is corrected with a warning.
+Administration → Nodes.
+
+### Choose Node capabilities
+
+Every Node must enable at least one capability. A Build-only Node claims and
+runs builds but does not accept site traffic:
+
+```toml
+[node.capabilities]
+build = true
+serve = false
+```
+
+A Serve-only Node stages assigned artifacts and serves traffic but does not
+claim builds:
+
+```toml
+[node.capabilities]
+build = false
+serve = true
+```
+
+A combined Node supports both roles:
+
+```toml
+[node.capabilities]
+build = true
+serve = true
+```
+
+For every Serve-capable Node, set `serve.public_base_url` to an absolute
+HTTP(S) URL that every other Serve Node can reach. This is the address used
+for one-hop gateway traffic, so `127.0.0.1` is only suitable for a
+single-machine cluster:
+
+```toml
+[serve]
+public_base_url = "http://serve-a.internal:8080"
+```
+
+### Configure Serve scheduling capacity
+
+By default a Serve Node reports 80% of its logical CPU capacity, 75% of total
+memory, 80% of the available space on the filesystem containing
+`serve.artifact_cache_root`, and 10 deployment slots. These values initialize
+the Node's scheduling capacity on its first Serve registration.
+
+Set explicit initial values when automatic detection is not appropriate:
+
+```toml
+[serve.capacity]
+cpu_millicores = 1600
+memory_mb = 1536
+disk_mb = 8192
+max_deployments = 10
+```
+
+`0` for CPU, memory, or disk keeps automatic detection; deployment capacity
+must be positive. Administrators can inspect usage and persist later capacity
+changes under Administration → Nodes.
+
+Each Static deployment initially reserves 50 millicores, 64 MB memory, and
+256 MB disk. Each SSR deployment reserves 200 millicores, 256 MB memory, and
+512 MB disk. The artifact upload replaces the disk estimate with its actual
+unpacked size. Automatic placement selects the eligible Node with the lowest
+projected dominant resource usage and randomizes exact ties; operators may
+instead choose a specific Serve Node in the deployment dialog.
+
+When every Node is at normal capacity, the scheduler may place up to two
+additional deployments on each Serve Node. CPU, memory, or deployment slots
+may be overcommitted in this mode, but disk is never overcommitted. A
+deployment keeps its single assigned Serve Node for its lifetime.
 
 ## 4. Configure a host source
 
 Public URLs need a host source. Point a wildcard DNS record
-(`*.apps.example.com`) at the Node serve listener (port 8080 by default),
+(`*.apps.example.com`) at any Serve Node listener (port 8080 by default),
 then add a **Wildcard** host source with that base domain under
 Administration → Host sources and mark it as the default.
+
+Every Serve Node holds the same Host route snapshot. If DNS sends a request to
+a Node that does not own that deployment, the receiving Node streams it to the
+assigned Node through one authenticated peer hop. Make every
+`serve.public_base_url` reachable between Serve Nodes and allow the serve port
+through internal firewalls.
 
 Without wildcard DNS, add a **DNS provider (Cloudflare)** source instead:
 provide an API token with the Zone / DNS / Edit permission, the zone ID,
@@ -167,11 +246,15 @@ SSH, and `git://` connections are pinned to an address that passed this policy.
    credential first when the repository is private.
 2. Open the project → Deployments → **Deploy preview** or **Deploy
    production**.
-3. Watch the realtime build log. Builds run inside the configured container
-   runtime, produce Grass Output v1, and upload the artifact.
-4. Preview deployments activate automatically (default policy) and are
-   reachable at their preview URL as soon as the build is ready.
-5. Production deployments require review by default: request review, then
+3. Watch the realtime build log. A Build Node runs the build inside its
+   configured container runtime, produces Grass Output v1, and streams the
+   artifact to Control API local storage.
+4. The assigned Serve Node downloads, verifies, and stages the artifact. A
+   deployment is not available for review, promotion, rollback, or public
+   access until both its Build and Serve states are ready.
+5. Preview deployments activate automatically (default policy) and become
+   reachable at their preview URL after Serve staging is ready.
+6. Production deployments require review by default: request review, then
    approve as a team admin on the deployment page — or platform-wide under
    **Administration → Reviews**, where administrators see every pending
    review and can **Approve**, **Approve & promote** (publish in the same
@@ -183,6 +266,17 @@ SSH, and `git://` connections are pinned to an address that passed this policy.
 
 ## Notes
 
+- The Control API is the artifact relay between Build and Serve Nodes: Build
+  Nodes upload to its local storage and Serve Nodes download into their local
+  artifact cache. Size the Control API storage for retained artifacts as well
+  as logs and other platform data.
+- After upgrading an existing cluster to this version, restart every Node at
+  least once so it registers its exact capabilities and Serve capacity.
+- This phase runs exactly one Control API and assigns each deployment to one
+  Serve Node. It does not provide Control API high availability, Build
+  failover, automatic Serve reassignment, or object storage. An unavailable
+  assigned Serve Node therefore makes its sites unavailable until that Node
+  returns.
 - Static outputs from Vite/React/Vue/Svelte SPAs, Next.js static export,
   Nuxt SPA/prerender, SvelteKit adapter-static, and Astro static are
   supported. **SSR deployments work for Next.js, Astro, and Nuxt**: the

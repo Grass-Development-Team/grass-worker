@@ -83,7 +83,10 @@ pub fn router() -> Router<ControlApiState> {
             "/nodes/local-process",
             get(nodes::local_process_status).post(nodes::local_process_action),
         )
-        .route("/nodes/{node_id}", get(nodes::detail))
+        .route(
+            "/nodes/{node_id}",
+            get(nodes::detail).patch(nodes::update_capacity),
+        )
         .route("/nodes/{node_id}/health", get(nodes::health))
         .route("/nodes/{node_id}/rotate-token", post(nodes::rotate_token))
 }

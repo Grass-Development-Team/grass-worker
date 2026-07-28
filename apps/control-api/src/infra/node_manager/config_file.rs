@@ -33,6 +33,13 @@ struct NodeSection {
     control_api: String,
     node_token: String,
     work_root: String,
+    capabilities: CapabilitiesSection,
+}
+
+#[derive(Serialize)]
+struct CapabilitiesSection {
+    build: bool,
+    serve: bool,
 }
 
 #[derive(Serialize)]
@@ -81,6 +88,10 @@ pub fn generate(path: &str, params: &GenerateParams<'_>) -> anyhow::Result<Vec<S
             control_api: params.control_api_url.clone(),
             node_token: params.node_token.to_owned(),
             work_root: work_root.clone(),
+            capabilities: CapabilitiesSection {
+                build: true,
+                serve: true,
+            },
         },
         runtime: detect_runtime(),
         serve: ServeSection {
@@ -239,6 +250,8 @@ mod tests {
             value["node"]["node_token"].as_str().unwrap(),
             "secret-token"
         );
+        assert_eq!(value["node"]["capabilities"]["build"].as_bool(), Some(true));
+        assert_eq!(value["node"]["capabilities"]["serve"].as_bool(), Some(true));
         assert!(
             value["node"]["work_root"]
                 .as_str()

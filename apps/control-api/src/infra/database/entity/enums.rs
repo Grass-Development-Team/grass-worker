@@ -114,9 +114,17 @@ string_active_enum!(DeploymentReleaseStatus, "deployment_release_status", {
     Active => "active",
 });
 
+string_active_enum!(DeploymentServeStatus, "deployment_serve_status", {
+    Pending => "pending",
+    Syncing => "syncing",
+    Ready => "ready",
+    Failed => "failed",
+});
+
 string_active_enum!(DeploymentEventKind, "deployment_event_kind", {
     System => "system",
     Build => "build",
+    Serve => "serve",
     Release => "release",
     Review => "review",
     Host => "host",

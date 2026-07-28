@@ -2,9 +2,10 @@
 
 use std::time::Duration;
 
-use grass_node_protocol::{HeartbeatRequest, NodeCapabilities, RegisterRequest};
+use grass_node_protocol::{
+    HeartbeatRequest, NodeCapabilities, NodeResources, RegisterRequest, RegisterResponse,
+};
 use tracing::{info, warn};
-use uuid::Uuid;
 
 use crate::{client::ControlApiClient, config::NodeConfig};
 
@@ -12,35 +13,48 @@ pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const REGISTER_RETRY_DELAY: Duration = Duration::from_secs(5);
 const REGISTER_MAX_ATTEMPTS: u32 = 60;
 
-/// Applies the first-stage capability rule: build and serve must both be on.
-/// Returns the corrected capabilities and logs a warning when the config
-/// tried to disable one.
-pub fn corrected_capabilities(config: &NodeConfig) -> NodeCapabilities {
-    let requested_build = config.node.capabilities.build;
-    let requested_serve = config.node.capabilities.serve;
-    if !requested_build || !requested_serve {
-        warn!(
-            operation = "node.capabilities.corrected",
-            build = requested_build,
-            serve = requested_serve,
-            "first-stage nodes must build and serve; enabling both capabilities"
-        );
+pub fn registration_request(
+    config: &NodeConfig,
+    resources: Option<NodeResources>,
+) -> anyhow::Result<RegisterRequest> {
+    config.validate()?;
+    if config.node.capabilities.serve && resources.is_none() {
+        anyhow::bail!("serve capacity is required when serve capability is enabled");
     }
-    NodeCapabilities {
-        build: true,
-        serve: true,
-    }
+
+    Ok(RegisterRequest {
+        name: config.node.id.clone(),
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        capabilities: NodeCapabilities {
+            build: config.node.capabilities.build,
+            serve: config.node.capabilities.serve,
+        },
+        build_concurrency: if config.node.capabilities.build {
+            config.build.concurrency
+        } else {
+            0
+        },
+        serve_base_url: config
+            .node
+            .capabilities
+            .serve
+            .then(|| config.serve.public_base_url.clone()),
+        resources: config
+            .node
+            .capabilities
+            .serve
+            .then_some(resources)
+            .flatten(),
+    })
 }
 
 /// Registers the Node, retrying while the Control API is unavailable.
-pub async fn register(client: &ControlApiClient, config: &NodeConfig) -> anyhow::Result<Uuid> {
-    let request = RegisterRequest {
-        name: config.node.id.clone(),
-        version: env!("CARGO_PKG_VERSION").to_owned(),
-        capabilities: corrected_capabilities(config),
-        build_concurrency: config.build.concurrency,
-        serve_base_url: Some(config.serve.public_base_url.clone()),
-    };
+pub async fn register(
+    client: &ControlApiClient,
+    config: &NodeConfig,
+    resources: Option<NodeResources>,
+) -> anyhow::Result<RegisterResponse> {
+    let request = registration_request(config, resources)?;
 
     let mut attempt = 0;
     loop {
@@ -53,7 +67,12 @@ pub async fn register(client: &ControlApiClient, config: &NodeConfig) -> anyhow:
                     name = %response.name,
                     "node registered with control api"
                 );
-                return Ok(response.node_id);
+                if config.node.capabilities.serve
+                    && response.gateway_token.as_deref().is_none_or(str::is_empty)
+                {
+                    anyhow::bail!("control api omitted the serve gateway token");
+                }
+                return Ok(response);
             }
             Err(error) if attempt < REGISTER_MAX_ATTEMPTS => {
                 warn!(
@@ -92,14 +111,38 @@ pub fn spawn_heartbeat(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use grass_node_protocol::NodeResources;
 
     #[test]
-    fn capabilities_are_forced_to_build_and_serve() {
+    fn capabilities_require_at_least_one_role() {
         let mut config = NodeConfig::default();
         config.node.capabilities.build = false;
         config.node.capabilities.serve = false;
-        let corrected = corrected_capabilities(&config);
-        assert!(corrected.build);
-        assert!(corrected.serve);
+        assert_eq!(
+            config.validate().unwrap_err().to_string(),
+            "node must enable build or serve"
+        );
+
+        config.node.capabilities.serve = true;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn registration_preserves_serve_only_capability_and_capacity() {
+        let mut config = NodeConfig::default();
+        config.node.capabilities.build = false;
+        let resources = NodeResources {
+            cpu_millicores: 800,
+            memory_mb: 768,
+            disk_mb: 4_096,
+            max_deployments: 10,
+        };
+
+        let request = registration_request(&config, Some(resources)).unwrap();
+
+        assert!(!request.capabilities.build);
+        assert!(request.capabilities.serve);
+        assert_eq!(request.build_concurrency, 0);
+        assert_eq!(request.resources, Some(resources));
     }
 }

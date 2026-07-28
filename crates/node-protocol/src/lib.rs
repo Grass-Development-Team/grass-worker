@@ -25,6 +25,21 @@ pub struct NodeCapabilities {
     pub serve: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeResources {
+    pub cpu_millicores: u64,
+    pub memory_mb: u64,
+    pub disk_mb: u64,
+    pub max_deployments: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServeResources {
+    pub cpu_millicores: u64,
+    pub memory_mb: u64,
+    pub disk_mb: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterRequest {
     pub name: String,
@@ -34,6 +49,9 @@ pub struct RegisterRequest {
     /// Public base URL of the Node serve listener, when known.
     #[serde(default)]
     pub serve_base_url: Option<String>,
+    /// Schedulable Serve capacity. Build-only Nodes omit this field.
+    #[serde(default)]
+    pub resources: Option<NodeResources>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +61,10 @@ pub struct RegisterResponse {
     /// Capabilities after server-side correction; the first stage forces
     /// build and serve on.
     pub capabilities: NodeCapabilities,
+    /// Shared credential for authenticated Serve-to-Serve proxying. It is
+    /// present only when Serve capability is enabled.
+    #[serde(default)]
+    pub gateway_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -204,6 +226,9 @@ pub mod artifact_headers {
     pub const OUTPUT_API_VERSION: &str = "x-grass-output-api-version";
     pub const FRAMEWORK_NAME: &str = "x-grass-framework-name";
     pub const FRAMEWORK_VERSION: &str = "x-grass-framework-version";
+    pub const CHECKSUM_SHA256: &str = "x-grass-checksum-sha256";
+    pub const PACKED_SIZE_BYTES: &str = "x-grass-packed-size-bytes";
+    pub const UNPACKED_SIZE_BYTES: &str = "x-grass-unpacked-size-bytes";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -214,6 +239,75 @@ pub struct UploadArtifactResponse {
 }
 
 // --- Serve resolution -------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServeArtifact {
+    pub artifact_id: Uuid,
+    pub checksum_sha256: String,
+    pub packed_size_bytes: u64,
+    pub unpacked_size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServeAssignment {
+    pub deployment_id: Uuid,
+    pub project_id: Uuid,
+    pub runtime_kind: String,
+    pub status: ServeAssignmentStatus,
+    pub artifact: ServeArtifact,
+    pub resources: ServeResources,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServeAssignmentStatus {
+    Pending,
+    Syncing,
+    Ready,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServeAssignmentsResponse {
+    pub assignments: Vec<ServeAssignment>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportedServeStatus {
+    Syncing,
+    Ready,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReportServeStatusRequest {
+    pub status: ReportedServeStatus,
+    #[serde(default)]
+    pub failure_code: Option<String>,
+    #[serde(default)]
+    pub failure_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReportServeStatusResponse {
+    pub acknowledged: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServeRoute {
+    pub host: String,
+    pub deployment_id: Uuid,
+    pub target_node_id: Uuid,
+    pub target_base_url: String,
+    pub resources: ServeResources,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouteSnapshotResponse {
+    pub revision: String,
+    pub routes: Vec<ServeRoute>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolveHostResponse {
@@ -291,5 +385,35 @@ mod tests {
         .unwrap();
         assert_eq!(terminal.status, Some(ReportedStatus::Failed));
         assert_eq!(terminal.build_minutes, Some(3));
+    }
+
+    #[test]
+    fn serve_protocol_round_trips_resources_status_and_routes() {
+        let resources = ServeResources {
+            cpu_millicores: 200,
+            memory_mb: 256,
+            disk_mb: 512,
+        };
+        assert_eq!(
+            serde_json::to_value(resources).unwrap()["cpu_millicores"],
+            200
+        );
+
+        let status: ReportedServeStatus = serde_json::from_str("\"syncing\"").unwrap();
+        assert_eq!(status, ReportedServeStatus::Syncing);
+        let assignment_status: ServeAssignmentStatus = serde_json::from_str("\"pending\"").unwrap();
+        assert_eq!(assignment_status, ServeAssignmentStatus::Pending);
+
+        let route = ServeRoute {
+            host: "app.example.com".to_owned(),
+            deployment_id: Uuid::nil(),
+            target_node_id: Uuid::nil(),
+            target_base_url: "http://node-1:8080".to_owned(),
+            resources,
+        };
+        let parsed: ServeRoute =
+            serde_json::from_slice(&serde_json::to_vec(&route).unwrap()).unwrap();
+        assert_eq!(parsed.host, "app.example.com");
+        assert_eq!(parsed.resources, resources);
     }
 }
