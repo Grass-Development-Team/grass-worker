@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { apiUrl } from "@/lib/api";
 import { Router } from "./router";
 import { AuthProvider } from "@/features/auth/auth-context";
+import { brandingApi } from "@/features/branding/branding.api";
+import { BrandingProvider } from "@/features/branding/branding-context";
 
 interface HealthResponse {
   status: string;
@@ -34,6 +36,11 @@ export function App() {
     retry: 3,
     retryDelay: 2000,
     refetchInterval: 3000,
+  });
+  const { data: siteConfig } = useQuery({
+    queryKey: ["site-config"],
+    queryFn: brandingApi.getSiteConfig,
+    retry: false,
   });
 
   const isSetupMode = health?.setup === true;
@@ -77,12 +84,22 @@ export function App() {
   }
 
   if (isSetupMode) {
-    return <Router />;
+    return (
+      <BrandingProvider
+        branding={siteConfig && { siteName: siteConfig.site_name, version: siteConfig.version }}
+      >
+        <Router />
+      </BrandingProvider>
+    );
   }
 
   return (
-    <AuthProvider>
-      <Router />
-    </AuthProvider>
+    <BrandingProvider
+      branding={siteConfig && { siteName: siteConfig.site_name, version: siteConfig.version }}
+    >
+      <AuthProvider>
+        <Router />
+      </AuthProvider>
+    </BrandingProvider>
   );
 }

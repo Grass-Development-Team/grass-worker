@@ -3,6 +3,7 @@ import { useState } from "react";
 import { AlertCircle, ArrowRight, Check } from "lucide-react";
 
 import { setupApi } from "@/features/setup/setup.api";
+import { useBranding } from "@/features/branding/branding-context";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -14,6 +15,7 @@ import {
 } from "@/components/ui/card";
 
 export function FinishStep({ onSuccess }: { onSuccess: () => void }) {
+  const { siteName } = useBranding();
   const [error, setError] = useState<string | null>(null);
   const mutation = useMutation({
     mutationFn: setupApi.finishSetup,
@@ -29,7 +31,7 @@ export function FinishStep({ onSuccess }: { onSuccess: () => void }) {
           <Check className="size-5" /> Complete Setup
         </CardTitle>
         <CardDescription>
-          All steps are done. Click below to finish setup and start using Grass Worker.
+          All steps are done. Click below to finish setup and start using {siteName}.
         </CardDescription>
       </CardHeader>
       <CardContent>

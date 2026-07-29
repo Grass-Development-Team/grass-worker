@@ -46,11 +46,12 @@ import {
 import { AdminSidebarNav } from "@/features/admin/components/admin-sidebar-nav";
 import { adminSections } from "@/features/admin/admin-sections";
 import { useAuth } from "@/features/auth/auth-context";
+import { useBranding, usePageTitle } from "@/features/branding/branding-context";
 import {
   ProjectBreadcrumb,
   ProjectSidebarNav,
 } from "@/features/projects/components/project-sidebar-nav";
-import { canViewTeamSettings } from "@/features/teams/team-permissions";
+import { canViewTeamAudit, canViewTeamSettings } from "@/features/teams/team-permissions";
 import { TeamSwitcher } from "@/features/teams/team-switcher";
 import { useTeam } from "@/features/teams/team-context";
 
@@ -132,9 +133,11 @@ function ThemeToggle() {
 function TeamSidebarNav({
   navigation,
   showSettings,
+  showAudit,
 }: {
   navigation: { title: string; url: string; icon: React.ComponentType }[];
   showSettings: boolean;
+  showAudit: boolean;
 }) {
   const location = useLocation();
 
@@ -170,21 +173,24 @@ function TeamSidebarNav({
           <SidebarGroupLabel>Team settings</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {settingsNavigation.map((item) => (
-                <SidebarMenuItem key={item.url}>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={
-                      location.pathname === item.url || location.pathname.startsWith(`${item.url}/`)
-                    }
-                  >
-                    <NavLink to={item.url}>
-                      <item.icon />
-                      <span>{item.title}</span>
-                    </NavLink>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
+              {settingsNavigation
+                .filter((item) => item.title !== "Audit" || showAudit)
+                .map((item) => (
+                  <SidebarMenuItem key={item.url}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={
+                        location.pathname === item.url ||
+                        location.pathname.startsWith(`${item.url}/`)
+                      }
+                    >
+                      <NavLink to={item.url}>
+                        <item.icon />
+                        <span>{item.title}</span>
+                      </NavLink>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -195,12 +201,14 @@ function TeamSidebarNav({
 
 function AppLayoutContent() {
   const { user, logout } = useAuth();
+  const { siteName, version } = useBranding();
   const { activeTeam, activeRole, error, refreshTeams } = useTeam();
   const location = useLocation();
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
   const [actionError, setActionError] = useState<string | null>(null);
   const showSettings = activeRole ? canViewTeamSettings(activeRole) : false;
+  const showAudit = activeRole ? canViewTeamAudit(activeRole) : false;
   const navigation =
     user?.platform_role === "admin"
       ? [...primaryNavigation, administrationNavigation]
@@ -213,6 +221,7 @@ function AppLayoutContent() {
       : null;
   const inAdmin = location.pathname === "/admin" || location.pathname.startsWith("/admin/");
   const title = pageTitle(location.pathname, Boolean(projectId));
+  usePageTitle(title || null);
 
   useEffect(() => {
     if (isMobile) setOpenMobile(false);
@@ -235,9 +244,9 @@ function AppLayoutContent() {
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton asChild>
-                <NavLink to="/" aria-label="Grass Worker Console">
+                <NavLink to="/" aria-label={`${siteName} Console`}>
                   <ActivityIcon />
-                  <span className="font-semibold">Grass Worker</span>
+                  <span className="font-semibold">{siteName}</span>
                 </NavLink>
               </SidebarMenuButton>
             </SidebarMenuItem>
@@ -250,7 +259,11 @@ function AppLayoutContent() {
           ) : inAdmin ? (
             <AdminSidebarNav />
           ) : (
-            <TeamSidebarNav navigation={navigation} showSettings={showSettings} />
+            <TeamSidebarNav
+              navigation={navigation}
+              showSettings={showSettings}
+              showAudit={showAudit}
+            />
           )}
         </SidebarContent>
         <SidebarFooter>
@@ -284,6 +297,9 @@ function AppLayoutContent() {
               </DropdownMenu>
             </SidebarMenuItem>
           </SidebarMenu>
+          <p className="px-2 text-[10px] text-muted-foreground group-data-[collapsible=icon]:hidden">
+            Powered by Grass Worker · v{version}
+          </p>
         </SidebarFooter>
       </Sidebar>
       <SidebarInset>
