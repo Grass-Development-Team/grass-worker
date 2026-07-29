@@ -13,6 +13,18 @@
 
 # 第二阶段
 
+## P0：平台管理、审计与权限修复
+
+- P0.1 审计基础：覆盖用户 API、登录失败和权限拒绝，记录操作者、时间、来源、结果、耗时、脱敏变更与可见级别；默认保留 90 天；
+- P0.2 平台与团队差异化审计：服务端分页、筛选、详情和权限隔离；团队仅 Owner/Admin 可查看当前团队精选业务事件；
+- P0.3 Console 角色能力矩阵：Viewer 隐藏无权限操作，配置页面保持只读可见，后端继续独立鉴权；
+- P0.4 动态站点品牌：登录、注册、邀请、侧栏和标题使用配置名称，仅弱化保留 Grass Worker 与版本署名；
+- P0.5 Invitation 预检：进入链接即显示团队、角色和有效期，并立即提示失效、已使用或邮箱不匹配；
+- P0.6 Team Group Review Policy：仅平台管理员配置，按 Team Group Policy > 平台默认解析，团队不可覆盖；
+- P0.7 Control API 非敏感配置管理：Console 可读写并校验，敏感配置仅显示配置状态；
+- P0.8 Node 期望配置同步：非敏感 Node 配置可由 Console 管理，并显示 Pending、Applying、Applied、Failed；
+- P0.9 Node 排空、迁移与删除队列：Serve 安全迁移并切换路由，Build 等待任务完成，统一显示删除进度与失败恢复；
+
 ## P1：测试与工程质量
 
 - 补齐 Console 测试：setup、login、team switcher、deployment list/detail、quota、protected route；

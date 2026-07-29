@@ -14,8 +14,8 @@ use crate::{
         deployments, scheduler,
     },
     infra::database::entity::{
-        AuditEventResult, DeploymentBuildStatus, DeploymentEnvironment, DeploymentReleaseStatus,
-        DeploymentServeStatus, ReleaseReason, deployment,
+        AuditEventResult, AuditEventVisibility, DeploymentBuildStatus, DeploymentEnvironment,
+        DeploymentReleaseStatus, DeploymentServeStatus, ReleaseReason, deployment,
     },
 };
 
@@ -277,6 +277,7 @@ pub async fn request_release(
     target: deployment::Model,
     reason: ReleaseReason,
     actor_user_id: Uuid,
+    audit_visibility: AuditEventVisibility,
 ) -> Result<ReleaseRequestOutcome, DeliveryError> {
     scheduler::lock_placement(tx).await?;
     let target = deployments::get_by_id_for_update(tx, target.id)
@@ -325,6 +326,7 @@ pub async fn request_release(
     }
     active.pending_release_reason = Set(Some(reason.clone()));
     active.pending_release_actor_user_id = Set(Some(actor_user_id));
+    active.pending_release_audit_visibility = Set(Some(audit_visibility));
     active.pending_release_requested_at = Set(Some(now));
     let queued = active.update(tx).await?;
     deployments::append_event(
@@ -354,19 +356,25 @@ pub async fn complete_pending_release(
     }
 
     let actor_user_id = target.pending_release_actor_user_id;
+    let audit_visibility = target
+        .pending_release_audit_visibility
+        .clone()
+        .unwrap_or(AuditEventVisibility::Platform);
     let activated = deployments::activate(tx, target, reason.clone(), actor_user_id).await?;
     let project_id = activated.project_id;
     let environment = activated.environment.clone();
     let mut active: deployment::ActiveModel = activated.into();
     active.pending_release_reason = Set(None);
     active.pending_release_actor_user_id = Set(None);
+    active.pending_release_audit_visibility = Set(None);
     active.pending_release_requested_at = Set(None);
     let activated = active.update(tx).await?;
     reconcile_environment(tx, project_id, environment).await?;
-    audits::create_audit_event(
+    audits::create_audit_event_with_visibility(
         tx,
         CreateAuditEventParams {
             actor_user_id,
+            actor_node_id: None,
             team_id: Some(activated.team_id),
             action: release_audit_action(&reason, false).to_owned(),
             target_type: "deployment".to_owned(),
@@ -379,6 +387,7 @@ pub async fn complete_pending_release(
                 "completed_after_sync": true,
             }),
         },
+        audit_visibility,
     )
     .await?;
     Ok(Some(activated))
@@ -394,8 +403,8 @@ mod tests {
     };
     use grass_node_protocol::{ReportServeStatusRequest, ReportedServeStatus};
     use sea_orm::{
-        ActiveModelTrait, ActiveValue::Set, ConnectionTrait, Database, DatabaseBackend,
-        DatabaseConnection, EntityTrait, Statement, TransactionTrait,
+        ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, Database,
+        DatabaseBackend, DatabaseConnection, EntityTrait, QueryFilter, Statement, TransactionTrait,
     };
     use sea_orm_migration::MigratorTrait;
     use time::{Duration, OffsetDateTime};
@@ -408,10 +417,10 @@ mod tests {
         },
         infra::database::{
             entity::{
-                DeploymentBuildStatus, DeploymentEnvironment, DeploymentReleaseStatus,
-                DeploymentServeStatus, NodeStatus, PlatformRole, ProjectRuntime, ReleaseReason,
-                TeamKind, TeamMemberRole, UserStatus, deployment, node, project, release, team,
-                team_member, user,
+                AuditActorType, AuditEventResult, AuditEventVisibility, DeploymentBuildStatus,
+                DeploymentEnvironment, DeploymentReleaseStatus, DeploymentServeStatus, NodeStatus,
+                PlatformRole, ProjectRuntime, ReleaseReason, TeamKind, TeamMemberRole, UserStatus,
+                audit_event, deployment, node, project, release, team, team_member, user,
             },
             migrate::Migrator,
         },
@@ -679,6 +688,39 @@ mod tests {
             .unwrap()
     }
 
+    async fn insert_audit_actor_fixture(
+        db: &DatabaseConnection,
+        actor_type: AuditActorType,
+        actor_user_id: Option<Uuid>,
+        actor_node_id: Option<Uuid>,
+    ) -> Result<audit_event::Model, sea_orm::DbErr> {
+        audit_event::ActiveModel {
+            id: Set(Uuid::now_v7()),
+            actor_user_id: Set(actor_user_id),
+            actor_node_id: Set(actor_node_id),
+            team_id: Set(None),
+            actor_type: Set(actor_type),
+            visibility: Set(AuditEventVisibility::Platform),
+            action: Set("test.actor_constraint".to_owned()),
+            target_type: Set("test".to_owned()),
+            target_id: Set(None),
+            result: Set(AuditEventResult::Success),
+            reason: Set(None),
+            metadata: Set(serde_json::json!({})),
+            request_id: Set(None),
+            source_ip: Set(None),
+            user_agent: Set(None),
+            http_method: Set(None),
+            request_path: Set(None),
+            status_code: Set(None),
+            duration_ms: Set(None),
+            changes: Set(serde_json::json!({})),
+            created_at: Set(OffsetDateTime::now_utc()),
+        }
+        .insert(db)
+        .await
+    }
+
     async fn set_serve_status(db: &DatabaseConnection, id: Uuid, status: DeploymentServeStatus) {
         let deployment = reload_deployment(db, id).await;
         let mut active: deployment::ActiveModel = deployment.into();
@@ -904,6 +946,7 @@ mod tests {
             fixture.rollback_target.clone(),
             ReleaseReason::Rollback,
             fixture.user.id,
+            AuditEventVisibility::Team,
         )
         .await
         .unwrap();
@@ -991,6 +1034,7 @@ mod tests {
             fixture.rollback_target.clone(),
             ReleaseReason::Rollback,
             fixture.user.id,
+            AuditEventVisibility::Team,
         )
         .await
         .unwrap();
@@ -1111,6 +1155,7 @@ mod tests {
             target,
             ReleaseReason::Rollback,
             fixture.user.id,
+            AuditEventVisibility::Team,
         )
         .await
         .unwrap();
@@ -1123,6 +1168,7 @@ mod tests {
             stale_target,
             ReleaseReason::Rollback,
             fixture.user.id,
+            AuditEventVisibility::Team,
         )
         .await;
         assert!(second.is_err());
@@ -1193,6 +1239,143 @@ CREATE TRIGGER reject_queued_release_audit
         assert_eq!(target.pending_release_reason, None);
         assert_eq!(target.serve_status, DeploymentServeStatus::Retired);
         assert_eq!(target.serve_node_id, None);
+
+        test_db.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn postgres_platform_queued_promotion_completion_stays_platform_visible() {
+        let Some(test_db) = PostgresTestDatabase::start().await else {
+            eprintln!("GRASS_TEST_DATABASE_URL is not configured; skipping PostgreSQL test");
+            return;
+        };
+        let fixture = seed_delivery_fixture(&test_db.db).await;
+
+        let transaction = test_db.db.begin().await.unwrap();
+        let queued = request_release(
+            &transaction,
+            fixture.rollback_target.clone(),
+            ReleaseReason::Promote,
+            fixture.user.id,
+            AuditEventVisibility::Platform,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(queued, ReleaseRequestOutcome::SyncQueued(_)));
+        transaction.commit().await.unwrap();
+
+        set_serve_status(
+            &test_db.db,
+            fixture.rollback_target.id,
+            DeploymentServeStatus::Ready,
+        )
+        .await;
+        let transaction = test_db.db.begin().await.unwrap();
+        let target = reload_deployment(&transaction, fixture.rollback_target.id).await;
+        let activated = complete_pending_release(&transaction, target)
+            .await
+            .unwrap()
+            .unwrap();
+        transaction.commit().await.unwrap();
+
+        assert_eq!(activated.pending_release_audit_visibility, None);
+        let event = audit_event::Entity::find()
+            .filter(audit_event::Column::TargetId.eq(activated.id))
+            .filter(audit_event::Column::Action.eq("deployment.promoted"))
+            .one(&test_db.db)
+            .await
+            .unwrap()
+            .expect("queued promotion completion audit");
+        assert_eq!(event.visibility, AuditEventVisibility::Platform);
+
+        test_db.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn postgres_audit_actor_constraint_rejects_mismatches_and_allows_fk_nulling() {
+        let Some(test_db) = PostgresTestDatabase::start().await else {
+            eprintln!("GRASS_TEST_DATABASE_URL is not configured; skipping PostgreSQL test");
+            return;
+        };
+        let fixture = seed_delivery_fixture(&test_db.db).await;
+
+        let user_event = insert_audit_actor_fixture(
+            &test_db.db,
+            AuditActorType::User,
+            Some(fixture.user.id),
+            None,
+        )
+        .await
+        .unwrap();
+        let node_event = insert_audit_actor_fixture(
+            &test_db.db,
+            AuditActorType::Node,
+            None,
+            Some(fixture.node.id),
+        )
+        .await
+        .unwrap();
+        insert_audit_actor_fixture(&test_db.db, AuditActorType::System, None, None)
+            .await
+            .unwrap();
+        insert_audit_actor_fixture(&test_db.db, AuditActorType::Anonymous, None, None)
+            .await
+            .unwrap();
+
+        assert!(
+            insert_audit_actor_fixture(
+                &test_db.db,
+                AuditActorType::User,
+                None,
+                Some(fixture.node.id),
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            insert_audit_actor_fixture(
+                &test_db.db,
+                AuditActorType::Node,
+                Some(fixture.user.id),
+                None,
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            insert_audit_actor_fixture(
+                &test_db.db,
+                AuditActorType::System,
+                Some(fixture.user.id),
+                None,
+            )
+            .await
+            .is_err()
+        );
+
+        user::Entity::delete_by_id(fixture.user.id)
+            .exec(&test_db.db)
+            .await
+            .unwrap();
+        node::Entity::delete_by_id(fixture.node.id)
+            .exec(&test_db.db)
+            .await
+            .unwrap();
+
+        let user_event = audit_event::Entity::find_by_id(user_event.id)
+            .one(&test_db.db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(user_event.actor_type, AuditActorType::User);
+        assert_eq!(user_event.actor_user_id, None);
+        let node_event = audit_event::Entity::find_by_id(node_event.id)
+            .one(&test_db.db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(node_event.actor_type, AuditActorType::Node);
+        assert_eq!(node_event.actor_node_id, None);
 
         test_db.cleanup().await;
     }
@@ -1314,6 +1497,12 @@ ORDER BY column_name
                     None,
                 ),
                 (
+                    "pending_release_audit_visibility".to_owned(),
+                    "audit_event_visibility".to_owned(),
+                    "YES".to_owned(),
+                    None,
+                ),
+                (
                     "pending_release_reason".to_owned(),
                     "release_reason".to_owned(),
                     "YES".to_owned(),
@@ -1338,6 +1527,7 @@ FROM pg_constraint
 WHERE conrelid = 'deployments'::regclass
   AND conname IN (
     'fk_deployments_pending_release_actor_user_id',
+    'ck_deployments_pending_release_audit_visibility',
     'ck_deployments_pending_release_reason',
     'ck_deployments_pending_release_requested_at'
   )
@@ -1354,7 +1544,7 @@ ORDER BY conname
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(constraints.len(), 3);
+        assert_eq!(constraints.len(), 4);
         assert!(constraints.iter().any(|(name, definition)| {
             name == "fk_deployments_pending_release_actor_user_id"
                 && definition.contains("FOREIGN KEY (pending_release_actor_user_id)")
@@ -1370,6 +1560,11 @@ ORDER BY conname
                 .iter()
                 .any(|(name, _)| { name == "ck_deployments_pending_release_requested_at" })
         );
+        assert!(constraints.iter().any(|(name, definition)| {
+            name == "ck_deployments_pending_release_audit_visibility"
+                && definition.contains("pending_release_reason IS NULL")
+                && definition.contains("pending_release_audit_visibility IS NULL")
+        }));
 
         let index_definition = test_db
             .db

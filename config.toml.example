@@ -27,6 +27,11 @@ cookie_secure = false
 idle_ttl_seconds = 900
 session_ttl_seconds = 2592000
 
+[audit]
+# Audit events are retained for 90 days by default. Set to 0 to keep them
+# permanently.
+retention_days = 90
+
 [node_manager]
 auto_start_local_node = false
 local_node_binary = "grass-node"

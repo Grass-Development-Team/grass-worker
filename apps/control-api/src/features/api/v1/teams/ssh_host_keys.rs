@@ -99,6 +99,7 @@ async fn change_status(
         super::database(&state, op)?,
         CreateAuditEventParams {
             actor_user_id: Some(role.user_id),
+            actor_node_id: None,
             team_id: Some(role.team_id),
             action: action.to_owned(),
             target_type: "ssh_host_key".to_owned(),

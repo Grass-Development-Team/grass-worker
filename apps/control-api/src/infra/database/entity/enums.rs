@@ -214,6 +214,18 @@ string_active_enum!(AuditEventResult, "audit_event_result", {
     Denied => "denied",
 });
 
+string_active_enum!(AuditActorType, "audit_actor_type", {
+    Anonymous => "anonymous",
+    User => "user",
+    System => "system",
+    Node => "node",
+});
+
+string_active_enum!(AuditEventVisibility, "audit_event_visibility", {
+    Platform => "platform",
+    Team => "team",
+});
+
 string_active_enum!(SourceCredentialKind, "source_credential_kind", {
     Https => "https",
     Ssh => "ssh",

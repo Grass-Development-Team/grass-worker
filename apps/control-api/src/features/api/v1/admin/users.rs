@@ -183,10 +183,11 @@ pub async fn update(
     .await
     .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
-    let _ = audits::create_audit_event(
+    let _ = audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
+            actor_node_id: None,
             team_id: None,
             action: "user.updated".to_owned(),
             target_type: "user".to_owned(),
@@ -249,10 +250,11 @@ pub async fn reset_password(
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
-    let _ = audits::create_audit_event(
+    let _ = audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
+            actor_node_id: None,
             team_id: None,
             action: "user.password_reset".to_owned(),
             target_type: "user".to_owned(),
@@ -387,10 +389,11 @@ pub async fn create(
             source: source.into(),
         })?;
 
-    let _ = audits::create_audit_event(
+    let _ = audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
+            actor_node_id: None,
             team_id: None,
             action: "user.created".to_owned(),
             target_type: "user".to_owned(),

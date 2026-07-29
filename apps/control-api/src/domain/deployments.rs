@@ -263,6 +263,7 @@ pub async fn create_deployment<C: ConnectionTrait>(
         serve_failure_message: Set(None),
         pending_release_reason: Set(None),
         pending_release_actor_user_id: Set(None),
+        pending_release_audit_visibility: Set(None),
         pending_release_requested_at: Set(None),
         claimed_at: Set(None),
         build_started_at: Set(None),

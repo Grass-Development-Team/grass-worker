@@ -174,10 +174,11 @@ async fn record_project_audit(
     project: &project::Model,
     action: &str,
 ) {
-    let _ = audits::create_audit_event(
+    let _ = audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(actor),
+            actor_node_id: None,
             team_id: Some(project.team_id),
             action: action.to_owned(),
             target_type: "project".to_owned(),

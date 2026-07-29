@@ -28,7 +28,7 @@ use crate::{
     },
     infra::{
         database::entity::{
-            AuditEventResult, DeploymentBuildStatus, DeploymentEnvironment,
+            AuditEventResult, AuditEventVisibility, DeploymentBuildStatus, DeploymentEnvironment,
             DeploymentReleaseStatus, HostBindingEnvironment, HostBindingStatus, ReleaseReason,
             deployment, node, project_host_binding, user,
         },
@@ -539,6 +539,7 @@ pub async fn create(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(session.data.user_id),
+            actor_node_id: None,
             team_id: Some(access.team.id),
             action: "deployment.created".to_owned(),
             target_type: "deployment".to_owned(),
@@ -997,6 +998,7 @@ pub(crate) async fn cancel_deployment_core(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(actor_user_id),
+            actor_node_id: None,
             team_id: Some(team_id),
             action: "deployment.canceled".to_owned(),
             target_type: "deployment".to_owned(),
@@ -1292,6 +1294,7 @@ async fn activate_deployment(
         deployment,
         reason.clone(),
         session.data.user_id,
+        AuditEventVisibility::Team,
     )
     .await
     .map_err(|error| map_delivery_error(error, op))?;
@@ -1303,6 +1306,7 @@ async fn activate_deployment(
         &transaction,
         CreateAuditEventParams {
             actor_user_id: Some(session.data.user_id),
+            actor_node_id: None,
             team_id: Some(access.team.id),
             action: delivery::release_audit_action(&reason, release_pending).to_owned(),
             target_type: "deployment".to_owned(),

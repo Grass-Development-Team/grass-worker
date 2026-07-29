@@ -88,10 +88,11 @@ async fn audit_group_mutation(
     group_id: Uuid,
     metadata: serde_json::Value,
 ) {
-    let _ = audits::create_audit_event(
+    let _ = audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(actor),
+            actor_node_id: None,
             team_id: None,
             action: action.to_owned(),
             target_type: "team_group".to_owned(),
@@ -407,10 +408,11 @@ pub async fn assign(
             source: source.into(),
         })?;
 
-    let _ = audits::create_audit_event(
+    let _ = audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
+            actor_node_id: None,
             team_id: Some(team.id),
             action: "team.group_changed".to_owned(),
             target_type: "team".to_owned(),

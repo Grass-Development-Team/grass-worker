@@ -268,10 +268,11 @@ pub async fn update_capacity(
             source: source.into(),
         })?;
 
-    let _ = audits::create_audit_event(
+    let _ = audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
+            actor_node_id: None,
             team_id: None,
             action: "node.capacity_updated".to_owned(),
             target_type: "node".to_owned(),
@@ -354,10 +355,11 @@ pub async fn create(
     .await
     .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
-    let _ = audits::create_audit_event(
+    let _ = audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
+            actor_node_id: None,
             team_id: None,
             action: "node.created".to_owned(),
             target_type: "node".to_owned(),
@@ -400,10 +402,11 @@ pub async fn create(
                 match state.node_manager.start().await {
                     Ok(status) => {
                         local_process = Some(status);
-                        let _ = audits::create_audit_event(
+                        let _ = audits::create_platform_audit_event(
                             db,
                             CreateAuditEventParams {
                                 actor_user_id: Some(data.user_id),
+                                actor_node_id: None,
                                 team_id: None,
                                 action: "node.local_process_started".to_owned(),
                                 target_type: "node".to_owned(),
@@ -478,10 +481,11 @@ pub async fn local_process_action(
 
     match result {
         Ok(_) => {
-            let _ = audits::create_audit_event(
+            let _ = audits::create_platform_audit_event(
                 db,
                 CreateAuditEventParams {
                     actor_user_id: Some(data.user_id),
+                    actor_node_id: None,
                     team_id: None,
                     action: action_name.to_owned(),
                     target_type: "node".to_owned(),
@@ -539,10 +543,11 @@ pub async fn rotate_token(
             .await;
     }
 
-    let _ = audits::create_audit_event(
+    let _ = audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
+            actor_node_id: None,
             team_id: None,
             action: "node.token_revoked".to_owned(),
             target_type: "node".to_owned(),

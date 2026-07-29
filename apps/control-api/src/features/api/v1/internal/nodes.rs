@@ -60,6 +60,7 @@ pub async fn register(
         db,
         CreateAuditEventParams {
             actor_user_id: None,
+            actor_node_id: Some(node.id),
             team_id: None,
             action: "node.registered".to_owned(),
             target_type: "node".to_owned(),

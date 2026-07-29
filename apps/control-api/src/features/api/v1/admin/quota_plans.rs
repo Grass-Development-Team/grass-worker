@@ -120,10 +120,11 @@ async fn audit_plan_mutation(
     plan_id: Uuid,
     metadata: serde_json::Value,
 ) {
-    let _ = audits::create_audit_event(
+    let _ = audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(actor),
+            actor_node_id: None,
             team_id: None,
             action: action.to_owned(),
             target_type: "quota_plan".to_owned(),

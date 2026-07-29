@@ -1,8 +1,8 @@
 use sea_orm::entity::prelude::*;
 
 use super::enums::{
-    DeploymentBuildStatus, DeploymentEnvironment, DeploymentReleaseStatus, DeploymentServeStatus,
-    ProjectRuntime, ReleaseReason,
+    AuditEventVisibility, DeploymentBuildStatus, DeploymentEnvironment, DeploymentReleaseStatus,
+    DeploymentServeStatus, ProjectRuntime, ReleaseReason,
 };
 
 #[allow(dead_code)]
@@ -42,6 +42,7 @@ pub struct Model {
     pub serve_failure_message: Option<String>,
     pub pending_release_reason: Option<ReleaseReason>,
     pub pending_release_actor_user_id: Option<Uuid>,
+    pub pending_release_audit_visibility: Option<AuditEventVisibility>,
     pub pending_release_requested_at: Option<TimeDateTimeWithTimeZone>,
     pub claimed_at: Option<TimeDateTimeWithTimeZone>,
     pub build_started_at: Option<TimeDateTimeWithTimeZone>,

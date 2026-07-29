@@ -1,3 +1,4 @@
+pub mod audit;
 pub mod cache;
 pub mod database;
 pub mod log;
@@ -11,14 +12,16 @@ pub mod storage;
 use std::{env, net::SocketAddr, path::Path};
 
 use anyhow::Context;
-use grass_config::{ConfigError, load_toml_or_default, overlay_bool, overlay_string, save_toml};
+use grass_config::{
+    ConfigError, load_toml_or_default, overlay_bool, overlay_string, overlay_u64, save_toml,
+};
 use serde::{Deserialize, Serialize};
 use tracing_subscriber::{EnvFilter, fmt};
 
 use self::{
-    cache::CacheConfig, database::DatabaseConfig, log::LogConfig, migration::MigrationConfig,
-    node_manager::NodeManagerConfig, secrets::SecretsConfig, server::ServerConfig,
-    session::SessionConfig, storage::StorageConfig,
+    audit::AuditConfig, cache::CacheConfig, database::DatabaseConfig, log::LogConfig,
+    migration::MigrationConfig, node_manager::NodeManagerConfig, secrets::SecretsConfig,
+    server::ServerConfig, session::SessionConfig, storage::StorageConfig,
 };
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -35,6 +38,8 @@ pub struct ControlApiConfig {
     pub secrets: SecretsConfig,
     #[serde(default)]
     pub session: SessionConfig,
+    #[serde(default)]
+    pub audit: AuditConfig,
     #[serde(default)]
     pub node_manager: NodeManagerConfig,
     #[serde(default)]
@@ -134,6 +139,10 @@ fn apply_env(config: &mut ControlApiConfig) -> Result<(), ConfigError> {
     );
     overlay_string("GWAPI_LOG_LEVEL", &mut config.log.level);
     overlay_string("LOG_LEVEL", &mut config.log.level);
+    overlay_u64(
+        "GWAPI_AUDIT_RETENTION_DAYS",
+        &mut config.audit.retention_days,
+    )?;
     Ok(())
 }
 
@@ -154,6 +163,18 @@ mod tests {
     fn default_database_url_is_empty_for_setup() {
         let cfg = ControlApiConfig::default();
         assert!(cfg.database.url.is_empty());
+    }
+
+    #[test]
+    fn audit_events_are_retained_for_ninety_days_by_default() {
+        let cfg = ControlApiConfig::default();
+
+        assert_eq!(cfg.audit.retention_days, 90);
+        assert!(
+            cfg.audit
+                .retention_cutoff(time::OffsetDateTime::UNIX_EPOCH)
+                .is_some()
+        );
     }
 
     #[test]

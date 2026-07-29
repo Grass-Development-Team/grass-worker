@@ -8,6 +8,7 @@ use serde_json::json;
 use crate::{
     domain::audits::{self, AuditEventFilter},
     infra::{
+        database::entity::AuditEventVisibility,
         error::{AppError, ok_response},
         http::extractors::TeamRole,
     },
@@ -37,6 +38,7 @@ pub async fn list(
             action: query.action.filter(|action| !action.trim().is_empty()),
             target_id: None,
             team_id: Some(role.team_id),
+            visibility: Some(AuditEventVisibility::Team),
             limit: query.limit.unwrap_or(100),
         },
     )

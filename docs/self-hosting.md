@@ -38,6 +38,22 @@ URL and Redis URL. Then:
 just run api          # or: grass-control-api --config config.toml
 ```
 
+Audit events are retained for 90 days by default. Configure another number
+of days, or use `0` for permanent retention:
+
+```toml
+[audit]
+retention_days = 90
+```
+
+`GWAPI_AUDIT_RETENTION_DAYS` overrides this value at runtime. The Control API
+records user-facing API reads and writes, failed logins, authorization
+denials, request IDs, actors, source addresses, results, durations, and
+redacted change values. High-volume Node heartbeats, build-log chunks, route
+polling, artifact/static transfers, WebSocket messages, and frontend static
+assets are intentionally not recorded per item. A WebSocket handshake is
+still recorded once as a user-facing read.
+
 With an empty database the service starts in **setup mode**. Open the
 Console (`just run console` during development, or the embedded Console on
 the Control API port in release builds) and finish the setup flow:
@@ -325,7 +341,9 @@ SSH, and `git://` connections are pinned to an address that passed this policy.
 - **Administration → Projects** lists every project on the platform with
   its team and latest deployment; administrators can archive or soft-delete
   projects from there.
-- Every key action is recorded under team and administrator audit pages.
+- User-facing API access and key business actions are recorded with separate
+  platform/team visibility; audit metadata and before/after values are
+  redacted before storage.
 - Secrets never land in the repository: node tokens are stored hashed, and
   DNS provider credentials belong in host source config or environment
   variables.

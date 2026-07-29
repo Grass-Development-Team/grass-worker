@@ -174,6 +174,7 @@ pub async fn handler(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(session.data.user_id),
+            actor_node_id: None,
             team_id: Some(team.id),
             action: "project.created".to_owned(),
             target_type: "project".to_owned(),
@@ -272,6 +273,7 @@ async fn auto_assign_host(
                     db,
                     CreateAuditEventParams {
                         actor_user_id: Some(session.data.user_id),
+                        actor_node_id: None,
                         team_id: Some(team.id),
                         action: "host.provisioned".to_owned(),
                         target_type: "project_host_binding".to_owned(),
