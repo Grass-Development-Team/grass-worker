@@ -67,6 +67,7 @@ export function Router() {
     <Routes>
       <Route element={<AuthLayout />}>
         <Route path="/setup" element={<SetupRoute />} />
+        <Route path="/invitations/accept" element={<AcceptInvitationRoute />} />
         <Route
           path="/login"
           element={
@@ -125,7 +126,6 @@ export function Router() {
           <Route path="settings" element={<SettingsPanel />} />
           <Route path="audit" element={<AuditEventsTable />} />
         </Route>
-        <Route path="/invitations/accept" element={<AcceptInvitationRoute />} />
         <Route element={<TeamSettingsGuard />}>
           <Route path="/settings/team" element={<TeamSettingsRoute />} />
           <Route path="/settings/members" element={<TeamMembersRoute />} />
