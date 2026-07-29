@@ -88,6 +88,10 @@ pub fn router() -> Router<ControlApiState> {
             get(nodes::detail).patch(nodes::update_capacity),
         )
         .route("/nodes/{node_id}/health", get(nodes::health))
+        .route(
+            "/nodes/{node_id}/configuration",
+            axum::routing::put(nodes::update_configuration),
+        )
         .route("/nodes/{node_id}/rotate-token", post(nodes::rotate_token))
 }
 

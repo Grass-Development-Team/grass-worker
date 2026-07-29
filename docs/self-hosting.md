@@ -181,6 +181,11 @@ max_deployments = 10
 must be positive. Administrators can inspect usage and persist later capacity
 changes under Administration → Nodes.
 
+The same page exposes every non-secret Node setting as desired configuration.
+After saving, the Node reports `Pending`, `Applying`, `Applied`, or `Failed`
+until its effective revision matches the desired revision. Node tokens and
+other secret values are never returned as part of desired configuration.
+
 Each Static deployment initially reserves 50 millicores, 64 MB memory, and
 256 MB disk. Each SSR deployment reserves 200 millicores, 256 MB memory, and
 512 MB disk. The artifact upload replaces the disk estimate with its actual

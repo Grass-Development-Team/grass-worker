@@ -60,7 +60,12 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let active_builds = Arc::new(AtomicU16::new(0));
-    let heartbeat = lifecycle::spawn_heartbeat(client.clone(), active_builds.clone());
+    let heartbeat = lifecycle::spawn_heartbeat(
+        client.clone(),
+        active_builds.clone(),
+        cli.config_path().to_owned(),
+        config.config_revision,
+    );
 
     let runtime = match runtime::BuildRuntime::from_config(&config.runtime) {
         Ok(runtime) => Some(Arc::new(runtime)),

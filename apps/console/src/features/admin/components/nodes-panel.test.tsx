@@ -12,6 +12,45 @@ function jsonResponse(data: unknown): Response {
   });
 }
 
+const configuration = {
+  node: {
+    id: "serve-node-1",
+    control_api: "http://127.0.0.1:7817",
+    work_root: "/data/node",
+    capabilities: { build: true, serve: true },
+  },
+  build: {
+    concurrency: 2,
+    command_timeout_seconds: 600,
+    retain_workspace_on_failure: false,
+  },
+  serve: {
+    host: "0.0.0.0",
+    port: 8080,
+    public_base_url: "http://127.0.0.1:8080",
+    metadata_cache_ttl_seconds: 30,
+    artifact_cache_root: "/data/node/artifacts",
+    capacity: {
+      cpu_millicores: 1200,
+      memory_mb: 1536,
+      disk_mb: 8192,
+      max_deployments: 10,
+    },
+    ssr: { idle_stop_seconds: 1800, startup_timeout_seconds: 90 },
+  },
+  runtime: {
+    backend: "podman-socket",
+    socket: "unix:///run/user/1000/podman/podman.sock",
+    default_build_image: "docker.io/library/node:22",
+    default_serve_image: "docker.io/library/node:22",
+    network: "bridge",
+    resources: { cpu_limit: 2, memory_mb: 2048 },
+  },
+  security: { private_repository_targets: [] },
+  development: { verbose_build_log: false },
+  log: { level: "info", format: "pretty" },
+};
+
 const nodeFixture = {
   id: "node-1",
   name: "serve-node-1",
@@ -31,6 +70,17 @@ const nodeFixture = {
   },
   usage: { cpu_millicores: 200, memory_mb: 256, disk_mb: 512, deployments: 1 },
   overflow_count: 0,
+  configuration: {
+    desired: configuration,
+    desired_revision: 3,
+    effective: configuration,
+    effective_revision: 3,
+    status: "applied",
+    error: null,
+    node_token_configured: true,
+    updated_at: "2026-07-27T00:00:00Z",
+    applied_at: "2026-07-27T00:00:01Z",
+  },
   last_heartbeat_at: "2026-07-27T00:00:00Z",
   created_at: "2026-07-27T00:00:00Z",
 };
@@ -46,13 +96,13 @@ function renderNodes() {
 
 afterEach(() => vi.restoreAllMocks());
 
-it("edits positive node scheduling capacity", async () => {
+it("edits the complete non-secret desired Node configuration", async () => {
   const calls: { url: string; init?: RequestInit }[] = [];
   vi.spyOn(globalThis, "fetch").mockImplementation(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       calls.push({ url, init });
-      if (init?.method === "PATCH") return jsonResponse({ node: nodeFixture });
+      if (init?.method === "PUT") return jsonResponse({ node: nodeFixture });
       return jsonResponse({
         nodes: [nodeFixture],
         local_process: {
@@ -74,22 +124,23 @@ it("edits positive node scheduling capacity", async () => {
   const user = userEvent.setup();
   renderNodes();
 
-  await user.click(await screen.findByRole("button", { name: "Edit capacity for serve-node-1" }));
-  const cpuInput = screen.getByLabelText("CPU millicores");
-  await user.clear(cpuInput);
-  await user.type(cpuInput, "1600");
-  await user.click(screen.getByRole("button", { name: "Save capacity" }));
+  expect(await screen.findByText("Applied · r3")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Edit configuration for serve-node-1" }));
+  const concurrencyInput = screen.getByLabelText("Build concurrency");
+  await user.clear(concurrencyInput);
+  await user.type(concurrencyInput, "4");
+  await user.click(screen.getByRole("button", { name: "Save configuration" }));
 
   await waitFor(() => {
     const update = calls.find(
-      (call) => call.url === "/api/v1/admin/nodes/node-1" && call.init?.method === "PATCH",
+      (call) =>
+        call.url === "/api/v1/admin/nodes/node-1/configuration" && call.init?.method === "PUT",
     );
     expect(update).toBeDefined();
-    expect(JSON.parse(String(update!.init!.body))).toEqual({
-      capacity_cpu_millicores: 1600,
-      capacity_memory_mb: 1536,
-      capacity_disk_mb: 8192,
-      max_deployments: 10,
-    });
+    const payload = JSON.parse(String(update!.init!.body));
+    expect(payload.build.concurrency).toBe(4);
+    expect(payload.serve.capacity.max_deployments).toBe(10);
+    expect(payload.runtime.default_serve_image).toBe("docker.io/library/node:22");
+    expect(JSON.stringify(payload)).not.toContain("node_token");
   });
 });

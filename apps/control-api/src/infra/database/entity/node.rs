@@ -1,6 +1,6 @@
 use sea_orm::entity::prelude::*;
 
-use super::enums::NodeStatus;
+use super::enums::{NodeConfigSyncStatus, NodeStatus};
 
 #[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
@@ -22,6 +22,15 @@ pub struct Model {
     pub max_deployments: i32,
     pub metadata: Json,
     pub last_heartbeat_at: Option<TimeDateTimeWithTimeZone>,
+    pub desired_config: Option<Json>,
+    pub desired_config_revision: i64,
+    pub effective_config: Option<Json>,
+    pub effective_config_revision: i64,
+    pub config_sync_status: NodeConfigSyncStatus,
+    pub config_sync_error: Option<String>,
+    pub node_token_configured: bool,
+    pub config_updated_at: Option<TimeDateTimeWithTimeZone>,
+    pub config_applied_at: Option<TimeDateTimeWithTimeZone>,
     pub deleted_at: Option<TimeDateTimeWithTimeZone>,
     pub created_at: TimeDateTimeWithTimeZone,
     pub updated_at: TimeDateTimeWithTimeZone,

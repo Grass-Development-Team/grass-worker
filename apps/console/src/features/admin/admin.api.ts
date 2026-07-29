@@ -27,8 +27,59 @@ export interface AdminNode {
   capacity: AdminNodeResources;
   usage: AdminNodeUsage;
   overflow_count: number;
+  configuration: AdminNodeConfigurationSync;
   last_heartbeat_at: string | null;
   created_at: string;
+}
+
+export type NodeConfigurationSyncStatus = "pending" | "applying" | "applied" | "failed";
+
+export interface AdminNodeConfigurationSync {
+  desired: NodeConfiguration | null;
+  desired_revision: number;
+  effective: NodeConfiguration | null;
+  effective_revision: number;
+  status: NodeConfigurationSyncStatus;
+  error: string | null;
+  node_token_configured: boolean;
+  updated_at: string | null;
+  applied_at: string | null;
+}
+
+export interface NodeConfiguration {
+  node: {
+    id: string;
+    control_api: string;
+    work_root: string;
+    capabilities: { build: boolean; serve: boolean };
+  };
+  build: {
+    concurrency: number;
+    command_timeout_seconds: number;
+    retain_workspace_on_failure: boolean;
+  };
+  serve: {
+    host: string;
+    port: number;
+    public_base_url: string;
+    metadata_cache_ttl_seconds: number;
+    artifact_cache_root: string;
+    capacity: AdminNodeResources;
+    ssr: { idle_stop_seconds: number; startup_timeout_seconds: number };
+  };
+  runtime: {
+    backend: "docker-socket" | "podman-socket";
+    socket: string;
+    default_build_image: string;
+    default_serve_image: string;
+    network: string;
+    resources: { cpu_limit: number; memory_mb: number };
+  };
+  security: {
+    private_repository_targets: Array<{ host: string; ip: string; port: number }>;
+  };
+  development: { verbose_build_log: boolean };
+  log: { level: string; format: "pretty" | "json" };
 }
 
 export interface AdminNodeResources {
@@ -300,6 +351,12 @@ export const adminApi = {
   updateNodeCapacity: (nodeId: string, input: UpdateNodeCapacityInput) =>
     request<{ node: AdminNode }>(`/api/v1/admin/nodes/${nodeId}`, {
       method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+
+  updateNodeConfiguration: (nodeId: string, input: NodeConfiguration) =>
+    request<{ node: AdminNode }>(`/api/v1/admin/nodes/${nodeId}/configuration`, {
+      method: "PUT",
       body: JSON.stringify(input),
     }),
 

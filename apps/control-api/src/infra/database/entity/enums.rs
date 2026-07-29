@@ -200,6 +200,13 @@ string_active_enum!(NodeStatus, "node_status", {
     Disabled => "disabled",
 });
 
+string_active_enum!(NodeConfigSyncStatus, "node_config_sync_status", {
+    Pending => "pending",
+    Applying => "applying",
+    Applied => "applied",
+    Failed => "failed",
+});
+
 string_active_enum!(SystemSettingValueKind, "system_setting_value_kind", {
     String => "string",
     Number => "number",

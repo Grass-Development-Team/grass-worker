@@ -22,6 +22,7 @@ impl MigratorTrait for Migrator {
             Box::new(migration::m20260728_000011_delivery_rollout::Migration),
             Box::new(migration::m20260729_000012_audit_foundation::Migration),
             Box::new(migration::m20260729_000013_team_group_review_policy::Migration),
+            Box::new(migration::m20260729_000014_node_config_sync::Migration),
         ]
     }
 }
@@ -98,7 +99,7 @@ mod tests {
     fn registers_audit_foundation_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 13);
+        assert_eq!(migrations.len(), 14);
         assert_eq!(
             migrations.get(11).expect("twelfth migration").name(),
             "m20260729_000012_audit_foundation"
@@ -146,7 +147,7 @@ mod tests {
 
     async fn verify_audit_foundation_migration(db: &DatabaseConnection) -> anyhow::Result<()> {
         Migrator::up(db, Some(11)).await?;
-        assert_migration_tracking(db, 11, 2).await?;
+        assert_migration_tracking(db, 11, 3).await?;
 
         let user_id = Uuid::now_v7();
         let team_id = Uuid::now_v7();
@@ -155,7 +156,7 @@ mod tests {
         seed_v11_audit_fixtures(db, user_id, team_id, project_id, deployment_id).await?;
 
         Migrator::up(db, Some(1)).await?;
-        assert_migration_tracking(db, 12, 1).await?;
+        assert_migration_tracking(db, 12, 2).await?;
         assert_audit_enum_shapes(db).await?;
         assert_audit_column_shapes(db).await?;
         assert_audit_constraints(db).await?;
@@ -163,11 +164,11 @@ mod tests {
         assert_audit_backfill(db, deployment_id).await?;
 
         Migrator::down(db, Some(1)).await?;
-        assert_migration_tracking(db, 11, 2).await?;
+        assert_migration_tracking(db, 11, 3).await?;
         assert_audit_foundation_objects_absent(db).await?;
 
         Migrator::up(db, None).await?;
-        assert_migration_tracking(db, 13, 0).await?;
+        assert_migration_tracking(db, 14, 0).await?;
         assert_audit_foundation_objects_restored(db).await?;
 
         Ok(())
