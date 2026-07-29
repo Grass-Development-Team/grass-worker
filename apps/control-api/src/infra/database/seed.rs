@@ -412,6 +412,7 @@ async fn upsert_team_group(
                 quota_plan_id: Set(Some(
                     quota_plan_id_by_code(database, seed.quota_plan_code).await?,
                 )),
+                review_policy: Set(None),
                 is_default: Set(is_default),
                 deleted_at: Set(None),
                 created_at: Set(now),

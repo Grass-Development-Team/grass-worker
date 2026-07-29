@@ -147,6 +147,10 @@ export interface AdminTeamGroup {
   name: string;
   description: string | null;
   quota_plan_id: string | null;
+  review_policy: {
+    production: "auto" | "manual" | null;
+    preview: "auto" | "manual" | null;
+  };
   is_default: boolean;
   team_count?: number;
   created_at: string;
@@ -379,6 +383,10 @@ export const adminApi = {
     name: string;
     description?: string;
     quota_plan_id?: string;
+    review_policy?: {
+      production: "auto" | "manual" | null;
+      preview: "auto" | "manual" | null;
+    };
   }) =>
     request<{ group: AdminTeamGroup }>("/api/v1/admin/team-groups", {
       method: "POST",
@@ -391,6 +399,10 @@ export const adminApi = {
       name?: string;
       description?: string;
       quota_plan_id?: string | null;
+      review_policy?: {
+        production: "auto" | "manual" | null;
+        preview: "auto" | "manual" | null;
+      };
       is_default?: boolean;
     },
   ) =>

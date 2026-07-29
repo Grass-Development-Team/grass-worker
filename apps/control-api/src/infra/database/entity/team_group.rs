@@ -10,6 +10,7 @@ pub struct Model {
     pub name: String,
     pub description: Option<String>,
     pub quota_plan_id: Option<Uuid>,
+    pub review_policy: Option<Json>,
     pub is_default: bool,
     pub deleted_at: Option<TimeDateTimeWithTimeZone>,
     pub created_at: TimeDateTimeWithTimeZone,

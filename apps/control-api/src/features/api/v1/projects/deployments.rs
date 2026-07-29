@@ -812,7 +812,7 @@ pub async fn detail(
     let was_active = deployments::was_active(db, deployment.id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    let policy = deployments::review_policy(db)
+    let policy = deployments::review_policy_for_team(db, deployment.team_id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     let preview_ids = effective_preview_ids(db, access.project.id, OP).await?;
@@ -1256,7 +1256,7 @@ async fn activate_deployment(
 
     // Production activation must pass the review policy; rejected builds
     // can never activate.
-    let policy = deployments::review_policy(db)
+    let policy = deployments::review_policy_for_team(db, deployment.team_id)
         .await
         .map_err(|source| AppError::Infrastructure { op, source })?;
     let review_required = matches!(policy.mode_for(&deployment.environment), ReviewMode::Manual);

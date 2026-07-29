@@ -34,6 +34,13 @@ import {
 import { adminApi, type AdminTeamGroup } from "../admin.api";
 
 const INHERIT_NONE = "__none__";
+const INHERIT_REVIEW = "inherit";
+
+const reviewModeLabel = (mode: "auto" | "manual" | null) =>
+  mode ? `${mode.charAt(0).toUpperCase()}${mode.slice(1)}` : "Inherit";
+
+const reviewPolicyLabel = (group: AdminTeamGroup) =>
+  `Production ${reviewModeLabel(group.review_policy.production)} · Preview ${reviewModeLabel(group.review_policy.preview)}`;
 
 export function TeamGroupsPanel() {
   const queryClient = useQueryClient();
@@ -70,7 +77,7 @@ export function TeamGroupsPanel() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-4">
         <p className="text-sm text-muted-foreground">
-          Groups map teams to a quota plan. New teams join the default group.
+          Groups map teams to quota plans and platform-managed review policy overrides.
         </p>
         <Button onClick={() => setCreating(true)}>
           <PlusIcon /> New group
@@ -95,6 +102,7 @@ export function TeamGroupsPanel() {
             <TableRow>
               <TableHead>Group</TableHead>
               <TableHead>Quota plan</TableHead>
+              <TableHead>Review policy</TableHead>
               <TableHead>Teams</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
@@ -114,6 +122,9 @@ export function TeamGroupsPanel() {
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">
                   {planName(group.quota_plan_id)}
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground">
+                  {reviewPolicyLabel(group)}
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">
                   {group.team_count ?? 0}
@@ -192,6 +203,12 @@ function GroupFormDialog({
   const [name, setName] = useState(group?.name ?? "");
   const [description, setDescription] = useState(group?.description ?? "");
   const [planId, setPlanId] = useState(group?.quota_plan_id ?? INHERIT_NONE);
+  const [reviewProduction, setReviewProduction] = useState(
+    group?.review_policy.production ?? INHERIT_REVIEW,
+  );
+  const [reviewPreview, setReviewPreview] = useState(
+    group?.review_policy.preview ?? INHERIT_REVIEW,
+  );
 
   const plansQuery = useQuery({
     queryKey: ["admin", "quota-plans"],
@@ -205,12 +222,20 @@ function GroupFormDialog({
             name,
             description,
             quota_plan_id: planId === INHERIT_NONE ? null : planId,
+            review_policy: {
+              production: reviewProduction === INHERIT_REVIEW ? null : reviewProduction,
+              preview: reviewPreview === INHERIT_REVIEW ? null : reviewPreview,
+            },
           })
         : adminApi.createTeamGroup({
             code,
             name,
             description: description || undefined,
             quota_plan_id: planId === INHERIT_NONE ? undefined : planId,
+            review_policy: {
+              production: reviewProduction === INHERIT_REVIEW ? null : reviewProduction,
+              preview: reviewPreview === INHERIT_REVIEW ? null : reviewPreview,
+            },
           }),
     onSuccess: onSaved,
   });
@@ -261,6 +286,34 @@ function GroupFormDialog({
               onChange={(event) => setDescription(event.target.value)}
             />
           </Field>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field>
+              <FieldLabel htmlFor="group-review-production">Production review</FieldLabel>
+              <Select value={reviewProduction} onValueChange={setReviewProduction}>
+                <SelectTrigger id="group-review-production" aria-label="Production review">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={INHERIT_REVIEW}>Inherit</SelectItem>
+                  <SelectItem value="auto">Auto</SelectItem>
+                  <SelectItem value="manual">Manual</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="group-review-preview">Preview review</FieldLabel>
+              <Select value={reviewPreview} onValueChange={setReviewPreview}>
+                <SelectTrigger id="group-review-preview" aria-label="Preview review">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={INHERIT_REVIEW}>Inherit</SelectItem>
+                  <SelectItem value="auto">Auto</SelectItem>
+                  <SelectItem value="manual">Manual</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+          </div>
           <Field>
             <FieldLabel htmlFor="group-plan">Quota plan</FieldLabel>
             <Select value={planId} onValueChange={setPlanId}>

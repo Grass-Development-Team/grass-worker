@@ -21,6 +21,7 @@ impl MigratorTrait for Migrator {
             Box::new(migration::m20260727_000010_node_scheduling::Migration),
             Box::new(migration::m20260728_000011_delivery_rollout::Migration),
             Box::new(migration::m20260729_000012_audit_foundation::Migration),
+            Box::new(migration::m20260729_000013_team_group_review_policy::Migration),
         ]
     }
 }
@@ -97,9 +98,9 @@ mod tests {
     fn registers_audit_foundation_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 12);
+        assert_eq!(migrations.len(), 13);
         assert_eq!(
-            migrations.last().expect("last migration").name(),
+            migrations.get(11).expect("twelfth migration").name(),
             "m20260729_000012_audit_foundation"
         );
 
@@ -145,7 +146,7 @@ mod tests {
 
     async fn verify_audit_foundation_migration(db: &DatabaseConnection) -> anyhow::Result<()> {
         Migrator::up(db, Some(11)).await?;
-        assert_migration_tracking(db, 11, 1).await?;
+        assert_migration_tracking(db, 11, 2).await?;
 
         let user_id = Uuid::now_v7();
         let team_id = Uuid::now_v7();
@@ -154,7 +155,7 @@ mod tests {
         seed_v11_audit_fixtures(db, user_id, team_id, project_id, deployment_id).await?;
 
         Migrator::up(db, Some(1)).await?;
-        assert_migration_tracking(db, 12, 0).await?;
+        assert_migration_tracking(db, 12, 1).await?;
         assert_audit_enum_shapes(db).await?;
         assert_audit_column_shapes(db).await?;
         assert_audit_constraints(db).await?;
@@ -162,11 +163,11 @@ mod tests {
         assert_audit_backfill(db, deployment_id).await?;
 
         Migrator::down(db, Some(1)).await?;
-        assert_migration_tracking(db, 11, 1).await?;
+        assert_migration_tracking(db, 11, 2).await?;
         assert_audit_foundation_objects_absent(db).await?;
 
         Migrator::up(db, None).await?;
-        assert_migration_tracking(db, 12, 0).await?;
+        assert_migration_tracking(db, 13, 0).await?;
         assert_audit_foundation_objects_restored(db).await?;
 
         Ok(())
@@ -238,18 +239,20 @@ VALUES (
             "expected {pending_count} pending migrations, found {}",
             pending.len()
         );
-        if applied_count == 12 {
+        if applied_count >= 12 {
             ensure!(
-                applied.last().map(|migration| migration.name())
+                applied.get(11).map(|migration| migration.name())
                     == Some("m20260729_000012_audit_foundation"),
                 "audit foundation migration was not the twelfth applied migration"
             );
         }
-        if pending_count == 1 {
+        if pending_count > 0 {
+            let expected = Migrator::migrations()
+                .get(applied_count)
+                .map(|migration| migration.name().to_owned());
             ensure!(
-                pending.first().map(|migration| migration.name())
-                    == Some("m20260729_000012_audit_foundation"),
-                "audit foundation migration was not the sole pending migration"
+                pending.first().map(|migration| migration.name()) == expected.as_deref(),
+                "migration tracking did not expose the next registered migration first"
             );
         }
 
