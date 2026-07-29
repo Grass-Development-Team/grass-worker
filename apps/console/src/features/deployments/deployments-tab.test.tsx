@@ -14,16 +14,26 @@ function jsonResponse(data: unknown): Response {
   });
 }
 
-function renderDeployments() {
+function renderDeployments(canDeploy = true) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>
-        <DeploymentsTab projectId="project-1" />
+        <DeploymentsTab projectId="project-1" canDeploy={canDeploy} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
 }
+
+it("keeps deployments read-only when creation is not allowed", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ deployments: [] }));
+
+  renderDeployments(false);
+
+  await screen.findByText("No deployments yet.");
+  expect(screen.queryByRole("button", { name: "Deploy preview" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Deploy production" })).not.toBeInTheDocument();
+});
 
 afterEach(() => vi.restoreAllMocks());
 

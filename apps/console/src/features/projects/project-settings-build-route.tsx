@@ -12,7 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { SettingsCard } from "@/components/settings-card";
-import { canManageMembers } from "../teams/team-permissions";
+import { canContributeToProjects, canManageMembers } from "../teams/team-permissions";
 import { teamsApi, type SourceCredential } from "../teams/teams.api";
 
 import { projectsApi, type UpdateProjectInput } from "./projects.api";
@@ -31,6 +31,7 @@ export function ProjectSettingsBuildRoute() {
   const [gitError, setGitError] = useState<string | null>(null);
   const [buildError, setBuildError] = useState<string | null>(null);
   const [selectedCredentialId, setSelectedCredentialId] = useState("none");
+  const canEdit = canContributeToProjects(role);
   const canManageCredentials = canManageMembers(role);
 
   const boundCredential = useQuery({
@@ -102,7 +103,7 @@ export function ProjectSettingsBuildRoute() {
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          gitMutation.mutate();
+          if (canEdit) gitMutation.mutate();
         }}
       >
         <SettingsCard
@@ -110,9 +111,11 @@ export function ProjectSettingsBuildRoute() {
           description="Deployments clone this repository at build time."
           hint="HTTP, HTTPS, SSH, scp-like SSH, and git:// URLs are supported; bind a credential for private HTTPS or SSH access."
           action={
-            <Button type="submit" size="sm" disabled={gitMutation.isPending}>
-              {gitMutation.isPending ? "Saving…" : "Save"}
-            </Button>
+            canEdit ? (
+              <Button type="submit" size="sm" disabled={gitMutation.isPending}>
+                {gitMutation.isPending ? "Saving…" : "Save"}
+              </Button>
+            ) : undefined
           }
         >
           <div className="grid gap-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
@@ -122,6 +125,7 @@ export function ProjectSettingsBuildRoute() {
                 id="settings-repo"
                 placeholder="https://github.com/acme/site.git"
                 value={repositoryUrl}
+                readOnly={!canEdit}
                 onChange={(event) => setRepositoryUrl(event.target.value)}
               />
             </Field>
@@ -131,6 +135,7 @@ export function ProjectSettingsBuildRoute() {
                 id="settings-branch"
                 placeholder="main"
                 value={defaultBranch}
+                readOnly={!canEdit}
                 onChange={(event) => setDefaultBranch(event.target.value)}
               />
             </Field>
@@ -194,7 +199,7 @@ export function ProjectSettingsBuildRoute() {
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          buildMutation.mutate();
+          if (canEdit) buildMutation.mutate();
         }}
       >
         <SettingsCard
@@ -202,9 +207,11 @@ export function ProjectSettingsBuildRoute() {
           description="How the deployable output is produced inside the build container."
           hint="Leave fields empty to auto-detect from the framework."
           action={
-            <Button type="submit" size="sm" disabled={buildMutation.isPending}>
-              {buildMutation.isPending ? "Saving…" : "Save"}
-            </Button>
+            canEdit ? (
+              <Button type="submit" size="sm" disabled={buildMutation.isPending}>
+                {buildMutation.isPending ? "Saving…" : "Save"}
+              </Button>
+            ) : undefined
           }
         >
           <div className="grid gap-4 sm:grid-cols-2">
@@ -214,6 +221,7 @@ export function ProjectSettingsBuildRoute() {
                 id="settings-root"
                 placeholder="."
                 value={rootDirectory}
+                readOnly={!canEdit}
                 onChange={(event) => setRootDirectory(event.target.value)}
               />
             </Field>
@@ -223,6 +231,7 @@ export function ProjectSettingsBuildRoute() {
                 id="settings-install"
                 placeholder="npm install"
                 value={installCommand}
+                readOnly={!canEdit}
                 onChange={(event) => setInstallCommand(event.target.value)}
               />
             </Field>
@@ -232,6 +241,7 @@ export function ProjectSettingsBuildRoute() {
                 id="settings-build"
                 placeholder="npm run build"
                 value={buildCommand}
+                readOnly={!canEdit}
                 onChange={(event) => setBuildCommand(event.target.value)}
               />
             </Field>
@@ -241,6 +251,7 @@ export function ProjectSettingsBuildRoute() {
                 id="settings-output"
                 placeholder="dist"
                 value={outputDirectory}
+                readOnly={!canEdit}
                 onChange={(event) => setOutputDirectory(event.target.value)}
               />
             </Field>
