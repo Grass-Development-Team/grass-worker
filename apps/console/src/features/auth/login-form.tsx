@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useBranding } from "@/features/branding/branding-context";
 import { useAuth } from "./auth-context";
 
 export function previewAuthorizationContinuation(
@@ -50,6 +51,7 @@ export function LoginForm({
   documentNavigate = (destination) => window.location.assign(destination),
   ...props
 }: LoginFormProps) {
+  const { siteName } = useBranding();
   const navigate = useNavigate();
   const location = useLocation();
   const previewContinuation = previewAuthorizationContinuation(location.search);
@@ -105,9 +107,9 @@ export function LoginForm({
       <div className="flex flex-col items-center gap-2">
         <div className="bg-primary text-primary-foreground flex size-9 items-center justify-center rounded-lg">
           <ActivityIcon className="size-5" />
-          <span className="sr-only">Grass Worker</span>
+          <span className="sr-only">{siteName}</span>
         </div>
-        <h1 className="text-xl font-semibold">Welcome to Grass Worker</h1>
+        <h1 className="text-xl font-semibold">Welcome to {siteName}</h1>
         <div className="text-center text-sm text-muted-foreground">
           Don&apos;t have an account?{" "}
           <Link to={signupHref} className="text-foreground underline underline-offset-4">

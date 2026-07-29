@@ -31,16 +31,34 @@ SELECT
     n.capacity_memory_mb,
     n.capacity_disk_mb,
     n.max_deployments,
-    COALESCE(SUM(d.serve_cpu_millicores), 0)::BIGINT AS used_cpu_millicores,
-    COALESCE(SUM(d.serve_memory_mb), 0)::BIGINT AS used_memory_mb,
-    COALESCE(SUM(d.serve_disk_mb), 0)::BIGINT AS used_disk_mb,
-    COUNT(d.id)::BIGINT AS used_deployments
+    (COALESCE(SUM(d.serve_cpu_millicores), 0)
+        + COALESCE(MAX(shadow.cpu_millicores), 0))::BIGINT AS used_cpu_millicores,
+    (COALESCE(SUM(d.serve_memory_mb), 0)
+        + COALESCE(MAX(shadow.memory_mb), 0))::BIGINT AS used_memory_mb,
+    (COALESCE(SUM(d.serve_disk_mb), 0)
+        + COALESCE(MAX(shadow.disk_mb), 0))::BIGINT AS used_disk_mb,
+    (COUNT(d.id) + COALESCE(MAX(shadow.deployments), 0))::BIGINT AS used_deployments
 FROM nodes n
 LEFT JOIN deployments d
     ON d.serve_node_id = n.id
     AND d.deleted_at IS NULL
     AND d.build_status NOT IN ('failed', 'canceled')
     AND d.serve_status <> 'retired'
+LEFT JOIN LATERAL (
+    SELECT
+        COALESCE(SUM(md.serve_cpu_millicores), 0)::BIGINT AS cpu_millicores,
+        COALESCE(SUM(md.serve_memory_mb), 0)::BIGINT AS memory_mb,
+        COALESCE(SUM(md.serve_disk_mb), 0)::BIGINT AS disk_mb,
+        COUNT(md.id)::BIGINT AS deployments
+    FROM node_deployment_migrations m
+    JOIN deployments md ON md.id = m.deployment_id
+    WHERE m.target_node_id = n.id
+      AND m.status IN ('pending', 'syncing', 'ready')
+      AND md.serve_node_id IS DISTINCT FROM n.id
+      AND md.deleted_at IS NULL
+      AND md.build_status NOT IN ('failed', 'canceled')
+      AND md.serve_status <> 'retired'
+) shadow ON TRUE
 WHERE n.deleted_at IS NULL
     AND n.status = 'active'
     AND n.serve_enabled = TRUE
@@ -414,6 +432,13 @@ mod tests {
     fn capacity_queries_ignore_retired_deployments() {
         assert!(NODE_USAGE_SQL.contains("d.serve_status <> 'retired'"));
         assert!(ELIGIBLE_CANDIDATES_SQL.contains("d.serve_status <> 'retired'"));
+    }
+
+    #[test]
+    fn eligible_capacity_reserves_resources_for_active_shadow_migrations() {
+        assert!(ELIGIBLE_CANDIDATES_SQL.contains("node_deployment_migrations"));
+        assert!(ELIGIBLE_CANDIDATES_SQL.contains("m.status IN ('pending', 'syncing', 'ready')"));
+        assert!(ELIGIBLE_CANDIDATES_SQL.contains("m.target_node_id = n.id"));
     }
 
     fn candidate(

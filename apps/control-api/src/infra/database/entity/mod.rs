@@ -8,6 +8,8 @@ pub mod host_policy;
 pub mod host_provision_event;
 pub mod host_source;
 pub mod node;
+pub mod node_deletion_job;
+pub mod node_deployment_migration;
 pub mod project;
 pub mod project_host_binding;
 pub mod project_source_credential;
@@ -48,6 +50,10 @@ pub use host_provision_event::Entity as HostProvisionEvent;
 pub use host_source::Entity as HostSource;
 #[allow(unused_imports)]
 pub use node::Entity as Node;
+#[allow(unused_imports)]
+pub use node_deletion_job::Entity as NodeDeletionJob;
+#[allow(unused_imports)]
+pub use node_deployment_migration::Entity as NodeDeploymentMigration;
 #[allow(unused_imports)]
 pub use project::Entity as Project;
 #[allow(unused_imports)]

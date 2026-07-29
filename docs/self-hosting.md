@@ -38,6 +38,28 @@ URL and Redis URL. Then:
 just run api          # or: grass-control-api --config config.toml
 ```
 
+Audit events are retained for 90 days by default. Configure another number
+of days, or use `0` for permanent retention:
+
+```toml
+[audit]
+retention_days = 90
+```
+
+`GWAPI_AUDIT_RETENTION_DAYS` overrides this value at runtime. The Control API
+records user-facing API reads and writes, failed logins, authorization
+denials, request IDs, actors, source addresses, results, durations, and
+redacted change values. High-volume Node heartbeats, build-log chunks, route
+polling, artifact/static transfers, WebSocket messages, and frontend static
+assets are intentionally not recorded per item. A WebSocket handshake is
+still recorded once as a user-facing read.
+
+After setup, platform administrators can inspect and update non-secret
+Control API settings under **Administration → Settings**. Secret settings
+remain write-only: the Console reports whether each value is configured but
+never returns it. File and environment configuration still provide the
+startup values for settings that cannot be changed before the API is running.
+
 With an empty database the service starts in **setup mode**. Open the
 Console (`just run console` during development, or the embedded Console on
 the Control API port in release builds) and finish the setup flow:
@@ -158,6 +180,26 @@ max_deployments = 10
 `0` for CPU, memory, or disk keeps automatic detection; deployment capacity
 must be positive. Administrators can inspect usage and persist later capacity
 changes under Administration → Nodes.
+
+The same page exposes every non-secret Node setting as desired configuration.
+After saving, the Node reports `Pending`, `Applying`, `Applied`, or `Failed`
+until its effective revision matches the desired revision. Node tokens and
+other secret values are never returned as part of desired configuration.
+
+### Drain and delete a Node
+
+Deleting a Node is asynchronous. After the confirmation prompt, a Serve Node
+with assigned services requires an administrator to select another eligible
+Serve Node. The source enters the deletion queue, artifacts are synchronized
+to the target, and routes switch atomically only after every replacement is
+Ready. A Serve Node without assigned services can enter the queue directly.
+
+A Build-capable Node stops claiming new work while Draining and remains in the
+queue until its existing builds reach a terminal state. The Console shows the
+queued, migrating, draining, deleting, failed, and completed progress states.
+A failed deletion keeps the source routes intact, displays the failure reason,
+and can be retried after the underlying capacity, connectivity, or artifact
+problem is fixed. The Node token stops authenticating after deletion completes.
 
 Each Static deployment initially reserves 50 millicores, 64 MB memory, and
 256 MB disk. Each SSR deployment reserves 200 millicores, 256 MB memory, and
@@ -294,9 +336,10 @@ SSH, and `git://` connections are pinned to an address that passed this policy.
   least once so it registers its exact capabilities and Serve capacity.
 - This phase runs exactly one Control API and assigns each deployment to one
   Serve Node. It does not provide Control API high availability, Build
-  failover, automatic Serve reassignment, or object storage. An unavailable
-  assigned Serve Node therefore makes its sites unavailable until that Node
-  returns.
+  failover, automatic failover after an unexpected Serve outage, or object
+  storage. Planned Serve Node deletion uses the drain-and-migrate workflow
+  above; an unexpected outage still makes assigned sites unavailable until
+  that Node returns or an administrator can complete a safe migration.
 - Static outputs from Vite/React/Vue/Svelte SPAs, Next.js static export,
   Nuxt SPA/prerender, SvelteKit adapter-static, and Astro static are
   supported. **SSR deployments work for Next.js, Astro, and Nuxt**: the
@@ -325,7 +368,9 @@ SSH, and `git://` connections are pinned to an address that passed this policy.
 - **Administration → Projects** lists every project on the platform with
   its team and latest deployment; administrators can archive or soft-delete
   projects from there.
-- Every key action is recorded under team and administrator audit pages.
+- User-facing API access and key business actions are recorded with separate
+  platform/team visibility; audit metadata and before/after values are
+  redacted before storage.
 - Secrets never land in the repository: node tokens are stored hashed, and
   DNS provider credentials belong in host source config or environment
   variables.

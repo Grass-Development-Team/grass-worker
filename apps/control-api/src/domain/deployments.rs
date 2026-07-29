@@ -18,7 +18,7 @@ use crate::domain::scheduler::Placement;
 use crate::infra::database::entity::{
     DeploymentBuildStatus, DeploymentEnvironment, DeploymentEventKind, DeploymentReleaseStatus,
     DeploymentReviewStatus, DeploymentServeStatus, ProjectRuntime, ReleaseReason, deployment,
-    deployment_artifact, deployment_event, deployment_review, project, release,
+    deployment_artifact, deployment_event, deployment_review, project, release, team, team_group,
 };
 
 // --- State machine ----------------------------------------------------------
@@ -263,6 +263,7 @@ pub async fn create_deployment<C: ConnectionTrait>(
         serve_failure_message: Set(None),
         pending_release_reason: Set(None),
         pending_release_actor_user_id: Set(None),
+        pending_release_audit_visibility: Set(None),
         pending_release_requested_at: Set(None),
         claimed_at: Set(None),
         build_started_at: Set(None),
@@ -916,6 +917,48 @@ pub async fn review_policy<C: ConnectionTrait>(db: &C) -> anyhow::Result<ReviewP
     })
 }
 
+fn apply_review_policy_override(
+    defaults: ReviewPolicy,
+    policy: Option<&serde_json::Value>,
+) -> ReviewPolicy {
+    ReviewPolicy {
+        production: parse_mode(
+            policy.and_then(|policy| policy.get("production")),
+            defaults.production,
+        ),
+        preview: parse_mode(
+            policy.and_then(|policy| policy.get("preview")),
+            defaults.preview,
+        ),
+    }
+}
+
+/// Resolves each environment as Team Group override > platform default.
+pub async fn review_policy_for_team<C: ConnectionTrait>(
+    db: &C,
+    team_id: Uuid,
+) -> anyhow::Result<ReviewPolicy> {
+    let defaults = review_policy(db).await?;
+    let team = team::Entity::find_by_id(team_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("team not found while resolving review policy"))?;
+    let Some(group_id) = team.group_id else {
+        return Ok(defaults);
+    };
+    let group = team_group::Entity::find_by_id(group_id)
+        .filter(team_group::Column::DeletedAt.is_null())
+        .one(db)
+        .await?;
+
+    Ok(apply_review_policy_override(
+        defaults,
+        group
+            .as_ref()
+            .and_then(|group| group.review_policy.as_ref()),
+    ))
+}
+
 /// Whether a runtime kind is deployable. Returns the stable failure message
 /// for the kinds that are still unimplemented (hybrid/serverless/edge).
 pub fn runtime_failure(runtime: &ProjectRuntime) -> Option<(&'static str, &'static str)> {
@@ -1054,6 +1097,21 @@ mod tests {
             policy.mode_for(&DeploymentEnvironment::Preview),
             ReviewMode::Auto
         );
+    }
+
+    #[test]
+    fn team_group_review_policy_overrides_each_environment_independently() {
+        let defaults = ReviewPolicy::default();
+        let production_override = serde_json::json!({ "production": "auto" });
+        let policy = apply_review_policy_override(defaults, Some(&production_override));
+
+        assert!(matches!(policy.production, ReviewMode::Auto));
+        assert!(matches!(policy.preview, ReviewMode::Auto));
+
+        let preview_override = serde_json::json!({ "preview": "manual" });
+        let policy = apply_review_policy_override(defaults, Some(&preview_override));
+        assert!(matches!(policy.production, ReviewMode::Manual));
+        assert!(matches!(policy.preview, ReviewMode::Manual));
     }
 
     #[test]

@@ -7,9 +7,20 @@ import {
   ServerIcon,
   SlidersHorizontalIcon,
   SquareIcon,
+  Trash2Icon,
 } from "lucide-react";
 import { useState } from "react";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,9 +32,29 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+  FieldTitle,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
 import {
   Table,
   TableBody,
@@ -32,13 +63,17 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 import {
   adminApi,
   type AdminLocalProcessInfo,
   type AdminNode,
-  type UpdateNodeCapacityInput,
+  type AdminNodeConfigurationSync,
+  type AdminNodeDeletionJob,
+  type AdminNodeDeletionPlan,
+  type NodeConfiguration,
 } from "../admin.api";
 
 function healthBadge(node: AdminNode) {
@@ -57,6 +92,42 @@ function processBadge(info: AdminLocalProcessInfo) {
       return <Badge variant="destructive">Failed</Badge>;
     default:
       return <Badge variant="secondary">Stopped</Badge>;
+  }
+}
+
+function configurationBadge(configuration: AdminNodeConfigurationSync) {
+  const revision =
+    configuration.status === "applied"
+      ? configuration.effective_revision
+      : configuration.desired_revision;
+  switch (configuration.status) {
+    case "pending":
+      return <Badge variant="secondary">Pending · r{revision}</Badge>;
+    case "applying":
+      return <Badge variant="warning">Applying · r{revision}</Badge>;
+    case "applied":
+      return <Badge variant="success">Applied · r{revision}</Badge>;
+    case "failed":
+      return <Badge variant="destructive">Failed · r{revision}</Badge>;
+  }
+}
+
+const ACTIVE_DELETION_STATUSES = new Set(["queued", "migrating", "draining", "deleting"]);
+
+function deletionBadge(deletion: AdminNodeDeletionJob) {
+  switch (deletion.status) {
+    case "queued":
+      return <Badge variant="secondary">Queued for deletion</Badge>;
+    case "migrating":
+      return <Badge variant="warning">Migrating services</Badge>;
+    case "draining":
+      return <Badge variant="warning">Draining builds</Badge>;
+    case "deleting":
+      return <Badge variant="destructive">Deleting</Badge>;
+    case "failed":
+      return <Badge variant="destructive">Deletion failed</Badge>;
+    case "completed":
+      return <Badge variant="secondary">Deleted</Badge>;
   }
 }
 
@@ -144,11 +215,19 @@ export function NodesPanel() {
   const [revealedToken, setRevealedToken] = useState<{ label: string; token: string } | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [deletingNode, setDeletingNode] = useState<AdminNode | null>(null);
+  const [deletionPlan, setDeletionPlan] = useState<AdminNodeDeletionPlan | null>(null);
+  const [targetNodeId, setTargetNodeId] = useState("");
 
   const nodesQuery = useQuery({
     queryKey: ["admin", "nodes"],
     queryFn: adminApi.listNodes,
-    refetchInterval: 30_000,
+    refetchInterval: (query) =>
+      query.state.data?.nodes.some(
+        (node) => node.deletion && ACTIVE_DELETION_STATUSES.has(node.deletion.status),
+      )
+        ? 2_000
+        : 30_000,
   });
 
   const rotateMutation = useMutation({
@@ -162,8 +241,52 @@ export function NodesPanel() {
       setError(cause instanceof Error ? cause.message : "Unable to rotate the token."),
   });
 
+  const planMutation = useMutation({
+    mutationFn: (node: AdminNode) => adminApi.nodeDeletionPlan(node.id),
+    onSuccess: (plan) => {
+      setError(null);
+      if (plan.requires_target) {
+        setDeletionPlan(plan);
+        setTargetNodeId("");
+        return;
+      }
+      if (deletingNode) {
+        queueMutation.mutate({ node: deletingNode, targetNodeId: null });
+      }
+    },
+    onError: (cause) => {
+      setDeletingNode(null);
+      setError(cause instanceof Error ? cause.message : "Unable to prepare node deletion.");
+    },
+  });
+
+  const queueMutation = useMutation({
+    mutationFn: ({ node, targetNodeId }: { node: AdminNode; targetNodeId: string | null }) =>
+      adminApi.queueNodeDeletion(node.id, { target_node_id: targetNodeId }),
+    onSuccess: () => {
+      setError(null);
+      setDeletingNode(null);
+      setDeletionPlan(null);
+      setTargetNodeId("");
+      queryClient.invalidateQueries({ queryKey: ["admin", "nodes"] });
+    },
+    onError: (cause) => {
+      setDeletionPlan(null);
+      setDeletingNode(null);
+      setTargetNodeId("");
+      setError(cause instanceof Error ? cause.message : "Unable to queue node deletion.");
+    },
+  });
+
+  const closeDeletion = () => {
+    if (planMutation.isPending || queueMutation.isPending) return;
+    setDeletingNode(null);
+    setDeletionPlan(null);
+    setTargetNodeId("");
+  };
+
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
           Nodes build deployments and serve static sites. Heartbeats older than 90 seconds mark a
@@ -236,6 +359,7 @@ export function NodesPanel() {
                 <TableHead>Health</TableHead>
                 <TableHead>Capabilities</TableHead>
                 <TableHead>Serve load</TableHead>
+                <TableHead>Configuration</TableHead>
                 <TableHead>Version</TableHead>
                 <TableHead>Last heartbeat</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -245,9 +369,29 @@ export function NodesPanel() {
               {nodesQuery.data.nodes.map((node) => (
                 <TableRow key={node.id}>
                   <TableCell>
-                    <span className="font-medium">{node.name}</span>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <span className="font-medium">{node.name}</span>
+                      {node.deletion && deletionBadge(node.deletion)}
+                    </div>
                     {node.base_url && (
                       <p className="text-xs text-muted-foreground">{node.base_url}</p>
+                    )}
+                    {node.deletion &&
+                      (node.deletion.total_deployments > 0 || node.deletion.active_builds > 0) && (
+                        <p className="text-xs text-muted-foreground">
+                          {node.deletion.total_deployments > 0 &&
+                            `${node.deletion.migrated_deployments}/${node.deletion.total_deployments} services synced`}
+                          {node.deletion.total_deployments > 0 && node.deletion.active_builds > 0
+                            ? " · "
+                            : ""}
+                          {node.deletion.active_builds > 0 &&
+                            `${node.deletion.active_builds} active builds`}
+                        </p>
+                      )}
+                    {node.deletion?.error && (
+                      <p className="max-w-64 truncate text-xs text-destructive">
+                        {node.deletion.error}
+                      </p>
                     )}
                   </TableCell>
                   <TableCell>{healthBadge(node)}</TableCell>
@@ -261,7 +405,7 @@ export function NodesPanel() {
                   </TableCell>
                   <TableCell className="text-xs tabular-nums text-muted-foreground">
                     {node.serve_enabled ? (
-                      <div className="space-y-0.5 whitespace-nowrap">
+                      <div className="flex flex-col gap-0.5 whitespace-nowrap">
                         <p>
                           CPU {node.usage.cpu_millicores}/{node.capacity.cpu_millicores}m
                         </p>
@@ -280,6 +424,16 @@ export function NodesPanel() {
                       "—"
                     )}
                   </TableCell>
+                  <TableCell>
+                    <div className="flex flex-col items-start gap-1">
+                      {configurationBadge(node.configuration)}
+                      {node.configuration.error && (
+                        <span className="max-w-48 truncate text-xs text-destructive">
+                          {node.configuration.error}
+                        </span>
+                      )}
+                    </div>
+                  </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     {node.version ?? "—"}
                   </TableCell>
@@ -290,7 +444,7 @@ export function NodesPanel() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
-                      {node.serve_enabled && <EditCapacityDialog node={node} />}
+                      <EditConfigurationDialog node={node} />
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button
@@ -305,6 +459,41 @@ export function NodesPanel() {
                         </TooltipTrigger>
                         <TooltipContent>Rotate token</TooltipContent>
                       </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            size="icon"
+                            variant="outline"
+                            aria-label={
+                              node.deletion?.status === "failed"
+                                ? `Retry deletion for ${node.name}`
+                                : `Delete ${node.name}`
+                            }
+                            onClick={() => setDeletingNode(node)}
+                            disabled={
+                              planMutation.isPending ||
+                              queueMutation.isPending ||
+                              (node.deletion != null &&
+                                ACTIVE_DELETION_STATUSES.has(node.deletion.status))
+                            }
+                          >
+                            {node.deletion && ACTIVE_DELETION_STATUSES.has(node.deletion.status) ? (
+                              <Spinner />
+                            ) : node.deletion?.status === "failed" ? (
+                              <RotateCcwIcon />
+                            ) : (
+                              <Trash2Icon />
+                            )}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          {node.deletion && ACTIVE_DELETION_STATUSES.has(node.deletion.status)
+                            ? "Deletion in progress"
+                            : node.deletion?.status === "failed"
+                              ? "Retry deletion"
+                              : "Delete node"}
+                        </TooltipContent>
+                      </Tooltip>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -312,21 +501,188 @@ export function NodesPanel() {
             </TableBody>
           </Table>
         ))}
+
+      <AlertDialog
+        open={deletingNode !== null && deletionPlan === null}
+        onOpenChange={(open) => !open && closeDeletion()}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {deletingNode?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The node will stop accepting new work. Serve deployments will be copied to a
+              replacement before traffic moves, and existing builds will finish before deletion.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={planMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={planMutation.isPending}
+              onClick={(event) => {
+                event.preventDefault();
+                if (deletingNode) planMutation.mutate(deletingNode);
+              }}
+            >
+              {planMutation.isPending && <Spinner data-icon="inline-start" />}
+              Delete node
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog open={deletionPlan !== null} onOpenChange={(open) => !open && closeDeletion()}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Move services before deleting</DialogTitle>
+            <DialogDescription>
+              Select one Serve Node with capacity for all {deletionPlan?.assigned_deployments ?? 0}
+              assigned services. Traffic stays on {deletingNode?.name} until every copy is ready.
+            </DialogDescription>
+          </DialogHeader>
+          {deletionPlan?.eligible_targets.length === 0 ? (
+            <p role="alert" className="text-sm text-destructive">
+              No healthy Serve Node has enough capacity for this migration.
+            </p>
+          ) : (
+            <Field>
+              <FieldLabel htmlFor="node-deletion-target">Replacement Serve Node</FieldLabel>
+              <Select value={targetNodeId} onValueChange={setTargetNodeId}>
+                <SelectTrigger id="node-deletion-target" aria-label="Replacement Serve Node">
+                  <SelectValue placeholder="Select a Serve Node" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {deletionPlan?.eligible_targets.map((target) => (
+                      <SelectItem key={target.id} value={target.id}>
+                        {target.name} · {target.available_deployments} deployment slots available
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </Field>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={closeDeletion} disabled={queueMutation.isPending}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={!targetNodeId || queueMutation.isPending}
+              onClick={() =>
+                deletingNode &&
+                queueMutation.mutate({ node: deletingNode, targetNodeId: targetNodeId || null })
+              }
+            >
+              {queueMutation.isPending && <Spinner data-icon="inline-start" />}
+              Queue deletion
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
-function EditCapacityDialog({ node }: { node: AdminNode }) {
+function cloneConfiguration(configuration: NodeConfiguration): NodeConfiguration {
+  return JSON.parse(JSON.stringify(configuration)) as NodeConfiguration;
+}
+
+function ConfigurationTextField({
+  id,
+  label,
+  value,
+  onChange,
+  type = "text",
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  type?: "text" | "url";
+}) {
+  return (
+    <Field>
+      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+      <Input
+        id={id}
+        type={type}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        required
+      />
+    </Field>
+  );
+}
+
+function ConfigurationNumberField({
+  id,
+  label,
+  value,
+  onChange,
+  min = 0,
+  max,
+}: {
+  id: string;
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+  min?: number;
+  max?: number;
+}) {
+  return (
+    <Field>
+      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+      <Input
+        id={id}
+        type="number"
+        min={min}
+        max={max}
+        step={1}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+        required
+      />
+    </Field>
+  );
+}
+
+function ConfigurationSwitch({
+  id,
+  label,
+  description,
+  checked,
+  onCheckedChange,
+}: {
+  id: string;
+  label: string;
+  description?: string;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+}) {
+  return (
+    <Field orientation="horizontal">
+      <FieldContent>
+        <FieldLabel htmlFor={id}>{label}</FieldLabel>
+        {description && <FieldDescription>{description}</FieldDescription>}
+      </FieldContent>
+      <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} />
+    </Field>
+  );
+}
+
+function EditConfigurationDialog({ node }: { node: AdminNode }) {
   const queryClient = useQueryClient();
+  const source = node.configuration.desired ?? node.configuration.effective;
   const [open, setOpen] = useState(false);
-  const [cpu, setCpu] = useState(String(node.capacity.cpu_millicores));
-  const [memory, setMemory] = useState(String(node.capacity.memory_mb));
-  const [disk, setDisk] = useState(String(node.capacity.disk_mb));
-  const [deployments, setDeployments] = useState(String(node.capacity.max_deployments));
+  const [configuration, setConfiguration] = useState<NodeConfiguration | null>(() =>
+    source ? cloneConfiguration(source) : null,
+  );
   const [validationError, setValidationError] = useState<string | null>(null);
 
   const updateMutation = useMutation({
-    mutationFn: (input: UpdateNodeCapacityInput) => adminApi.updateNodeCapacity(node.id, input),
+    mutationFn: (input: NodeConfiguration) => adminApi.updateNodeConfiguration(node.id, input),
     onSuccess: () => {
       setOpen(false);
       setValidationError(null);
@@ -335,121 +691,772 @@ function EditCapacityDialog({ node }: { node: AdminNode }) {
   });
 
   const openDialog = () => {
-    setCpu(String(node.capacity.cpu_millicores));
-    setMemory(String(node.capacity.memory_mb));
-    setDisk(String(node.capacity.disk_mb));
-    setDeployments(String(node.capacity.max_deployments));
+    if (!source) return;
+    setConfiguration(cloneConfiguration(source));
     setValidationError(null);
     updateMutation.reset();
     setOpen(true);
   };
 
   const submit = () => {
-    const values = [cpu, memory, disk, deployments].map(Number);
-    if (values.some((value) => !Number.isSafeInteger(value) || value <= 0)) {
-      setValidationError("Capacity values must be positive integers.");
+    if (!configuration) return;
+    if (!configuration.node.capabilities.build && !configuration.node.capabilities.serve) {
+      setValidationError("Enable at least one Node capability.");
+      return;
+    }
+    if (configuration.node.capabilities.build && configuration.build.concurrency < 1) {
+      setValidationError("Build concurrency must be positive when Build is enabled.");
       return;
     }
     setValidationError(null);
-    updateMutation.mutate({
-      capacity_cpu_millicores: values[0],
-      capacity_memory_mb: values[1],
-      capacity_disk_mb: values[2],
-      max_deployments: values[3],
+    updateMutation.mutate(configuration);
+  };
+
+  const updateTarget = (index: number, key: "host" | "ip" | "port", value: string | number) => {
+    setConfiguration((current) => {
+      if (!current) return current;
+      const targets = current.security.private_repository_targets.map((target, targetIndex) =>
+        targetIndex === index ? { ...target, [key]: value } : target,
+      );
+      return { ...current, security: { private_repository_targets: targets } };
     });
   };
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (nextOpen) openDialog();
+        else setOpen(false);
+      }}
+    >
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
             type="button"
             size="icon"
             variant="outline"
-            aria-label={`Edit capacity for ${node.name}`}
+            aria-label={`Edit configuration for ${node.name}`}
             onClick={openDialog}
+            disabled={!source}
           >
             <SlidersHorizontalIcon />
           </Button>
         </TooltipTrigger>
-        <TooltipContent>Edit capacity</TooltipContent>
+        <TooltipContent>
+          {source ? "Edit configuration" : "Configuration is available after registration"}
+        </TooltipContent>
       </Tooltip>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader>
-          <DialogTitle>Edit Serve capacity</DialogTitle>
-          <DialogDescription>{node.name}</DialogDescription>
+          <DialogTitle>Edit Node configuration</DialogTitle>
+          <DialogDescription>
+            {node.name} · changes are applied after the Node writes the configuration and restarts.
+          </DialogDescription>
         </DialogHeader>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            submit();
-          }}
-        >
-          <FieldGroup className="gap-4">
-            <Field>
-              <FieldLabel htmlFor={`node-${node.id}-cpu`}>CPU millicores</FieldLabel>
-              <Input
-                id={`node-${node.id}-cpu`}
-                type="number"
-                min={1}
-                step={1}
-                value={cpu}
-                onChange={(event) => setCpu(event.target.value)}
-                required
-              />
+        {configuration && (
+          <form
+            className="flex flex-col gap-5"
+            onSubmit={(event) => {
+              event.preventDefault();
+              submit();
+            }}
+          >
+            <Field orientation="horizontal">
+              <FieldContent>
+                <FieldTitle>Configuration synchronization</FieldTitle>
+                <FieldDescription>
+                  Desired r{node.configuration.desired_revision}, effective r
+                  {node.configuration.effective_revision}
+                </FieldDescription>
+              </FieldContent>
+              {configurationBadge(node.configuration)}
             </Field>
-            <Field>
-              <FieldLabel htmlFor={`node-${node.id}-memory`}>Memory MB</FieldLabel>
-              <Input
-                id={`node-${node.id}-memory`}
-                type="number"
-                min={1}
-                step={1}
-                value={memory}
-                onChange={(event) => setMemory(event.target.value)}
-                required
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor={`node-${node.id}-disk`}>Artifact disk MB</FieldLabel>
-              <Input
-                id={`node-${node.id}-disk`}
-                type="number"
-                min={1}
-                step={1}
-                value={disk}
-                onChange={(event) => setDisk(event.target.value)}
-                required
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor={`node-${node.id}-deployments`}>Max deployments</FieldLabel>
-              <Input
-                id={`node-${node.id}-deployments`}
-                type="number"
-                min={1}
-                step={1}
-                value={deployments}
-                onChange={(event) => setDeployments(event.target.value)}
-                required
-              />
-            </Field>
+
+            <Tabs defaultValue="general">
+              <TabsList className="grid h-auto w-full grid-cols-2 sm:grid-cols-4">
+                <TabsTrigger value="general">General</TabsTrigger>
+                <TabsTrigger value="serve">Serve</TabsTrigger>
+                <TabsTrigger value="runtime">Runtime</TabsTrigger>
+                <TabsTrigger value="security">Security & logs</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="general" className="mt-3">
+                <FieldGroup className="gap-5">
+                  <FieldSet className="gap-4">
+                    <FieldLegend>Identity</FieldLegend>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <ConfigurationTextField
+                        id={`node-${node.id}-config-id`}
+                        label="Node ID"
+                        value={configuration.node.id}
+                        onChange={(id) =>
+                          setConfiguration((current) =>
+                            current ? { ...current, node: { ...current.node, id } } : current,
+                          )
+                        }
+                      />
+                      <ConfigurationTextField
+                        id={`node-${node.id}-control-api`}
+                        label="Control API URL"
+                        type="url"
+                        value={configuration.node.control_api}
+                        onChange={(control_api) =>
+                          setConfiguration((current) =>
+                            current
+                              ? { ...current, node: { ...current.node, control_api } }
+                              : current,
+                          )
+                        }
+                      />
+                      <ConfigurationTextField
+                        id={`node-${node.id}-work-root`}
+                        label="Work root"
+                        value={configuration.node.work_root}
+                        onChange={(work_root) =>
+                          setConfiguration((current) =>
+                            current
+                              ? { ...current, node: { ...current.node, work_root } }
+                              : current,
+                          )
+                        }
+                      />
+                    </div>
+                  </FieldSet>
+
+                  <FieldSet className="gap-3">
+                    <FieldLegend>Capabilities</FieldLegend>
+                    <FieldGroup className="gap-3">
+                      <ConfigurationSwitch
+                        id={`node-${node.id}-build-capability`}
+                        label="Build"
+                        checked={configuration.node.capabilities.build}
+                        onCheckedChange={(build) =>
+                          setConfiguration((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  node: {
+                                    ...current.node,
+                                    capabilities: { ...current.node.capabilities, build },
+                                  },
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                      <ConfigurationSwitch
+                        id={`node-${node.id}-serve-capability`}
+                        label="Serve"
+                        checked={configuration.node.capabilities.serve}
+                        onCheckedChange={(serve) =>
+                          setConfiguration((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  node: {
+                                    ...current.node,
+                                    capabilities: { ...current.node.capabilities, serve },
+                                  },
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                    </FieldGroup>
+                  </FieldSet>
+
+                  <FieldSet className="gap-4">
+                    <FieldLegend>Build</FieldLegend>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <ConfigurationNumberField
+                        id={`node-${node.id}-build-concurrency`}
+                        label="Build concurrency"
+                        min={configuration.node.capabilities.build ? 1 : 0}
+                        max={65_535}
+                        value={configuration.build.concurrency}
+                        onChange={(concurrency) =>
+                          setConfiguration((current) =>
+                            current
+                              ? { ...current, build: { ...current.build, concurrency } }
+                              : current,
+                          )
+                        }
+                      />
+                      <ConfigurationNumberField
+                        id={`node-${node.id}-command-timeout`}
+                        label="Command timeout seconds"
+                        min={1}
+                        value={configuration.build.command_timeout_seconds}
+                        onChange={(command_timeout_seconds) =>
+                          setConfiguration((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  build: { ...current.build, command_timeout_seconds },
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                    </div>
+                    <ConfigurationSwitch
+                      id={`node-${node.id}-retain-workspace`}
+                      label="Retain workspace on failure"
+                      checked={configuration.build.retain_workspace_on_failure}
+                      onCheckedChange={(retain_workspace_on_failure) =>
+                        setConfiguration((current) =>
+                          current
+                            ? {
+                                ...current,
+                                build: { ...current.build, retain_workspace_on_failure },
+                              }
+                            : current,
+                        )
+                      }
+                    />
+                  </FieldSet>
+                </FieldGroup>
+              </TabsContent>
+
+              <TabsContent value="serve" className="mt-3">
+                <FieldGroup className="gap-5">
+                  <FieldSet className="gap-4">
+                    <FieldLegend>Listener and cache</FieldLegend>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <ConfigurationTextField
+                        id={`node-${node.id}-serve-host`}
+                        label="Serve host"
+                        value={configuration.serve.host}
+                        onChange={(host) =>
+                          setConfiguration((current) =>
+                            current ? { ...current, serve: { ...current.serve, host } } : current,
+                          )
+                        }
+                      />
+                      <ConfigurationNumberField
+                        id={`node-${node.id}-serve-port`}
+                        label="Serve port"
+                        min={1}
+                        max={65_535}
+                        value={configuration.serve.port}
+                        onChange={(port) =>
+                          setConfiguration((current) =>
+                            current ? { ...current, serve: { ...current.serve, port } } : current,
+                          )
+                        }
+                      />
+                      <ConfigurationTextField
+                        id={`node-${node.id}-public-base-url`}
+                        label="Public base URL"
+                        type="url"
+                        value={configuration.serve.public_base_url}
+                        onChange={(public_base_url) =>
+                          setConfiguration((current) =>
+                            current
+                              ? { ...current, serve: { ...current.serve, public_base_url } }
+                              : current,
+                          )
+                        }
+                      />
+                      <ConfigurationNumberField
+                        id={`node-${node.id}-metadata-cache-ttl`}
+                        label="Metadata cache TTL seconds"
+                        value={configuration.serve.metadata_cache_ttl_seconds}
+                        onChange={(metadata_cache_ttl_seconds) =>
+                          setConfiguration((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  serve: { ...current.serve, metadata_cache_ttl_seconds },
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                      <ConfigurationTextField
+                        id={`node-${node.id}-artifact-cache-root`}
+                        label="Artifact cache root"
+                        value={configuration.serve.artifact_cache_root}
+                        onChange={(artifact_cache_root) =>
+                          setConfiguration((current) =>
+                            current
+                              ? { ...current, serve: { ...current.serve, artifact_cache_root } }
+                              : current,
+                          )
+                        }
+                      />
+                    </div>
+                  </FieldSet>
+
+                  <FieldSet className="gap-4">
+                    <FieldLegend>Capacity</FieldLegend>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <ConfigurationNumberField
+                        id={`node-${node.id}-cpu-capacity`}
+                        label="CPU millicores"
+                        value={configuration.serve.capacity.cpu_millicores}
+                        onChange={(cpu_millicores) =>
+                          setConfiguration((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  serve: {
+                                    ...current.serve,
+                                    capacity: { ...current.serve.capacity, cpu_millicores },
+                                  },
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                      <ConfigurationNumberField
+                        id={`node-${node.id}-memory-capacity`}
+                        label="Memory MB"
+                        value={configuration.serve.capacity.memory_mb}
+                        onChange={(memory_mb) =>
+                          setConfiguration((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  serve: {
+                                    ...current.serve,
+                                    capacity: { ...current.serve.capacity, memory_mb },
+                                  },
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                      <ConfigurationNumberField
+                        id={`node-${node.id}-disk-capacity`}
+                        label="Artifact disk MB"
+                        value={configuration.serve.capacity.disk_mb}
+                        onChange={(disk_mb) =>
+                          setConfiguration((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  serve: {
+                                    ...current.serve,
+                                    capacity: { ...current.serve.capacity, disk_mb },
+                                  },
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                      <ConfigurationNumberField
+                        id={`node-${node.id}-max-deployments`}
+                        label="Max deployments"
+                        min={1}
+                        value={configuration.serve.capacity.max_deployments}
+                        onChange={(max_deployments) =>
+                          setConfiguration((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  serve: {
+                                    ...current.serve,
+                                    capacity: { ...current.serve.capacity, max_deployments },
+                                  },
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                    </div>
+                  </FieldSet>
+
+                  <FieldSet className="gap-4">
+                    <FieldLegend>SSR lifecycle</FieldLegend>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <ConfigurationNumberField
+                        id={`node-${node.id}-ssr-idle-stop`}
+                        label="Idle stop seconds"
+                        value={configuration.serve.ssr.idle_stop_seconds}
+                        onChange={(idle_stop_seconds) =>
+                          setConfiguration((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  serve: {
+                                    ...current.serve,
+                                    ssr: { ...current.serve.ssr, idle_stop_seconds },
+                                  },
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                      <ConfigurationNumberField
+                        id={`node-${node.id}-ssr-startup-timeout`}
+                        label="Startup timeout seconds"
+                        value={configuration.serve.ssr.startup_timeout_seconds}
+                        onChange={(startup_timeout_seconds) =>
+                          setConfiguration((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  serve: {
+                                    ...current.serve,
+                                    ssr: { ...current.serve.ssr, startup_timeout_seconds },
+                                  },
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                    </div>
+                  </FieldSet>
+                </FieldGroup>
+              </TabsContent>
+
+              <TabsContent value="runtime" className="mt-3">
+                <FieldGroup className="gap-5">
+                  <FieldSet className="gap-4">
+                    <FieldLegend>Container runtime</FieldLegend>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <Field>
+                        <FieldLabel htmlFor={`node-${node.id}-runtime-backend`}>Backend</FieldLabel>
+                        <Select
+                          value={configuration.runtime.backend}
+                          onValueChange={(backend: "docker-socket" | "podman-socket") =>
+                            setConfiguration((current) =>
+                              current
+                                ? { ...current, runtime: { ...current.runtime, backend } }
+                                : current,
+                            )
+                          }
+                        >
+                          <SelectTrigger id={`node-${node.id}-runtime-backend`} className="w-full">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectGroup>
+                              <SelectItem value="docker-socket">Docker socket</SelectItem>
+                              <SelectItem value="podman-socket">Podman socket</SelectItem>
+                            </SelectGroup>
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                      <ConfigurationTextField
+                        id={`node-${node.id}-runtime-socket`}
+                        label="Socket"
+                        value={configuration.runtime.socket}
+                        onChange={(socket) =>
+                          setConfiguration((current) =>
+                            current
+                              ? { ...current, runtime: { ...current.runtime, socket } }
+                              : current,
+                          )
+                        }
+                      />
+                      <ConfigurationTextField
+                        id={`node-${node.id}-build-image`}
+                        label="Default build image"
+                        value={configuration.runtime.default_build_image}
+                        onChange={(default_build_image) =>
+                          setConfiguration((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  runtime: { ...current.runtime, default_build_image },
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                      <ConfigurationTextField
+                        id={`node-${node.id}-serve-image`}
+                        label="Default serve image"
+                        value={configuration.runtime.default_serve_image}
+                        onChange={(default_serve_image) =>
+                          setConfiguration((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  runtime: { ...current.runtime, default_serve_image },
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                      <ConfigurationTextField
+                        id={`node-${node.id}-runtime-network`}
+                        label="Network"
+                        value={configuration.runtime.network}
+                        onChange={(network) =>
+                          setConfiguration((current) =>
+                            current
+                              ? { ...current, runtime: { ...current.runtime, network } }
+                              : current,
+                          )
+                        }
+                      />
+                    </div>
+                  </FieldSet>
+
+                  <FieldSet className="gap-4">
+                    <FieldLegend>Per-container resources</FieldLegend>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <ConfigurationNumberField
+                        id={`node-${node.id}-runtime-cpu`}
+                        label="CPU limit"
+                        min={1}
+                        value={configuration.runtime.resources.cpu_limit}
+                        onChange={(cpu_limit) =>
+                          setConfiguration((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  runtime: {
+                                    ...current.runtime,
+                                    resources: { ...current.runtime.resources, cpu_limit },
+                                  },
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                      <ConfigurationNumberField
+                        id={`node-${node.id}-runtime-memory`}
+                        label="Memory MB"
+                        min={1}
+                        value={configuration.runtime.resources.memory_mb}
+                        onChange={(memory_mb) =>
+                          setConfiguration((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  runtime: {
+                                    ...current.runtime,
+                                    resources: { ...current.runtime.resources, memory_mb },
+                                  },
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                    </div>
+                  </FieldSet>
+                </FieldGroup>
+              </TabsContent>
+
+              <TabsContent value="security" className="mt-3">
+                <FieldGroup className="gap-5">
+                  <FieldSet className="gap-4">
+                    <FieldLegend>Authentication</FieldLegend>
+                    <Field orientation="horizontal">
+                      <FieldTitle>Node token</FieldTitle>
+                      <Badge
+                        variant={node.configuration.node_token_configured ? "success" : "secondary"}
+                      >
+                        {node.configuration.node_token_configured ? "Configured" : "Not configured"}
+                      </Badge>
+                    </Field>
+                  </FieldSet>
+
+                  <FieldSet className="gap-4">
+                    <FieldLegend>Private repository targets</FieldLegend>
+                    {configuration.security.private_repository_targets.length > 0 && (
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Host</TableHead>
+                            <TableHead>IP address</TableHead>
+                            <TableHead>Port</TableHead>
+                            <TableHead className="w-12">
+                              <span className="sr-only">Actions</span>
+                            </TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {configuration.security.private_repository_targets.map(
+                            (target, index) => (
+                              <TableRow key={`${index}-${target.host}-${target.ip}`}>
+                                <TableCell>
+                                  <Field>
+                                    <FieldLabel
+                                      htmlFor={`node-${node.id}-target-${index}-host`}
+                                      className="sr-only"
+                                    >
+                                      Private target host {index + 1}
+                                    </FieldLabel>
+                                    <Input
+                                      id={`node-${node.id}-target-${index}-host`}
+                                      value={target.host}
+                                      onChange={(event) =>
+                                        updateTarget(index, "host", event.target.value)
+                                      }
+                                      required
+                                    />
+                                  </Field>
+                                </TableCell>
+                                <TableCell>
+                                  <Field>
+                                    <FieldLabel
+                                      htmlFor={`node-${node.id}-target-${index}-ip`}
+                                      className="sr-only"
+                                    >
+                                      Private target IP {index + 1}
+                                    </FieldLabel>
+                                    <Input
+                                      id={`node-${node.id}-target-${index}-ip`}
+                                      value={target.ip}
+                                      onChange={(event) =>
+                                        updateTarget(index, "ip", event.target.value)
+                                      }
+                                      required
+                                    />
+                                  </Field>
+                                </TableCell>
+                                <TableCell>
+                                  <Field>
+                                    <FieldLabel
+                                      htmlFor={`node-${node.id}-target-${index}-port`}
+                                      className="sr-only"
+                                    >
+                                      Private target port {index + 1}
+                                    </FieldLabel>
+                                    <Input
+                                      id={`node-${node.id}-target-${index}-port`}
+                                      type="number"
+                                      min={1}
+                                      max={65_535}
+                                      step={1}
+                                      value={target.port}
+                                      onChange={(event) =>
+                                        updateTarget(index, "port", Number(event.target.value))
+                                      }
+                                      required
+                                    />
+                                  </Field>
+                                </TableCell>
+                                <TableCell>
+                                  <Button
+                                    type="button"
+                                    size="icon"
+                                    variant="ghost"
+                                    aria-label={`Remove private target ${index + 1}`}
+                                    onClick={() =>
+                                      setConfiguration((current) =>
+                                        current
+                                          ? {
+                                              ...current,
+                                              security: {
+                                                private_repository_targets:
+                                                  current.security.private_repository_targets.filter(
+                                                    (_, targetIndex) => targetIndex !== index,
+                                                  ),
+                                              },
+                                            }
+                                          : current,
+                                      )
+                                    }
+                                  >
+                                    <Trash2Icon />
+                                  </Button>
+                                </TableCell>
+                              </TableRow>
+                            ),
+                          )}
+                        </TableBody>
+                      </Table>
+                    )}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="self-start"
+                      disabled={configuration.security.private_repository_targets.length >= 100}
+                      onClick={() =>
+                        setConfiguration((current) =>
+                          current
+                            ? {
+                                ...current,
+                                security: {
+                                  private_repository_targets: [
+                                    ...current.security.private_repository_targets,
+                                    { host: "", ip: "", port: 443 },
+                                  ],
+                                },
+                              }
+                            : current,
+                        )
+                      }
+                    >
+                      <PlusIcon data-icon="inline-start" />
+                      Add target
+                    </Button>
+                  </FieldSet>
+
+                  <FieldSet className="gap-4">
+                    <FieldLegend>Development and logging</FieldLegend>
+                    <ConfigurationSwitch
+                      id={`node-${node.id}-verbose-build-log`}
+                      label="Verbose build log"
+                      checked={configuration.development.verbose_build_log}
+                      onCheckedChange={(verbose_build_log) =>
+                        setConfiguration((current) =>
+                          current ? { ...current, development: { verbose_build_log } } : current,
+                        )
+                      }
+                    />
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <ConfigurationTextField
+                        id={`node-${node.id}-log-filter`}
+                        label="Log filter"
+                        value={configuration.log.level}
+                        onChange={(level) =>
+                          setConfiguration((current) =>
+                            current ? { ...current, log: { ...current.log, level } } : current,
+                          )
+                        }
+                      />
+                      <Field>
+                        <FieldLabel htmlFor={`node-${node.id}-log-format`}>Log format</FieldLabel>
+                        <Select
+                          value={configuration.log.format}
+                          onValueChange={(format: "pretty" | "json") =>
+                            setConfiguration((current) =>
+                              current ? { ...current, log: { ...current.log, format } } : current,
+                            )
+                          }
+                        >
+                          <SelectTrigger id={`node-${node.id}-log-format`} className="w-full">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectGroup>
+                              <SelectItem value="pretty">Pretty</SelectItem>
+                              <SelectItem value="json">JSON</SelectItem>
+                            </SelectGroup>
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                    </div>
+                  </FieldSet>
+                </FieldGroup>
+              </TabsContent>
+            </Tabs>
+
             <FieldError>
               {validationError ??
                 (updateMutation.isError
                   ? updateMutation.error instanceof Error
                     ? updateMutation.error.message
-                    : "Unable to update capacity."
-                  : null)}
+                    : "Unable to update Node configuration."
+                  : node.configuration.error)}
             </FieldError>
-          </FieldGroup>
-          <DialogFooter className="mt-5">
-            <Button type="submit" disabled={updateMutation.isPending}>
-              {updateMutation.isPending ? "Saving…" : "Save capacity"}
-            </Button>
-          </DialogFooter>
-        </form>
+            <DialogFooter>
+              <Button type="submit" disabled={updateMutation.isPending}>
+                {updateMutation.isPending && <Spinner data-icon="inline-start" />}
+                {updateMutation.isPending ? "Saving…" : "Save configuration"}
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
       </DialogContent>
     </Dialog>
   );

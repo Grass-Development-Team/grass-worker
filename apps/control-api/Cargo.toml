@@ -46,4 +46,5 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+sea-orm = { workspace = true, features = ["mock"] }
 tower = { version = "0.5", features = ["util"] }

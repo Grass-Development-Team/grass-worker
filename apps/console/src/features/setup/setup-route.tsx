@@ -12,8 +12,10 @@ import { NodeStep } from "@/features/setup/components/node-step";
 import { StorageStep } from "@/features/setup/components/storage-step";
 import { FinishStep } from "@/features/setup/components/finish-step";
 import { Button } from "@/components/ui/button";
+import { useBranding } from "@/features/branding/branding-context";
 
 export function SetupRoute() {
+  const { siteName } = useBranding();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [nodeToken, setNodeToken] = useState<string | null>(null);
@@ -60,6 +62,7 @@ export function SetupRoute() {
 
   const handleStepSuccess = () => {
     queryClient.invalidateQueries({ queryKey: ["setup-state"] });
+    queryClient.invalidateQueries({ queryKey: ["site-config"] });
   };
 
   const handleFinishSuccess = () => {
@@ -73,7 +76,7 @@ export function SetupRoute() {
         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-primary-foreground">
           <Package className="size-6" />
         </div>
-        <h1 className="text-2xl font-bold">Welcome to Grass Worker</h1>
+        <h1 className="text-2xl font-bold">Welcome to {siteName}</h1>
         <p className="text-sm text-muted-foreground">
           Let&apos;s get your platform set up in a few steps.
         </p>

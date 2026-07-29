@@ -53,6 +53,7 @@ pub fn router() -> Router<ControlApiState> {
             "/teams/{team_id}/members/{user_id}",
             patch(members::update_role).delete(members::remove),
         )
+        .route("/team-invitations/preflight", get(invitations::preflight))
         .route("/team-invitations/accept", post(invitations::accept))
         .route("/teams/{team_id}/invitations", post(invitations::create))
 }

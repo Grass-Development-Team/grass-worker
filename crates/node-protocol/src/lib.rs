@@ -19,7 +19,7 @@ pub mod stage {
 
 // --- Registration -----------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeCapabilities {
     pub build: bool,
     pub serve: bool,
@@ -31,6 +31,105 @@ pub struct NodeResources {
     pub memory_mb: u64,
     pub disk_mb: u64,
     pub max_deployments: u32,
+}
+
+/// Complete Node configuration that is safe to synchronize through the
+/// Control API. Authentication tokens are intentionally excluded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeConfiguration {
+    pub node: NodeIdentityConfiguration,
+    pub build: NodeBuildConfiguration,
+    pub serve: NodeServeConfiguration,
+    pub runtime: NodeRuntimeConfiguration,
+    pub security: NodeSecurityConfiguration,
+    pub development: NodeDevelopmentConfiguration,
+    pub log: NodeLogConfiguration,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeIdentityConfiguration {
+    pub id: String,
+    pub control_api: String,
+    pub work_root: String,
+    pub capabilities: NodeCapabilities,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeBuildConfiguration {
+    pub concurrency: u16,
+    pub command_timeout_seconds: u64,
+    pub retain_workspace_on_failure: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeServeConfiguration {
+    pub host: String,
+    pub port: u16,
+    pub public_base_url: String,
+    pub metadata_cache_ttl_seconds: u64,
+    pub artifact_cache_root: String,
+    pub capacity: NodeServeCapacityConfiguration,
+    pub ssr: NodeSsrConfiguration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeServeCapacityConfiguration {
+    pub cpu_millicores: u64,
+    pub memory_mb: u64,
+    pub disk_mb: u64,
+    pub max_deployments: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeSsrConfiguration {
+    pub idle_stop_seconds: u64,
+    pub startup_timeout_seconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeRuntimeConfiguration {
+    pub backend: String,
+    pub socket: String,
+    pub default_build_image: String,
+    pub default_serve_image: String,
+    pub network: String,
+    pub resources: NodeRuntimeResourcesConfiguration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeRuntimeResourcesConfiguration {
+    pub cpu_limit: u32,
+    pub memory_mb: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeSecurityConfiguration {
+    pub private_repository_targets: Vec<NodePrivateRepositoryTargetConfiguration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodePrivateRepositoryTargetConfiguration {
+    pub host: String,
+    pub ip: String,
+    pub port: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeDevelopmentConfiguration {
+    pub verbose_build_log: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeLogConfiguration {
+    pub level: String,
+    pub format: NodeLogFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeLogFormat {
+    Pretty,
+    Json,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,6 +151,15 @@ pub struct RegisterRequest {
     /// Schedulable Serve capacity. Build-only Nodes omit this field.
     #[serde(default)]
     pub resources: Option<NodeResources>,
+    /// Revision loaded by the running Node process.
+    #[serde(default)]
+    pub config_revision: u64,
+    /// Effective non-secret configuration loaded by this process.
+    #[serde(default)]
+    pub effective_config: Option<NodeConfiguration>,
+    /// Whether the running process has a usable token, without exposing it.
+    #[serde(default)]
+    pub node_token_configured: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,11 +180,26 @@ pub struct HeartbeatRequest {
     /// Number of builds currently running on the Node.
     #[serde(default)]
     pub active_builds: u16,
+    /// Revision currently used by the running process.
+    #[serde(default)]
+    pub effective_config_revision: u64,
+    /// Desired revision written to disk and awaiting process restart.
+    #[serde(default)]
+    pub applying_config_revision: Option<u64>,
+    /// Last failure while persisting the desired configuration.
+    #[serde(default)]
+    pub config_apply_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeartbeatResponse {
     pub acknowledged: bool,
+    /// Latest desired revision, when it differs from the running process.
+    #[serde(default)]
+    pub desired_config_revision: Option<u64>,
+    /// Complete desired non-secret configuration for the Node to persist.
+    #[serde(default)]
+    pub desired_config: Option<NodeConfiguration>,
 }
 
 // --- Claim ------------------------------------------------------------------
@@ -400,6 +523,101 @@ pub enum LogStreamMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn node_configuration_json() -> serde_json::Value {
+        serde_json::json!({
+            "node": {
+                "id": "node-a",
+                "control_api": "https://control.example.test",
+                "work_root": "/data/node",
+                "capabilities": { "build": true, "serve": true }
+            },
+            "build": {
+                "concurrency": 2,
+                "command_timeout_seconds": 600,
+                "retain_workspace_on_failure": false
+            },
+            "serve": {
+                "host": "0.0.0.0",
+                "port": 8080,
+                "public_base_url": "https://node-a.example.test",
+                "metadata_cache_ttl_seconds": 30,
+                "artifact_cache_root": "/data/node/artifacts",
+                "capacity": {
+                    "cpu_millicores": 2_000,
+                    "memory_mb": 4_096,
+                    "disk_mb": 20_480,
+                    "max_deployments": 20
+                },
+                "ssr": { "idle_stop_seconds": 1_800, "startup_timeout_seconds": 90 }
+            },
+            "runtime": {
+                "backend": "podman-socket",
+                "socket": "unix:///run/user/1000/podman/podman.sock",
+                "default_build_image": "docker.io/library/node:22",
+                "default_serve_image": "docker.io/library/node:22",
+                "network": "bridge",
+                "resources": { "cpu_limit": 2, "memory_mb": 2_048 }
+            },
+            "security": {
+                "private_repository_targets": [
+                    { "host": "git.internal.example", "ip": "10.0.0.8", "port": 2222 }
+                ]
+            },
+            "development": { "verbose_build_log": true },
+            "log": { "level": "info", "format": "pretty" }
+        })
+    }
+
+    #[test]
+    fn node_configuration_sync_fields_round_trip_without_secrets() {
+        let registration: RegisterRequest = serde_json::from_value(serde_json::json!({
+            "name": "node-a",
+            "version": "0.1.0",
+            "capabilities": { "build": true, "serve": true },
+            "build_concurrency": 2,
+            "serve_base_url": "https://node-a.example.test",
+            "resources": {
+                "cpu_millicores": 2_000,
+                "memory_mb": 4_096,
+                "disk_mb": 20_480,
+                "max_deployments": 20
+            },
+            "config_revision": 7,
+            "effective_config": node_configuration_json(),
+            "node_token_configured": true
+        }))
+        .unwrap();
+        let registration = serde_json::to_value(registration).unwrap();
+        assert_eq!(registration["config_revision"], 7);
+        assert_eq!(
+            registration["effective_config"]["runtime"]["default_serve_image"],
+            "docker.io/library/node:22"
+        );
+        assert_eq!(registration["node_token_configured"], true);
+        assert!(registration.to_string().find("node_token\"").is_none());
+
+        let heartbeat: HeartbeatRequest = serde_json::from_value(serde_json::json!({
+            "active_builds": 1,
+            "effective_config_revision": 6,
+            "applying_config_revision": 7,
+            "config_apply_error": null
+        }))
+        .unwrap();
+        let heartbeat = serde_json::to_value(heartbeat).unwrap();
+        assert_eq!(heartbeat["effective_config_revision"], 6);
+        assert_eq!(heartbeat["applying_config_revision"], 7);
+
+        let response: HeartbeatResponse = serde_json::from_value(serde_json::json!({
+            "acknowledged": true,
+            "desired_config_revision": 8,
+            "desired_config": node_configuration_json()
+        }))
+        .unwrap();
+        let response = serde_json::to_value(response).unwrap();
+        assert_eq!(response["desired_config_revision"], 8);
+        assert_eq!(response["desired_config"]["node"]["id"], "node-a");
+    }
 
     #[test]
     fn log_stream_messages_round_trip_as_tagged_json() {

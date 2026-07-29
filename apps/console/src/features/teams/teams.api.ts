@@ -36,6 +36,15 @@ export interface TeamInvitation {
   token: string;
 }
 
+export interface InvitationPreflight {
+  team: Pick<Team, "id" | "name">;
+  role: ManagedTeamRole;
+  status: "pending" | "expired" | "accepted" | "revoked" | "email_mismatch";
+  expires_at: string;
+  email_matches_current_user: boolean | null;
+  can_accept: boolean;
+}
+
 export interface SourceCredential {
   id: string;
   team_id: string;
@@ -121,6 +130,12 @@ export const teamsApi = {
     request<{ member: Pick<TeamMember, "id" | "user_id" | "role"> & { team_id: string } }>(
       "/api/v1/team-invitations/accept",
       withCredentials({ method: "POST", body: JSON.stringify({ token }) }),
+    ),
+
+  preflightInvitation: (token: string) =>
+    request<InvitationPreflight>(
+      `/api/v1/team-invitations/preflight?${new URLSearchParams({ token })}`,
+      withCredentials(),
     ),
 
   listSourceCredentials: (teamId: string) =>

@@ -27,8 +27,93 @@ export interface AdminNode {
   capacity: AdminNodeResources;
   usage: AdminNodeUsage;
   overflow_count: number;
+  deletion?: AdminNodeDeletionJob | null;
+  configuration: AdminNodeConfigurationSync;
   last_heartbeat_at: string | null;
   created_at: string;
+}
+
+export type NodeDeletionStatus =
+  | "queued"
+  | "migrating"
+  | "draining"
+  | "deleting"
+  | "failed"
+  | "completed";
+
+export interface AdminNodeDeletionJob {
+  id: string;
+  status: NodeDeletionStatus;
+  target_node_id: string | null;
+  total_deployments: number;
+  migrated_deployments: number;
+  active_builds: number;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export interface AdminNodeDeletionPlan {
+  node_id: string;
+  assigned_deployments: number;
+  active_builds: number;
+  requires_target: boolean;
+  eligible_targets: Array<{
+    id: string;
+    name: string;
+    available_deployments: number;
+  }>;
+}
+
+export type NodeConfigurationSyncStatus = "pending" | "applying" | "applied" | "failed";
+
+export interface AdminNodeConfigurationSync {
+  desired: NodeConfiguration | null;
+  desired_revision: number;
+  effective: NodeConfiguration | null;
+  effective_revision: number;
+  status: NodeConfigurationSyncStatus;
+  error: string | null;
+  node_token_configured: boolean;
+  updated_at: string | null;
+  applied_at: string | null;
+}
+
+export interface NodeConfiguration {
+  node: {
+    id: string;
+    control_api: string;
+    work_root: string;
+    capabilities: { build: boolean; serve: boolean };
+  };
+  build: {
+    concurrency: number;
+    command_timeout_seconds: number;
+    retain_workspace_on_failure: boolean;
+  };
+  serve: {
+    host: string;
+    port: number;
+    public_base_url: string;
+    metadata_cache_ttl_seconds: number;
+    artifact_cache_root: string;
+    capacity: AdminNodeResources;
+    ssr: { idle_stop_seconds: number; startup_timeout_seconds: number };
+  };
+  runtime: {
+    backend: "docker-socket" | "podman-socket";
+    socket: string;
+    default_build_image: string;
+    default_serve_image: string;
+    network: string;
+    resources: { cpu_limit: number; memory_mb: number };
+  };
+  security: {
+    private_repository_targets: Array<{ host: string; ip: string; port: number }>;
+  };
+  development: { verbose_build_log: boolean };
+  log: { level: string; format: "pretty" | "json" };
 }
 
 export interface AdminNodeResources {
@@ -147,6 +232,10 @@ export interface AdminTeamGroup {
   name: string;
   description: string | null;
   quota_plan_id: string | null;
+  review_policy: {
+    production: "auto" | "manual" | null;
+    preview: "auto" | "manual" | null;
+  };
   is_default: boolean;
   team_count?: number;
   created_at: string;
@@ -209,6 +298,25 @@ export interface AdminSettings {
   storage: { root: string };
   signup: { policy: "open" | "invite_only" | "closed" };
   review: { production: "auto" | "manual"; preview: "auto" | "manual" };
+  server: { host: string; port: number };
+  database: { url_configured: boolean };
+  redis: { backend: "moka" | "redis"; url_configured: boolean };
+  secrets: { secret_key_configured: boolean; git_credentials_configured: boolean };
+  session: {
+    cookie_secure: boolean;
+    idle_ttl_seconds: number;
+    session_ttl_seconds: number;
+  };
+  audit: { retention_days: number };
+  node_manager: {
+    auto_start_local_node: boolean;
+    local_node_binary: string;
+    local_node_config: string;
+    restart_on_exit: boolean;
+  };
+  migration: { auto_migrate: boolean };
+  log: { level: string; format: "pretty" | "json" };
+  restart_required_sections: Array<"server" | "redis" | "node_manager" | "migration" | "log">;
 }
 
 export const adminApi = {
@@ -277,6 +385,21 @@ export const adminApi = {
   updateNodeCapacity: (nodeId: string, input: UpdateNodeCapacityInput) =>
     request<{ node: AdminNode }>(`/api/v1/admin/nodes/${nodeId}`, {
       method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+
+  updateNodeConfiguration: (nodeId: string, input: NodeConfiguration) =>
+    request<{ node: AdminNode }>(`/api/v1/admin/nodes/${nodeId}/configuration`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+
+  nodeDeletionPlan: (nodeId: string) =>
+    request<AdminNodeDeletionPlan>(`/api/v1/admin/nodes/${nodeId}/deletion-plan`),
+
+  queueNodeDeletion: (nodeId: string, input: { target_node_id: string | null }) =>
+    request<{ job: AdminNodeDeletionJob }>(`/api/v1/admin/nodes/${nodeId}/deletion`, {
+      method: "POST",
       body: JSON.stringify(input),
     }),
 
@@ -379,6 +502,10 @@ export const adminApi = {
     name: string;
     description?: string;
     quota_plan_id?: string;
+    review_policy?: {
+      production: "auto" | "manual" | null;
+      preview: "auto" | "manual" | null;
+    };
   }) =>
     request<{ group: AdminTeamGroup }>("/api/v1/admin/team-groups", {
       method: "POST",
@@ -391,6 +518,10 @@ export const adminApi = {
       name?: string;
       description?: string;
       quota_plan_id?: string | null;
+      review_policy?: {
+        production: "auto" | "manual" | null;
+        preview: "auto" | "manual" | null;
+      };
       is_default?: boolean;
     },
   ) =>
@@ -455,6 +586,20 @@ export const adminApi = {
     signup_policy?: "open" | "invite_only" | "closed";
     review_production?: "auto" | "manual";
     review_preview?: "auto" | "manual";
+    server_host?: string;
+    server_port?: number;
+    redis_backend?: "moka" | "redis";
+    session_cookie_secure?: boolean;
+    session_idle_ttl_seconds?: number;
+    session_ttl_seconds?: number;
+    audit_retention_days?: number;
+    node_manager_auto_start_local_node?: boolean;
+    node_manager_local_node_binary?: string;
+    node_manager_local_node_config?: string;
+    node_manager_restart_on_exit?: boolean;
+    migration_auto_migrate?: boolean;
+    log_level?: string;
+    log_format?: "pretty" | "json";
   }) =>
     request<AdminSettings>("/api/v1/admin/settings", {
       method: "PATCH",

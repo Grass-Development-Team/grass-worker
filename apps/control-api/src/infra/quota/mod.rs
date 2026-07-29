@@ -402,6 +402,7 @@ impl<'a> QuotaService<'a> {
             self.db,
             CreateAuditEventParams {
                 actor_user_id,
+                actor_node_id: None,
                 team_id: Some(team_id),
                 action: "quota.denied".to_owned(),
                 target_type: "team".to_owned(),

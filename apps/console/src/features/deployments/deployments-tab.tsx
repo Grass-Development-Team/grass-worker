@@ -42,7 +42,13 @@ import {
 } from "./deployments.api";
 import { BuildStatusBadge, ReleaseStatusBadge, ServeStatusBadge } from "./components/status-badges";
 
-export function DeploymentsTab({ projectId }: { projectId: string }) {
+export function DeploymentsTab({
+  projectId,
+  canDeploy,
+}: {
+  projectId: string;
+  canDeploy: boolean;
+}) {
   const queryClient = useQueryClient();
   const [environmentFilter, setEnvironmentFilter] = useState<"all" | DeploymentEnvironment>("all");
   const [deploymentEnvironment, setDeploymentEnvironment] = useState<DeploymentEnvironment | null>(
@@ -69,7 +75,7 @@ export function DeploymentsTab({ projectId }: { projectId: string }) {
   const serveNodesQuery = useQuery({
     queryKey: ["serve-nodes", projectId],
     queryFn: () => deploymentsApi.serveNodes(projectId),
-    enabled: deploymentEnvironment !== null,
+    enabled: canDeploy && deploymentEnvironment !== null,
   });
 
   const createMutation = useMutation({
@@ -115,21 +121,23 @@ export function DeploymentsTab({ projectId }: { projectId: string }) {
             <SelectItem value="preview">Preview</SelectItem>
           </SelectContent>
         </Select>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            onClick={() => openDeploymentDialog("preview")}
-            disabled={createMutation.isPending}
-          >
-            <RocketIcon /> Deploy preview
-          </Button>
-          <Button
-            onClick={() => openDeploymentDialog("production")}
-            disabled={createMutation.isPending}
-          >
-            <RocketIcon /> Deploy production
-          </Button>
-        </div>
+        {canDeploy && (
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => openDeploymentDialog("preview")}
+              disabled={createMutation.isPending}
+            >
+              <RocketIcon /> Deploy preview
+            </Button>
+            <Button
+              onClick={() => openDeploymentDialog("production")}
+              disabled={createMutation.isPending}
+            >
+              <RocketIcon /> Deploy production
+            </Button>
+          </div>
+        )}
       </div>
       <Dialog
         open={deploymentEnvironment !== null}
@@ -214,7 +222,9 @@ export function DeploymentsTab({ projectId }: { projectId: string }) {
       {deploymentsQuery.data &&
         (deploymentsQuery.data.deployments.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            No deployments yet. Deploy production or preview to start a build.
+            {canDeploy
+              ? "No deployments yet. Deploy production or preview to start a build."
+              : "No deployments yet."}
           </p>
         ) : (
           <Table>

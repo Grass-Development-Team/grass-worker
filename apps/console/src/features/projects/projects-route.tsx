@@ -40,6 +40,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useTeam } from "@/features/teams/team-context";
+import { canCreateProject } from "@/features/teams/team-permissions";
 
 import { projectsApi, type CreateProjectInput } from "./projects.api";
 
@@ -114,8 +115,9 @@ function slugify(value: string): string {
 }
 
 export function ProjectsRoute() {
-  const { activeTeam } = useTeam();
+  const { activeTeam, activeRole } = useTeam();
   const teamId = activeTeam?.id;
+  const showCreateProject = Boolean(activeRole && canCreateProject(activeRole));
 
   const projectsQuery = useQuery({
     queryKey: ["projects", teamId],
@@ -136,7 +138,7 @@ export function ProjectsRoute() {
             Deployable projects owned by {activeTeam?.name}.
           </p>
         </div>
-        <CreateProjectDialog teamId={teamId} />
+        {showCreateProject && <CreateProjectDialog teamId={teamId} />}
       </div>
 
       {projectsQuery.isLoading && <Skeleton className="h-64 w-full" aria-busy="true" />}
@@ -156,7 +158,9 @@ export function ProjectsRoute() {
               </EmptyMedia>
               <EmptyTitle>No projects yet</EmptyTitle>
               <EmptyDescription>
-                Create your first project to start deploying static sites.
+                {showCreateProject
+                  ? "Create your first project to start deploying static sites."
+                  : "No projects are available for this team."}
               </EmptyDescription>
             </EmptyHeader>
           </Empty>

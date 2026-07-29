@@ -63,6 +63,7 @@ async fn audit_binding(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(actor_user_id),
+            actor_node_id: None,
             team_id: Some(access.team.id),
             action: action.to_owned(),
             target_type: "source_credential".to_owned(),

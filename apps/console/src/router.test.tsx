@@ -20,6 +20,9 @@ vi.mock("@/features/admin/admin-route", () => ({
 vi.mock("@/features/teams/team-settings-guard", () => ({
   TeamSettingsGuard: () => <Outlet />,
 }));
+vi.mock("@/features/teams/accept-invitation-route", () => ({
+  AcceptInvitationRoute: () => <div>Invitation page</div>,
+}));
 
 function setUser(platformRole: "admin" | "user") {
   vi.mocked(useAuth).mockReturnValue({
@@ -29,6 +32,16 @@ function setUser(platformRole: "admin" | "user") {
       display_name: "User",
       platform_role: platformRole,
     },
+    isLoading: false,
+    login: vi.fn(),
+    register: vi.fn(),
+    logout: vi.fn(),
+  } as ReturnType<typeof useAuth>);
+}
+
+function setGuest() {
+  vi.mocked(useAuth).mockReturnValue({
+    user: null,
     isLoading: false,
     login: vi.fn(),
     register: vi.fn(),
@@ -63,4 +76,16 @@ describe("Administration routing", () => {
 
     expect(screen.getByText("Administration page")).toBeInTheDocument();
   });
+});
+
+it("allows unauthenticated visitors to inspect an invitation link", () => {
+  setGuest();
+
+  render(
+    <MemoryRouter initialEntries={["/invitations/accept?token=secret"]}>
+      <Router />
+    </MemoryRouter>,
+  );
+
+  expect(screen.getByText("Invitation page")).toBeInTheDocument();
 });

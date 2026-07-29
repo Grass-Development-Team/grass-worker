@@ -51,6 +51,9 @@ pub async fn register(
             build_concurrency: i32::from(body.build_concurrency),
             base_url: body.serve_base_url,
             resources: body.resources,
+            config_revision: body.config_revision,
+            effective_config: body.effective_config,
+            node_token_configured: body.node_token_configured,
         },
     )
     .await
@@ -60,6 +63,7 @@ pub async fn register(
         db,
         CreateAuditEventParams {
             actor_user_id: None,
+            actor_node_id: Some(node.id),
             team_id: None,
             action: "node.registered".to_owned(),
             target_type: "node".to_owned(),
@@ -133,16 +137,23 @@ fn derive_gateway_token(secret: &str) -> String {
 pub async fn heartbeat(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
-    Json(_body): Json<HeartbeatRequest>,
+    Json(body): Json<HeartbeatRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "internal.nodes.heartbeat";
     let db = super::database(&state, OP)?;
 
-    nodes::record_heartbeat(db, node)
+    let node = nodes::record_heartbeat(db, node, &body)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let (desired_config_revision, desired_config) =
+        nodes::desired_config_for_heartbeat(&node, &body)
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
-    Ok(ok_response(HeartbeatResponse { acknowledged: true }))
+    Ok(ok_response(HeartbeatResponse {
+        acknowledged: true,
+        desired_config_revision,
+        desired_config,
+    }))
 }
 
 #[cfg(test)]
@@ -162,6 +173,9 @@ mod tests {
                 disk_mb: 4_096,
                 max_deployments: 10,
             }),
+            config_revision: 0,
+            effective_config: None,
+            node_token_configured: false,
         }
     }
 

@@ -122,20 +122,22 @@ pub async fn stream(
     }))
 }
 
-async fn record_stream_audit(
+// The request middleware records the handshake once; this separate domain
+// event records completion of the stream lifecycle.
+async fn record_stream_ended_audit(
     state: &ControlApiState,
     user_id: Uuid,
     team_id: Uuid,
     deployment_id: Uuid,
-    action: &str,
 ) {
     if let Some(db) = state.try_database() {
-        let _ = audits::create_audit_event(
+        let _ = audits::create_platform_audit_event(
             db,
             CreateAuditEventParams {
                 actor_user_id: Some(user_id),
+                actor_node_id: None,
                 team_id: Some(team_id),
-                action: action.to_owned(),
+                action: "deployment.log_stream_ended".to_owned(),
                 target_type: "deployment".to_owned(),
                 target_id: Some(deployment_id),
                 result: AuditEventResult::Success,
@@ -155,14 +157,6 @@ async fn browser_stream(
     user_id: Uuid,
     can_cancel: bool,
 ) {
-    record_stream_audit(
-        &state,
-        user_id,
-        team_id,
-        deployment_id,
-        "deployment.log_stream_started",
-    )
-    .await;
     let mut frames = state.log_hub.subscribe(deployment_id);
 
     loop {
@@ -202,14 +196,7 @@ async fn browser_stream(
         }
     }
 
-    record_stream_audit(
-        &state,
-        user_id,
-        team_id,
-        deployment_id,
-        "deployment.log_stream_ended",
-    )
-    .await;
+    record_stream_ended_audit(&state, user_id, team_id, deployment_id).await;
 }
 
 async fn handle_ws_cancel(state: &ControlApiState, deployment_id: Uuid, user_id: Uuid) {

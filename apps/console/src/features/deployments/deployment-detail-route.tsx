@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTeam } from "@/features/teams/team-context";
-import { canManageMembers } from "@/features/teams/team-permissions";
+import { canContributeToProjects, canManageMembers } from "@/features/teams/team-permissions";
 
 import {
   deploymentsApi,
@@ -78,6 +78,7 @@ export function DeploymentDetailRoute() {
   const detail = detailQuery.data;
   const { deployment } = detail;
   const running = isBuildRunning(deployment.build_status);
+  const canMutate = activeRole ? canContributeToProjects(activeRole) : false;
   const isAdmin = activeRole ? canManageMembers(activeRole) : false;
   const url = deployment.production_url ?? deployment.preview_url;
   const buildReady = deployment.build_status === "ready";
@@ -134,7 +135,7 @@ export function DeploymentDetailRoute() {
       )}
 
       <div className="flex flex-wrap gap-2">
-        {running && (
+        {running && canMutate && (
           <Button
             variant="destructive"
             onClick={() => act(cancelMutation.mutateAsync)}
@@ -143,7 +144,7 @@ export function DeploymentDetailRoute() {
             <BanIcon /> Cancel build
           </Button>
         )}
-        {canRetry && (
+        {canRetry && canMutate && (
           <Button
             variant="outline"
             onClick={() => act(retryMutation.mutateAsync)}

@@ -1,14 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
-import { afterEach, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+
+import { useTeam } from "@/features/teams/team-context";
 
 import type { DeploymentDetail } from "./deployments.api";
 import { DeploymentDetailRoute } from "./deployment-detail-route";
 
-vi.mock("@/features/teams/team-context", () => ({
-  useTeam: () => ({ activeRole: "admin" }),
-}));
+vi.mock("@/features/teams/team-context", () => ({ useTeam: vi.fn() }));
 
 vi.mock("./components/log-viewer", () => ({
   LogViewer: () => null,
@@ -85,6 +85,25 @@ function renderDetail(detail: DeploymentDetail) {
 }
 
 afterEach(() => vi.restoreAllMocks());
+beforeEach(() => {
+  vi.mocked(useTeam).mockReturnValue({ activeRole: "admin" } as ReturnType<typeof useTeam>);
+});
+
+it("keeps deployment actions hidden from viewers", async () => {
+  vi.mocked(useTeam).mockReturnValue({ activeRole: "viewer" } as ReturnType<typeof useTeam>);
+  renderDetail(
+    detailFixture({
+      build_status: "failed",
+      serve_status: "failed",
+      release_status: "draft",
+    }),
+  );
+
+  expect(await screen.findByText("Failed")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Cancel build" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Promote" })).not.toBeInTheDocument();
+});
 
 it("keeps promote disabled while the serve node is syncing", async () => {
   renderDetail(detailFixture());

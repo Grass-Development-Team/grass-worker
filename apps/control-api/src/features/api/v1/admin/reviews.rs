@@ -24,9 +24,9 @@ use crate::{
     },
     infra::{
         database::entity::{
-            AuditEventResult, DeploymentBuildStatus, DeploymentEventKind, DeploymentReleaseStatus,
-            DeploymentReviewStatus, DeploymentServeStatus, ReleaseReason, deployment,
-            deployment_event, deployment_review, project, team, user,
+            AuditEventResult, AuditEventVisibility, DeploymentBuildStatus, DeploymentEventKind,
+            DeploymentReleaseStatus, DeploymentReviewStatus, DeploymentServeStatus, ReleaseReason,
+            deployment, deployment_event, deployment_review, project, team, user,
         },
         error::{AppError, accepted_response, ok_response},
         http::extractors::Session,
@@ -355,10 +355,11 @@ async fn decide(
     .await
     .map_err(|source| AppError::Infrastructure { op, source })?;
 
-    audits::create_audit_event(
+    audits::create_platform_audit_event(
         &transaction,
         CreateAuditEventParams {
             actor_user_id: Some(session.data.user_id),
+            actor_node_id: None,
             team_id: Some(deployment.team_id),
             action: if approved {
                 "deployment.review_approved".to_owned()
@@ -383,6 +384,7 @@ async fn decide(
             deployment,
             ReleaseReason::Promote,
             session.data.user_id,
+            AuditEventVisibility::Platform,
         )
         .await
         .map_err(|error| {
@@ -392,10 +394,11 @@ async fn decide(
             ReleaseRequestOutcome::Activated(deployment) => (deployment, true, false),
             ReleaseRequestOutcome::SyncQueued(deployment) => (deployment, false, true),
         };
-        audits::create_audit_event(
+        audits::create_platform_audit_event(
             &transaction,
             CreateAuditEventParams {
                 actor_user_id: Some(session.data.user_id),
+                actor_node_id: None,
                 team_id: Some(deployment.team_id),
                 action: delivery::release_audit_action(&ReleaseReason::Promote, release_pending)
                     .to_owned(),

@@ -9,3 +9,7 @@ pub mod m20260726_000008_audit_team_scope;
 pub mod m20260727_000009_git_source_access;
 pub mod m20260727_000010_node_scheduling;
 pub mod m20260728_000011_delivery_rollout;
+pub mod m20260729_000012_audit_foundation;
+pub mod m20260729_000013_team_group_review_policy;
+pub mod m20260729_000014_node_config_sync;
+pub mod m20260729_000015_node_deletion_queue;

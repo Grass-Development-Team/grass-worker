@@ -51,6 +51,12 @@ pub struct ErrorBody {
     pub op: &'static str,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuditErrorContext {
+    pub operation: &'static str,
+    pub reason: String,
+}
+
 impl AppError {
     fn status_code(&self) -> StatusCode {
         match self {
@@ -111,13 +117,20 @@ impl IntoResponse for AppError {
             tracing::error!(operation = *op, error = %source, "infrastructure request failed");
         }
         let status = self.status_code();
+        let operation = self.op();
+        let message = self.message();
         let body = ErrorBody {
             code: self.error_code(),
-            message: self.message(),
+            message: message.clone(),
             data: serde_json::Value::Null,
-            op: self.op(),
+            op: operation,
         };
-        (status, Json(body)).into_response()
+        let mut response = (status, Json(body)).into_response();
+        response.extensions_mut().insert(AuditErrorContext {
+            operation,
+            reason: message,
+        });
+        response
     }
 }
 
@@ -168,5 +181,21 @@ mod tests {
         let response = accepted_response(serde_json::json!({ "queued": true })).into_response();
 
         assert_eq!(response.status(), StatusCode::ACCEPTED);
+    }
+
+    #[test]
+    fn error_responses_expose_safe_audit_context_to_middleware() {
+        let response = AppError::Forbidden {
+            op: "team.role.not_member",
+            message: "not a member of this team".to_owned(),
+        }
+        .into_response();
+
+        let context = response
+            .extensions()
+            .get::<AuditErrorContext>()
+            .expect("audit error context");
+        assert_eq!(context.operation, "team.role.not_member");
+        assert_eq!(context.reason, "not a member of this team");
     }
 }

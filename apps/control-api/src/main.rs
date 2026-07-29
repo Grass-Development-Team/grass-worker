@@ -30,6 +30,8 @@ async fn main() -> anyhow::Result<()> {
     init::database(&state).await?;
     init::cache(&state).await?;
     spawn_node_health_sweep(state.clone());
+    spawn_audit_retention_sweep(state.clone());
+    spawn_node_deletion_sweep(state.clone());
     auto_start_local_node(&state).await;
     let addr = init::address(&state);
     let app = features::router::router(state.clone()).with_state(state.clone());
@@ -118,6 +120,62 @@ fn spawn_node_health_sweep(state: ControlApiState) {
                     %error,
                     "node health sweep failed"
                 ),
+            }
+        }
+    });
+}
+
+/// Removes expired audit events immediately on startup and then once per day.
+/// A retention value of zero intentionally keeps events permanently.
+fn spawn_audit_retention_sweep(state: ControlApiState) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(86_400));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            let cutoff = state
+                .config
+                .read()
+                .unwrap()
+                .audit
+                .retention_cutoff(time::OffsetDateTime::now_utc());
+            let Some(cutoff) = cutoff else {
+                continue;
+            };
+            let Some(db) = state.try_database() else {
+                continue;
+            };
+            match domain::audits::prune_events_before(db, cutoff).await {
+                Ok(0) => {}
+                Ok(count) => info!(
+                    operation = "control_api.audit_retention_sweep",
+                    count, "removed expired audit events"
+                ),
+                Err(error) => tracing::warn!(
+                    operation = "control_api.audit_retention_sweep",
+                    %error,
+                    "audit retention sweep failed"
+                ),
+            }
+        }
+    });
+}
+
+fn spawn_node_deletion_sweep(state: ControlApiState) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            let Some(db) = state.try_database() else {
+                continue;
+            };
+            if let Err(error) = domain::node_deletions::process_pending_jobs(db).await {
+                tracing::warn!(
+                    operation = "control_api.node_deletion_sweep",
+                    %error,
+                    "node deletion sweep failed"
+                );
             }
         }
     });

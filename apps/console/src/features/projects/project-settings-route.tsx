@@ -17,17 +17,25 @@ import {
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SettingsCard } from "@/components/settings-card";
+import { useBranding } from "@/features/branding/branding-context";
+import {
+  canContributeToProjects,
+  canManageProjectLifecycle,
+} from "@/features/teams/team-permissions";
 
 import { projectsApi } from "./projects.api";
 import { useProject } from "./project-layout";
 
 export function ProjectSettingsRoute() {
-  const { project } = useProject();
+  const { siteName } = useBranding();
+  const { project, role } = useProject();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [name, setName] = useState(project.name);
   const [nameError, setNameError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const canEdit = canContributeToProjects(role);
+  const canManageLifecycle = canManageProjectLifecycle(role);
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["project", project.id] });
 
@@ -67,7 +75,7 @@ export function ProjectSettingsRoute() {
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          nameMutation.mutate();
+          if (canEdit) nameMutation.mutate();
         }}
       >
         <SettingsCard
@@ -75,9 +83,11 @@ export function ProjectSettingsRoute() {
           description="Used to identify your project on the Console and in deployment URLs."
           hint={`The URL slug stays ${project.slug}.`}
           action={
-            <Button type="submit" size="sm" disabled={nameMutation.isPending || !name.trim()}>
-              {nameMutation.isPending ? "Saving…" : "Save"}
-            </Button>
+            canEdit ? (
+              <Button type="submit" size="sm" disabled={nameMutation.isPending || !name.trim()}>
+                {nameMutation.isPending ? "Saving…" : "Save"}
+              </Button>
+            ) : undefined
           }
         >
           <Input
@@ -85,6 +95,7 @@ export function ProjectSettingsRoute() {
             aria-label="Project name"
             className="max-w-sm"
             value={name}
+            readOnly={!canEdit}
             onChange={(event) => setName(event.target.value)}
           />
           {nameError && (
@@ -97,7 +108,7 @@ export function ProjectSettingsRoute() {
 
       <SettingsCard
         title="Project ID"
-        description="Used when interacting with the Grass Worker API."
+        description={`Used when interacting with the ${siteName} API.`}
         hint="The project ID cannot be changed."
       >
         <div className="flex max-w-md items-center gap-2">
@@ -128,23 +139,25 @@ export function ProjectSettingsRoute() {
         }
         hint="Archiving can be reverted at any time."
         action={
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => archiveMutation.mutate()}
-            disabled={archiveMutation.isPending}
-          >
-            {project.archived_at ? (
-              <>
-                <ArchiveRestoreIcon /> Unarchive
-              </>
-            ) : (
-              <>
-                <ArchiveIcon /> Archive
-              </>
-            )}
-          </Button>
+          canManageLifecycle ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => archiveMutation.mutate()}
+              disabled={archiveMutation.isPending}
+            >
+              {project.archived_at ? (
+                <>
+                  <ArchiveRestoreIcon /> Unarchive
+                </>
+              ) : (
+                <>
+                  <ArchiveIcon /> Archive
+                </>
+              )}
+            </Button>
+          ) : undefined
         }
       />
 
@@ -154,31 +167,33 @@ export function ProjectSettingsRoute() {
         description="The project is soft-deleted and stops serving immediately. A platform administrator can restore it."
         hint="Please make sure this is what you want."
         action={
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button variant="destructive" size="sm" disabled={deleteMutation.isPending}>
-                <Trash2Icon /> Delete
-              </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Delete this project?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  The project is soft-deleted and can be restored by an administrator. Active
-                  deployments stop being served.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction
-                  className={buttonVariants({ variant: "destructive" })}
-                  onClick={() => deleteMutation.mutate()}
-                >
-                  Delete project
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+          canManageLifecycle ? (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="destructive" size="sm" disabled={deleteMutation.isPending}>
+                  <Trash2Icon /> Delete
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete this project?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    The project is soft-deleted and can be restored by an administrator. Active
+                    deployments stop being served.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    className={buttonVariants({ variant: "destructive" })}
+                    onClick={() => deleteMutation.mutate()}
+                  >
+                    Delete project
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          ) : undefined
         }
       />
     </div>

@@ -36,6 +36,7 @@ async fn record_lifecycle_audit(
             db,
             CreateAuditEventParams {
                 actor_user_id: Some(actor),
+                actor_node_id: None,
                 team_id: Some(team_id),
                 action: action.to_owned(),
                 target_type: "project".to_owned(),
