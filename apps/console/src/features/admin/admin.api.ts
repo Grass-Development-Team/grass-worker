@@ -213,6 +213,25 @@ export interface AdminSettings {
   storage: { root: string };
   signup: { policy: "open" | "invite_only" | "closed" };
   review: { production: "auto" | "manual"; preview: "auto" | "manual" };
+  server: { host: string; port: number };
+  database: { url_configured: boolean };
+  redis: { backend: "moka" | "redis"; url_configured: boolean };
+  secrets: { secret_key_configured: boolean; git_credentials_configured: boolean };
+  session: {
+    cookie_secure: boolean;
+    idle_ttl_seconds: number;
+    session_ttl_seconds: number;
+  };
+  audit: { retention_days: number };
+  node_manager: {
+    auto_start_local_node: boolean;
+    local_node_binary: string;
+    local_node_config: string;
+    restart_on_exit: boolean;
+  };
+  migration: { auto_migrate: boolean };
+  log: { level: string; format: "pretty" | "json" };
+  restart_required_sections: Array<"server" | "redis" | "node_manager" | "migration" | "log">;
 }
 
 export const adminApi = {
@@ -467,6 +486,20 @@ export const adminApi = {
     signup_policy?: "open" | "invite_only" | "closed";
     review_production?: "auto" | "manual";
     review_preview?: "auto" | "manual";
+    server_host?: string;
+    server_port?: number;
+    redis_backend?: "moka" | "redis";
+    session_cookie_secure?: boolean;
+    session_idle_ttl_seconds?: number;
+    session_ttl_seconds?: number;
+    audit_retention_days?: number;
+    node_manager_auto_start_local_node?: boolean;
+    node_manager_local_node_binary?: string;
+    node_manager_local_node_config?: string;
+    node_manager_restart_on_exit?: boolean;
+    migration_auto_migrate?: boolean;
+    log_level?: string;
+    log_format?: "pretty" | "json";
   }) =>
     request<AdminSettings>("/api/v1/admin/settings", {
       method: "PATCH",

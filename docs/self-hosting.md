@@ -54,6 +54,12 @@ polling, artifact/static transfers, WebSocket messages, and frontend static
 assets are intentionally not recorded per item. A WebSocket handshake is
 still recorded once as a user-facing read.
 
+After setup, platform administrators can inspect and update non-secret
+Control API settings under **Administration → Settings**. Secret settings
+remain write-only: the Console reports whether each value is configured but
+never returns it. File and environment configuration still provide the
+startup values for settings that cannot be changed before the API is running.
+
 With an empty database the service starts in **setup mode**. Open the
 Console (`just run console` during development, or the embedded Console on
 the Control API port in release builds) and finish the setup flow:
