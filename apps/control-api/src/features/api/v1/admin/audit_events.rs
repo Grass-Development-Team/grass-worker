@@ -4,6 +4,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::infra::http::timestamps::ts;
@@ -21,11 +22,112 @@ pub struct AuditQuery {
     #[serde(default)]
     pub action: Option<String>,
     #[serde(default)]
+    pub actor_user_id: Option<Uuid>,
+    #[serde(default)]
+    pub actor_type: Option<String>,
+    #[serde(default)]
+    pub target_type: Option<String>,
+    #[serde(default)]
     pub target_id: Option<Uuid>,
     #[serde(default)]
     pub team_id: Option<Uuid>,
     #[serde(default)]
-    pub limit: Option<u64>,
+    pub result: Option<String>,
+    #[serde(default, rename = "from")]
+    pub created_from_ms: Option<i64>,
+    #[serde(default, rename = "to")]
+    pub created_to_ms: Option<i64>,
+    #[serde(default)]
+    pub page: Option<u64>,
+    #[serde(default)]
+    pub per_page: Option<u64>,
+}
+
+fn parse_actor_type(
+    value: Option<&str>,
+    op: &'static str,
+) -> Result<Option<AuditActorType>, AppError> {
+    value
+        .map(|value| match value {
+            "anonymous" => Ok(AuditActorType::Anonymous),
+            "user" => Ok(AuditActorType::User),
+            "system" => Ok(AuditActorType::System),
+            "node" => Ok(AuditActorType::Node),
+            _ => Err(AppError::Validation {
+                op,
+                message: "actor_type must be anonymous, user, system, or node".to_owned(),
+            }),
+        })
+        .transpose()
+}
+
+fn parse_result(
+    value: Option<&str>,
+    op: &'static str,
+) -> Result<Option<AuditEventResult>, AppError> {
+    value
+        .map(|value| match value {
+            "success" => Ok(AuditEventResult::Success),
+            "failure" => Ok(AuditEventResult::Failure),
+            "denied" => Ok(AuditEventResult::Denied),
+            _ => Err(AppError::Validation {
+                op,
+                message: "result must be success, failure, or denied".to_owned(),
+            }),
+        })
+        .transpose()
+}
+
+fn timestamp_from_millis(
+    value: Option<i64>,
+    field: &'static str,
+    op: &'static str,
+) -> Result<Option<OffsetDateTime>, AppError> {
+    value
+        .map(|value| {
+            OffsetDateTime::from_unix_timestamp_nanos(i128::from(value) * 1_000_000).map_err(|_| {
+                AppError::Validation {
+                    op,
+                    message: format!("{field} is outside the supported timestamp range"),
+                }
+            })
+        })
+        .transpose()
+}
+
+pub(crate) fn event_filter(
+    query: AuditQuery,
+    team_id: Option<Uuid>,
+    visibility: Option<AuditEventVisibility>,
+    team_visible_only: bool,
+    op: &'static str,
+) -> Result<AuditEventFilter, AppError> {
+    let created_from = timestamp_from_millis(query.created_from_ms, "from", op)?;
+    let created_to = timestamp_from_millis(query.created_to_ms, "to", op)?;
+    if created_from
+        .zip(created_to)
+        .is_some_and(|(from, to)| from > to)
+    {
+        return Err(AppError::Validation {
+            op,
+            message: "from must not be later than to".to_owned(),
+        });
+    }
+    Ok(AuditEventFilter {
+        action: query.action.filter(|value| !value.trim().is_empty()),
+        actor_user_id: query.actor_user_id,
+        actor_type: parse_actor_type(query.actor_type.as_deref(), op)?,
+        target_type: query.target_type.filter(|value| !value.trim().is_empty()),
+        target_id: query.target_id,
+        team_id: team_id.or(query.team_id),
+        result: parse_result(query.result.as_deref(), op)?,
+        created_from,
+        created_to,
+        visibility,
+        team_visible_only,
+        page: query.page.unwrap_or(1),
+        per_page: query.per_page.unwrap_or(50),
+    })
 }
 
 pub(crate) fn event_view(event: &audit_event::Model) -> serde_json::Value {
@@ -74,21 +176,18 @@ pub async fn list(
     const OP: &str = "admin.audit_events.list";
     let db = super::database(&state, OP)?;
 
-    let events = audits::list_events(
-        db,
-        AuditEventFilter {
-            action: query.action.filter(|action| !action.trim().is_empty()),
-            target_id: query.target_id,
-            team_id: query.team_id,
-            visibility: None,
-            limit: query.limit.unwrap_or(100),
-        },
-    )
-    .await
-    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let page = audits::list_events(db, event_filter(query, None, None, false, OP)?)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
     Ok(ok_response(json!({
-        "events": events.iter().map(event_view).collect::<Vec<_>>(),
+        "events": page.events.iter().map(event_view).collect::<Vec<_>>(),
+        "pagination": {
+            "page": page.page,
+            "per_page": page.per_page,
+            "total": page.total,
+            "total_pages": page.total_pages,
+        },
     })))
 }
 

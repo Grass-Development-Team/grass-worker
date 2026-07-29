@@ -1,9 +1,16 @@
+import { Navigate } from "react-router";
+
 import { useTeam } from "@/features/teams/team-context";
+import { canViewTeamAudit } from "@/features/teams/team-permissions";
 
 import { AuditEventsTable } from "./audit-events-table";
 
 export function TeamAuditRoute() {
-  const { activeTeam } = useTeam();
+  const { activeTeam, activeRole } = useTeam();
+
+  if (activeRole && !canViewTeamAudit(activeRole)) {
+    return <Navigate to="/" replace />;
+  }
 
   if (!activeTeam) {
     return <p className="text-sm text-muted-foreground">Select a team to view its audit trail.</p>;
