@@ -27,9 +27,43 @@ export interface AdminNode {
   capacity: AdminNodeResources;
   usage: AdminNodeUsage;
   overflow_count: number;
+  deletion?: AdminNodeDeletionJob | null;
   configuration: AdminNodeConfigurationSync;
   last_heartbeat_at: string | null;
   created_at: string;
+}
+
+export type NodeDeletionStatus =
+  | "queued"
+  | "migrating"
+  | "draining"
+  | "deleting"
+  | "failed"
+  | "completed";
+
+export interface AdminNodeDeletionJob {
+  id: string;
+  status: NodeDeletionStatus;
+  target_node_id: string | null;
+  total_deployments: number;
+  migrated_deployments: number;
+  active_builds: number;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export interface AdminNodeDeletionPlan {
+  node_id: string;
+  assigned_deployments: number;
+  active_builds: number;
+  requires_target: boolean;
+  eligible_targets: Array<{
+    id: string;
+    name: string;
+    available_deployments: number;
+  }>;
 }
 
 export type NodeConfigurationSyncStatus = "pending" | "applying" | "applied" | "failed";
@@ -357,6 +391,15 @@ export const adminApi = {
   updateNodeConfiguration: (nodeId: string, input: NodeConfiguration) =>
     request<{ node: AdminNode }>(`/api/v1/admin/nodes/${nodeId}/configuration`, {
       method: "PUT",
+      body: JSON.stringify(input),
+    }),
+
+  nodeDeletionPlan: (nodeId: string) =>
+    request<AdminNodeDeletionPlan>(`/api/v1/admin/nodes/${nodeId}/deletion-plan`),
+
+  queueNodeDeletion: (nodeId: string, input: { target_node_id: string | null }) =>
+    request<{ job: AdminNodeDeletionJob }>(`/api/v1/admin/nodes/${nodeId}/deletion`, {
+      method: "POST",
       body: JSON.stringify(input),
     }),
 

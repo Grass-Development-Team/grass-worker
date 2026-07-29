@@ -186,6 +186,21 @@ After saving, the Node reports `Pending`, `Applying`, `Applied`, or `Failed`
 until its effective revision matches the desired revision. Node tokens and
 other secret values are never returned as part of desired configuration.
 
+### Drain and delete a Node
+
+Deleting a Node is asynchronous. After the confirmation prompt, a Serve Node
+with assigned services requires an administrator to select another eligible
+Serve Node. The source enters the deletion queue, artifacts are synchronized
+to the target, and routes switch atomically only after every replacement is
+Ready. A Serve Node without assigned services can enter the queue directly.
+
+A Build-capable Node stops claiming new work while Draining and remains in the
+queue until its existing builds reach a terminal state. The Console shows the
+queued, migrating, draining, deleting, failed, and completed progress states.
+A failed deletion keeps the source routes intact, displays the failure reason,
+and can be retried after the underlying capacity, connectivity, or artifact
+problem is fixed. The Node token stops authenticating after deletion completes.
+
 Each Static deployment initially reserves 50 millicores, 64 MB memory, and
 256 MB disk. Each SSR deployment reserves 200 millicores, 256 MB memory, and
 512 MB disk. The artifact upload replaces the disk estimate with its actual
@@ -321,9 +336,10 @@ SSH, and `git://` connections are pinned to an address that passed this policy.
   least once so it registers its exact capabilities and Serve capacity.
 - This phase runs exactly one Control API and assigns each deployment to one
   Serve Node. It does not provide Control API high availability, Build
-  failover, automatic Serve reassignment, or object storage. An unavailable
-  assigned Serve Node therefore makes its sites unavailable until that Node
-  returns.
+  failover, automatic failover after an unexpected Serve outage, or object
+  storage. Planned Serve Node deletion uses the drain-and-migrate workflow
+  above; an unexpected outage still makes assigned sites unavailable until
+  that Node returns or an administrator can complete a safe migration.
 - Static outputs from Vite/React/Vue/Svelte SPAs, Next.js static export,
   Nuxt SPA/prerender, SvelteKit adapter-static, and Astro static are
   supported. **SSR deployments work for Next.js, Astro, and Nuxt**: the

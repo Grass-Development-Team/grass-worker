@@ -207,6 +207,22 @@ string_active_enum!(NodeConfigSyncStatus, "node_config_sync_status", {
     Failed => "failed",
 });
 
+string_active_enum!(NodeDeletionStatus, "node_deletion_status", {
+    Queued => "queued",
+    Migrating => "migrating",
+    Draining => "draining",
+    Deleting => "deleting",
+    Failed => "failed",
+    Completed => "completed",
+});
+
+string_active_enum!(NodeDeploymentMigrationStatus, "node_deployment_migration_status", {
+    Pending => "pending",
+    Syncing => "syncing",
+    Ready => "ready",
+    Failed => "failed",
+});
+
 string_active_enum!(SystemSettingValueKind, "system_setting_value_kind", {
     String => "string",
     Number => "number",

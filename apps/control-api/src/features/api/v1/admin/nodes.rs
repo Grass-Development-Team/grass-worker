@@ -4,7 +4,9 @@ use axum::{
     response::IntoResponse,
 };
 use grass_node_protocol::NodeResources;
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, TransactionTrait};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, TransactionTrait,
+};
 use serde::Deserialize;
 use serde_json::json;
 use time::OffsetDateTime;
@@ -14,12 +16,13 @@ use crate::infra::http::timestamps::ts;
 use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
+        node_deletions,
         nodes::{self, CreateNodeParams},
         scheduler::{self, NodeUsage},
         settings,
     },
     infra::{
-        database::entity::{AuditEventResult, NodeConfigSyncStatus, node},
+        database::entity::{AuditEventResult, NodeConfigSyncStatus, node, node_deletion_job},
         error::{AppError, ok_response},
         http::middlewares::node_auth::revoked_token_key,
         node_manager::config_file,
@@ -30,7 +33,32 @@ use crate::{
 /// Heartbeats older than this mark a Node unhealthy.
 pub const HEARTBEAT_STALE_SECONDS: i64 = 90;
 
-fn node_view(node: &node::Model, usage: NodeUsage, now: OffsetDateTime) -> serde_json::Value {
+#[derive(Deserialize)]
+pub struct QueueNodeDeletionRequest {
+    pub target_node_id: Option<Uuid>,
+}
+
+fn deletion_job_view(job: &node_deletion_job::Model) -> serde_json::Value {
+    json!({
+        "id": job.id,
+        "status": node_deletions::status_value(&job.status),
+        "target_node_id": job.target_node_id,
+        "total_deployments": job.total_deployments,
+        "migrated_deployments": job.migrated_deployments,
+        "active_builds": job.active_builds,
+        "error": job.error,
+        "created_at": ts(job.created_at),
+        "updated_at": ts(job.updated_at),
+        "completed_at": ts(job.completed_at),
+    })
+}
+
+fn node_view(
+    node: &node::Model,
+    usage: NodeUsage,
+    deletion: Option<&node_deletion_job::Model>,
+    now: OffsetDateTime,
+) -> serde_json::Value {
     let capacity = NodeResources {
         cpu_millicores: node.capacity_cpu_millicores.max(0) as u64,
         memory_mb: node.capacity_memory_mb.max(0) as u64,
@@ -54,6 +82,7 @@ fn node_view(node: &node::Model, usage: NodeUsage, now: OffsetDateTime) -> serde
         "capacity": capacity,
         "usage": usage,
         "overflow_count": overflow_count,
+        "deletion": deletion.map(deletion_job_view),
         "configuration": {
             "desired": node.desired_config,
             "desired_revision": node.desired_config_revision,
@@ -82,6 +111,20 @@ pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoRespo
     let nodes = nodes::list(db)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let deletion_jobs = node_deletion_job::Entity::find()
+        .filter(
+            node_deletion_job::Column::Status
+                .ne(crate::infra::database::entity::NodeDeletionStatus::Completed),
+        )
+        .all(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?
+        .into_iter()
+        .map(|job| (job.node_id, job))
+        .collect::<std::collections::HashMap<_, _>>();
     let usage = scheduler::node_usage(db)
         .await
         .map_err(|source| AppError::Infrastructure {
@@ -93,7 +136,12 @@ pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoRespo
     Ok(ok_response(json!({
         "nodes": nodes
             .iter()
-            .map(|node| node_view(node, usage.get(&node.id).copied().unwrap_or_default(), now))
+            .map(|node| node_view(
+                node,
+                usage.get(&node.id).copied().unwrap_or_default(),
+                deletion_jobs.get(&node.id),
+                now,
+            ))
             .collect::<Vec<_>>(),
         "local_process": local_process_view(&state).await,
     })))
@@ -140,8 +188,73 @@ pub async fn detail(
         .unwrap_or_default();
 
     Ok(ok_response(json!({
-        "node": node_view(&node, usage, OffsetDateTime::now_utc()),
+        "node": node_view(&node, usage, None, OffsetDateTime::now_utc()),
     })))
+}
+
+/// GET /api/v1/admin/nodes/{node_id}/deletion-plan
+pub async fn deletion_plan(
+    State(state): State<ControlApiState>,
+    Path(node_id): Path<Uuid>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "admin.nodes.deletion_plan";
+    let db = super::database(&state, OP)?;
+    let node = nodes::get_by_id(db, node_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "node not found".to_owned(),
+        })?;
+    let plan = node_deletions::plan(db, &node)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    Ok(ok_response(plan))
+}
+
+/// POST /api/v1/admin/nodes/{node_id}/deletion
+pub async fn queue_deletion(
+    State(state): State<ControlApiState>,
+    crate::infra::http::extractors::Session { data, .. }: crate::infra::http::extractors::Session,
+    Path(node_id): Path<Uuid>,
+    Json(body): Json<QueueNodeDeletionRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "admin.nodes.queue_deletion";
+    let db = super::database(&state, OP)?;
+    let transaction = db
+        .begin()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    scheduler::lock_placement(&transaction)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let node = nodes::get_by_id_for_update(&transaction, node_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "node not found".to_owned(),
+        })?;
+    let job = node_deletions::enqueue(&transaction, node, body.target_node_id, data.user_id)
+        .await
+        .map_err(|error| AppError::Conflict {
+            op: OP,
+            message: error.to_string(),
+        })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    Ok(ok_response(json!({ "job": deletion_job_view(&job) })))
 }
 
 #[derive(Debug, Deserialize)]
@@ -453,7 +566,7 @@ pub async fn update_configuration(
         })?;
 
     Ok(ok_response(json!({
-        "node": node_view(&node, usage, OffsetDateTime::now_utc()),
+        "node": node_view(&node, usage, None, OffsetDateTime::now_utc()),
     })))
 }
 
@@ -551,7 +664,7 @@ pub async fn update_capacity(
     .await;
 
     Ok(ok_response(json!({
-        "node": node_view(&node, usage, OffsetDateTime::now_utc()),
+        "node": node_view(&node, usage, None, OffsetDateTime::now_utc()),
     })))
 }
 
@@ -694,7 +807,7 @@ pub async fn create(
     }
 
     Ok(ok_response(json!({
-        "node": node_view(&node, NodeUsage::default(), OffsetDateTime::now_utc()),
+        "node": node_view(&node, NodeUsage::default(), None, OffsetDateTime::now_utc()),
         // Shown exactly once; only the hash is stored.
         "token": token,
         "local_process": local_process,
@@ -1016,7 +1129,7 @@ mod tests {
             deployments: 12,
         };
 
-        let view = node_view(&node, usage, OffsetDateTime::now_utc());
+        let view = node_view(&node, usage, None, OffsetDateTime::now_utc());
 
         assert_eq!(view["capacity"]["cpu_millicores"], 1_200);
         assert_eq!(view["usage"]["deployments"], 12);

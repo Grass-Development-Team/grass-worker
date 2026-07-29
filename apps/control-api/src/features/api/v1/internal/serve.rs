@@ -10,7 +10,10 @@ use grass_node_protocol::{
     RouteSnapshotResponse, ServeAccess, ServeArtifact, ServeAssignment, ServeAssignmentStatus,
     ServeAssignmentsResponse, ServeResources, ServeRoute,
 };
-use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, TransactionTrait};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+    TransactionTrait,
+};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -21,8 +24,8 @@ use crate::{
         database::entity::{
             DeploymentArtifactKind, DeploymentBuildStatus, DeploymentEnvironment,
             DeploymentReleaseStatus, DeploymentServeStatus, HostBindingEnvironment,
-            HostBindingStatus, NodeStatus, deployment, deployment_artifact, node,
-            project_host_binding,
+            HostBindingStatus, NodeDeploymentMigrationStatus, NodeStatus, deployment,
+            deployment_artifact, node, node_deployment_migration, project_host_binding,
         },
         error::{AppError, ok_response},
         http::middlewares::node_auth::AuthenticatedNode,
@@ -96,6 +99,22 @@ fn ensure_serve_node(
     Ok(())
 }
 
+fn shadow_migration_statuses() -> [NodeDeploymentMigrationStatus; 3] {
+    [
+        NodeDeploymentMigrationStatus::Pending,
+        NodeDeploymentMigrationStatus::Syncing,
+        NodeDeploymentMigrationStatus::Ready,
+    ]
+}
+
+fn migration_is_shadow_assignment(status: &NodeDeploymentMigrationStatus) -> bool {
+    shadow_migration_statuses().contains(status)
+}
+
+pub(crate) fn migration_allows_artifact_download(status: &NodeDeploymentMigrationStatus) -> bool {
+    migration_is_shadow_assignment(status)
+}
+
 /// GET /api/v1/internal/serve/assignments
 pub async fn assignments(
     State(state): State<ControlApiState>,
@@ -116,13 +135,50 @@ pub async fn assignments(
             op: OP,
             source: source.into(),
         })?;
-    if assigned.is_empty() {
+    let migrations = node_deployment_migration::Entity::find()
+        .filter(node_deployment_migration::Column::TargetNodeId.eq(node.id))
+        .filter(node_deployment_migration::Column::Status.is_in(shadow_migration_statuses()))
+        .order_by_asc(node_deployment_migration::Column::CreatedAt)
+        .all(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let migration_deployment_ids = migrations
+        .iter()
+        .map(|migration| migration.deployment_id)
+        .collect::<Vec<_>>();
+    let migration_deployments = if migration_deployment_ids.is_empty() {
+        Vec::new()
+    } else {
+        deployment::Entity::find()
+            .filter(deployment::Column::Id.is_in(migration_deployment_ids))
+            .filter(
+                Condition::any()
+                    .add(deployment::Column::ServeNodeId.ne(node.id))
+                    .add(deployment::Column::ServeNodeId.is_null()),
+            )
+            .filter(deployment::Column::BuildStatus.eq(DeploymentBuildStatus::Ready))
+            .filter(deployment::Column::DeletedAt.is_null())
+            .all(db)
+            .await
+            .map_err(|source| AppError::Infrastructure {
+                op: OP,
+                source: source.into(),
+            })?
+    };
+    if assigned.is_empty() && migration_deployments.is_empty() {
         return Ok(ok_response(ServeAssignmentsResponse {
             assignments: Vec::new(),
         }));
     }
 
-    let deployment_ids = assigned.iter().map(|item| item.id).collect::<Vec<_>>();
+    let deployment_ids = assigned
+        .iter()
+        .chain(migration_deployments.iter())
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
     let artifacts = deployment_artifact::Entity::find()
         .filter(deployment_artifact::Column::DeploymentId.is_in(deployment_ids))
         .filter(deployment_artifact::Column::Kind.eq(DeploymentArtifactKind::GrassOutput))
@@ -137,8 +193,20 @@ pub async fn assignments(
         .map(|artifact| (artifact.deployment_id, artifact))
         .collect::<HashMap<_, _>>();
 
-    let mut assignments = Vec::with_capacity(assigned.len());
-    for item in assigned {
+    let migration_statuses = migrations
+        .into_iter()
+        .map(|migration| (migration.deployment_id, migration.status))
+        .collect::<HashMap<_, _>>();
+    let mut assignments = Vec::with_capacity(assigned.len() + migration_deployments.len());
+    for (item, migration_status) in
+        assigned
+            .into_iter()
+            .map(|item| (item, None))
+            .chain(migration_deployments.into_iter().map(|item| {
+                let status = migration_statuses.get(&item.id).cloned();
+                (item, status)
+            }))
+    {
         let Some(artifact) = artifacts.get(&item.id) else {
             continue;
         };
@@ -150,12 +218,18 @@ pub async fn assignments(
             deployment_id: item.id,
             project_id: item.project_id,
             runtime_kind: projects::runtime_value(&item.runtime_kind).to_owned(),
-            status: match item.serve_status {
-                DeploymentServeStatus::Pending => ServeAssignmentStatus::Pending,
-                DeploymentServeStatus::Syncing => ServeAssignmentStatus::Syncing,
-                DeploymentServeStatus::Ready => ServeAssignmentStatus::Ready,
-                DeploymentServeStatus::Failed => ServeAssignmentStatus::Failed,
-                DeploymentServeStatus::Retired => continue,
+            status: match migration_status {
+                Some(NodeDeploymentMigrationStatus::Pending) => ServeAssignmentStatus::Pending,
+                Some(NodeDeploymentMigrationStatus::Syncing) => ServeAssignmentStatus::Syncing,
+                Some(NodeDeploymentMigrationStatus::Failed) => ServeAssignmentStatus::Failed,
+                Some(NodeDeploymentMigrationStatus::Ready) => ServeAssignmentStatus::Ready,
+                None => match item.serve_status {
+                    DeploymentServeStatus::Pending => ServeAssignmentStatus::Pending,
+                    DeploymentServeStatus::Syncing => ServeAssignmentStatus::Syncing,
+                    DeploymentServeStatus::Ready => ServeAssignmentStatus::Ready,
+                    DeploymentServeStatus::Failed => ServeAssignmentStatus::Failed,
+                    DeploymentServeStatus::Retired => continue,
+                },
             },
             artifact: ServeArtifact {
                 artifact_id: artifact.id,
@@ -219,6 +293,51 @@ pub async fn report_status(
             op: OP,
             message: "deployment not found".to_owned(),
         })?;
+    let migration = node_deployment_migration::Entity::find()
+        .filter(node_deployment_migration::Column::DeploymentId.eq(deployment_id))
+        .filter(node_deployment_migration::Column::TargetNodeId.eq(node.id))
+        .filter(node_deployment_migration::Column::Status.is_in(shadow_migration_statuses()))
+        .lock_exclusive()
+        .one(&transaction)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    if let Some(migration) = migration.filter(|_| deployment.serve_node_id != Some(node.id)) {
+        let now = time::OffsetDateTime::now_utc();
+        let (status, error, ready_at) = match report.status {
+            ReportedServeStatus::Syncing => (NodeDeploymentMigrationStatus::Syncing, None, None),
+            ReportedServeStatus::Ready => (NodeDeploymentMigrationStatus::Ready, None, Some(now)),
+            ReportedServeStatus::Failed => (
+                NodeDeploymentMigrationStatus::Failed,
+                report.failure_message.or(report.failure_code),
+                None,
+            ),
+        };
+        let mut active: node_deployment_migration::ActiveModel = migration.into();
+        active.status = sea_orm::ActiveValue::Set(status);
+        active.error = sea_orm::ActiveValue::Set(error);
+        active.ready_at = sea_orm::ActiveValue::Set(ready_at);
+        active.updated_at = sea_orm::ActiveValue::Set(now);
+        active
+            .update(&transaction)
+            .await
+            .map_err(|source| AppError::Infrastructure {
+                op: OP,
+                source: source.into(),
+            })?;
+        transaction
+            .commit()
+            .await
+            .map_err(|source| AppError::Infrastructure {
+                op: OP,
+                source: source.into(),
+            })?;
+        return Ok(ok_response(ReportServeStatusResponse {
+            acknowledged: true,
+        }));
+    }
     if deployment.serve_node_id != Some(node.id) {
         return Err(AppError::Forbidden {
             op: OP,
@@ -545,7 +664,30 @@ mod tests {
     };
     use uuid::Uuid;
 
-    use super::{deployments, route_revision, validate_status_report};
+    use crate::infra::database::entity::NodeDeploymentMigrationStatus;
+
+    use super::{
+        deployments, migration_allows_artifact_download, migration_is_shadow_assignment,
+        route_revision, validate_status_report,
+    };
+
+    #[test]
+    fn ready_shadow_assignments_remain_authorized_until_atomic_cutover() {
+        for status in [
+            NodeDeploymentMigrationStatus::Pending,
+            NodeDeploymentMigrationStatus::Syncing,
+            NodeDeploymentMigrationStatus::Ready,
+        ] {
+            assert!(migration_is_shadow_assignment(&status));
+            assert!(migration_allows_artifact_download(&status));
+        }
+        assert!(!migration_is_shadow_assignment(
+            &NodeDeploymentMigrationStatus::Failed
+        ));
+        assert!(!migration_allows_artifact_download(
+            &NodeDeploymentMigrationStatus::Failed
+        ));
+    }
 
     #[test]
     fn legacy_artifact_metadata_uses_unknown_unpacked_size() {

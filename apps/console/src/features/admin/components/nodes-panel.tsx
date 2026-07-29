@@ -11,6 +11,16 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -61,6 +71,8 @@ import {
   type AdminLocalProcessInfo,
   type AdminNode,
   type AdminNodeConfigurationSync,
+  type AdminNodeDeletionJob,
+  type AdminNodeDeletionPlan,
   type NodeConfiguration,
 } from "../admin.api";
 
@@ -100,6 +112,24 @@ function configurationBadge(configuration: AdminNodeConfigurationSync) {
   }
 }
 
+const ACTIVE_DELETION_STATUSES = new Set(["queued", "migrating", "draining", "deleting"]);
+
+function deletionBadge(deletion: AdminNodeDeletionJob) {
+  switch (deletion.status) {
+    case "queued":
+      return <Badge variant="secondary">Queued for deletion</Badge>;
+    case "migrating":
+      return <Badge variant="warning">Migrating services</Badge>;
+    case "draining":
+      return <Badge variant="warning">Draining builds</Badge>;
+    case "deleting":
+      return <Badge variant="destructive">Deleting</Badge>;
+    case "failed":
+      return <Badge variant="destructive">Deletion failed</Badge>;
+    case "completed":
+      return <Badge variant="secondary">Deleted</Badge>;
+  }
+}
 
 function LocalProcessCard({ info }: { info: AdminLocalProcessInfo }) {
   const queryClient = useQueryClient();
@@ -185,11 +215,19 @@ export function NodesPanel() {
   const [revealedToken, setRevealedToken] = useState<{ label: string; token: string } | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [deletingNode, setDeletingNode] = useState<AdminNode | null>(null);
+  const [deletionPlan, setDeletionPlan] = useState<AdminNodeDeletionPlan | null>(null);
+  const [targetNodeId, setTargetNodeId] = useState("");
 
   const nodesQuery = useQuery({
     queryKey: ["admin", "nodes"],
     queryFn: adminApi.listNodes,
-    refetchInterval: 30_000,
+    refetchInterval: (query) =>
+      query.state.data?.nodes.some(
+        (node) => node.deletion && ACTIVE_DELETION_STATUSES.has(node.deletion.status),
+      )
+        ? 2_000
+        : 30_000,
   });
 
   const rotateMutation = useMutation({
@@ -203,8 +241,52 @@ export function NodesPanel() {
       setError(cause instanceof Error ? cause.message : "Unable to rotate the token."),
   });
 
+  const planMutation = useMutation({
+    mutationFn: (node: AdminNode) => adminApi.nodeDeletionPlan(node.id),
+    onSuccess: (plan) => {
+      setError(null);
+      if (plan.requires_target) {
+        setDeletionPlan(plan);
+        setTargetNodeId("");
+        return;
+      }
+      if (deletingNode) {
+        queueMutation.mutate({ node: deletingNode, targetNodeId: null });
+      }
+    },
+    onError: (cause) => {
+      setDeletingNode(null);
+      setError(cause instanceof Error ? cause.message : "Unable to prepare node deletion.");
+    },
+  });
+
+  const queueMutation = useMutation({
+    mutationFn: ({ node, targetNodeId }: { node: AdminNode; targetNodeId: string | null }) =>
+      adminApi.queueNodeDeletion(node.id, { target_node_id: targetNodeId }),
+    onSuccess: () => {
+      setError(null);
+      setDeletingNode(null);
+      setDeletionPlan(null);
+      setTargetNodeId("");
+      queryClient.invalidateQueries({ queryKey: ["admin", "nodes"] });
+    },
+    onError: (cause) => {
+      setDeletionPlan(null);
+      setDeletingNode(null);
+      setTargetNodeId("");
+      setError(cause instanceof Error ? cause.message : "Unable to queue node deletion.");
+    },
+  });
+
+  const closeDeletion = () => {
+    if (planMutation.isPending || queueMutation.isPending) return;
+    setDeletingNode(null);
+    setDeletionPlan(null);
+    setTargetNodeId("");
+  };
+
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
           Nodes build deployments and serve static sites. Heartbeats older than 90 seconds mark a
@@ -287,9 +369,29 @@ export function NodesPanel() {
               {nodesQuery.data.nodes.map((node) => (
                 <TableRow key={node.id}>
                   <TableCell>
-                    <span className="font-medium">{node.name}</span>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <span className="font-medium">{node.name}</span>
+                      {node.deletion && deletionBadge(node.deletion)}
+                    </div>
                     {node.base_url && (
                       <p className="text-xs text-muted-foreground">{node.base_url}</p>
+                    )}
+                    {node.deletion &&
+                      (node.deletion.total_deployments > 0 || node.deletion.active_builds > 0) && (
+                        <p className="text-xs text-muted-foreground">
+                          {node.deletion.total_deployments > 0 &&
+                            `${node.deletion.migrated_deployments}/${node.deletion.total_deployments} services synced`}
+                          {node.deletion.total_deployments > 0 && node.deletion.active_builds > 0
+                            ? " · "
+                            : ""}
+                          {node.deletion.active_builds > 0 &&
+                            `${node.deletion.active_builds} active builds`}
+                        </p>
+                      )}
+                    {node.deletion?.error && (
+                      <p className="max-w-64 truncate text-xs text-destructive">
+                        {node.deletion.error}
+                      </p>
                     )}
                   </TableCell>
                   <TableCell>{healthBadge(node)}</TableCell>
@@ -357,6 +459,41 @@ export function NodesPanel() {
                         </TooltipTrigger>
                         <TooltipContent>Rotate token</TooltipContent>
                       </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            size="icon"
+                            variant="outline"
+                            aria-label={
+                              node.deletion?.status === "failed"
+                                ? `Retry deletion for ${node.name}`
+                                : `Delete ${node.name}`
+                            }
+                            onClick={() => setDeletingNode(node)}
+                            disabled={
+                              planMutation.isPending ||
+                              queueMutation.isPending ||
+                              (node.deletion != null &&
+                                ACTIVE_DELETION_STATUSES.has(node.deletion.status))
+                            }
+                          >
+                            {node.deletion && ACTIVE_DELETION_STATUSES.has(node.deletion.status) ? (
+                              <Spinner />
+                            ) : node.deletion?.status === "failed" ? (
+                              <RotateCcwIcon />
+                            ) : (
+                              <Trash2Icon />
+                            )}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          {node.deletion && ACTIVE_DELETION_STATUSES.has(node.deletion.status)
+                            ? "Deletion in progress"
+                            : node.deletion?.status === "failed"
+                              ? "Retry deletion"
+                              : "Delete node"}
+                        </TooltipContent>
+                      </Tooltip>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -364,6 +501,86 @@ export function NodesPanel() {
             </TableBody>
           </Table>
         ))}
+
+      <AlertDialog
+        open={deletingNode !== null && deletionPlan === null}
+        onOpenChange={(open) => !open && closeDeletion()}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {deletingNode?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The node will stop accepting new work. Serve deployments will be copied to a
+              replacement before traffic moves, and existing builds will finish before deletion.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={planMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={planMutation.isPending}
+              onClick={(event) => {
+                event.preventDefault();
+                if (deletingNode) planMutation.mutate(deletingNode);
+              }}
+            >
+              {planMutation.isPending && <Spinner data-icon="inline-start" />}
+              Delete node
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog open={deletionPlan !== null} onOpenChange={(open) => !open && closeDeletion()}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Move services before deleting</DialogTitle>
+            <DialogDescription>
+              Select one Serve Node with capacity for all {deletionPlan?.assigned_deployments ?? 0}
+              assigned services. Traffic stays on {deletingNode?.name} until every copy is ready.
+            </DialogDescription>
+          </DialogHeader>
+          {deletionPlan?.eligible_targets.length === 0 ? (
+            <p role="alert" className="text-sm text-destructive">
+              No healthy Serve Node has enough capacity for this migration.
+            </p>
+          ) : (
+            <Field>
+              <FieldLabel htmlFor="node-deletion-target">Replacement Serve Node</FieldLabel>
+              <Select value={targetNodeId} onValueChange={setTargetNodeId}>
+                <SelectTrigger id="node-deletion-target" aria-label="Replacement Serve Node">
+                  <SelectValue placeholder="Select a Serve Node" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {deletionPlan?.eligible_targets.map((target) => (
+                      <SelectItem key={target.id} value={target.id}>
+                        {target.name} · {target.available_deployments} deployment slots available
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </Field>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={closeDeletion} disabled={queueMutation.isPending}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={!targetNodeId || queueMutation.isPending}
+              onClick={() =>
+                deletingNode &&
+                queueMutation.mutate({ node: deletingNode, targetNodeId: targetNodeId || null })
+              }
+            >
+              {queueMutation.isPending && <Spinner data-icon="inline-start" />}
+              Queue deletion
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

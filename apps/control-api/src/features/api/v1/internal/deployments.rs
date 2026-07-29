@@ -31,8 +31,9 @@ use crate::{
     },
     infra::{
         database::entity::{
-            AuditEventResult, DeploymentArtifactKind, DeploymentBuildStatus, ProjectRuntime,
-            ReleaseReason, deployment, deployment_artifact, node, team,
+            AuditEventResult, DeploymentArtifactKind, DeploymentBuildStatus, NodeStatus,
+            ProjectRuntime, ReleaseReason, deployment, deployment_artifact, node,
+            node_deployment_migration, team,
         },
         error::{AppError, ok_response},
         http::middlewares::node_auth::AuthenticatedNode,
@@ -84,6 +85,18 @@ async fn build_owned_deployment(
 
 // --- Claim ------------------------------------------------------------------
 
+fn can_claim_new_build(status: &NodeStatus) -> bool {
+    matches!(status, NodeStatus::Active)
+}
+
+fn current_node_for_claim_query(node_id: Uuid) -> sea_orm::Select<node::Entity> {
+    node::Entity::find_by_id(node_id)
+        .filter(node::Column::DeletedAt.is_null())
+        .filter(node::Column::Status.eq(NodeStatus::Active))
+        .filter(node::Column::BuildEnabled.eq(true))
+        .lock_exclusive()
+}
+
 /// POST /api/v1/internal/deployments/claim
 pub async fn claim(
     State(state): State<ControlApiState>,
@@ -102,6 +115,9 @@ pub async fn claim(
     }
 
     if body.capacity == 0 {
+        return Ok(ok_response(ClaimResponse { deployment: None }));
+    }
+    if !can_claim_new_build(&node.status) {
         return Ok(ok_response(ClaimResponse { deployment: None }));
     }
 
@@ -143,6 +159,43 @@ pub async fn claim(
                 return Err(error);
             }
         };
+        let transaction = match db.begin().await {
+            Ok(transaction) => transaction,
+            Err(source) => {
+                quota.release_build_slot(team.id).await;
+                return Err(AppError::Infrastructure {
+                    op: OP,
+                    source: source.into(),
+                });
+            }
+        };
+        let current_node = match current_node_for_claim_query(node.id)
+            .one(&transaction)
+            .await
+        {
+            Ok(current_node) => current_node,
+            Err(source) => {
+                let _ = transaction.rollback().await;
+                quota.release_build_slot(team.id).await;
+                return Err(AppError::Infrastructure {
+                    op: OP,
+                    source: source.into(),
+                });
+            }
+        };
+        if current_node.is_none() {
+            let rollback_result =
+                transaction
+                    .rollback()
+                    .await
+                    .map_err(|source| AppError::Infrastructure {
+                        op: OP,
+                        source: source.into(),
+                    });
+            quota.release_build_slot(team.id).await;
+            rollback_result?;
+            return Ok(ok_response(ClaimResponse { deployment: None }));
+        }
 
         // Optimistic claim: only one node can flip pending → claimed.
         let claim_result = deployment::Entity::update_many()
@@ -160,7 +213,7 @@ pub async fn claim(
             )
             .filter(deployment::Column::Id.eq(candidate.id))
             .filter(deployment::Column::BuildStatus.eq(DeploymentBuildStatus::Pending))
-            .exec(db)
+            .exec(&transaction)
             .await;
         let claim_result = match claim_result {
             Ok(result) => result,
@@ -174,37 +227,32 @@ pub async fn claim(
         };
 
         if claim_result.rows_affected == 0 {
+            let rollback_result =
+                transaction
+                    .rollback()
+                    .await
+                    .map_err(|source| AppError::Infrastructure {
+                        op: OP,
+                        source: source.into(),
+                    });
             quota.release_build_slot(team.id).await;
+            rollback_result?;
             continue;
         }
 
         let source_credential_lease = match candidate.source_credential_version_id {
             Some(version_id) => {
-                match source_credentials::issue_lease(db, node.id, candidate.id, version_id).await {
+                match source_credentials::issue_lease(
+                    &transaction,
+                    node.id,
+                    candidate.id,
+                    version_id,
+                )
+                .await
+                {
                     Ok(lease) => Some(lease),
                     Err(error) => {
-                        let _ = deployment::Entity::update_many()
-                            .col_expr(
-                                deployment::Column::BuildStatus,
-                                sea_orm::ActiveEnum::as_enum(&DeploymentBuildStatus::Pending),
-                            )
-                            .col_expr(
-                                deployment::Column::BuildNodeId,
-                                sea_orm::sea_query::Expr::value(Option::<Uuid>::None),
-                            )
-                            .col_expr(
-                                deployment::Column::ClaimedAt,
-                                sea_orm::sea_query::Expr::value(
-                                    Option::<time::OffsetDateTime>::None,
-                                ),
-                            )
-                            .filter(deployment::Column::Id.eq(candidate.id))
-                            .filter(deployment::Column::BuildNodeId.eq(node.id))
-                            .filter(
-                                deployment::Column::BuildStatus.eq(DeploymentBuildStatus::Claimed),
-                            )
-                            .exec(db)
-                            .await;
+                        let _ = transaction.rollback().await;
                         quota.release_build_slot(team.id).await;
                         return Err(AppError::Infrastructure {
                             op: OP,
@@ -218,7 +266,7 @@ pub async fn claim(
 
         // The claim is committed; a missing timeline event must not fail it.
         if let Err(error) = deployments::append_event(
-            db,
+            &transaction,
             candidate.id,
             crate::infra::database::entity::DeploymentEventKind::Build,
             "build status changed to claimed",
@@ -231,6 +279,13 @@ pub async fn claim(
                 %error,
                 "failed to append claim event"
             );
+        }
+        if let Err(source) = transaction.commit().await {
+            quota.release_build_slot(team.id).await;
+            return Err(AppError::Infrastructure {
+                op: OP,
+                source: source.into(),
+            });
         }
 
         let root_directory = candidate
@@ -680,7 +735,7 @@ async fn finalize_ready(
     } else {
         deployment
     };
-    let policy = deployments::review_policy(&transaction)
+    let policy = deployments::review_policy_for_team(&transaction, deployment.team_id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     let action = deployments::ready_release_action(
@@ -748,7 +803,7 @@ pub(super) async fn auto_activate_if_allowed(
                 crate::features::api::v1::projects::deployments::map_delivery_error(error, OP)
             })?
     } else {
-        let policy = deployments::review_policy(transaction)
+        let policy = deployments::review_policy_for_team(transaction, deployment.team_id)
             .await
             .map_err(|source| AppError::Infrastructure { op: OP, source })?;
         let action = deployments::serve_ready_release_action(
@@ -1213,7 +1268,19 @@ pub async fn download_artifact(
             op: OP,
             message: "deployment not found".to_owned(),
         })?;
-    if deployment.serve_node_id != Some(node.id) {
+    let is_migration_target = node_deployment_migration::Entity::find()
+        .filter(node_deployment_migration::Column::DeploymentId.eq(deployment.id))
+        .filter(node_deployment_migration::Column::TargetNodeId.eq(node.id))
+        .one(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?
+        .is_some_and(|migration| {
+            super::serve::migration_allows_artifact_download(&migration.status)
+        });
+    if deployment.serve_node_id != Some(node.id) && !is_migration_target {
         return Err(AppError::Forbidden {
             op: OP,
             message: "deployment is not assigned to this Serve Node".to_owned(),
@@ -1345,6 +1412,18 @@ mod artifact_tests {
 
 #[cfg(test)]
 mod tests {
+    use grass_cache::{Cache, CacheBackend, CacheStore};
+    use sea_orm::{DbBackend, DbErr, MockDatabase, QueryTrait};
+    use time::OffsetDateTime;
+
+    use crate::infra::{
+        config::ControlApiConfig,
+        database::entity::{
+            DeploymentEnvironment, DeploymentReleaseStatus, DeploymentServeStatus, QuotaPeriod,
+            TeamKind, quota_limit, quota_plan,
+        },
+    };
+
     use super::*;
 
     #[test]
@@ -1355,5 +1434,182 @@ mod tests {
         assert!(!ready_report_needs_build_transition(
             &DeploymentBuildStatus::Ready
         ));
+    }
+
+    #[test]
+    fn draining_nodes_finish_existing_builds_without_claiming_new_ones() {
+        assert!(can_claim_new_build(&NodeStatus::Active));
+        assert!(!can_claim_new_build(&NodeStatus::Draining));
+        assert!(!can_claim_new_build(&NodeStatus::Offline));
+    }
+
+    #[test]
+    fn claim_rechecks_and_locks_the_current_node_row() {
+        let sql = current_node_for_claim_query(Uuid::nil())
+            .build(DbBackend::Postgres)
+            .to_string();
+        assert!(sql.contains("FOR UPDATE"));
+        assert!(sql.contains("deleted_at"));
+        assert!(sql.contains("status"));
+        assert!(sql.contains("build_enabled"));
+    }
+
+    #[tokio::test]
+    async fn claim_releases_the_build_slot_when_the_locked_node_query_fails() {
+        let now = OffsetDateTime::now_utc();
+        let team_id = Uuid::now_v7();
+        let project_id = Uuid::now_v7();
+        let node_id = Uuid::now_v7();
+        let plan_id = Uuid::now_v7();
+        let candidate = deployment::Model {
+            id: Uuid::now_v7(),
+            project_id,
+            team_id,
+            build_node_id: None,
+            serve_node_id: None,
+            environment: DeploymentEnvironment::Preview,
+            runtime_kind: ProjectRuntime::Static,
+            build_status: DeploymentBuildStatus::Pending,
+            serve_status: DeploymentServeStatus::Pending,
+            release_status: DeploymentReleaseStatus::Draft,
+            serve_cpu_millicores: 0,
+            serve_memory_mb: 0,
+            serve_disk_mb: 0,
+            overcommitted: false,
+            source_repository_url: Some("https://example.test/repository.git".to_owned()),
+            source_credential_version_id: None,
+            source_branch: Some("main".to_owned()),
+            commit_hash: None,
+            commit_message: None,
+            triggered_by_user_id: None,
+            install_command: None,
+            build_command: None,
+            output_directory: None,
+            source_metadata: json!({}),
+            preview_host: None,
+            build_stage: None,
+            failure_code: None,
+            failure_message: None,
+            serve_failure_code: None,
+            serve_failure_message: None,
+            pending_release_reason: None,
+            pending_release_actor_user_id: None,
+            pending_release_audit_visibility: None,
+            pending_release_requested_at: None,
+            claimed_at: None,
+            build_started_at: None,
+            build_finished_at: None,
+            serve_started_at: None,
+            serve_finished_at: None,
+            deleted_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let team = team::Model {
+            id: team_id,
+            slug: "claim-slot-release".to_owned(),
+            name: "Claim Slot Release".to_owned(),
+            kind: TeamKind::Team,
+            group_id: None,
+            explicit_quota_plan_id: None,
+            owner_user_id: None,
+            deleted_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let plan = quota_plan::Model {
+            id: plan_id,
+            code: "claim-slot-release".to_owned(),
+            name: "Claim Slot Release".to_owned(),
+            description: None,
+            is_default: true,
+            enabled: true,
+            created_at: now,
+            updated_at: now,
+        };
+        let limits = vec![
+            quota_limit::Model {
+                id: Uuid::now_v7(),
+                quota_plan_id: plan_id,
+                dimension: QuotaDimension::ConcurrentBuilds.as_str().to_owned(),
+                limit_value: 1,
+                period: QuotaPeriod::None,
+                created_at: now,
+                updated_at: now,
+            },
+            quota_limit::Model {
+                id: Uuid::now_v7(),
+                quota_plan_id: plan_id,
+                dimension: QuotaDimension::BuildTimeoutSeconds.as_str().to_owned(),
+                limit_value: 600,
+                period: QuotaPeriod::None,
+                created_at: now,
+                updated_at: now,
+            },
+        ];
+        let database = MockDatabase::new(DbBackend::Postgres)
+            .append_query_results([vec![candidate]])
+            .append_query_results([vec![team]])
+            .append_query_results([vec![plan.clone()]])
+            .append_query_results([limits.clone()])
+            .append_query_results([vec![plan]])
+            .append_query_results([limits])
+            .append_query_errors([DbErr::Custom("locked node query failed".to_owned())])
+            .into_connection();
+        let cache = CacheStore::connect_cache(CacheBackend::Moka, "")
+            .await
+            .unwrap();
+        let state = ControlApiState::new(ControlApiConfig::default(), "unused.toml");
+        state.database.set(database).unwrap();
+        assert!(state.cache.set(cache).is_ok());
+        let authenticated_node = node::Model {
+            id: node_id,
+            name: "build-1".to_owned(),
+            token_hash: "unused".to_owned(),
+            status: NodeStatus::Active,
+            build_enabled: true,
+            serve_enabled: false,
+            build_concurrency: 1,
+            base_url: None,
+            work_root: None,
+            capacity_cpu_millicores: 1_000,
+            capacity_memory_mb: 1_024,
+            capacity_disk_mb: 10_240,
+            max_deployments: 1,
+            metadata: json!({}),
+            last_heartbeat_at: Some(now),
+            desired_config: None,
+            desired_config_revision: 0,
+            effective_config: None,
+            effective_config_revision: 0,
+            config_sync_status: crate::infra::database::entity::NodeConfigSyncStatus::Applied,
+            config_sync_error: None,
+            node_token_configured: true,
+            config_updated_at: None,
+            config_applied_at: None,
+            deleted_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let result = claim(
+            State(state.clone()),
+            Extension(AuthenticatedNode(authenticated_node)),
+            Json(ClaimRequest { capacity: 1 }),
+        )
+        .await;
+
+        assert!(result.is_err());
+        let key = format!("quota:team:{team_id}:concurrent_builds");
+        assert_eq!(
+            state
+                .try_cache()
+                .unwrap()
+                .get(&key)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("0")
+        );
     }
 }

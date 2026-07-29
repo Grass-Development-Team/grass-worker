@@ -335,6 +335,17 @@ pub async fn invitation_team_by_token_hash(
         .map_err(Into::into)
 }
 
+pub async fn invitation_by_token_hash<C: ConnectionTrait>(
+    db: &C,
+    token_hash: &str,
+) -> anyhow::Result<Option<team_invitation::Model>> {
+    team_invitation::Entity::find()
+        .filter(team_invitation::Column::TokenHash.eq(token_hash))
+        .one(db)
+        .await
+        .map_err(Into::into)
+}
+
 pub fn validate_invitation_acceptance(
     status: &TeamInvitationStatus,
     expires_at: OffsetDateTime,
@@ -523,7 +534,6 @@ pub async fn accept_invitation_with_connection<C: ConnectionTrait>(
     let mut active: team_invitation::ActiveModel = invitation.into();
     active.status = Set(TeamInvitationStatus::Accepted);
     active.accepted_at = Set(Some(now));
-    active.token_hash = Set(None);
     active.update(db).await?;
 
     Ok(member)
