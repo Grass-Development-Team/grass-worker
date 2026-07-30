@@ -48,6 +48,13 @@ impl RouteTable {
         self.snapshot.read().await.routes.get(&host).cloned()
     }
 
+    async fn clear(&self) -> bool {
+        let mut snapshot = self.snapshot.write().await;
+        let changed = snapshot.revision.is_some() || !snapshot.routes.is_empty();
+        *snapshot = RouteSnapshot::default();
+        changed
+    }
+
     /// Removes every cached Host route for one deployment. Clearing the
     /// revision forces the next scheduled pull to re-apply the authoritative
     /// snapshot even if an invalidation races with snapshot generation.
@@ -96,7 +103,11 @@ async fn refresh_routes(
     table: &RouteTable,
 ) -> anyhow::Result<bool> {
     let _refresh = table.refresh.lock().await;
-    table.apply(client.route_snapshot().await?).await
+    match client.route_snapshot().await {
+        Ok(snapshot) => table.apply(snapshot).await,
+        Err(crate::client::RouteSnapshotError::AuthorizationRevoked) => Ok(table.clear().await),
+        Err(error) => Err(error.into()),
+    }
 }
 
 pub fn spawn(
@@ -146,7 +157,7 @@ pub fn spawn(
 mod tests {
     use std::{collections::HashSet, sync::Arc};
 
-    use axum::{Router, routing::get};
+    use axum::{Router, http::StatusCode, routing::get};
     use grass_node_protocol::{RouteSnapshotResponse, ServeResources, ServeRoute};
     use uuid::Uuid;
 
@@ -234,6 +245,37 @@ mod tests {
             deployment_id
         );
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn revoked_node_authorization_clears_cached_routes() {
+        for status in [StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN] {
+            let deployment_id = Uuid::now_v7();
+            let table = Arc::new(RouteTable::default());
+            table
+                .apply(RouteSnapshotResponse {
+                    revision: "before-revocation".to_owned(),
+                    routes: vec![route("app.example.com", deployment_id)],
+                })
+                .await
+                .unwrap();
+            let app = Router::new().route(
+                "/api/v1/internal/serve/routes",
+                get(move || async move { status }),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let client =
+                ControlApiClient::new(&format!("http://{address}"), "revoked-token").unwrap();
+
+            let changed = refresh_routes(&client, &table).await.unwrap();
+
+            assert!(changed);
+            assert!(table.lookup("app.example.com").await.is_none());
+            assert_eq!(table.revision().await, None);
+            server.abort();
+        }
     }
 
     #[tokio::test]

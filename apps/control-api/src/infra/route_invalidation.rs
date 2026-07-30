@@ -61,12 +61,28 @@ async fn invalidate_at_urls(
     }
 }
 
+async fn invalidate_best_effort_at_urls(
+    client: &reqwest::Client,
+    base_urls: &[String],
+    gateway_token: &str,
+    deployment_id: Uuid,
+) {
+    if let Err(error) = invalidate_at_urls(client, base_urls, gateway_token, deployment_id).await {
+        tracing::warn!(
+            operation = "routes.invalidate.inactive_nodes_failed",
+            %deployment_id,
+            %error,
+            "failed to invalidate routes on one or more inactive Serve Nodes"
+        );
+    }
+}
+
 pub async fn invalidate_deployment(
     db: &sea_orm::DatabaseConnection,
     secret_key: &str,
     deployment_id: Uuid,
 ) -> anyhow::Result<()> {
-    let base_urls = node::Entity::find()
+    let active_base_urls = node::Entity::find()
         .select_only()
         .column(node::Column::BaseUrl)
         .filter(node::Column::ServeEnabled.eq(true))
@@ -79,16 +95,29 @@ pub async fn invalidate_deployment(
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
-    if base_urls.is_empty() {
-        return Ok(());
-    }
-    invalidate_at_urls(
-        &reqwest::Client::new(),
-        &base_urls,
-        &nodes::gateway_token(secret_key),
-        deployment_id,
-    )
-    .await
+    let inactive_base_urls = node::Entity::find()
+        .select_only()
+        .column(node::Column::BaseUrl)
+        .filter(node::Column::ServeEnabled.eq(true))
+        .filter(node::Column::BaseUrl.is_not_null())
+        .filter(
+            sea_orm::Condition::any()
+                .add(node::Column::Status.eq(NodeStatus::Disabled))
+                .add(node::Column::DeletedAt.is_not_null()),
+        )
+        .into_tuple::<Option<String>>()
+        .all(db)
+        .await?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let client = reqwest::Client::new();
+    let gateway_token = nodes::gateway_token(secret_key);
+    let (_, active_result) = tokio::join!(
+        invalidate_best_effort_at_urls(&client, &inactive_base_urls, &gateway_token, deployment_id,),
+        invalidate_at_urls(&client, &active_base_urls, &gateway_token, deployment_id,),
+    );
+    active_result
 }
 
 #[cfg(test)]
@@ -103,7 +132,7 @@ mod tests {
     use serde_json::Value;
     use uuid::Uuid;
 
-    use super::invalidate_at_urls;
+    use super::{invalidate_at_urls, invalidate_best_effort_at_urls};
 
     #[tokio::test]
     async fn broadcasts_authenticated_route_invalidation_to_serve_nodes() {
@@ -143,5 +172,62 @@ mod tests {
         );
         assert_eq!(received[0].1["deployment_id"], deployment_id.to_string());
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn inactive_node_failures_do_not_block_route_invalidation() {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let deployment_id = Uuid::now_v7();
+        let app = Router::new().route(
+            "/_grass/internal/routes/invalidate",
+            post({
+                let received = received.clone();
+                move |Json(body): Json<Value>| {
+                    let received = received.clone();
+                    async move {
+                        received.lock().unwrap().push(body);
+                        StatusCode::OK
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let unavailable_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let unavailable_address = unavailable_listener.local_addr().unwrap();
+        drop(unavailable_listener);
+
+        invalidate_best_effort_at_urls(
+            &reqwest::Client::new(),
+            &[
+                format!("http://{address}"),
+                format!("http://{unavailable_address}"),
+            ],
+            "derived-gateway-token",
+            deployment_id,
+        )
+        .await;
+
+        assert_eq!(received.lock().unwrap().len(), 1);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn active_node_failures_block_route_invalidation() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+
+        let error = invalidate_at_urls(
+            &reqwest::Client::new(),
+            &[format!("http://{address}")],
+            "derived-gateway-token",
+            Uuid::now_v7(),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("did not acknowledge"));
     }
 }
