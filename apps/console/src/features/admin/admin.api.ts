@@ -559,11 +559,10 @@ export const adminApi = {
 
   listReviews: () => request<{ total: number; reviews: AdminReview[] }>("/api/v1/admin/reviews"),
 
-  approveReview: (deploymentId: string, opts?: { reason?: string; promote?: boolean }) =>
+  approveReview: (deploymentId: string, opts?: { reason?: string }) =>
     request<{
       deployment_id: string;
       release_status: string;
-      promoted: boolean;
       release_pending: boolean;
     }>(`/api/v1/admin/deployments/${deploymentId}/review/approve`, {
       method: "POST",

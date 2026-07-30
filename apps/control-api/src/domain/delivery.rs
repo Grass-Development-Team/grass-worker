@@ -49,6 +49,19 @@ pub enum ReleaseRequestOutcome {
     SyncQueued(deployment::Model),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PublicationRemovalKind {
+    TeamUser,
+    PlatformAdmin,
+}
+
+pub fn publication_removal_target(kind: PublicationRemovalKind) -> DeploymentReleaseStatus {
+    match kind {
+        PublicationRemovalKind::TeamUser => DeploymentReleaseStatus::Approved,
+        PublicationRemovalKind::PlatformAdmin => DeploymentReleaseStatus::Draft,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeliveryCandidate {
     pub id: Uuid,
@@ -115,8 +128,8 @@ pub fn effective_preview_id(candidates: &[DeliveryCandidate]) -> Option<Uuid> {
     candidates
         .iter()
         .filter(|candidate| matches!(candidate.build_status, DeploymentBuildStatus::Ready))
-        .filter(|candidate| matches!(candidate.serve_status, DeploymentServeStatus::Ready))
         .max_by_key(|candidate| (candidate.created_at, candidate.id))
+        .filter(|candidate| matches!(candidate.serve_status, DeploymentServeStatus::Ready))
         .map(|candidate| candidate.id)
 }
 
@@ -179,13 +192,68 @@ pub async fn effective_preview<C: ConnectionTrait>(
         .filter(deployment::Column::ProjectId.eq(project_id))
         .filter(deployment::Column::Environment.eq(environment))
         .filter(deployment::Column::BuildStatus.eq(DeploymentBuildStatus::Ready))
-        .filter(deployment::Column::ServeStatus.eq(DeploymentServeStatus::Ready))
         .filter(deployment::Column::PreviewHost.is_not_null())
         .filter(deployment::Column::DeletedAt.is_null())
         .order_by_desc(deployment::Column::CreatedAt)
         .order_by_desc(deployment::Column::Id)
         .one(db)
         .await
+        .map(|deployment| {
+            deployment.filter(|deployment| {
+                matches!(deployment.serve_status, DeploymentServeStatus::Ready)
+            })
+        })
+}
+
+/// Removes all routes for the current publication while retaining its build,
+/// artifact, log, and review records. This operation never activates an older
+/// deployment.
+pub async fn remove_publication(
+    tx: &DatabaseTransaction,
+    target: deployment::Model,
+    kind: PublicationRemovalKind,
+) -> Result<deployment::Model, DeliveryError> {
+    scheduler::lock_placement(tx).await?;
+    let target = deployments::get_by_id_for_update(tx, target.id)
+        .await?
+        .ok_or_else(|| DeliveryError::Other(anyhow::anyhow!("deployment disappeared")))?;
+    let project_id = target.project_id;
+    let environment = target.environment.clone();
+    let target = deployments::transition_release(
+        tx,
+        target,
+        publication_removal_target(kind),
+        serde_json::json!({
+            "publication_removed_by": match kind {
+                PublicationRemovalKind::TeamUser => "team_user",
+                PublicationRemovalKind::PlatformAdmin => "platform_admin",
+            },
+        }),
+    )
+    .await?;
+    let target = if matches!(target.serve_status, DeploymentServeStatus::Retired) {
+        target
+    } else {
+        deployments::transition_serve(
+            tx,
+            target,
+            deployments::ServeTransition {
+                to: DeploymentServeStatus::Retired,
+                failure_code: None,
+                failure_message: None,
+            },
+        )
+        .await?
+    };
+    let mut active: deployment::ActiveModel = target.into();
+    active.serve_node_id = Set(None);
+    active.pending_release_reason = Set(None);
+    active.pending_release_actor_user_id = Set(None);
+    active.pending_release_audit_visibility = Set(None);
+    active.pending_release_requested_at = Set(None);
+    let removed = active.update(tx).await?;
+    reconcile_environment(tx, project_id, environment).await?;
+    Ok(removed)
 }
 
 /// Reconciles the Serve assignments for one project environment while holding
@@ -433,8 +501,9 @@ mod tests {
     };
 
     use super::{
-        DeliveryCandidate, ReleaseRequestAction, ReleaseRequestOutcome, complete_pending_release,
-        desired_delivery_ids, effective_preview_id, reconcile_environment, release_audit_action,
+        DeliveryCandidate, PublicationRemovalKind, ReleaseRequestAction, ReleaseRequestOutcome,
+        complete_pending_release, desired_delivery_ids, effective_preview_id,
+        publication_removal_target, reconcile_environment, release_audit_action,
         release_request_action, request_release, transition_unsuccessful_build,
     };
 
@@ -872,6 +941,40 @@ mod tests {
     }
 
     #[test]
+    fn withdrawn_newest_preview_never_falls_back_to_an_older_deployment() {
+        let old = candidate(
+            DeploymentEnvironment::Preview,
+            DeploymentBuildStatus::Ready,
+            DeploymentServeStatus::Ready,
+            DeploymentReleaseStatus::Approved,
+            false,
+            1,
+        );
+        let withdrawn = candidate(
+            DeploymentEnvironment::Preview,
+            DeploymentBuildStatus::Ready,
+            DeploymentServeStatus::Retired,
+            DeploymentReleaseStatus::Approved,
+            false,
+            2,
+        );
+
+        assert_eq!(effective_preview_id(&[old, withdrawn]), None);
+    }
+
+    #[test]
+    fn publication_removal_preserves_or_invalidates_review_by_actor() {
+        assert_eq!(
+            publication_removal_target(PublicationRemovalKind::TeamUser),
+            DeploymentReleaseStatus::Approved,
+        );
+        assert_eq!(
+            publication_removal_target(PublicationRemovalKind::PlatformAdmin),
+            DeploymentReleaseStatus::Draft,
+        );
+    }
+
+    #[test]
     fn release_request_queues_targets_that_are_not_currently_served() {
         assert_eq!(
             release_request_action(DeploymentServeStatus::Retired, false),
@@ -1122,10 +1225,7 @@ mod tests {
             },
             Path(target.id),
             Some(Json(
-                crate::features::api::v1::admin::reviews::DecisionRequest {
-                    reason: None,
-                    promote: true,
-                },
+                crate::features::api::v1::admin::reviews::DecisionRequest { reason: None },
             )),
         )
         .await;

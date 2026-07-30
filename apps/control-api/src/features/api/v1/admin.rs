@@ -1,4 +1,5 @@
 pub mod audit_events;
+pub mod deployments;
 pub mod host_sources;
 pub mod nodes;
 pub mod projects;
@@ -69,6 +70,10 @@ pub fn router() -> Router<ControlApiState> {
             post(projects::unarchive),
         )
         .route("/projects/{project_id}/delete", post(projects::remove))
+        .route(
+            "/deployments/{deployment_id}/withdraw",
+            post(deployments::withdraw),
+        )
         .route("/reviews", get(reviews::list))
         .route(
             "/deployments/{deployment_id}/review/approve",

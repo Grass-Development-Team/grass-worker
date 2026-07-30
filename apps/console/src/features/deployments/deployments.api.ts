@@ -163,6 +163,12 @@ export const deploymentsApi = {
       { method: "POST" },
     ),
 
+  unpublish: (projectId: string, deploymentId: string) =>
+    request<{ deployment: Deployment }>(
+      `/api/v1/projects/${projectId}/deployments/${deploymentId}/unpublish`,
+      { method: "POST" },
+    ),
+
   retry: (projectId: string, deploymentId: string) =>
     request<{ deployment: Deployment }>(
       `/api/v1/projects/${projectId}/deployments/${deploymentId}/retry`,

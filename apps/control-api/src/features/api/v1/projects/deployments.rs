@@ -129,19 +129,28 @@ impl UrlContext {
                     .map(|host| format!("{}://{}", self.public_scheme, host))
             })
             .flatten();
-        let production_url = matches!(deployment.release_status, DeploymentReleaseStatus::Active)
-            .then(|| {
-                self.production_host
-                    .as_ref()
-                    .map(|host| format!("{}://{}", self.public_scheme, host))
-            })
-            .flatten();
+        let production_url =
+            production_url_is_available(&deployment.environment, &deployment.release_status)
+                .then(|| {
+                    self.production_host
+                        .as_ref()
+                        .map(|host| format!("{}://{}", self.public_scheme, host))
+                })
+                .flatten();
 
         json!({
             "preview_url": preview_url,
             "production_url": production_url,
         })
     }
+}
+
+fn production_url_is_available(
+    environment: &DeploymentEnvironment,
+    release_status: &DeploymentReleaseStatus,
+) -> bool {
+    matches!(environment, DeploymentEnvironment::Production)
+        && matches!(release_status, DeploymentReleaseStatus::Active)
 }
 
 pub(crate) fn deployment_view(
@@ -1047,6 +1056,83 @@ pub async fn cancel(
     })))
 }
 
+/// POST /api/v1/projects/{project_id}/deployments/{deployment_id}/unpublish
+pub async fn unpublish(
+    State(state): State<ControlApiState>,
+    session: Session,
+    Path((project_id, deployment_id)): Path<(Uuid, Uuid)>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "deployments.unpublish";
+    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    access.require_admin(OP)?;
+    let db = super::database(&state, OP)?;
+    let transaction = db
+        .begin()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let deployment = deployments::get_by_id_for_update(&transaction, deployment_id)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?
+        .filter(|deployment| deployment.project_id == access.project.id)
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "deployment not found".to_owned(),
+        })?;
+    let deployment = delivery::remove_publication(
+        &transaction,
+        deployment,
+        delivery::PublicationRemovalKind::TeamUser,
+    )
+    .await
+    .map_err(|error| map_delivery_error(error, OP))?;
+    audits::create_audit_event(
+        &transaction,
+        CreateAuditEventParams {
+            actor_user_id: Some(session.data.user_id),
+            actor_node_id: None,
+            team_id: Some(access.team.id),
+            action: "deployment.unpublished".to_owned(),
+            target_type: "deployment".to_owned(),
+            target_id: Some(deployment.id),
+            result: AuditEventResult::Success,
+            reason: None,
+            metadata: json!({ "project_id": project_id }),
+        },
+    )
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+
+    let urls = UrlContext::load(db, access.project.id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let nodes = load_nodes(db, std::slice::from_ref(&deployment))
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let preview_ids = effective_preview_ids(db, access.project.id, OP).await?;
+    Ok(ok_response(json!({
+        "deployment": deployment_view(
+            &deployment,
+            &urls,
+            &preview_ids,
+            &HashMap::new(),
+            &nodes,
+        ),
+    })))
+}
+
 /// POST /api/v1/projects/{project_id}/deployments/{deployment_id}/retry
 pub async fn retry(
     State(state): State<ControlApiState>,
@@ -1372,6 +1458,22 @@ mod tests {
         ));
         assert!(environment_gets_preview_host(
             &DeploymentEnvironment::Production
+        ));
+    }
+
+    #[test]
+    fn production_urls_are_only_exposed_for_active_production_deployments() {
+        assert!(production_url_is_available(
+            &DeploymentEnvironment::Production,
+            &DeploymentReleaseStatus::Active,
+        ));
+        assert!(!production_url_is_available(
+            &DeploymentEnvironment::Preview,
+            &DeploymentReleaseStatus::Active,
+        ));
+        assert!(!production_url_is_available(
+            &DeploymentEnvironment::Production,
+            &DeploymentReleaseStatus::Approved,
         ));
     }
 

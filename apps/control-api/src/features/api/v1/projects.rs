@@ -101,6 +101,10 @@ pub fn router() -> Router<ControlApiState> {
             post(deployments::cancel),
         )
         .route(
+            "/projects/{project_id}/deployments/{deployment_id}/unpublish",
+            post(deployments::unpublish),
+        )
+        .route(
             "/projects/{project_id}/deployments/{deployment_id}/retry",
             post(deployments::retry),
         )
