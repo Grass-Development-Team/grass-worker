@@ -10,11 +10,11 @@ use uuid::Uuid;
 
 use crate::infra::http::timestamps::ts;
 use crate::{
-    domain::hosts,
+    domain::hosts::{self, DomainReviewMode},
     infra::{
         database::entity::{
-            HostBindingEnvironment, HostBindingKind, HostBindingStatus, host_policy,
-            project_host_binding,
+            HostBindingEnvironment, HostBindingKind, HostBindingStatus, HostReviewStatus,
+            host_policy, project_host_binding,
         },
         error::{AppError, ok_response},
         host_provision::service::{BindHostRequest, HostBindingService},
@@ -41,8 +41,21 @@ fn binding_view(binding: &project_host_binding::Model) -> serde_json::Value {
         "failure_reason": binding.failure_reason,
         "is_primary": binding.is_primary,
         "host_source_id": binding.host_source_id,
+        "review_status": review_status_value(&binding.review_status),
+        "reviewed_by_user_id": binding.reviewed_by_user_id,
+        "reviewed_at": binding.reviewed_at.map(ts),
+        "review_reason": binding.review_reason,
         "created_at": ts(binding.created_at),
     })
+}
+
+fn review_status_value(status: &HostReviewStatus) -> &'static str {
+    match status {
+        HostReviewStatus::NotRequired => "not_required",
+        HostReviewStatus::Pending => "pending",
+        HostReviewStatus::Approved => "approved",
+        HostReviewStatus::Rejected => "rejected",
+    }
 }
 
 fn status_value(status: &HostBindingStatus) -> &'static str {
@@ -190,6 +203,17 @@ pub async fn create(
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     let is_primary = existing.is_empty();
+    let review_status = if source.is_some() {
+        HostReviewStatus::NotRequired
+    } else {
+        match hosts::domain_review_policy_for_team(db, access.team.id)
+            .await
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        {
+            DomainReviewMode::Auto => HostReviewStatus::Approved,
+            DomainReviewMode::Manual => HostReviewStatus::Pending,
+        }
+    };
 
     let service = HostBindingService::new(db, cache);
     let binding = service
@@ -207,6 +231,7 @@ pub async fn create(
                 },
                 environment,
                 is_primary,
+                review_status,
                 actor_user_id: Some(session.data.user_id),
             },
         )
@@ -399,4 +424,43 @@ async fn load_binding(
         });
     }
     Ok(binding)
+}
+
+#[cfg(test)]
+mod tests {
+    use time::OffsetDateTime;
+
+    use super::*;
+
+    #[test]
+    fn host_view_exposes_review_state_separately_from_provisioning() {
+        let reviewer_id = Uuid::now_v7();
+        let binding = project_host_binding::Model {
+            id: Uuid::now_v7(),
+            project_id: Uuid::now_v7(),
+            team_id: Uuid::now_v7(),
+            host_source_id: None,
+            host: "manual.example.test".to_owned(),
+            kind: HostBindingKind::Custom,
+            environment: HostBindingEnvironment::Production,
+            status: HostBindingStatus::Pending,
+            failure_reason: None,
+            is_primary: false,
+            review_status: HostReviewStatus::Rejected,
+            reviewed_by_user_id: Some(reviewer_id),
+            reviewed_at: Some(OffsetDateTime::UNIX_EPOCH),
+            review_reason: Some("Ownership could not be verified".to_owned()),
+            deleted_at: None,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+        };
+
+        let view = binding_view(&binding);
+
+        assert_eq!(view["status"], "pending");
+        assert_eq!(view["review_status"], "rejected");
+        assert_eq!(view["reviewed_by_user_id"], reviewer_id.to_string());
+        assert!(view["reviewed_at"].is_string());
+        assert_eq!(view["review_reason"], "Ownership could not be verified");
+    }
 }

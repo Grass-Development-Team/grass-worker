@@ -235,6 +235,7 @@ export interface AdminTeamGroup {
   review_policy: {
     production: "auto" | "manual" | null;
     preview: "auto" | "manual" | null;
+    domain: "auto" | "manual" | null;
   };
   is_default: boolean;
   team_count?: number;
@@ -298,6 +299,7 @@ export interface AdminSettings {
   storage: { root: string };
   signup: { policy: "open" | "invite_only" | "closed" };
   review: { production: "auto" | "manual"; preview: "auto" | "manual" };
+  domain_review: { default: "auto" | "manual" };
   server: { host: string; port: number };
   database: { url_configured: boolean };
   redis: { backend: "moka" | "redis"; url_configured: boolean };
@@ -505,6 +507,7 @@ export const adminApi = {
     review_policy?: {
       production: "auto" | "manual" | null;
       preview: "auto" | "manual" | null;
+      domain: "auto" | "manual" | null;
     };
   }) =>
     request<{ group: AdminTeamGroup }>("/api/v1/admin/team-groups", {
@@ -521,6 +524,7 @@ export const adminApi = {
       review_policy?: {
         production: "auto" | "manual" | null;
         preview: "auto" | "manual" | null;
+        domain: "auto" | "manual" | null;
       };
       is_default?: boolean;
     },
@@ -585,6 +589,7 @@ export const adminApi = {
     signup_policy?: "open" | "invite_only" | "closed";
     review_production?: "auto" | "manual";
     review_preview?: "auto" | "manual";
+    domain_review_default?: "auto" | "manual";
     server_host?: string;
     server_port?: number;
     redis_backend?: "moka" | "redis";

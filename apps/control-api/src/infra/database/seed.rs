@@ -293,6 +293,11 @@ fn default_system_settings() -> Vec<SystemSettingSeed> {
             }),
         },
         SystemSettingSeed {
+            key: "domain_review_policy.default",
+            value_kind: SystemSettingValueKind::Json,
+            value_json: json!("auto"),
+        },
+        SystemSettingSeed {
             key: "team_roles.default",
             value_kind: SystemSettingValueKind::Json,
             value_json: json!(["owner", "admin", "member", "viewer"]),

@@ -244,6 +244,12 @@ editing a source only overwrites the fields you fill in.
 A **Manual** source assigns domains without touching DNS; bindings stay
 `pending` until an operator creates the record and re-runs provisioning.
 
+Custom domains use the Domain Review Policy configured under Administration
+settings. The platform default is `auto`; a Team Group can override it with
+`auto`, `manual`, or inherit the platform default. Manual review keeps a new
+custom binding unavailable until an administrator approves it. Domains
+assigned from a platform Host Source do not require domain review.
+
 New projects automatically receive `slug.apps.example.com`; preview
 deployments receive unique `slug-xxxxxxxx.apps.example.com` hosts.
 

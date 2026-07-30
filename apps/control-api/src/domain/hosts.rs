@@ -9,7 +9,8 @@ use uuid::Uuid;
 
 use crate::infra::database::entity::{
     HostBindingEnvironment, HostBindingKind, HostBindingStatus, HostProvisionEventStatus,
-    HostSourceKind, host_policy, host_provision_event, host_source, project_host_binding,
+    HostReviewStatus, HostSourceKind, host_policy, host_provision_event, host_source,
+    project_host_binding, team, team_group,
 };
 
 // --- Host sources -----------------------------------------------------------
@@ -181,6 +182,68 @@ pub enum AutoAssignSelection<'a> {
     NoDefault,
 }
 
+// --- Domain review policy --------------------------------------------------
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DomainReviewMode {
+    Manual,
+    #[default]
+    Auto,
+}
+
+fn parse_domain_review_mode(
+    value: Option<&serde_json::Value>,
+    default: DomainReviewMode,
+) -> DomainReviewMode {
+    match value.and_then(serde_json::Value::as_str) {
+        Some("manual") => DomainReviewMode::Manual,
+        Some("auto") => DomainReviewMode::Auto,
+        _ => default,
+    }
+}
+
+fn apply_domain_review_policy_override(
+    default: DomainReviewMode,
+    policy: Option<&serde_json::Value>,
+) -> DomainReviewMode {
+    parse_domain_review_mode(policy.and_then(|value| value.get("domain")), default)
+}
+
+pub async fn domain_review_policy<C: ConnectionTrait>(db: &C) -> anyhow::Result<DomainReviewMode> {
+    let default = DomainReviewMode::default();
+    let setting = crate::domain::settings::get_setting(db, "domain_review_policy.default").await?;
+    Ok(parse_domain_review_mode(
+        setting.as_ref().map(|setting| &setting.value),
+        default,
+    ))
+}
+
+/// Resolves custom-domain review as Team Group override > platform default.
+pub async fn domain_review_policy_for_team<C: ConnectionTrait>(
+    db: &C,
+    team_id: Uuid,
+) -> anyhow::Result<DomainReviewMode> {
+    let default = domain_review_policy(db).await?;
+    let team = team::Entity::find_by_id(team_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("team not found while resolving domain review policy"))?;
+    let Some(group_id) = team.group_id else {
+        return Ok(default);
+    };
+    let group = team_group::Entity::find_by_id(group_id)
+        .filter(team_group::Column::DeletedAt.is_null())
+        .one(db)
+        .await?;
+
+    Ok(apply_domain_review_policy_override(
+        default,
+        group
+            .as_ref()
+            .and_then(|group| group.review_policy.as_ref()),
+    ))
+}
+
 // --- Host bindings ----------------------------------------------------------
 
 pub struct CreateBindingParams {
@@ -193,6 +256,7 @@ pub struct CreateBindingParams {
     pub status: HostBindingStatus,
     pub failure_reason: Option<String>,
     pub is_primary: bool,
+    pub review_status: HostReviewStatus,
 }
 
 pub async fn list_bindings_for_project<C: ConnectionTrait>(
@@ -248,6 +312,10 @@ pub async fn create_binding<C: ConnectionTrait>(
         status: Set(params.status),
         failure_reason: Set(params.failure_reason),
         is_primary: Set(params.is_primary),
+        review_status: Set(params.review_status),
+        reviewed_by_user_id: Set(None),
+        reviewed_at: Set(None),
+        review_reason: Set(None),
         deleted_at: Set(None),
         created_at: Set(now),
         updated_at: Set(now),
@@ -511,5 +579,75 @@ mod tests {
         let first = preview_host_for("my-app", Uuid::now_v7(), "grass.test");
         let second = preview_host_for("my-app", Uuid::now_v7(), "grass.test");
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn domain_review_policy_defaults_to_auto_and_accepts_a_team_group_override() {
+        assert_eq!(DomainReviewMode::default(), DomainReviewMode::Auto);
+        assert_eq!(
+            apply_domain_review_policy_override(
+                DomainReviewMode::Auto,
+                Some(&serde_json::json!({ "domain": "manual" })),
+            ),
+            DomainReviewMode::Manual
+        );
+        assert_eq!(
+            apply_domain_review_policy_override(
+                DomainReviewMode::Manual,
+                Some(&serde_json::json!({ "production": "auto" })),
+            ),
+            DomainReviewMode::Manual
+        );
+    }
+
+    #[tokio::test]
+    async fn domain_review_policy_resolves_team_group_before_platform_default() {
+        use crate::infra::database::entity::{
+            SystemSettingValueKind, TeamKind, system_setting, team, team_group,
+        };
+
+        let group_id = Uuid::now_v7();
+        let team_id = Uuid::now_v7();
+        let now = OffsetDateTime::UNIX_EPOCH;
+        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([vec![system_setting::Model {
+                id: Uuid::now_v7(),
+                key: "domain_review_policy.default".to_owned(),
+                value_kind: SystemSettingValueKind::String,
+                value: serde_json::json!("manual"),
+                is_secret: false,
+                created_at: now,
+                updated_at: now,
+            }]])
+            .append_query_results([vec![team::Model {
+                id: team_id,
+                slug: "domain-review".to_owned(),
+                name: "Domain Review".to_owned(),
+                kind: TeamKind::Team,
+                group_id: Some(group_id),
+                explicit_quota_plan_id: None,
+                owner_user_id: None,
+                deleted_at: None,
+                created_at: now,
+                updated_at: now,
+            }]])
+            .append_query_results([vec![team_group::Model {
+                id: group_id,
+                code: "domain-review".to_owned(),
+                name: "Domain Review".to_owned(),
+                description: None,
+                quota_plan_id: None,
+                review_policy: Some(serde_json::json!({ "domain": "auto" })),
+                is_default: false,
+                deleted_at: None,
+                created_at: now,
+                updated_at: now,
+            }]])
+            .into_connection();
+
+        assert_eq!(
+            domain_review_policy_for_team(&db, team_id).await.unwrap(),
+            DomainReviewMode::Auto
+        );
     }
 }

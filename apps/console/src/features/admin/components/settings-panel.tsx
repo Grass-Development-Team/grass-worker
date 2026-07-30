@@ -125,6 +125,7 @@ function SettingsForm({ initial }: { initial: AdminSettings }) {
   const [signupPolicy, setSignupPolicy] = useState(initial.signup.policy);
   const [reviewProduction, setReviewProduction] = useState(initial.review.production);
   const [reviewPreview, setReviewPreview] = useState(initial.review.preview);
+  const [domainReview, setDomainReview] = useState(initial.domain_review.default);
   const [serverHost, setServerHost] = useState(initial.server.host);
   const [serverPort, setServerPort] = useState(initial.server.port);
   const [redisBackend, setRedisBackend] = useState(initial.redis.backend);
@@ -520,13 +521,14 @@ function SettingsForm({ initial }: { initial: AdminSettings }) {
             signup_policy: signupPolicy,
             review_production: reviewProduction,
             review_preview: reviewPreview,
+            domain_review_default: domainReview,
           });
         }}
       >
         <SettingsCard
           title="Policies"
-          description="Signup and release review defaults."
-          hint="Release review changes apply to new deployments."
+          description="Signup, release review, and custom domain review defaults."
+          hint="Review policy changes apply to new deployments and custom domains."
           action={<SaveAction pending={policies.mutation.isPending} saved={policies.saved} />}
         >
           <FieldGroup>
@@ -549,7 +551,7 @@ function SettingsForm({ initial }: { initial: AdminSettings }) {
                 </SelectContent>
               </Select>
             </Field>
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <Field>
                 <FieldLabel htmlFor="settings-review-production">Production review</FieldLabel>
                 <Select
@@ -582,6 +584,24 @@ function SettingsForm({ initial }: { initial: AdminSettings }) {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="auto">Auto — activates when ready</SelectItem>
+                    <SelectItem value="manual">Manual — requires approval</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="settings-review-domain">Custom domain review</FieldLabel>
+                <Select
+                  value={domainReview}
+                  onValueChange={(value) => {
+                    setDomainReview(value as typeof domainReview);
+                    policies.setSaved(false);
+                  }}
+                >
+                  <SelectTrigger id="settings-review-domain">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="auto">Auto — approve new custom domains</SelectItem>
                     <SelectItem value="manual">Manual — requires approval</SelectItem>
                   </SelectContent>
                 </Select>

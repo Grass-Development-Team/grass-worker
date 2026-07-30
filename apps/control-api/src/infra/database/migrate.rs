@@ -24,6 +24,7 @@ impl MigratorTrait for Migrator {
             Box::new(migration::m20260729_000013_team_group_review_policy::Migration),
             Box::new(migration::m20260729_000014_node_config_sync::Migration),
             Box::new(migration::m20260729_000015_node_deletion_queue::Migration),
+            Box::new(migration::m20260730_000016_domain_review_policy::Migration),
         ]
     }
 }
@@ -100,7 +101,7 @@ mod tests {
     fn registers_audit_foundation_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 15);
+        assert_eq!(migrations.len(), 16);
         assert_eq!(
             migrations.get(11).expect("twelfth migration").name(),
             "m20260729_000012_audit_foundation"
@@ -129,7 +130,7 @@ mod tests {
     fn registers_team_group_review_policy_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 15);
+        assert_eq!(migrations.len(), 16);
         assert_eq!(
             migrations.get(12).expect("thirteenth migration").name(),
             "m20260729_000013_team_group_review_policy"
@@ -140,7 +141,7 @@ mod tests {
     fn registers_node_config_sync_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 15);
+        assert_eq!(migrations.len(), 16);
         assert_eq!(
             migrations.get(13).expect("fourteenth migration").name(),
             "m20260729_000014_node_config_sync"
@@ -151,10 +152,25 @@ mod tests {
     fn registers_node_deletion_queue_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 15);
+        assert_eq!(migrations.len(), 16);
+        assert_eq!(
+            migrations.get(14).expect("fifteenth migration").name(),
+            "m20260729_000015_node_deletion_queue"
+        );
+    }
+
+    #[test]
+    fn registers_domain_review_policy_after_node_deletion_queue() {
+        let migrations = Migrator::migrations();
+
+        assert_eq!(migrations.len(), 16);
+        assert_eq!(
+            migrations.get(14).expect("fifteenth migration").name(),
+            "m20260729_000015_node_deletion_queue"
+        );
         assert_eq!(
             migrations.last().expect("last migration").name(),
-            "m20260729_000015_node_deletion_queue"
+            "m20260730_000016_domain_review_policy"
         );
     }
 

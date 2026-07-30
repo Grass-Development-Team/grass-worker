@@ -1,6 +1,6 @@
 use sea_orm::entity::prelude::*;
 
-use super::enums::{HostBindingEnvironment, HostBindingKind, HostBindingStatus};
+use super::enums::{HostBindingEnvironment, HostBindingKind, HostBindingStatus, HostReviewStatus};
 
 #[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
@@ -17,6 +17,10 @@ pub struct Model {
     pub status: HostBindingStatus,
     pub failure_reason: Option<String>,
     pub is_primary: bool,
+    pub review_status: HostReviewStatus,
+    pub reviewed_by_user_id: Option<Uuid>,
+    pub reviewed_at: Option<TimeDateTimeWithTimeZone>,
+    pub review_reason: Option<String>,
     pub deleted_at: Option<TimeDateTimeWithTimeZone>,
     pub created_at: TimeDateTimeWithTimeZone,
     pub updated_at: TimeDateTimeWithTimeZone,
@@ -49,6 +53,14 @@ pub enum Relation {
         on_delete = "SetNull"
     )]
     HostSource,
+    #[sea_orm(
+        belongs_to = "super::user::Entity",
+        from = "Column::ReviewedByUserId",
+        to = "super::user::Column::Id",
+        on_update = "NoAction",
+        on_delete = "SetNull"
+    )]
+    Reviewer,
 }
 impl Related<super::project::Entity> for Entity {
     fn to() -> RelationDef {
@@ -63,6 +75,11 @@ impl Related<super::team::Entity> for Entity {
 impl Related<super::host_source::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::HostSource.def()
+    }
+}
+impl Related<super::user::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Reviewer.def()
     }
 }
 impl ActiveModelBehavior for ActiveModel {}

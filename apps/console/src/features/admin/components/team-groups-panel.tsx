@@ -40,7 +40,7 @@ const reviewModeLabel = (mode: "auto" | "manual" | null) =>
   mode ? `${mode.charAt(0).toUpperCase()}${mode.slice(1)}` : "Inherit";
 
 const reviewPolicyLabel = (group: AdminTeamGroup) =>
-  `Production ${reviewModeLabel(group.review_policy.production)} · Preview ${reviewModeLabel(group.review_policy.preview)}`;
+  `Production ${reviewModeLabel(group.review_policy.production)} · Preview ${reviewModeLabel(group.review_policy.preview)} · Domain ${reviewModeLabel(group.review_policy.domain)}`;
 
 export function TeamGroupsPanel() {
   const queryClient = useQueryClient();
@@ -209,6 +209,7 @@ function GroupFormDialog({
   const [reviewPreview, setReviewPreview] = useState(
     group?.review_policy.preview ?? INHERIT_REVIEW,
   );
+  const [reviewDomain, setReviewDomain] = useState(group?.review_policy.domain ?? INHERIT_REVIEW);
 
   const plansQuery = useQuery({
     queryKey: ["admin", "quota-plans"],
@@ -225,6 +226,7 @@ function GroupFormDialog({
             review_policy: {
               production: reviewProduction === INHERIT_REVIEW ? null : reviewProduction,
               preview: reviewPreview === INHERIT_REVIEW ? null : reviewPreview,
+              domain: reviewDomain === INHERIT_REVIEW ? null : reviewDomain,
             },
           })
         : adminApi.createTeamGroup({
@@ -235,6 +237,7 @@ function GroupFormDialog({
             review_policy: {
               production: reviewProduction === INHERIT_REVIEW ? null : reviewProduction,
               preview: reviewPreview === INHERIT_REVIEW ? null : reviewPreview,
+              domain: reviewDomain === INHERIT_REVIEW ? null : reviewDomain,
             },
           }),
     onSuccess: onSaved,
@@ -304,6 +307,19 @@ function GroupFormDialog({
               <FieldLabel htmlFor="group-review-preview">Preview review</FieldLabel>
               <Select value={reviewPreview} onValueChange={setReviewPreview}>
                 <SelectTrigger id="group-review-preview" aria-label="Preview review">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={INHERIT_REVIEW}>Inherit</SelectItem>
+                  <SelectItem value="auto">Auto</SelectItem>
+                  <SelectItem value="manual">Manual</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="group-review-domain">Domain review</FieldLabel>
+              <Select value={reviewDomain} onValueChange={setReviewDomain}>
+                <SelectTrigger id="group-review-domain" aria-label="Domain review">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
