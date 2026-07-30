@@ -35,6 +35,7 @@ use crate::{
         error::{AppError, accepted_response, ok_response},
         http::extractors::Session,
         quota::{QuotaCharge, QuotaService},
+        route_invalidation,
     },
     state::ControlApiState,
 };
@@ -1114,6 +1115,10 @@ pub async fn unpublish(
             op: OP,
             source: source.into(),
         })?;
+    let secret_key = state.config.read().unwrap().secrets.secret_key.clone();
+    route_invalidation::invalidate_deployment(db, &secret_key, deployment.id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
     let urls = UrlContext::load(db, access.project.id)
         .await

@@ -1,4 +1,5 @@
 use grass_node_protocol::NodeResources;
+use ring::hmac;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
     EntityTrait, QueryFilter, QuerySelect,
@@ -8,6 +9,11 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::infra::database::entity::{NodeConfigSyncStatus, NodeStatus, node};
+
+pub fn gateway_token(secret: &str) -> String {
+    let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes());
+    hex::encode(hmac::sign(&key, b"grass-node-gateway-v1").as_ref())
+}
 
 pub struct CreateNodeParams {
     pub name: String,

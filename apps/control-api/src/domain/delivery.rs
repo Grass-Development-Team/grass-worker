@@ -62,6 +62,15 @@ pub fn publication_removal_target(kind: PublicationRemovalKind) -> DeploymentRel
     }
 }
 
+fn publication_removal_is_complete(
+    release_status: &DeploymentReleaseStatus,
+    serve_status: &DeploymentServeStatus,
+    kind: PublicationRemovalKind,
+) -> bool {
+    release_status == &publication_removal_target(kind)
+        && matches!(serve_status, DeploymentServeStatus::Retired)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeliveryCandidate {
     pub id: Uuid,
@@ -217,6 +226,9 @@ pub async fn remove_publication(
     let target = deployments::get_by_id_for_update(tx, target.id)
         .await?
         .ok_or_else(|| DeliveryError::Other(anyhow::anyhow!("deployment disappeared")))?;
+    if publication_removal_is_complete(&target.release_status, &target.serve_status, kind) {
+        return Ok(target);
+    }
     let project_id = target.project_id;
     let environment = target.environment.clone();
     let target = deployments::transition_release(
@@ -503,8 +515,9 @@ mod tests {
     use super::{
         DeliveryCandidate, PublicationRemovalKind, ReleaseRequestAction, ReleaseRequestOutcome,
         complete_pending_release, desired_delivery_ids, effective_preview_id,
-        publication_removal_target, reconcile_environment, release_audit_action,
-        release_request_action, request_release, transition_unsuccessful_build,
+        publication_removal_is_complete, publication_removal_target, reconcile_environment,
+        release_audit_action, release_request_action, request_release,
+        transition_unsuccessful_build,
     };
 
     static MIGRATION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -972,6 +985,25 @@ mod tests {
             publication_removal_target(PublicationRemovalKind::PlatformAdmin),
             DeploymentReleaseStatus::Draft,
         );
+    }
+
+    #[test]
+    fn completed_publication_removal_is_idempotent_for_route_sync_retries() {
+        assert!(publication_removal_is_complete(
+            &DeploymentReleaseStatus::Approved,
+            &DeploymentServeStatus::Retired,
+            PublicationRemovalKind::TeamUser,
+        ));
+        assert!(publication_removal_is_complete(
+            &DeploymentReleaseStatus::Draft,
+            &DeploymentServeStatus::Retired,
+            PublicationRemovalKind::PlatformAdmin,
+        ));
+        assert!(!publication_removal_is_complete(
+            &DeploymentReleaseStatus::Active,
+            &DeploymentServeStatus::Ready,
+            PublicationRemovalKind::TeamUser,
+        ));
     }
 
     #[test]

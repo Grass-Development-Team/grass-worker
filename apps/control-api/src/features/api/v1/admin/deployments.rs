@@ -18,6 +18,7 @@ use crate::{
         database::entity::{AuditEventResult, deployment},
         error::{AppError, ok_response},
         http::extractors::Session,
+        route_invalidation,
     },
     state::ControlApiState,
 };
@@ -100,6 +101,10 @@ pub async fn withdraw(
             op: OP,
             source: source.into(),
         })?;
+    let secret_key = state.config.read().unwrap().secrets.secret_key.clone();
+    route_invalidation::invalidate_deployment(db, &secret_key, deployment.id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
     Ok(ok_response(json!({
         "deployment": deployment_view(&deployment),

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use grass_node_protocol::{RouteSnapshotResponse, ServeRoute};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 const ROUTE_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -15,6 +15,7 @@ struct RouteSnapshot {
 
 #[derive(Default)]
 pub struct RouteTable {
+    refresh: Mutex<()>,
     snapshot: RwLock<RouteSnapshot>,
 }
 
@@ -47,6 +48,23 @@ impl RouteTable {
         self.snapshot.read().await.routes.get(&host).cloned()
     }
 
+    /// Removes every cached Host route for one deployment. Clearing the
+    /// revision forces the next scheduled pull to re-apply the authoritative
+    /// snapshot even if an invalidation races with snapshot generation.
+    pub async fn remove_deployment(&self, deployment_id: uuid::Uuid) -> bool {
+        let _refresh = self.refresh.lock().await;
+        let mut snapshot = self.snapshot.write().await;
+        let previous_len = snapshot.routes.len();
+        snapshot
+            .routes
+            .retain(|_, route| route.deployment_id != deployment_id);
+        let changed = snapshot.routes.len() != previous_len;
+        if changed {
+            snapshot.revision = None;
+        }
+        changed
+    }
+
     pub async fn revision(&self) -> Option<String> {
         self.snapshot.read().await.revision.clone()
     }
@@ -77,6 +95,7 @@ async fn refresh_routes(
     client: &crate::client::ControlApiClient,
     table: &RouteTable,
 ) -> anyhow::Result<bool> {
+    let _refresh = table.refresh.lock().await;
     table.apply(client.route_snapshot().await?).await
 }
 
@@ -252,5 +271,66 @@ mod tests {
             .unwrap();
 
         assert!(table.local_deployment_ids(local_node).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn invalidated_deployment_cannot_be_readded_by_an_in_flight_stale_snapshot() {
+        let table = Arc::new(RouteTable::default());
+        let deployment_id = Uuid::now_v7();
+        table
+            .apply(RouteSnapshotResponse {
+                revision: "before-withdrawal".to_owned(),
+                routes: vec![route("app.example.com", deployment_id)],
+            })
+            .await
+            .unwrap();
+
+        let request_started = Arc::new(tokio::sync::Notify::new());
+        let release_response = Arc::new(tokio::sync::Notify::new());
+        let stale_route = route("app.example.com", deployment_id);
+        let app = Router::new().route(
+            "/api/v1/internal/serve/routes",
+            get({
+                let request_started = request_started.clone();
+                let release_response = release_response.clone();
+                move || {
+                    let request_started = request_started.clone();
+                    let release_response = release_response.clone();
+                    let stale_route = stale_route.clone();
+                    async move {
+                        request_started.notify_one();
+                        release_response.notified().await;
+                        axum::Json(serde_json::json!({
+                            "code": 200,
+                            "message": "OK",
+                            "data": {
+                                "revision": "before-withdrawal",
+                                "routes": [stale_route],
+                            }
+                        }))
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = ControlApiClient::new(&format!("http://{address}"), "node-token").unwrap();
+        let refresh = tokio::spawn({
+            let table = table.clone();
+            async move { refresh_routes(&client, &table).await.unwrap() }
+        });
+        request_started.notified().await;
+        let invalidation = tokio::spawn({
+            let table = table.clone();
+            async move { table.remove_deployment(deployment_id).await }
+        });
+        tokio::task::yield_now().await;
+        release_response.notify_one();
+
+        refresh.await.unwrap();
+        assert!(invalidation.await.unwrap());
+        assert!(table.lookup("app.example.com").await.is_none());
+        server.abort();
     }
 }
