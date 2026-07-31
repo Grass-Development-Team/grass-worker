@@ -15,6 +15,7 @@ import { AcceptInvitationRoute } from "@/features/teams/accept-invitation-route"
 import { AdminRoute } from "@/features/admin/admin-route";
 import { ReviewsPanel } from "@/features/admin/components/reviews-panel";
 import { ProjectsPanel } from "@/features/admin/components/projects-panel";
+import { ProjectGovernancePage } from "@/features/admin/components/project-governance-page";
 import { NodesPanel } from "@/features/admin/components/nodes-panel";
 import { HostSourcesPanel } from "@/features/admin/components/host-sources-panel";
 import { QuotaPlansPanel } from "@/features/admin/components/quota-plans-panel";
@@ -117,6 +118,7 @@ export function Router() {
           <Route index element={<Navigate to="/admin/reviews" replace />} />
           <Route path="reviews" element={<ReviewsPanel />} />
           <Route path="projects" element={<ProjectsPanel />} />
+          <Route path="projects/:projectId" element={<ProjectGovernancePage />} />
           <Route path="nodes" element={<NodesPanel />} />
           <Route path="host-sources" element={<HostSourcesPanel />} />
           <Route path="quota-plans" element={<QuotaPlansPanel />} />

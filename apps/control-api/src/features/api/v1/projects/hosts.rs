@@ -304,8 +304,34 @@ pub async fn remove(
     let db = super::database(&state, OP)?;
     let cache = super::cache(&state, OP)?;
 
-    let binding = load_binding(db, &access, host_id, OP).await?;
+    let transaction = db
+        .begin()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let binding = hosts::get_binding_by_id_for_update_including_deleted(&transaction, host_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .filter(|binding| binding.project_id == access.project.id)
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "host binding not found".to_owned(),
+        })?;
     let binding_id = binding.id;
+    if binding.deleted_at.is_none() {
+        hosts::soft_delete_binding(&transaction, binding.clone())
+            .await
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    }
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     if let Some(source_id) = binding.host_source_id
         && let Some(source) = hosts::get_source_by_id(db, source_id)
@@ -317,19 +343,15 @@ pub async fn remove(
             .await?;
     }
 
-    hosts::soft_delete_binding(db, binding)
-        .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-
     crate::infra::quota::QuotaService::new(db, cache)
-        .release(
+        .release_once(
             OP,
             access.team.id,
             &[crate::infra::quota::QuotaCharge::one(
                 crate::domain::quotas::QuotaDimension::Hosts,
             )],
             "project_host_binding",
-            Some(binding_id),
+            binding_id,
         )
         .await?;
 

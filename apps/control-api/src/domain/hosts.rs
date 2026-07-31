@@ -1,8 +1,9 @@
 //! Database-backed host source, host binding, and provision event functions.
 
+use sea_orm::sea_query::LockType;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter,
-    QueryOrder,
+    QueryOrder, QuerySelect,
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -279,6 +280,31 @@ pub async fn get_binding_by_id<C: ConnectionTrait>(
     project_host_binding::Entity::find()
         .filter(project_host_binding::Column::Id.eq(binding_id))
         .filter(project_host_binding::Column::DeletedAt.is_null())
+        .one(db)
+        .await
+        .map_err(Into::into)
+}
+
+pub async fn get_binding_by_id_for_update<C: ConnectionTrait>(
+    db: &C,
+    binding_id: Uuid,
+) -> anyhow::Result<Option<project_host_binding::Model>> {
+    project_host_binding::Entity::find()
+        .filter(project_host_binding::Column::Id.eq(binding_id))
+        .filter(project_host_binding::Column::DeletedAt.is_null())
+        .lock(LockType::Update)
+        .one(db)
+        .await
+        .map_err(Into::into)
+}
+
+pub async fn get_binding_by_id_for_update_including_deleted<C: ConnectionTrait>(
+    db: &C,
+    binding_id: Uuid,
+) -> anyhow::Result<Option<project_host_binding::Model>> {
+    project_host_binding::Entity::find()
+        .filter(project_host_binding::Column::Id.eq(binding_id))
+        .lock(LockType::Update)
         .one(db)
         .await
         .map_err(Into::into)
@@ -649,5 +675,34 @@ mod tests {
             domain_review_policy_for_team(&db, team_id).await.unwrap(),
             DomainReviewMode::Auto
         );
+    }
+
+    #[tokio::test]
+    async fn binding_mutations_lock_the_live_row() {
+        let binding_id = Uuid::now_v7();
+        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([Vec::<project_host_binding::Model>::new()])
+            .into_connection();
+
+        get_binding_by_id_for_update(&db, binding_id).await.unwrap();
+
+        let statements = format!("{:?}", db.into_transaction_log());
+        assert!(statements.contains("FOR UPDATE"), "{statements}");
+    }
+
+    #[tokio::test]
+    async fn deletion_retries_can_lock_an_already_deleted_binding() {
+        let binding_id = Uuid::now_v7();
+        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([Vec::<project_host_binding::Model>::new()])
+            .into_connection();
+
+        get_binding_by_id_for_update_including_deleted(&db, binding_id)
+            .await
+            .unwrap();
+
+        let statements = format!("{:?}", db.into_transaction_log());
+        assert!(statements.contains("FOR UPDATE"), "{statements}");
+        assert!(!statements.contains("deleted_at\" IS NULL"), "{statements}");
     }
 }

@@ -238,6 +238,49 @@ impl<'a> QuotaService<'a> {
         Ok(())
     }
 
+    /// Releases a resource's usage once in durable storage, then rebuilds
+    /// the corresponding cache counter. Repeating the same call is safe and
+    /// also repairs a cache update that failed after the durable commit.
+    pub async fn release_once(
+        &self,
+        op: &'static str,
+        team_id: Uuid,
+        charges: &[QuotaCharge],
+        resource_type: &str,
+        resource_id: Uuid,
+    ) -> Result<(), AppError> {
+        for charge in charges {
+            quotas::record_event_once(
+                self.db,
+                release_idempotency_key(resource_type, resource_id, charge.dimension),
+                RecordEventParams {
+                    team_id,
+                    dimension: charge.dimension,
+                    kind: QuotaEventKind::Release,
+                    delta_value: -charge.amount,
+                    resource_type: Some(resource_type.to_owned()),
+                    resource_id: Some(resource_id),
+                    metadata: serde_json::json!({ "idempotent": true }),
+                },
+            )
+            .await
+            .map_err(|source| AppError::Infrastructure { op, source })?;
+
+            let usage = quotas::effective_usage(self.db, team_id, charge.dimension)
+                .await
+                .map_err(|source| AppError::Infrastructure { op, source })?;
+            self.cache
+                .set(
+                    &counter_key(team_id, charge.dimension),
+                    &usage.to_string(),
+                    counter_ttl(charge.dimension),
+                )
+                .await
+                .map_err(|source| AppError::Infrastructure { op, source })?;
+        }
+        Ok(())
+    }
+
     /// Reads a scalar (non-counted) limit such as the build timeout or the
     /// per-artifact size limit. `None` means unlimited.
     #[allow(dead_code)] // Wired by build and artifact limits in Milestones 6 and 7.
@@ -454,6 +497,17 @@ fn slot_release_key(deployment_id: Uuid) -> String {
     format!("quota:deployment:{deployment_id}:build_slot_released")
 }
 
+fn release_idempotency_key(
+    resource_type: &str,
+    resource_id: Uuid,
+    dimension: QuotaDimension,
+) -> String {
+    format!(
+        "release:{resource_type}:{resource_id}:{}",
+        dimension.as_str()
+    )
+}
+
 async fn release_build_slot_once(
     cache: &CacheStore,
     team_id: Uuid,
@@ -496,6 +550,15 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "quota exceeded: deployments.monthly limit reached"
+        );
+    }
+
+    #[test]
+    fn resource_release_idempotency_keys_are_dimension_scoped() {
+        let resource_id = Uuid::now_v7();
+        assert_eq!(
+            release_idempotency_key("project_host_binding", resource_id, QuotaDimension::Hosts),
+            format!("release:project_host_binding:{resource_id}:hosts")
         );
     }
 
