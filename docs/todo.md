@@ -2,7 +2,7 @@
 
 当前版本：0.1.0
 
-> 状态（2026-07-27）：第一阶段已交付。本文档是未完成工作、当前优先级和后续范围的唯一来源；已完成能力不在这里重复维护。
+> 状态（2026-07-31）：第一阶段和第二阶段平台治理、交付防护已交付。本文档是未完成工作、当前优先级和后续范围的唯一来源；已完成能力不在这里重复维护。
 
 ## 使用规则
 
@@ -13,46 +13,33 @@
 
 # 第二阶段
 
-## P0：平台管理、审计与权限修复
+## P0：发布质量与回归防线
 
-- P0.1 审计基础：覆盖用户 API、登录失败和权限拒绝，记录操作者、时间、来源、结果、耗时、脱敏变更与可见级别；默认保留 90 天；
-- P0.2 平台与团队差异化审计：服务端分页、筛选、详情和权限隔离；团队仅 Owner/Admin 可查看当前团队精选业务事件；
-- P0.3 Console 角色能力矩阵：Viewer 隐藏无权限操作，配置页面保持只读可见，后端继续独立鉴权；
-- P0.4 动态站点品牌：登录、注册、邀请、侧栏和标题使用配置名称，仅弱化保留 Grass Worker 与版本署名；
-- P0.5 Invitation 预检：进入链接即显示团队、角色和有效期，并立即提示失效、已使用或邮箱不匹配；
-- P0.6 Team Group Review Policy：仅平台管理员配置，按 Team Group Policy > 平台默认解析，团队不可覆盖；
-- P0.7 Control API 非敏感配置管理：Console 可读写并校验，敏感配置仅显示配置状态；
-- P0.8 Node 期望配置同步：非敏感 Node 配置可由 Console 管理，并显示 Pending、Applying、Applied、Failed；
-- P0.9 Node 排空、迁移与删除队列：Serve 安全迁移并切换路由，Build 等待任务完成，统一显示删除进度与失败恢复；
+- P0.1 Console 关键路径覆盖：补齐 Setup 主流程、Quota 和 Protected Route 测试；
+- P0.2 Log Viewer 连续性测试：覆盖 WebSocket 与 HTTP 补拉的 seq 去重、乱序合并、缺口检测和连续水位推进；
+- P0.3 Console 路由级拆包：对 Admin、Deployments、Setup 等 feature 使用动态 import，消除主 bundle 超过 500 KB 的现有警告；
+- P0.4 Node 构建冒烟：在 CI 中用最小 Vite 仓库完成 checkout -> build -> output -> serve，验证容器运行时和真实静态交付链路；
 
-## P1：测试与工程质量
+## P1：产品能力
 
-- 补齐 Console 测试：setup、login、team switcher、deployment list/detail、quota、protected route；
-- 优先覆盖 log viewer 的 seq 去重和连续水位补拉；
-- 按路由动态 import 拆分 admin、deployments、setup 等 feature chunk，消除主 bundle 超过 500 KB 的警告；
-- 增加最小 Vite 仓库 checkout -> build -> output -> serve 的 Node CI 冒烟；该检查依赖 CI 中可用的容器运行时。
+- P1.1 Artifact 清理策略：日志保留天数、Preview/失败部署保留期、Production 最近 N 个、定时任务和 active deployment 保护；
+- P1.2 SSR 配额增强：最大 SSR 进程数和每月 SSR 运行小时数；
+- P1.3 更多 SSR 框架：SvelteKit adapter-node、Remix / React Router SSR；
+- P1.4 Custom Grass Output：允许用户提供 `.grass/output/output.toml`，并定义 manifest 安全校验策略；
+- P1.5 认证增强：OAuth、MFA、密码策略和密码找回；
+- P1.6 消息外发：SMTP、邀请邮件、部署结果通知和 Webhook；
+- P1.7 更多 DNS Provider：增加 DNSPod、Route53 等实现；
+- P1.8 独立 Host Source：允许 Preview 与 Production 使用独立的默认 Host Source；
 
-## P2：产品能力
+## P2：平台扩展
 
-- Artifact 清理策略：日志保留天数、Preview/失败部署保留期、Production 最近 N 个、定时任务和 active deployment 保护；
-- SSR 配额增强：最大 SSR 进程数和每月 SSR 运行小时数；
-- 更多 SSR 框架：SvelteKit adapter-node、Remix / React Router SSR；
-- Custom Grass Output：允许用户提供 `.grass/output/output.toml`，并定义 manifest 安全校验策略；
-- 认证增强：OAuth、MFA、密码策略和密码找回；
-- SMTP、邀请邮件、部署结果通知和 Webhook；
-- 更多 DNS Provider 实现，例如 DNSPod 和 Route53。
-
-## P3：平台扩展
-
-- S3、MinIO、R2 artifact storage；
-- build node 与 serve node 分离调度；
-- artifact 跨节点同步；
-- 多节点负载均衡和 failover；
-- 分布式构建缓存；
-- Serverless Functions、Edge Runtime、ISR、Middleware 和 hybrid runtime；
-- Apple Container 与 Jail backend；
-- Vercel Output API 深度兼容；
-- Preview 与 Production 独立默认 Host Source。
+- P2.1 Artifact 对象存储：S3、MinIO、R2 backend；
+- P2.2 Serve 自动故障转移：多 Serve 节点之间自动重新分配部署并完成路由切换；
+- P2.3 Control API 高可用：多 Control API 协调、选主和一致性保障；
+- P2.4 分布式构建缓存；
+- P2.5 Serverless Functions、Edge Runtime、ISR、Middleware 和 hybrid runtime；
+- P2.6 Apple Container 与 Jail backend；
+- P2.7 Vercel Output API 深度兼容；
 
 # Future
 
