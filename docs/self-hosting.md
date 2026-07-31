@@ -317,6 +317,10 @@ SSH, and `git://` connections are pinned to an address that passed this policy.
    plain **Approve** lets a team administrator Promote later. The review
    policy is configured under **Administration → Settings → Release review**
    (production defaults to manual, preview to auto).
+   After a team unpublishes a deployment or a platform administrator withdraws
+   it, a manual-review deployment returns to Draft. **Publish** submits that
+   draft for review again; while it is Pending review, the deployment page
+   shows **Waiting for review** instead of another action button.
 7. Delivery uses a rolling overlap. While a replacement is Pending, Syncing,
    or Failed, the previous Ready Preview and current Active Production remain
    assigned and keep serving. Routes switch only after the replacement is
@@ -327,6 +331,10 @@ SSH, and `git://` connections are pinned to an address that passed this policy.
    it for Serve synchronization. The current Production domain remains on the
    active version until the target reports Ready, then activation and route
    cutover happen atomically.
+9. Unpublish and platform withdrawal commit route removal before notifying
+   Serve Nodes. A temporarily unavailable Serve Node is logged for operators
+   and reconciles from the current route snapshot; it does not turn the
+   completed action into an API failure.
 
 ## Notes
 

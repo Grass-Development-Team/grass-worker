@@ -9,10 +9,6 @@ export interface NotificationItem {
     name: string;
     slug: string;
   };
-  actor: {
-    id: string | null;
-    label: string;
-  };
   reason: string | null;
   target_url: string;
   read_at: string | null;
