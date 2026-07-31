@@ -14,7 +14,7 @@ use crate::{
     infra::{
         database::entity::{
             HostBindingEnvironment, HostBindingKind, HostBindingStatus, HostProvisionEventStatus,
-            host_source, project, project_host_binding, team,
+            HostReviewStatus, host_source, project, project_host_binding, team,
         },
         error::AppError,
         quota::{QuotaCharge, QuotaService},
@@ -33,7 +33,17 @@ pub struct BindHostRequest<'a> {
     pub kind: HostBindingKind,
     pub environment: HostBindingEnvironment,
     pub is_primary: bool,
+    pub review_status: HostReviewStatus,
     pub actor_user_id: Option<Uuid>,
+}
+
+fn custom_binding_status(review_status: &HostReviewStatus) -> HostBindingStatus {
+    match review_status {
+        HostReviewStatus::Approved => HostBindingStatus::Active,
+        HostReviewStatus::NotRequired | HostReviewStatus::Pending | HostReviewStatus::Rejected => {
+            HostBindingStatus::Pending
+        }
+    }
 }
 
 pub struct HostBindingService<'a> {
@@ -93,6 +103,7 @@ impl<'a> HostBindingService<'a> {
                 status: HostBindingStatus::Pending,
                 failure_reason: None,
                 is_primary: request.is_primary,
+                review_status: request.review_status,
             },
         )
         .await
@@ -117,11 +128,14 @@ impl<'a> HostBindingService<'a> {
 
         let binding = match request.source {
             Some(source) => self.provision(op, binding, source).await?,
-            // Bindings without a source (custom hosts) activate directly;
-            // DNS is the user's responsibility.
-            None => hosts::update_binding_status(self.db, binding, HostBindingStatus::Active, None)
-                .await
-                .map_err(|source| AppError::Infrastructure { op, source })?,
+            // Custom-host DNS is user-managed, but manual review still gates
+            // whether the binding can become serving/active.
+            None => {
+                let status = custom_binding_status(&binding.review_status);
+                hosts::update_binding_status(self.db, binding, status, None)
+                    .await
+                    .map_err(|source| AppError::Infrastructure { op, source })?
+            }
         };
 
         Ok(binding)
@@ -228,5 +242,27 @@ impl<'a> HostBindingService<'a> {
         hosts::update_binding_status(self.db, binding, status, failure_reason)
             .await
             .map_err(|source| AppError::Infrastructure { op, source })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::infra::database::entity::HostReviewStatus;
+
+    #[test]
+    fn custom_binding_only_activates_after_automatic_approval() {
+        assert_eq!(
+            custom_binding_status(&HostReviewStatus::Approved),
+            HostBindingStatus::Active
+        );
+        assert_eq!(
+            custom_binding_status(&HostReviewStatus::Pending),
+            HostBindingStatus::Pending
+        );
+        assert_eq!(
+            custom_binding_status(&HostReviewStatus::Rejected),
+            HostBindingStatus::Pending
+        );
     }
 }

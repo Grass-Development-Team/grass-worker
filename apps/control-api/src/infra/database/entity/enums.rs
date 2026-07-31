@@ -186,6 +186,13 @@ string_active_enum!(HostBindingStatus, "host_binding_status", {
     Disabled => "disabled",
 });
 
+string_active_enum!(HostReviewStatus, "host_review_status", {
+    NotRequired => "not_required",
+    Pending => "pending",
+    Approved => "approved",
+    Rejected => "rejected",
+});
+
 string_active_enum!(HostProvisionEventStatus, "host_provision_event_status", {
     Success => "success",
     Pending => "pending",

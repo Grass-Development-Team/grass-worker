@@ -13,7 +13,8 @@ use crate::{
     },
     infra::{
         database::entity::{
-            AuditEventResult, HostBindingEnvironment, HostBindingKind, ProjectRuntime,
+            AuditEventResult, HostBindingEnvironment, HostBindingKind, HostReviewStatus,
+            ProjectRuntime,
         },
         error::{AppError, ok_response},
         host_provision::service::{BindHostRequest, HostBindingService},
@@ -138,6 +139,7 @@ pub async fn handler(
         db,
         CreateProjectParams {
             team_id: team.id,
+            created_by_user_id: Some(session.data.user_id),
             slug,
             name: body.name.trim().to_owned(),
             runtime,
@@ -263,6 +265,7 @@ async fn auto_assign_host(
                     kind: HostBindingKind::Platform,
                     environment: HostBindingEnvironment::Production,
                     is_primary: true,
+                    review_status: HostReviewStatus::NotRequired,
                     actor_user_id: Some(session.data.user_id),
                 },
             )

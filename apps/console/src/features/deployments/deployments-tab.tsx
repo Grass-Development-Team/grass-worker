@@ -242,7 +242,10 @@ export function DeploymentsTab({
             </TableHeader>
             <TableBody>
               {deploymentsQuery.data.deployments.map((deployment) => {
-                const url = deployment.production_url ?? deployment.preview_url;
+                const url =
+                  deployment.environment === "preview"
+                    ? (deployment.preview_url ?? deployment.production_url)
+                    : (deployment.production_url ?? deployment.preview_url);
                 return (
                   <TableRow key={deployment.id}>
                     <TableCell>

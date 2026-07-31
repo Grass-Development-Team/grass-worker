@@ -1,6 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArchiveIcon, ArchiveRestoreIcon, FolderGit2Icon, Trash2Icon } from "lucide-react";
+import {
+  ArchiveIcon,
+  ArchiveRestoreIcon,
+  FolderGit2Icon,
+  Settings2Icon,
+  Trash2Icon,
+} from "lucide-react";
 import { useState } from "react";
+import { Link } from "react-router";
 
 import {
   AlertDialog,
@@ -73,7 +80,7 @@ export function ProjectsPanel() {
   });
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           Every project on the platform. Archiving pauses new deployments; deleting hides the
@@ -163,6 +170,12 @@ export function ProjectsPanel() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
+                      <Button size="sm" variant="outline" asChild>
+                        <Link to={`/admin/projects/${project.id}`}>
+                          <Settings2Icon data-icon="inline-start" />
+                          Manage
+                        </Link>
+                      </Button>
                       <Button
                         size="sm"
                         variant="outline"
@@ -171,11 +184,11 @@ export function ProjectsPanel() {
                       >
                         {project.archived_at ? (
                           <>
-                            <ArchiveRestoreIcon /> Unarchive
+                            <ArchiveRestoreIcon data-icon="inline-start" /> Unarchive
                           </>
                         ) : (
                           <>
-                            <ArchiveIcon /> Archive
+                            <ArchiveIcon data-icon="inline-start" /> Archive
                           </>
                         )}
                       </Button>
@@ -185,7 +198,7 @@ export function ProjectsPanel() {
                         onClick={() => setDeleting(project)}
                         disabled={deleteMutation.isPending}
                       >
-                        <Trash2Icon /> Delete
+                        <Trash2Icon data-icon="inline-start" /> Delete
                       </Button>
                     </div>
                   </TableCell>

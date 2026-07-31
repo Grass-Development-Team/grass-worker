@@ -3,6 +3,7 @@ import type {
   ReleaseStatus,
   ServeStatus,
 } from "@/features/deployments/deployments.api";
+import type { AuditPage } from "@/features/audit/audit.api";
 import { request } from "@/lib/api";
 
 export interface AdministrationStatus {
@@ -235,6 +236,7 @@ export interface AdminTeamGroup {
   review_policy: {
     production: "auto" | "manual" | null;
     preview: "auto" | "manual" | null;
+    domain: "auto" | "manual" | null;
   };
   is_default: boolean;
   team_count?: number;
@@ -272,6 +274,93 @@ export interface AdminProject {
   created_at: string;
 }
 
+export interface AdminProjectDetail {
+  id: string;
+  uuid: string;
+  slug: string;
+  name: string;
+  runtime: string;
+  repository_url: string | null;
+  default_branch: string | null;
+  install_command: string | null;
+  build_command: string | null;
+  output_directory: string | null;
+  source_config: Record<string, unknown>;
+  build_config: Record<string, unknown>;
+  archived_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminGovernanceDeployment {
+  id: string;
+  project_id: string;
+  environment: "production" | "preview";
+  build_status: BuildStatus;
+  serve_status: ServeStatus;
+  release_status: ReleaseStatus;
+  release_pending: boolean;
+  preview_host: string | null;
+  source_repository_url: string | null;
+  source_branch: string | null;
+  commit_hash: string | null;
+  commit_message: string | null;
+  build_stage: string | null;
+  failure_code: string | null;
+  failure_message: string | null;
+  serve_failure_code: string | null;
+  serve_failure_message: string | null;
+  claimed_at: string | null;
+  build_started_at: string | null;
+  build_finished_at: string | null;
+  serve_started_at: string | null;
+  serve_finished_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminProjectDomain {
+  id: string;
+  project_id: string;
+  host: string;
+  kind: "platform" | "custom";
+  environment: "production" | "preview" | "all";
+  status: "pending" | "active" | "failed" | "disabled";
+  review_status: "not_required" | "pending" | "approved" | "rejected";
+  failure_reason: string | null;
+  is_primary: boolean;
+  host_source_id: string | null;
+  reviewed_by_user_id: string | null;
+  reviewed_at: string | null;
+  review_reason: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminDeploymentGovernanceResult {
+  deployment: Pick<
+    AdminGovernanceDeployment,
+    "id" | "project_id" | "release_status" | "serve_status"
+  >;
+  reason: string | null;
+}
+
+export interface AdminDomainGovernanceResult {
+  domain: Pick<
+    AdminProjectDomain,
+    | "id"
+    | "project_id"
+    | "host"
+    | "status"
+    | "review_status"
+    | "reviewed_by_user_id"
+    | "reviewed_at"
+    | "review_reason"
+    | "is_primary"
+  >;
+  reason: string | null;
+}
+
 export interface AdminReview {
   id: string;
   requested_at: string;
@@ -298,6 +387,7 @@ export interface AdminSettings {
   storage: { root: string };
   signup: { policy: "open" | "invite_only" | "closed" };
   review: { production: "auto" | "manual"; preview: "auto" | "manual" };
+  domain_review: { default: "auto" | "manual" };
   server: { host: string; port: number };
   database: { url_configured: boolean };
   redis: { backend: "moka" | "redis"; url_configured: boolean };
@@ -505,6 +595,7 @@ export const adminApi = {
     review_policy?: {
       production: "auto" | "manual" | null;
       preview: "auto" | "manual" | null;
+      domain: "auto" | "manual" | null;
     };
   }) =>
     request<{ group: AdminTeamGroup }>("/api/v1/admin/team-groups", {
@@ -521,6 +612,7 @@ export const adminApi = {
       review_policy?: {
         production: "auto" | "manual" | null;
         preview: "auto" | "manual" | null;
+        domain: "auto" | "manual" | null;
       };
       is_default?: boolean;
     },
@@ -544,6 +636,67 @@ export const adminApi = {
       `/api/v1/admin/projects${q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ""}`,
     ),
 
+  getProject: (projectId: string) =>
+    request<{ project: AdminProjectDetail; team: AdminProjectTeamRef | null }>(
+      `/api/v1/admin/projects/${projectId}`,
+    ),
+
+  updateProjectSlug: (projectId: string, slug: string, reason?: string) =>
+    request<{
+      project: Pick<AdminProjectDetail, "id" | "uuid" | "slug">;
+      reason: string | null;
+    }>(`/api/v1/admin/projects/${projectId}/slug`, {
+      method: "PATCH",
+      body: JSON.stringify({ slug, ...(reason ? { reason } : {}) }),
+    }),
+
+  listProjectDeployments: (projectId: string) =>
+    request<{ deployments: AdminGovernanceDeployment[] }>(
+      `/api/v1/admin/projects/${projectId}/deployments`,
+    ),
+
+  withdrawDeployment: (deploymentId: string, reason?: string) =>
+    request<AdminDeploymentGovernanceResult>(`/api/v1/admin/deployments/${deploymentId}/withdraw`, {
+      method: "POST",
+      body: JSON.stringify(reason ? { reason } : {}),
+    }),
+
+  republishDeployment: (deploymentId: string, reason?: string) =>
+    request<
+      AdminDeploymentGovernanceResult & {
+        release_status: ReleaseStatus;
+        release_pending: boolean;
+        review_id: string | null;
+      }
+    >(`/api/v1/admin/deployments/${deploymentId}/republish`, {
+      method: "POST",
+      body: JSON.stringify(reason ? { reason } : {}),
+    }),
+
+  listProjectDomains: (projectId: string) =>
+    request<{ domains: AdminProjectDomain[] }>(`/api/v1/admin/projects/${projectId}/domains`),
+
+  approveDomain: (domainId: string, reason?: string) =>
+    request<AdminDomainGovernanceResult>(`/api/v1/admin/domains/${domainId}/approve`, {
+      method: "POST",
+      body: JSON.stringify(reason ? { reason } : {}),
+    }),
+
+  rejectDomain: (domainId: string, reason?: string) =>
+    request<AdminDomainGovernanceResult>(`/api/v1/admin/domains/${domainId}/reject`, {
+      method: "POST",
+      body: JSON.stringify(reason ? { reason } : {}),
+    }),
+
+  deleteDomain: (domainId: string, reason?: string) =>
+    request<{ deleted: true; reason: string | null }>(`/api/v1/admin/domains/${domainId}`, {
+      method: "DELETE",
+      body: JSON.stringify(reason ? { reason } : {}),
+    }),
+
+  listProjectActivity: (projectId: string, page = 1) =>
+    request<AuditPage>(`/api/v1/admin/projects/${projectId}/activity?page=${page}`),
+
   archiveProject: (projectId: string) =>
     request<{ project: AdminProject }>(`/api/v1/admin/projects/${projectId}/archive`, {
       method: "POST",
@@ -559,11 +712,10 @@ export const adminApi = {
 
   listReviews: () => request<{ total: number; reviews: AdminReview[] }>("/api/v1/admin/reviews"),
 
-  approveReview: (deploymentId: string, opts?: { reason?: string; promote?: boolean }) =>
+  approveReview: (deploymentId: string, opts?: { reason?: string }) =>
     request<{
       deployment_id: string;
       release_status: string;
-      promoted: boolean;
       release_pending: boolean;
     }>(`/api/v1/admin/deployments/${deploymentId}/review/approve`, {
       method: "POST",
@@ -586,6 +738,7 @@ export const adminApi = {
     signup_policy?: "open" | "invite_only" | "closed";
     review_production?: "auto" | "manual";
     review_preview?: "auto" | "manual";
+    domain_review_default?: "auto" | "manual";
     server_host?: string;
     server_port?: number;
     redis_backend?: "moka" | "redis";

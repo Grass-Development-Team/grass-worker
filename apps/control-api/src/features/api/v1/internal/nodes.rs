@@ -2,7 +2,6 @@ use axum::{Extension, Json, extract::State, response::IntoResponse};
 use grass_node_protocol::{
     HeartbeatRequest, HeartbeatResponse, NodeCapabilities, RegisterRequest, RegisterResponse,
 };
-use ring::hmac;
 use serde_json::json;
 
 use crate::{
@@ -76,7 +75,7 @@ pub async fn register(
     .await;
 
     let gateway_token = serve_enabled
-        .then(|| derive_gateway_token(&state.config.read().unwrap().secrets.secret_key));
+        .then(|| nodes::gateway_token(&state.config.read().unwrap().secrets.secret_key));
     Ok(ok_response(RegisterResponse {
         node_id: node.id,
         name: node.name,
@@ -126,11 +125,6 @@ fn validate_registration(body: &RegisterRequest) -> Result<(), &'static str> {
         return Err("serve settings are not allowed for a non-serve node");
     }
     Ok(())
-}
-
-fn derive_gateway_token(secret: &str) -> String {
-    let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes());
-    hex::encode(hmac::sign(&key, b"grass-node-gateway-v1").as_ref())
 }
 
 /// POST /api/v1/internal/nodes/heartbeat
@@ -191,9 +185,9 @@ mod tests {
 
     #[test]
     fn gateway_token_is_stable_and_secret_derived() {
-        let first = derive_gateway_token("a sufficiently long control api secret");
-        let second = derive_gateway_token("a sufficiently long control api secret");
-        let different = derive_gateway_token("another sufficiently long api secret");
+        let first = nodes::gateway_token("a sufficiently long control api secret");
+        let second = nodes::gateway_token("a sufficiently long control api secret");
+        let different = nodes::gateway_token("another sufficiently long api secret");
 
         assert_eq!(first, second);
         assert_eq!(first.len(), 64);

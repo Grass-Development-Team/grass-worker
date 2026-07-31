@@ -1,6 +1,6 @@
 //! Platform-wide release review queue. Platform administrators see every
-//! pending review and decide here, optionally promoting production
-//! deployments in the same step.
+//! pending review and decide here. Approval publishes the deployment in the
+//! same transaction.
 
 use std::collections::{HashMap, HashSet};
 
@@ -224,9 +224,6 @@ pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoRespo
 pub struct DecisionRequest {
     #[serde(default)]
     pub reason: Option<String>,
-    /// Approve only: also activate the deployment in the same step.
-    #[serde(default)]
-    pub promote: bool,
 }
 
 async fn decide(
@@ -249,7 +246,7 @@ async fn decide(
             op,
             source: source.into(),
         })?;
-    if approved && body.promote {
+    if approved {
         scheduler::lock_placement(&transaction)
             .await
             .map_err(|error| {
@@ -376,9 +373,8 @@ async fn decide(
     .await
     .map_err(|source| AppError::Infrastructure { op, source })?;
 
-    let mut promoted = false;
     let mut release_pending = false;
-    if approved && body.promote {
+    if approved {
         let outcome = delivery::request_release(
             &transaction,
             deployment,
@@ -390,9 +386,9 @@ async fn decide(
         .map_err(|error| {
             crate::features::api::v1::projects::deployments::map_delivery_error(error, op)
         })?;
-        (deployment, promoted, release_pending) = match outcome {
-            ReleaseRequestOutcome::Activated(deployment) => (deployment, true, false),
-            ReleaseRequestOutcome::SyncQueued(deployment) => (deployment, false, true),
+        (deployment, release_pending) = match outcome {
+            ReleaseRequestOutcome::Activated(deployment) => (deployment, false),
+            ReleaseRequestOutcome::SyncQueued(deployment) => (deployment, true),
         };
         audits::create_platform_audit_event(
             &transaction,
@@ -427,7 +423,6 @@ async fn decide(
     let response = json!({
         "deployment_id": deployment.id,
         "release_status": deployments::release_status_value(&deployment.release_status),
-        "promoted": promoted,
         "release_pending": release_pending,
         "review": {
             "id": review.id,

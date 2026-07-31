@@ -955,6 +955,7 @@ mod tests {
             db,
             CreateProjectParams {
                 team_id: team.id,
+                created_by_user_id: None,
                 slug: format!("project-{}", Uuid::now_v7().simple()),
                 name: "Node Deletion Project".to_owned(),
                 runtime: ProjectRuntime::Static,

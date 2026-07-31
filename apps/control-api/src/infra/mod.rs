@@ -7,4 +7,5 @@ pub mod logger;
 pub mod logs;
 pub mod node_manager;
 pub mod quota;
+pub mod route_invalidation;
 pub mod storage;

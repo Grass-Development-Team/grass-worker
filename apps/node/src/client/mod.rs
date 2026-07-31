@@ -39,6 +39,14 @@ pub enum PreviewAuthError {
     Infrastructure(#[from] anyhow::Error),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum RouteSnapshotError {
+    #[error("node authorization has been revoked")]
+    AuthorizationRevoked,
+    #[error(transparent)]
+    Infrastructure(#[from] anyhow::Error),
+}
+
 #[derive(Clone)]
 pub struct ControlApiClient {
     base_url: String,
@@ -394,15 +402,24 @@ impl ControlApiClient {
         .await
     }
 
-    pub async fn route_snapshot(&self) -> anyhow::Result<RouteSnapshotResponse> {
+    pub async fn route_snapshot(&self) -> Result<RouteSnapshotResponse, RouteSnapshotError> {
         let response = self
             .http
             .get(self.url("/serve/routes"))
             .bearer_auth(&self.token)
             .send()
             .await
-            .context("serve.routes: request failed")?;
-        Self::unwrap_envelope(response, "serve.routes").await
+            .context("serve.routes: request failed")
+            .map_err(RouteSnapshotError::Infrastructure)?;
+        if matches!(
+            response.status(),
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        ) {
+            return Err(RouteSnapshotError::AuthorizationRevoked);
+        }
+        Self::unwrap_envelope(response, "serve.routes")
+            .await
+            .map_err(RouteSnapshotError::Infrastructure)
     }
 
     #[allow(dead_code)] // Wired by the serve resolver in Milestone 10.

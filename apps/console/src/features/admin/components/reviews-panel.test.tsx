@@ -64,8 +64,8 @@ it("approves a deployment through the admin decision endpoint", async () => {
       if (url.includes("/review/approve")) {
         return jsonResponse({
           deployment_id: "deploy-1",
-          release_status: "approved",
-          promoted: false,
+          release_status: "active",
+          release_pending: false,
         });
       }
       return jsonResponse({ total: 1, reviews: [reviewFixture] });
@@ -79,6 +79,7 @@ it("approves a deployment through the admin decision endpoint", async () => {
     "/api/v1/admin/deployments/deploy-1/review/approve",
     expect.objectContaining({ method: "POST" }),
   );
+  expect(screen.queryByRole("button", { name: /Approve & promote/ })).not.toBeInTheDocument();
 });
 
 it("links to the protected preview and disables decisions until Serve is ready", async () => {
@@ -102,7 +103,6 @@ it("links to the protected preview and disables decisions until Serve is ready",
   );
   expect(screen.getByText("Syncing")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /^Approve$/ })).toBeDisabled();
-  expect(screen.getByRole("button", { name: /Approve & promote/ })).toBeDisabled();
   expect(screen.getByRole("button", { name: "Reject" })).toBeDisabled();
 });
 
@@ -128,7 +128,6 @@ it("allows decisions for a retired review without exposing its old preview", asy
 
   expect(await screen.findByText("Retired")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /^Approve$/ })).toBeEnabled();
-  expect(screen.getByRole("button", { name: /Approve & promote/ })).toBeEnabled();
   expect(screen.getByRole("button", { name: "Reject" })).toBeEnabled();
   expect(screen.queryByRole("link", { name: "Open preview" })).not.toBeInTheDocument();
 });
@@ -155,6 +154,5 @@ it("keeps decisions disabled when a retired review never reached Serve ready", a
 
   expect(await screen.findByText("Retired")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /^Approve$/ })).toBeDisabled();
-  expect(screen.getByRole("button", { name: /Approve & promote/ })).toBeDisabled();
   expect(screen.getByRole("button", { name: "Reject" })).toBeDisabled();
 });

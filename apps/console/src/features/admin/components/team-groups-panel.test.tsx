@@ -20,7 +20,7 @@ it("shows and edits the team group review policy override", async () => {
             name: "VIP",
             description: "Priority customers",
             quota_plan_id: null,
-            review_policy: { production: "auto", preview: null },
+            review_policy: { production: "auto", preview: null, domain: "manual" },
             is_default: false,
             team_count: 3,
             created_at: "2026-07-29T00:00:00Z",
@@ -41,9 +41,10 @@ it("shows and edits the team group review policy override", async () => {
 
   expect(await screen.findByText("VIP")).toBeInTheDocument();
   expect(screen.getByRole("columnheader", { name: "Review policy" })).toBeInTheDocument();
-  expect(screen.getByText("Production Auto · Preview Inherit")).toBeInTheDocument();
+  expect(screen.getByText("Production Auto · Preview Inherit · Domain Manual")).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "Edit" }));
   expect(screen.getByRole("combobox", { name: "Production review" })).toHaveTextContent("Auto");
   expect(screen.getByRole("combobox", { name: "Preview review" })).toHaveTextContent("Inherit");
+  expect(screen.getByRole("combobox", { name: "Domain review" })).toHaveTextContent("Manual");
 });

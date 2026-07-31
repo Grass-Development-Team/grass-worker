@@ -101,6 +101,29 @@ it("shows serve placement and serve failures in the serve column", async () => {
   expect(screen.getByText("Artifact checksum mismatch")).toBeInTheDocument();
 });
 
+it("visits the temporary URL for a preview deployment", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    jsonResponse({
+      deployments: [
+        deploymentFixture({
+          environment: "preview",
+          release_status: "active",
+          serve_status: "ready",
+          preview_url: "https://landing-preview.apps.example.com",
+          production_url: "https://landing.apps.example.com",
+        }),
+      ],
+    }),
+  );
+
+  renderDeployments();
+
+  expect(await screen.findByRole("link", { name: "Visit" })).toHaveAttribute(
+    "href",
+    "https://landing-preview.apps.example.com",
+  );
+});
+
 it("creates with automatic placement by default and sends a selected serve node", async () => {
   const calls: { url: string; init?: RequestInit }[] = [];
   vi.spyOn(globalThis, "fetch").mockImplementation(

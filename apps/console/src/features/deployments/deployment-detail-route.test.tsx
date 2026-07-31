@@ -127,6 +127,18 @@ it("does not expose platform moderation controls to team administrators", async 
   expect(screen.queryByRole("button", { name: "Reject" })).not.toBeInTheDocument();
 });
 
+it("allows a team administrator to unpublish an active deployment", async () => {
+  renderDetail(
+    detailFixture({
+      serve_status: "ready",
+      release_status: "active",
+      production_url: "https://landing.apps.example.com",
+    }),
+  );
+
+  expect(await screen.findByRole("button", { name: "Unpublish" })).toBeEnabled();
+});
+
 it("does not let team members request platform moderation", async () => {
   renderDetail({
     ...detailFixture({

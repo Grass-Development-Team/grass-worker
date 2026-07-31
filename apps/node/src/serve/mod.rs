@@ -18,13 +18,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::{
+    Json,
     body::Body,
     extract::{ConnectInfo, Request, State},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::any,
+    routing::{any, post},
 };
 use grass_node_protocol::{ServeAccess, ServeRoute};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use tokio::sync::Mutex;
@@ -101,10 +103,52 @@ impl ServeState {
 
 fn serve_router(state: Arc<ServeState>) -> axum::Router {
     axum::Router::new()
+        .route(ROUTE_INVALIDATION_PATH, post(invalidate_routes))
         .route(PEER_PROXY_PREFIX, any(handle_peer_proxy))
         .route("/_grass/internal/proxy/{*path}", any(handle_peer_proxy))
         .fallback(route_public_request)
         .with_state(state)
+}
+
+#[derive(Deserialize)]
+struct RouteInvalidationRequest {
+    deployment_id: Uuid,
+}
+
+async fn invalidate_routes(
+    State(state): State<Arc<ServeState>>,
+    headers: HeaderMap,
+    Json(body): Json<RouteInvalidationRequest>,
+) -> Response {
+    let authenticated = headers
+        .get(GATEWAY_TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|token| bool::from(token.as_bytes().ct_eq(state.gateway_token.as_bytes())));
+    if !authenticated {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    let removed = state.routes.remove_deployment(body.deployment_id).await;
+    let routed_here = state.routes.local_deployment_ids(state.node_id).await;
+    let routed_anywhere = state.routes.deployment_ids().await;
+    if let Err(error) = state
+        .ssr
+        .reconcile_routes(&routed_here, &routed_anywhere)
+        .await
+    {
+        warn!(
+            operation = "node.serve.routes.invalidation_reconcile_failed",
+            deployment_id = %body.deployment_id,
+            %error,
+            "route invalidation succeeded but SSR reconciliation failed"
+        );
+    }
+
+    Json(serde_json::json!({
+        "acknowledged": true,
+        "removed": removed,
+    }))
+    .into_response()
 }
 
 pub fn spawn(state: Arc<ServeState>, config: &NodeConfig) -> tokio::task::JoinHandle<()> {
@@ -237,6 +281,7 @@ fn resolve_not_found_file(static_dir: &Path, configured: Option<&str>) -> Option
 const GATEWAY_TOKEN_HEADER: &str = "x-grass-gateway-token";
 const GATEWAY_HOP_HEADER: &str = "x-grass-gateway-hop";
 const PEER_PROXY_PREFIX: &str = "/_grass/internal/proxy";
+const ROUTE_INVALIDATION_PATH: &str = "/_grass/internal/routes/invalidate";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GatewayOrigin {
@@ -1336,6 +1381,99 @@ mod tests {
         .unwrap();
 
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn route_invalidation_is_authenticated_and_removes_cached_access_before_acknowledging() {
+        let authority = axum::Router::new().fallback(|| async { "stale deployment" });
+        let authority_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let authority_address = authority_listener.local_addr().unwrap();
+        let authority_server =
+            tokio::spawn(async move { axum::serve(authority_listener, authority).await.unwrap() });
+
+        let config = NodeConfig::default();
+        let node_id = Uuid::now_v7();
+        let deployment_id = Uuid::now_v7();
+        let routes = Arc::new(routes::RouteTable::default());
+        routes
+            .apply(grass_node_protocol::RouteSnapshotResponse {
+                revision: "before-withdrawal".to_owned(),
+                routes: vec![ServeRoute {
+                    host: "app.example.com".to_owned(),
+                    deployment_id,
+                    target_node_id: Uuid::now_v7(),
+                    target_base_url: format!("http://{authority_address}"),
+                    resources: grass_node_protocol::ServeResources {
+                        cpu_millicores: 50,
+                        memory_mb: 64,
+                        disk_mb: 256,
+                    },
+                    access: ServeAccess::Public,
+                }],
+            })
+            .await
+            .unwrap();
+        let ssr = Arc::new(ssr::SsrManager::new(None, node_id, &config));
+        let state = Arc::new(ServeState::new(
+            ControlApiClient::new(&format!("http://{authority_address}"), "node-token").unwrap(),
+            node_id,
+            "shared-gateway-token".to_owned(),
+            routes,
+            &config,
+            ssr,
+        ));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                serve_router(state).into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap()
+        });
+
+        let client = reqwest::Client::new();
+        let rejected = client
+            .post(format!(
+                "http://{address}/_grass/internal/routes/invalidate"
+            ))
+            .header(GATEWAY_TOKEN_HEADER, "wrong-token")
+            .json(&serde_json::json!({ "deployment_id": deployment_id }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+
+        let stale = client
+            .get(format!("http://{address}/"))
+            .header(header::HOST, "app.example.com")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(stale.status(), StatusCode::OK);
+
+        let invalidation = client
+            .post(format!(
+                "http://{address}/_grass/internal/routes/invalidate"
+            ))
+            .header(GATEWAY_TOKEN_HEADER, "shared-gateway-token")
+            .json(&serde_json::json!({ "deployment_id": deployment_id }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(invalidation.status(), StatusCode::OK);
+
+        let response = client
+            .get(format!("http://{address}/"))
+            .header(header::HOST, "app.example.com")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        server.abort();
+        authority_server.abort();
     }
 
     #[tokio::test]

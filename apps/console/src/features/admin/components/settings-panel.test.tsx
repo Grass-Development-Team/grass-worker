@@ -27,6 +27,7 @@ const settings = {
   storage: { root: "/var/lib/grass-worker" },
   signup: { policy: "open" },
   review: { production: "manual", preview: "auto" },
+  domain_review: { default: "auto" },
   server: { host: "127.0.0.1", port: 7817 },
   database: { url_configured: true },
   redis: { backend: "redis", url_configured: true },
@@ -102,4 +103,26 @@ it("shows every non-secret Control API setting and only secret configuration sta
   expect(within(sensitive!).getByText("Git credential encryption")).toBeInTheDocument();
   expect(within(sensitive!).getAllByText("Configured")).toHaveLength(3);
   expect(within(sensitive!).getByText("Not configured")).toBeInTheDocument();
+});
+
+it("shows and saves the custom domain review default", async () => {
+  const user = userEvent.setup();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <SettingsPanel />
+    </QueryClientProvider>,
+  );
+
+  const domainReview = await screen.findByRole("combobox", { name: "Custom domain review" });
+  expect(domainReview).toHaveTextContent("Auto");
+  await user.click(domainReview);
+  await user.click(screen.getByRole("option", { name: /Manual/ }));
+  await user.click(within(domainReview.closest("form")!).getByRole("button", { name: "Save" }));
+
+  await waitFor(() =>
+    expect(adminApi.updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ domain_review_default: "manual" }),
+    ),
+  );
 });
