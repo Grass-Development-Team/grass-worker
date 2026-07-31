@@ -34,6 +34,7 @@ import { ProjectSettingsRoute } from "@/features/projects/project-settings-route
 import { ProjectSettingsBuildRoute } from "@/features/projects/project-settings-build-route";
 import { DeploymentDetailRoute } from "@/features/deployments/deployment-detail-route";
 import { TeamAuditRoute } from "@/features/audit/team-audit-route";
+import { NotificationsRoute } from "@/features/notifications/notifications-route";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
@@ -98,6 +99,7 @@ export function Router() {
         <Route path="/" element={<DashboardRoute />} />
         <Route path="/dashboard" element={<Navigate to="/" replace />} />
         <Route path="/quota" element={<QuotaRoute />} />
+        <Route path="/notifications" element={<NotificationsRoute />} />
         <Route path="/projects" element={<ProjectsRoute />} />
         <Route path="/projects/:projectId" element={<ProjectLayout />}>
           <Route index element={<ProjectOverviewRoute />} />

@@ -17,7 +17,7 @@ use crate::infra::http::timestamps::ts;
 use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
-        deployments, hosts, projects,
+        deployments, hosts, notifications, projects,
     },
     infra::{
         database::entity::{
@@ -290,6 +290,18 @@ pub async fn update_slug(
     )
     .await
     .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    notifications::create_project_notification(
+        &transaction,
+        notifications::CreateProjectNotification {
+            project: &updated,
+            actor_user_id: data.user_id,
+            action: "project.slug_updated",
+            reason: reason.clone(),
+            target_url: format!("/projects/{}", updated.id),
+        },
+    )
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     transaction
         .commit()
         .await
@@ -483,13 +495,14 @@ async fn load_project<C: ConnectionTrait>(
         })
 }
 
-async fn record_project_audit(
-    db: &sea_orm::DatabaseConnection,
+async fn record_project_event<C: ConnectionTrait>(
+    db: &C,
     actor: Uuid,
     project: &project::Model,
     action: &str,
-) {
-    let _ = audits::create_platform_audit_event(
+    target_url: String,
+) -> anyhow::Result<()> {
+    audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(actor),
@@ -503,7 +516,19 @@ async fn record_project_audit(
             metadata: json!({ "platform_admin": true, "slug": project.slug }),
         },
     )
-    .await;
+    .await?;
+    notifications::create_project_notification(
+        db,
+        notifications::CreateProjectNotification {
+            project,
+            actor_user_id: actor,
+            action,
+            reason: None,
+            target_url,
+        },
+    )
+    .await?;
+    Ok(())
 }
 
 /// POST /api/v1/admin/projects/{project_id}/archive
@@ -514,17 +539,39 @@ pub async fn archive(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.projects.archive";
     let db = super::database(&state, OP)?;
-    let project = load_project(db, project_id, OP).await?;
+    let transaction = db
+        .begin()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let project = load_project(&transaction, project_id, OP).await?;
     if project.archived_at.is_some() {
         return Err(AppError::Conflict {
             op: OP,
             message: "project is already archived".to_owned(),
         });
     }
-    let project = projects::set_archived(db, project, true)
+    let project = projects::set_archived(&transaction, project, true)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    record_project_audit(db, data.user_id, &project, "project.archived").await;
+    record_project_event(
+        &transaction,
+        data.user_id,
+        &project,
+        "project.archived",
+        format!("/projects/{}", project.id),
+    )
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     Ok(ok_response(
         json!({ "project": project_view(&project, None, None) }),
     ))
@@ -538,17 +585,39 @@ pub async fn unarchive(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.projects.unarchive";
     let db = super::database(&state, OP)?;
-    let project = load_project(db, project_id, OP).await?;
+    let transaction = db
+        .begin()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let project = load_project(&transaction, project_id, OP).await?;
     if project.archived_at.is_none() {
         return Err(AppError::Conflict {
             op: OP,
             message: "project is not archived".to_owned(),
         });
     }
-    let project = projects::set_archived(db, project, false)
+    let project = projects::set_archived(&transaction, project, false)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    record_project_audit(db, data.user_id, &project, "project.unarchived").await;
+    record_project_event(
+        &transaction,
+        data.user_id,
+        &project,
+        "project.unarchived",
+        format!("/projects/{}", project.id),
+    )
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     Ok(ok_response(
         json!({ "project": project_view(&project, None, None) }),
     ))
@@ -564,17 +633,46 @@ pub async fn remove(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.projects.delete";
     let db = super::database(&state, OP)?;
-    let project = load_project(db, project_id, OP).await?;
-    let project = projects::soft_delete(db, project)
+    let transaction = db
+        .begin()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let project = load_project(&transaction, project_id, OP).await?;
+    let project = projects::soft_delete(&transaction, project)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    record_project_audit(db, data.user_id, &project, "project.deleted").await;
+    record_project_event(
+        &transaction,
+        data.user_id,
+        &project,
+        "project.deleted",
+        "/projects".to_owned(),
+    )
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     Ok(ok_response(json!({ "deleted": true })))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::binding_audit_target_types;
+    use time::OffsetDateTime;
+    use uuid::Uuid;
+
+    use crate::infra::database::entity::{
+        PlatformRole, ProjectRuntime, TeamMemberRole, UserStatus, project, team_member, user,
+    };
+
+    use super::{binding_audit_target_types, record_project_event};
 
     #[test]
     fn project_activity_includes_both_host_audit_target_names() {
@@ -582,5 +680,85 @@ mod tests {
             binding_audit_target_types(),
             ["host", "project_host_binding"]
         );
+    }
+
+    #[tokio::test]
+    async fn platform_lifecycle_actions_write_audit_and_recipient_notifications() {
+        for (action, target_url) in [
+            ("project.archived", "/projects/project-id"),
+            ("project.unarchived", "/projects/project-id"),
+            ("project.deleted", "/projects"),
+        ] {
+            let actor_id = Uuid::now_v7();
+            let team_id = Uuid::now_v7();
+            let project_id = Uuid::now_v7();
+            let now = OffsetDateTime::UNIX_EPOCH;
+            let actor = user::Model {
+                id: actor_id,
+                email: "owner@example.invalid".to_owned(),
+                display_name: Some("Team Owner".to_owned()),
+                status: UserStatus::Active,
+                platform_role: PlatformRole::Admin,
+                last_login_at: None,
+                deleted_at: None,
+                created_at: now,
+                updated_at: now,
+            };
+            let member = team_member::Model {
+                id: Uuid::now_v7(),
+                team_id,
+                user_id: actor_id,
+                role: TeamMemberRole::Owner,
+                invited_by_user_id: None,
+                joined_at: now,
+                deleted_at: None,
+                created_at: now,
+                updated_at: now,
+            };
+            let project = project::Model {
+                id: project_id,
+                team_id,
+                created_by_user_id: Some(actor_id),
+                slug: "demo".to_owned(),
+                name: "Demo".to_owned(),
+                runtime: ProjectRuntime::Static,
+                repository_url: None,
+                default_branch: None,
+                install_command: None,
+                build_command: None,
+                output_directory: None,
+                source_config: serde_json::json!({}),
+                build_config: serde_json::json!({}),
+                archived_at: None,
+                deleted_at: None,
+                created_at: now,
+                updated_at: now,
+            };
+            let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+                .append_query_results([[member]])
+                .append_query_results([[actor.clone()]])
+                .append_query_results([[actor]])
+                .append_exec_results([
+                    sea_orm::MockExecResult {
+                        last_insert_id: 0,
+                        rows_affected: 1,
+                    },
+                    sea_orm::MockExecResult {
+                        last_insert_id: 0,
+                        rows_affected: 1,
+                    },
+                ])
+                .into_connection();
+
+            record_project_event(&db, actor_id, &project, action, target_url.to_owned())
+                .await
+                .unwrap();
+
+            let statements = format!("{:?}", db.into_transaction_log());
+            assert!(statements.contains("INSERT INTO \\\"audit_events\\\""));
+            assert!(statements.contains("INSERT INTO \\\"user_notifications\\\""));
+            assert!(statements.contains(action));
+            assert!(statements.contains(target_url));
+        }
     }
 }

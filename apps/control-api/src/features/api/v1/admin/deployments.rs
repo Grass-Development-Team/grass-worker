@@ -13,6 +13,7 @@ use crate::{
         audits::{self, CreateAuditEventParams},
         delivery::{self, PublicationRemovalKind},
         deployments::{self, DeploymentStateError, ReviewMode},
+        notifications, projects,
     },
     infra::{
         database::entity::{
@@ -144,6 +145,25 @@ pub async fn withdraw(
                 "platform_admin": true,
                 "project_id": deployment.project_id,
             }),
+        },
+    )
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let project = projects::get_by_id_any(&transaction, deployment.project_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "project not found".to_owned(),
+        })?;
+    notifications::create_project_notification(
+        &transaction,
+        notifications::CreateProjectNotification {
+            project: &project,
+            actor_user_id: session.data.user_id,
+            action: "deployment.withdrawn",
+            reason: reason.clone(),
+            target_url: format!("/projects/{}/deployments/{}", project.id, deployment.id),
         },
     )
     .await
@@ -281,18 +301,38 @@ pub async fn republish(
         }
         RepublishAction::Conflict => unreachable!(),
     }
+    let audit_action = republish_audit_action(action, release_pending);
     audits::create_platform_audit_event(
         &transaction,
         CreateAuditEventParams {
             actor_user_id: Some(session.data.user_id),
             actor_node_id: None,
             team_id: Some(target.team_id),
-            action: republish_audit_action(action, release_pending).to_owned(),
+            action: audit_action.to_owned(),
             target_type: "deployment".to_owned(),
             target_id: Some(target.id),
             result: AuditEventResult::Success,
             reason: reason.clone(),
             metadata: json!({ "platform_admin": true, "project_id": target.project_id, "release_pending": release_pending, "review_id": review_id }),
+        },
+    )
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let project = projects::get_by_id_any(&transaction, target.project_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "project not found".to_owned(),
+        })?;
+    notifications::create_project_notification(
+        &transaction,
+        notifications::CreateProjectNotification {
+            project: &project,
+            actor_user_id: session.data.user_id,
+            action: audit_action,
+            reason: reason.clone(),
+            target_url: format!("/projects/{}/deployments/{}", project.id, target.id),
         },
     )
     .await

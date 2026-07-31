@@ -54,6 +54,7 @@ import {
 import { canViewTeamAudit, canViewTeamSettings } from "@/features/teams/team-permissions";
 import { TeamSwitcher } from "@/features/teams/team-switcher";
 import { useTeam } from "@/features/teams/team-context";
+import { NotificationBell } from "@/features/notifications/notification-bell";
 
 const primaryNavigation = [
   { title: "Overview", url: "/", icon: HomeIcon },
@@ -84,6 +85,7 @@ function pageTitle(pathname: string, inProject: boolean): string {
     return "Overview";
   }
   if (pathname === "/quota") return "Usage";
+  if (pathname === "/notifications") return "Notifications";
   if (pathname.startsWith("/settings/team")) return "Team Settings";
   if (pathname.startsWith("/settings/members")) return "Members";
   if (pathname.startsWith("/settings/audit")) return "Audit";
@@ -332,6 +334,7 @@ function AppLayoutContent() {
             </div>
           )}
           <div className="ml-auto flex items-center gap-1">
+            <NotificationBell />
             <ThemeToggle />
           </div>
         </header>

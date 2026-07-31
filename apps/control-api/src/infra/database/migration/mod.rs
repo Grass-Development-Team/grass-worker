@@ -14,3 +14,4 @@ pub mod m20260729_000013_team_group_review_policy;
 pub mod m20260729_000014_node_config_sync;
 pub mod m20260729_000015_node_deletion_queue;
 pub mod m20260730_000016_domain_review_policy;
+pub mod m20260731_000017_project_notifications;

@@ -139,6 +139,7 @@ pub async fn handler(
         db,
         CreateProjectParams {
             team_id: team.id,
+            created_by_user_id: Some(session.data.user_id),
             slug,
             name: body.name.trim().to_owned(),
             runtime,

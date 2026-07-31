@@ -11,6 +11,7 @@ use crate::infra::database::entity::{ProjectRuntime, project};
 
 pub struct CreateProjectParams {
     pub team_id: Uuid,
+    pub created_by_user_id: Option<Uuid>,
     pub slug: String,
     pub name: String,
     pub runtime: ProjectRuntime,
@@ -42,6 +43,7 @@ pub async fn create_project<C: ConnectionTrait>(
     project::ActiveModel {
         id: Set(Uuid::now_v7()),
         team_id: Set(params.team_id),
+        created_by_user_id: Set(params.created_by_user_id),
         slug: Set(params.slug),
         name: Set(params.name),
         runtime: Set(params.runtime),
@@ -235,6 +237,7 @@ mod tests {
         let project = project::Model {
             id: Uuid::nil(),
             team_id: Uuid::nil(),
+            created_by_user_id: None,
             slug: "demo".into(),
             name: "Demo".into(),
             runtime: ProjectRuntime::Static,
@@ -257,5 +260,62 @@ mod tests {
             ..project
         };
         assert!(ensure_deployable(&active).is_ok());
+    }
+
+    #[tokio::test]
+    async fn project_creation_persists_the_creator() {
+        use sea_orm::{DbBackend, MockDatabase};
+
+        let project_id = Uuid::now_v7();
+        let team_id = Uuid::now_v7();
+        let creator_user_id = Uuid::now_v7();
+        let now = OffsetDateTime::UNIX_EPOCH;
+        let expected = project::Model {
+            id: project_id,
+            team_id,
+            created_by_user_id: Some(creator_user_id),
+            slug: "demo".to_owned(),
+            name: "Demo".to_owned(),
+            runtime: ProjectRuntime::Static,
+            repository_url: None,
+            default_branch: None,
+            install_command: None,
+            build_command: None,
+            output_directory: None,
+            source_config: serde_json::json!({}),
+            build_config: serde_json::json!({}),
+            archived_at: None,
+            deleted_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let db = MockDatabase::new(DbBackend::Postgres)
+            .append_query_results([[expected]])
+            .into_connection();
+
+        let created = create_project(
+            &db,
+            CreateProjectParams {
+                team_id,
+                created_by_user_id: Some(creator_user_id),
+                slug: "demo".to_owned(),
+                name: "Demo".to_owned(),
+                runtime: ProjectRuntime::Static,
+                repository_url: None,
+                default_branch: None,
+                install_command: None,
+                build_command: None,
+                output_directory: None,
+                source_config: serde_json::json!({}),
+                build_config: serde_json::json!({}),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(created.created_by_user_id, Some(creator_user_id));
+        let statements = format!("{:?}", db.into_transaction_log());
+        assert!(statements.contains("created_by_user_id"));
+        assert!(statements.contains(&creator_user_id.to_string()));
     }
 }

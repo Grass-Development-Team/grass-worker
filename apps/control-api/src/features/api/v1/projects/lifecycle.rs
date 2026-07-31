@@ -3,6 +3,7 @@ use axum::{
     extract::{Path, State},
     response::IntoResponse,
 };
+use sea_orm::{ConnectionTrait, TransactionTrait};
 use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
@@ -10,12 +11,12 @@ use uuid::Uuid;
 use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
-        projects,
+        notifications, projects,
         quotas::QuotaDimension,
         teams,
     },
     infra::{
-        database::entity::{AuditEventResult, ProjectRuntime, TeamMemberRole},
+        database::entity::{AuditEventResult, ProjectRuntime, TeamMemberRole, project},
         error::{AppError, ok_response},
         http::extractors::Session,
         quota::{QuotaCharge, QuotaService},
@@ -50,6 +51,42 @@ async fn record_lifecycle_audit(
     }
 }
 
+async fn record_lifecycle_event<C: ConnectionTrait>(
+    db: &C,
+    actor: Uuid,
+    action: &str,
+    project: &project::Model,
+    target_url: String,
+) -> anyhow::Result<()> {
+    audits::create_audit_event(
+        db,
+        CreateAuditEventParams {
+            actor_user_id: Some(actor),
+            actor_node_id: None,
+            team_id: Some(project.team_id),
+            action: action.to_owned(),
+            target_type: "project".to_owned(),
+            target_id: Some(project.id),
+            result: AuditEventResult::Success,
+            reason: None,
+            metadata: json!({}),
+        },
+    )
+    .await?;
+    notifications::create_project_notification(
+        db,
+        notifications::CreateProjectNotification {
+            project,
+            actor_user_id: actor,
+            action,
+            reason: None,
+            target_url,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
 fn runtime_dimension(runtime: &ProjectRuntime) -> QuotaDimension {
     match runtime {
         ProjectRuntime::Ssr => QuotaDimension::ProjectsSsr,
@@ -67,19 +104,32 @@ pub async fn archive(
     let access = super::project_access(&state, &session, project_id, false, OP).await?;
     access.require_admin(OP)?;
     let db = super::database(&state, OP)?;
-
-    let project = projects::set_archived(db, access.project, true)
+    let transaction = db
+        .begin()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let project = projects::set_archived(&transaction, access.project, true)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    record_lifecycle_audit(
-        &state,
+    record_lifecycle_event(
+        &transaction,
         session.data.user_id,
-        project.team_id,
         "project.archived",
-        project.id,
-        json!({}),
+        &project,
+        format!("/projects/{}", project.id),
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     Ok(ok_response(
         json!({ "project": super::project_view(&project) }),
@@ -96,19 +146,32 @@ pub async fn unarchive(
     let access = super::project_access(&state, &session, project_id, false, OP).await?;
     access.require_admin(OP)?;
     let db = super::database(&state, OP)?;
-
-    let project = projects::set_archived(db, access.project, false)
+    let transaction = db
+        .begin()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let project = projects::set_archived(&transaction, access.project, false)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    record_lifecycle_audit(
-        &state,
+    record_lifecycle_event(
+        &transaction,
         session.data.user_id,
-        project.team_id,
         "project.unarchived",
-        project.id,
-        json!({}),
+        &project,
+        format!("/projects/{}", project.id),
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     Ok(ok_response(
         json!({ "project": super::project_view(&project) }),
@@ -129,9 +192,32 @@ pub async fn delete(
 
     let runtime = access.project.runtime.clone();
     let team_id = access.project.team_id;
-    let project = projects::soft_delete(db, access.project)
+    let transaction = db
+        .begin()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let project = projects::soft_delete(&transaction, access.project)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    record_lifecycle_event(
+        &transaction,
+        session.data.user_id,
+        "project.deleted",
+        &project,
+        "/projects".to_owned(),
+    )
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     QuotaService::new(db, cache)
         .release(
@@ -145,16 +231,6 @@ pub async fn delete(
             Some(project.id),
         )
         .await?;
-    record_lifecycle_audit(
-        &state,
-        session.data.user_id,
-        project.team_id,
-        "project.deleted",
-        project.id,
-        json!({}),
-    )
-    .await;
-
     Ok(ok_response(
         json!({ "project": super::project_view(&project) }),
     ))
@@ -193,25 +269,45 @@ pub async fn restore(
         )
         .await?;
 
-    let project = match projects::restore(db, access.project).await {
+    let transaction = match db.begin().await {
+        Ok(transaction) => transaction,
+        Err(source) => {
+            quota.rollback(reservation).await;
+            return Err(AppError::Infrastructure {
+                op: OP,
+                source: source.into(),
+            });
+        }
+    };
+    let project = match projects::restore(&transaction, access.project).await {
         Ok(project) => project,
         Err(source) => {
             quota.rollback(reservation).await;
             return Err(AppError::Infrastructure { op: OP, source });
         }
     };
+    if let Err(source) = record_lifecycle_event(
+        &transaction,
+        session.data.user_id,
+        "project.restored",
+        &project,
+        format!("/projects/{}", project.id),
+    )
+    .await
+    {
+        quota.rollback(reservation).await;
+        return Err(AppError::Infrastructure { op: OP, source });
+    }
+    if let Err(source) = transaction.commit().await {
+        quota.rollback(reservation).await;
+        return Err(AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        });
+    }
     quota
         .commit(OP, reservation, "project", Some(project.id))
         .await?;
-    record_lifecycle_audit(
-        &state,
-        session.data.user_id,
-        project.team_id,
-        "project.restored",
-        project.id,
-        json!({}),
-    )
-    .await;
 
     Ok(ok_response(
         json!({ "project": super::project_view(&project) }),

@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
-        hosts,
+        hosts, notifications, projects,
     },
     infra::{
         database::entity::{
@@ -176,16 +176,40 @@ async fn decide(
             op: OP,
             source: source.into(),
         })?;
+    let action = if approved {
+        "domain.approved"
+    } else {
+        "domain.rejected"
+    };
     audits::create_platform_audit_event_with_changes(
         &transaction,
         CreateAuditEventParams {
             actor_user_id: Some(actor), actor_node_id: None, team_id: Some(updated.team_id),
-            action: if approved { "domain.approved" } else { "domain.rejected" }.to_owned(),
+            action: action.to_owned(),
             target_type: "project_host_binding".to_owned(), target_id: Some(updated.id),
             result: AuditEventResult::Success, reason: reason.clone(), metadata: json!({ "platform_admin": true, "project_id": updated.project_id }),
         },
         json!({ "before": before, "after": { "review_status": review_status(&updated.review_status), "status": binding_status(&updated.status) } }),
     ).await.map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let project = projects::get_by_id_any(&transaction, updated.project_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "project not found".to_owned(),
+        })?;
+    notifications::create_project_notification(
+        &transaction,
+        notifications::CreateProjectNotification {
+            project: &project,
+            actor_user_id: actor,
+            action,
+            reason: reason.clone(),
+            target_url: format!("/projects/{}/domains", project.id),
+        },
+    )
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     transaction
         .commit()
         .await
@@ -237,6 +261,25 @@ pub async fn remove(
             },
             json!({ "before": { "host": binding.host, "deleted": false }, "after": { "deleted": true } }),
         ).await.map_err(|source| AppError::Infrastructure { op: OP, source })?;
+        let project = projects::get_by_id_any(&transaction, binding.project_id)
+            .await
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?
+            .ok_or_else(|| AppError::NotFound {
+                op: OP,
+                message: "project not found".to_owned(),
+            })?;
+        notifications::create_project_notification(
+            &transaction,
+            notifications::CreateProjectNotification {
+                project: &project,
+                actor_user_id: data.user_id,
+                action: "domain.deleted",
+                reason: reason.clone(),
+                target_url: format!("/projects/{}/domains", project.id),
+            },
+        )
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     }
     transaction
         .commit()

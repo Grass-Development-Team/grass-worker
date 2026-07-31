@@ -701,6 +701,7 @@ mod tests {
         let project = project::ActiveModel {
             id: Set(Uuid::now_v7()),
             team_id: Set(team.id),
+            created_by_user_id: Set(None),
             slug: Set(format!("project-{}", Uuid::now_v7().simple())),
             name: Set("Delivery Project".to_owned()),
             runtime: Set(ProjectRuntime::Static),

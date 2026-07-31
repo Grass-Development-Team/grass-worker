@@ -4,6 +4,7 @@ pub mod deployments;
 pub mod hosts;
 pub mod node_deletions;
 pub mod nodes;
+pub mod notifications;
 pub mod projects;
 pub mod quotas;
 pub mod scheduler;

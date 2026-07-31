@@ -23,6 +23,9 @@ vi.mock("@/features/teams/team-settings-guard", () => ({
 vi.mock("@/features/teams/accept-invitation-route", () => ({
   AcceptInvitationRoute: () => <div>Invitation page</div>,
 }));
+vi.mock("@/features/notifications/notifications-route", () => ({
+  NotificationsRoute: () => <div>Notifications page</div>,
+}));
 
 function setUser(platformRole: "admin" | "user") {
   vi.mocked(useAuth).mockReturnValue({
@@ -88,4 +91,16 @@ it("allows unauthenticated visitors to inspect an invitation link", () => {
   );
 
   expect(screen.getByText("Invitation page")).toBeInTheDocument();
+});
+
+it("allows authenticated users to open notifications", () => {
+  setUser("user");
+
+  render(
+    <MemoryRouter initialEntries={["/notifications"]}>
+      <Router />
+    </MemoryRouter>,
+  );
+
+  expect(screen.getByText("Notifications page")).toBeInTheDocument();
 });
