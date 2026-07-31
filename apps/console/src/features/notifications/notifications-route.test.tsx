@@ -66,18 +66,18 @@ describe("Notifications route", () => {
     vi.mocked(notificationsApi.markRead).mockResolvedValue({ ok: true });
   });
 
-  it("shows governance context, optional reason, unread state and target links", async () => {
+  it("appends the reason to the message without exposing the administrator", async () => {
     renderRoute();
 
-    expect(await screen.findByText("Project slug changed")).toBeInTheDocument();
-    expect(screen.getAllByText("Demo")).toHaveLength(2);
-    expect(screen.getAllByText("Platform Admin", { exact: false, selector: "p" })).toHaveLength(2);
-    expect(screen.getByText("Reserved wording")).toBeInTheDocument();
-    expect(screen.getByText("Unread")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open Project slug changed" })).toHaveAttribute(
-      "href",
-      "/projects/project-1",
-    );
+    expect(
+      await screen.findByRole("heading", { name: "Project slug changed: Reserved wording" }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText(/Demo \/ demo-site/)).toHaveLength(2);
+    expect(screen.queryByText("Platform Admin", { exact: false })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Unread")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /Project slug changed: Reserved wording/i }),
+    ).toHaveAttribute("href", "/projects/project-1");
   });
 
   it("marks every unread notification as read", async () => {

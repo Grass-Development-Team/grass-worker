@@ -77,6 +77,21 @@ async fn invalidate_best_effort_at_urls(
     }
 }
 
+fn finish_post_commit_invalidation(
+    result: anyhow::Result<()>,
+    deployment_id: Uuid,
+    operation: &'static str,
+) {
+    if let Err(error) = result {
+        tracing::warn!(
+            operation,
+            %deployment_id,
+            %error,
+            "route invalidation failed after the deployment change was committed"
+        );
+    }
+}
+
 pub async fn invalidate_deployment(
     db: &sea_orm::DatabaseConnection,
     secret_key: &str,
@@ -120,6 +135,19 @@ pub async fn invalidate_deployment(
     active_result
 }
 
+pub async fn invalidate_deployment_best_effort(
+    db: &sea_orm::DatabaseConnection,
+    secret_key: &str,
+    deployment_id: Uuid,
+    operation: &'static str,
+) {
+    finish_post_commit_invalidation(
+        invalidate_deployment(db, secret_key, deployment_id).await,
+        deployment_id,
+        operation,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -132,7 +160,9 @@ mod tests {
     use serde_json::Value;
     use uuid::Uuid;
 
-    use super::{invalidate_at_urls, invalidate_best_effort_at_urls};
+    use super::{
+        finish_post_commit_invalidation, invalidate_at_urls, invalidate_best_effort_at_urls,
+    };
 
     #[tokio::test]
     async fn broadcasts_authenticated_route_invalidation_to_serve_nodes() {
@@ -229,5 +259,14 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("did not acknowledge"));
+    }
+
+    #[test]
+    fn post_commit_invalidation_does_not_fail_a_completed_withdrawal() {
+        finish_post_commit_invalidation(
+            Err(anyhow::anyhow!("Serve Node unavailable")),
+            Uuid::now_v7(),
+            "deployments.unpublish",
+        );
     }
 }

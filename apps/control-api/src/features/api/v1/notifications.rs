@@ -52,10 +52,6 @@ fn notification_view(item: &user_notification::Model) -> serde_json::Value {
             "name": item.project_name,
             "slug": item.project_slug,
         },
-        "actor": {
-            "id": item.actor_user_id,
-            "label": item.actor_label,
-        },
         "reason": item.reason,
         "target_url": item.target_url,
         "read_at": ts(item.read_at),
@@ -137,7 +133,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn notification_response_contains_actor_project_reason_and_target() {
+    fn notification_response_hides_actor_and_contains_project_reason_and_target() {
         let item = user_notification::Model {
             id: Uuid::now_v7(),
             recipient_user_id: Uuid::now_v7(),
@@ -159,7 +155,7 @@ mod tests {
         assert_eq!(value["title"], "Project slug changed");
         assert_eq!(value["project"]["name"], "Demo");
         assert_eq!(value["project"]["slug"], "demo-site");
-        assert_eq!(value["actor"]["label"], "Platform Admin");
+        assert!(value.get("actor").is_none());
         assert_eq!(value["reason"], "Reserved wording");
         assert_eq!(value["target_url"], "/projects/demo/deployments");
         assert!(value["read_at"].is_null());

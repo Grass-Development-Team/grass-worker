@@ -1,19 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeftIcon, ArrowRightIcon, ArrowUpRightIcon, CheckCheckIcon } from "lucide-react";
+import { ArrowLeftIcon, ArrowRightIcon, CheckCheckIcon } from "lucide-react";
 import { useState } from "react";
-import { Link } from "react-router";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { NotificationItems } from "./notification-items";
 import { notificationsApi } from "./notifications.api";
-
-function formatTimestamp(value: string) {
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value));
-}
 
 function errorMessage(cause: unknown) {
   return cause instanceof Error ? cause.message : "Unable to update notifications.";
@@ -96,46 +88,13 @@ export function NotificationsRoute() {
           No notifications.
         </div>
       ) : (
-        <div className="divide-y border-y">
-          {query.data.notifications.map((item) => (
-            <article
-              key={item.id}
-              className={`grid gap-4 py-5 md:grid-cols-[minmax(0,1fr)_auto] ${
-                item.read_at ? "opacity-75" : ""
-              }`}
-            >
-              <div className="min-w-0 space-y-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-sm font-semibold">{item.title}</h2>
-                  {!item.read_at && <Badge variant="secondary">Unread</Badge>}
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  <span className="font-medium text-foreground">{item.project.name}</span>
-                  <span className="px-1.5 text-muted-foreground/60">/</span>
-                  <span>{item.project.slug}</span>
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {item.actor.label} · {formatTimestamp(item.created_at)}
-                </p>
-                {item.reason && (
-                  <p className="border-l-2 pl-3 text-sm text-foreground/90">{item.reason}</p>
-                )}
-              </div>
-              <div className="flex items-start justify-end">
-                <Button asChild variant="ghost" size="icon">
-                  <Link
-                    to={item.target_url}
-                    aria-label={`Open ${item.title}`}
-                    onClick={() => {
-                      if (!item.read_at) markRead.mutate(item.id);
-                    }}
-                  >
-                    <ArrowUpRightIcon />
-                  </Link>
-                </Button>
-              </div>
-            </article>
-          ))}
+        <div className="overflow-hidden rounded-md border">
+          <NotificationItems
+            notifications={query.data.notifications}
+            onOpen={(item) => {
+              if (!item.read_at) markRead.mutate(item.id);
+            }}
+          />
         </div>
       )}
 

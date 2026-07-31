@@ -1116,9 +1116,7 @@ pub async fn unpublish(
             source: source.into(),
         })?;
     let secret_key = state.config.read().unwrap().secrets.secret_key.clone();
-    route_invalidation::invalidate_deployment(db, &secret_key, deployment.id)
-        .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    route_invalidation::invalidate_deployment_best_effort(db, &secret_key, deployment.id, OP).await;
 
     let urls = UrlContext::load(db, access.project.id)
         .await
@@ -1319,6 +1317,26 @@ pub async fn rollback(
     .await
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ActivationAction {
+    Release,
+    RequestReview,
+}
+
+fn activation_action(
+    status: &DeploymentReleaseStatus,
+    review_required: bool,
+) -> Result<ActivationAction, &'static str> {
+    match status {
+        DeploymentReleaseStatus::Rejected => {
+            Err("rejected deployments must be re-submitted for review")
+        }
+        DeploymentReleaseStatus::PendingReview => Err("deployment is waiting for review"),
+        DeploymentReleaseStatus::Draft if review_required => Ok(ActivationAction::RequestReview),
+        _ => Ok(ActivationAction::Release),
+    }
+}
+
 async fn activate_deployment(
     state: ControlApiState,
     session: Session,
@@ -1351,27 +1369,13 @@ async fn activate_deployment(
         .await
         .map_err(|source| AppError::Infrastructure { op, source })?;
     let review_required = matches!(policy.mode_for(&deployment.environment), ReviewMode::Manual);
-    match deployment.release_status {
-        DeploymentReleaseStatus::Rejected => {
-            return Err(AppError::Conflict {
+    let action =
+        activation_action(&deployment.release_status, review_required).map_err(|message| {
+            AppError::Conflict {
                 op,
-                message: "rejected deployments must be re-submitted for review".to_owned(),
-            });
-        }
-        DeploymentReleaseStatus::PendingReview => {
-            return Err(AppError::Conflict {
-                op,
-                message: "deployment is waiting for review".to_owned(),
-            });
-        }
-        DeploymentReleaseStatus::Draft if review_required => {
-            return Err(AppError::Conflict {
-                op,
-                message: "release review is required before activation".to_owned(),
-            });
-        }
-        _ => {}
-    }
+                message: message.to_owned(),
+            }
+        })?;
 
     let transaction = db
         .begin()
@@ -1380,18 +1384,50 @@ async fn activate_deployment(
             op,
             source: source.into(),
         })?;
-    let outcome = delivery::request_release(
-        &transaction,
-        deployment,
-        reason.clone(),
-        session.data.user_id,
-        AuditEventVisibility::Team,
-    )
-    .await
-    .map_err(|error| map_delivery_error(error, op))?;
-    let (deployment, release_pending) = match outcome {
-        ReleaseRequestOutcome::Activated(deployment) => (deployment, false),
-        ReleaseRequestOutcome::SyncQueued(deployment) => (deployment, true),
+    let (deployment, release_pending, review_id, audit_action) = match action {
+        ActivationAction::RequestReview => {
+            let deployment = deployments::get_by_id_for_update(&transaction, deployment.id)
+                .await
+                .map_err(|source| AppError::Infrastructure {
+                    op,
+                    source: source.into(),
+                })?
+                .ok_or_else(|| AppError::NotFound {
+                    op,
+                    message: "deployment not found".to_owned(),
+                })?;
+            let (deployment, review) =
+                deployments::request_review(&transaction, deployment, Some(session.data.user_id))
+                    .await
+                    .map_err(|error| map_state_error(error, op))?;
+            (
+                deployment,
+                false,
+                Some(review.id),
+                "deployment.review_requested",
+            )
+        }
+        ActivationAction::Release => {
+            let outcome = delivery::request_release(
+                &transaction,
+                deployment,
+                reason.clone(),
+                session.data.user_id,
+                AuditEventVisibility::Team,
+            )
+            .await
+            .map_err(|error| map_delivery_error(error, op))?;
+            let (deployment, release_pending) = match outcome {
+                ReleaseRequestOutcome::Activated(deployment) => (deployment, false),
+                ReleaseRequestOutcome::SyncQueued(deployment) => (deployment, true),
+            };
+            (
+                deployment,
+                release_pending,
+                None,
+                delivery::release_audit_action(&reason, release_pending),
+            )
+        }
     };
     audits::create_audit_event(
         &transaction,
@@ -1399,7 +1435,7 @@ async fn activate_deployment(
             actor_user_id: Some(session.data.user_id),
             actor_node_id: None,
             team_id: Some(access.team.id),
-            action: delivery::release_audit_action(&reason, release_pending).to_owned(),
+            action: audit_action.to_owned(),
             target_type: "deployment".to_owned(),
             target_id: Some(deployment.id),
             result: AuditEventResult::Success,
@@ -1407,6 +1443,7 @@ async fn activate_deployment(
             metadata: json!({
                 "project_id": project_id,
                 "release_pending": release_pending,
+                "review_id": review_id,
             }),
         },
     )
@@ -1436,6 +1473,7 @@ async fn activate_deployment(
             &nodes,
         ),
         "release_pending": release_pending,
+        "review_id": review_id,
     });
     Ok(if release_pending {
         accepted_response(response).into_response()
@@ -1447,6 +1485,30 @@ async fn activate_deployment(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manual_review_drafts_are_submitted_instead_of_rejected() {
+        assert_eq!(
+            activation_action(&DeploymentReleaseStatus::Draft, true),
+            Ok(ActivationAction::RequestReview)
+        );
+        assert_eq!(
+            activation_action(&DeploymentReleaseStatus::Draft, false),
+            Ok(ActivationAction::Release)
+        );
+    }
+
+    #[test]
+    fn pending_and_rejected_deployments_cannot_be_activated_directly() {
+        assert_eq!(
+            activation_action(&DeploymentReleaseStatus::PendingReview, true),
+            Err("deployment is waiting for review")
+        );
+        assert_eq!(
+            activation_action(&DeploymentReleaseStatus::Rejected, true),
+            Err("rejected deployments must be re-submitted for review")
+        );
+    }
 
     #[test]
     fn deployment_request_defaults_to_automatic_placement() {

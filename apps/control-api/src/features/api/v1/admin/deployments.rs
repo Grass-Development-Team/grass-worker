@@ -176,9 +176,7 @@ pub async fn withdraw(
             source: source.into(),
         })?;
     let secret_key = state.config.read().unwrap().secrets.secret_key.clone();
-    route_invalidation::invalidate_deployment(db, &secret_key, deployment.id)
-        .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    route_invalidation::invalidate_deployment_best_effort(db, &secret_key, deployment.id, OP).await;
 
     Ok(ok_response(json!({
         "deployment": deployment_view(&deployment),

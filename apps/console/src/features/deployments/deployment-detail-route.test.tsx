@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
@@ -139,17 +140,40 @@ it("allows a team administrator to unpublish an active deployment", async () => 
   expect(await screen.findByRole("button", { name: "Unpublish" })).toBeEnabled();
 });
 
-it("does not let team members request platform moderation", async () => {
+it("lets a team administrator publish a withdrawn draft into review", async () => {
+  const user = userEvent.setup();
   renderDetail({
     ...detailFixture({
-      serve_status: "ready",
+      serve_status: "retired",
       release_status: "draft",
     }),
     review_required: true,
   });
 
   expect(await screen.findByText("Draft")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Request review" })).not.toBeInTheDocument();
+  const publish = screen.getByRole("button", { name: "Publish" });
+  expect(publish).toBeEnabled();
+
+  await user.click(publish);
+
+  expect(globalThis.fetch).toHaveBeenCalledWith(
+    "/api/v1/projects/project-1/deployments/deployment-1/promote",
+    expect.objectContaining({ method: "POST" }),
+  );
+});
+
+it("shows a waiting state without actions while review is pending", async () => {
+  renderDetail({
+    ...detailFixture({
+      serve_status: "retired",
+      release_status: "pending_review",
+    }),
+    review_required: true,
+  });
+
+  expect(await screen.findByText("Waiting for review")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Publish" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Promote" })).not.toBeInTheDocument();
 });
 
 it("allows an administrator to queue rollback for a retired deployment", async () => {

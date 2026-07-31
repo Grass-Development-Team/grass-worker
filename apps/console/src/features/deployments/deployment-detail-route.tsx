@@ -90,6 +90,7 @@ export function DeploymentDetailRoute() {
   const buildReady = deployment.build_status === "ready";
   const lifecycleReady = buildReady && deployment.serve_status === "ready";
   const canQueueRelease = buildReady && deployment.serve_status === "retired";
+  const showPublish = buildReady && detail.review_required && deployment.release_status === "draft";
 
   const showPromote =
     buildReady &&
@@ -140,6 +141,12 @@ export function DeploymentDetailRoute() {
         </p>
       )}
 
+      {deployment.release_status === "pending_review" && (
+        <p role="status" className="text-sm text-muted-foreground">
+          Waiting for review
+        </p>
+      )}
+
       <div className="flex flex-wrap gap-2">
         {running && canMutate && (
           <Button
@@ -166,6 +173,14 @@ export function DeploymentDetailRoute() {
             disabled={unpublishMutation.isPending}
           >
             <BanIcon /> Unpublish
+          </Button>
+        )}
+        {showPublish && isAdmin && (
+          <Button
+            onClick={() => act(promoteMutation.mutateAsync)}
+            disabled={promoteMutation.isPending}
+          >
+            <RocketIcon /> Publish
           </Button>
         )}
         {showPromote && isAdmin && (
