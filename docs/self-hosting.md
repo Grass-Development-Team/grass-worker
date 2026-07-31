@@ -151,9 +151,10 @@ serve = true
 ```
 
 For every Serve-capable Node, set `serve.public_base_url` to an absolute
-HTTP(S) URL that every other Serve Node can reach. This is the address used
-for one-hop gateway traffic, so `127.0.0.1` is only suitable for a
-single-machine cluster:
+HTTP(S) URL that every other Serve Node and the Control API can reach. This
+address is used for one-hop gateway traffic and immediate route invalidation,
+so `127.0.0.1` is only suitable when the Control API and Node share the same
+machine:
 
 ```toml
 [serve]
@@ -227,8 +228,8 @@ Administration → Host sources and mark it as the default.
 Every Serve Node holds the same Host route snapshot. If DNS sends a request to
 a Node that does not own that deployment, the receiving Node streams it to the
 assigned Node through one authenticated peer hop. Make every
-`serve.public_base_url` reachable between Serve Nodes and allow the serve port
-through internal firewalls.
+`serve.public_base_url` reachable from every Serve Node and the Control API,
+and allow the serve port through internal firewalls.
 
 Without wildcard DNS, add a **DNS provider (Cloudflare)** source instead:
 provide an API token with the Zone / DNS / Edit permission, the zone ID,
@@ -242,6 +243,12 @@ editing a source only overwrites the fields you fill in.
 
 A **Manual** source assigns domains without touching DNS; bindings stay
 `pending` until an operator creates the record and re-runs provisioning.
+
+Custom domains use the Domain Review Policy configured under Administration
+settings. The platform default is `auto`; a Team Group can override it with
+`auto`, `manual`, or inherit the platform default. Manual review keeps a new
+custom binding unavailable until an administrator approves it. Domains
+assigned from a platform Host Source do not require domain review.
 
 New projects automatically receive `slug.apps.example.com`; preview
 deployments receive unique `slug-xxxxxxxx.apps.example.com` hosts.

@@ -15,6 +15,7 @@ import { AcceptInvitationRoute } from "@/features/teams/accept-invitation-route"
 import { AdminRoute } from "@/features/admin/admin-route";
 import { ReviewsPanel } from "@/features/admin/components/reviews-panel";
 import { ProjectsPanel } from "@/features/admin/components/projects-panel";
+import { ProjectGovernancePage } from "@/features/admin/components/project-governance-page";
 import { NodesPanel } from "@/features/admin/components/nodes-panel";
 import { HostSourcesPanel } from "@/features/admin/components/host-sources-panel";
 import { QuotaPlansPanel } from "@/features/admin/components/quota-plans-panel";
@@ -33,6 +34,7 @@ import { ProjectSettingsRoute } from "@/features/projects/project-settings-route
 import { ProjectSettingsBuildRoute } from "@/features/projects/project-settings-build-route";
 import { DeploymentDetailRoute } from "@/features/deployments/deployment-detail-route";
 import { TeamAuditRoute } from "@/features/audit/team-audit-route";
+import { NotificationsRoute } from "@/features/notifications/notifications-route";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
@@ -97,6 +99,7 @@ export function Router() {
         <Route path="/" element={<DashboardRoute />} />
         <Route path="/dashboard" element={<Navigate to="/" replace />} />
         <Route path="/quota" element={<QuotaRoute />} />
+        <Route path="/notifications" element={<NotificationsRoute />} />
         <Route path="/projects" element={<ProjectsRoute />} />
         <Route path="/projects/:projectId" element={<ProjectLayout />}>
           <Route index element={<ProjectOverviewRoute />} />
@@ -117,6 +120,7 @@ export function Router() {
           <Route index element={<Navigate to="/admin/reviews" replace />} />
           <Route path="reviews" element={<ReviewsPanel />} />
           <Route path="projects" element={<ProjectsPanel />} />
+          <Route path="projects/:projectId" element={<ProjectGovernancePage />} />
           <Route path="nodes" element={<NodesPanel />} />
           <Route path="host-sources" element={<HostSourcesPanel />} />
           <Route path="quota-plans" element={<QuotaPlansPanel />} />

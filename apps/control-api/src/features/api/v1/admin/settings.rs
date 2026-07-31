@@ -22,6 +22,7 @@ const PUBLIC_BASE_URL_KEY: &str = "site.public_base_url";
 const STORAGE_ROOT_KEY: &str = "storage.root";
 const SIGNUP_POLICY_KEY: &str = "signup.policy";
 const REVIEW_POLICY_KEY: &str = "release_review_policy.default";
+const DOMAIN_REVIEW_POLICY_KEY: &str = "domain_review_policy.default";
 
 async fn setting_string<C: ConnectionTrait>(
     db: &C,
@@ -44,6 +45,9 @@ pub async fn get(State(state): State<ControlApiState>) -> Result<impl IntoRespon
         .map_err(|source| AppError::Infrastructure { op: OP, source })?
         .map(|setting| setting.value)
         .unwrap_or_else(|| json!({}));
+    let domain_review = setting_string(db, DOMAIN_REVIEW_POLICY_KEY, OP)
+        .await?
+        .unwrap_or_else(|| "auto".to_owned());
     let config = state.config.read().unwrap().clone();
     let storage_root = setting_string(db, STORAGE_ROOT_KEY, OP)
         .await?
@@ -67,6 +71,9 @@ pub async fn get(State(state): State<ControlApiState>) -> Result<impl IntoRespon
         "review": {
             "production": review.get("production").and_then(|v| v.as_str()).unwrap_or("manual"),
             "preview": review.get("preview").and_then(|v| v.as_str()).unwrap_or("auto"),
+        },
+        "domain_review": {
+            "default": domain_review,
         },
         "server": {
             "host": config.server.host,
@@ -103,6 +110,7 @@ pub struct UpdateSettingsRequest {
     pub signup_policy: Option<String>,
     pub review_production: Option<String>,
     pub review_preview: Option<String>,
+    pub domain_review_default: Option<String>,
     pub server_host: Option<String>,
     pub server_port: Option<u16>,
     pub redis_backend: Option<String>,
@@ -127,6 +135,7 @@ struct PreparedSettingsUpdate {
     signup_policy: Option<String>,
     review_production: Option<String>,
     review_preview: Option<String>,
+    domain_review_default: Option<String>,
     server_host: Option<std::net::IpAddr>,
     server_port: Option<u16>,
     redis_backend: Option<grass_cache::CacheBackend>,
@@ -384,6 +393,12 @@ fn prepare_settings_update(
     if let Some(mode) = review_preview.as_deref() {
         validate_review_mode(mode, op)?;
     }
+    let domain_review_default = body
+        .domain_review_default
+        .map(|value| value.trim().to_owned());
+    if let Some(mode) = domain_review_default.as_deref() {
+        validate_review_mode(mode, op)?;
+    }
 
     let storage_root = body
         .storage_root
@@ -512,6 +527,7 @@ fn prepare_settings_update(
         signup_policy,
         review_production,
         review_preview,
+        domain_review_default,
         server_host,
         server_port: body.server_port,
         redis_backend,
@@ -534,6 +550,7 @@ fn prepare_settings_update(
         && prepared.signup_policy.is_none()
         && prepared.review_production.is_none()
         && prepared.review_preview.is_none()
+        && prepared.domain_review_default.is_none()
         && prepared.server_host.is_none()
         && prepared.server_port.is_none()
         && prepared.redis_backend.is_none()
@@ -729,6 +746,22 @@ pub async fn update(
         );
         changed.push("review_policy");
     }
+    if let Some(policy) = body.domain_review_default.as_deref() {
+        let current = setting_string(&transaction, DOMAIN_REVIEW_POLICY_KEY, OP)
+            .await?
+            .unwrap_or_else(|| "auto".to_owned());
+        before.insert("domain_review_default".to_owned(), json!(current));
+        settings::set_setting(
+            &transaction,
+            DOMAIN_REVIEW_POLICY_KEY,
+            SystemSettingValueKind::Json,
+            json!(policy),
+        )
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+        after.insert("domain_review_default".to_owned(), json!(policy));
+        changed.push("domain_review_default");
+    }
 
     if let Some(root) = body.storage_root.as_deref() {
         let configured_root = state.config.read().unwrap().storage.root.clone();
@@ -827,6 +860,7 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
+                Vec::new(),
             ])
             .into_connection();
         let mut config = ControlApiConfig::default();
@@ -905,6 +939,10 @@ mod tests {
             data["restart_required_sections"],
             serde_json::json!(["server", "redis", "node_manager", "migration", "log"])
         );
+        assert_eq!(
+            data["domain_review"],
+            serde_json::json!({ "default": "auto" })
+        );
 
         let serialized = String::from_utf8(bytes.to_vec()).unwrap();
         assert!(!serialized.contains("database-secret"));
@@ -947,6 +985,7 @@ mod tests {
             vec![updated.clone()],
             Vec::<crate::infra::database::entity::system_setting::Model>::new(),
             vec![updated],
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
             Vec::<crate::infra::database::entity::system_setting::Model>::new(),
             Vec::<crate::infra::database::entity::system_setting::Model>::new(),
             Vec::<crate::infra::database::entity::system_setting::Model>::new(),
@@ -1007,6 +1046,21 @@ mod tests {
     }
 
     #[test]
+    fn domain_review_default_accepts_only_auto_or_manual() {
+        let automatic: UpdateSettingsRequest = serde_json::from_value(serde_json::json!({
+            "domain_review_default": "auto"
+        }))
+        .unwrap();
+        let invalid: UpdateSettingsRequest = serde_json::from_value(serde_json::json!({
+            "domain_review_default": "sometimes"
+        }))
+        .unwrap();
+
+        assert!(prepare_settings_update(automatic, "test.settings.prepare").is_ok());
+        assert!(prepare_settings_update(invalid, "test.settings.prepare").is_err());
+    }
+
+    #[test]
     fn session_ttl_must_fit_timestamp_arithmetic() {
         let request: UpdateSettingsRequest = serde_json::from_value(serde_json::json!({
             "session_ttl_seconds": (i64::MAX as u64) + 1
@@ -1021,6 +1075,7 @@ mod tests {
         let db = MockDatabase::new(sea_orm::DbBackend::Postgres)
             .append_query_results([
                 Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+                Vec::new(),
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),

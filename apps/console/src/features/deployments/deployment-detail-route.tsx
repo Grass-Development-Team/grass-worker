@@ -55,6 +55,9 @@ export function DeploymentDetailRoute() {
   const retryMutation = useMutation({
     mutationFn: () => deploymentsApi.retry(projectId as string, deploymentId as string),
   });
+  const unpublishMutation = useMutation({
+    mutationFn: () => deploymentsApi.unpublish(projectId as string, deploymentId as string),
+  });
   const promoteMutation = useMutation({
     mutationFn: () => deploymentsApi.promote(projectId as string, deploymentId as string),
   });
@@ -80,7 +83,10 @@ export function DeploymentDetailRoute() {
   const running = isBuildRunning(deployment.build_status);
   const canMutate = activeRole ? canContributeToProjects(activeRole) : false;
   const isAdmin = activeRole ? canManageMembers(activeRole) : false;
-  const url = deployment.production_url ?? deployment.preview_url;
+  const url =
+    deployment.environment === "preview"
+      ? (deployment.preview_url ?? deployment.production_url)
+      : (deployment.production_url ?? deployment.preview_url);
   const buildReady = deployment.build_status === "ready";
   const lifecycleReady = buildReady && deployment.serve_status === "ready";
   const canQueueRelease = buildReady && deployment.serve_status === "retired";
@@ -151,6 +157,15 @@ export function DeploymentDetailRoute() {
             disabled={retryMutation.isPending}
           >
             <RotateCcwIcon /> Retry
+          </Button>
+        )}
+        {deployment.release_status === "active" && isAdmin && (
+          <Button
+            variant="outline"
+            onClick={() => act(unpublishMutation.mutateAsync)}
+            disabled={unpublishMutation.isPending}
+          >
+            <BanIcon /> Unpublish
           </Button>
         )}
         {showPromote && isAdmin && (

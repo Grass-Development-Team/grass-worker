@@ -12,6 +12,13 @@ vi.mock("@/features/teams/team-context", () => ({ useTeam: vi.fn() }));
 vi.mock("@/features/teams/team-switcher", () => ({
   TeamSwitcher: () => <div>Team switcher</div>,
 }));
+vi.mock("@/features/notifications/notification-bell", () => ({
+  NotificationBell: () => (
+    <a href="/notifications" aria-label="Notifications">
+      Notifications
+    </a>
+  ),
+}));
 vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => false }));
 
 function renderLayout(
@@ -70,5 +77,13 @@ describe("App layout administration navigation", () => {
     renderLayout("user");
     expect(screen.getByRole("link", { name: "Acme Deploy Console" })).toBeInTheDocument();
     expect(screen.getByText("Acme Deploy")).toBeInTheDocument();
+  });
+
+  it("shows the notifications entry in the application header", () => {
+    renderLayout("user");
+    expect(screen.getByRole("link", { name: "Notifications" })).toHaveAttribute(
+      "href",
+      "/notifications",
+    );
   });
 });

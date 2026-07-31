@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckIcon, ExternalLinkIcon, InboxIcon, RocketIcon, XIcon } from "lucide-react";
+import { CheckIcon, ExternalLinkIcon, InboxIcon, XIcon } from "lucide-react";
 import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -66,8 +66,7 @@ export function ReviewsPanel() {
   };
 
   const approveMutation = useMutation({
-    mutationFn: ({ deploymentId, promote }: { deploymentId: string; promote: boolean }) =>
-      adminApi.approveReview(deploymentId, { promote }),
+    mutationFn: (deploymentId: string) => adminApi.approveReview(deploymentId),
     onSuccess: () => {
       setError(null);
       invalidate();
@@ -79,8 +78,8 @@ export function ReviewsPanel() {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Deployments waiting for release review across all teams. Approve unblocks the team's Promote
-        button; Approve &amp; promote publishes after the target is ready on a Serve Node.
+        Deployments waiting for release review across all teams. Approval publishes immediately or
+        queues Serve synchronization when the artifact needs to be restored.
       </p>
 
       {error && (
@@ -169,28 +168,10 @@ export function ReviewsPanel() {
                       <div className="flex justify-end gap-1">
                         <Button
                           size="sm"
-                          variant="outline"
-                          onClick={() =>
-                            approveMutation.mutate({
-                              deploymentId: review.deployment.id,
-                              promote: false,
-                            })
-                          }
+                          onClick={() => approveMutation.mutate(review.deployment.id)}
                           disabled={!decisionsReady || approveMutation.isPending}
                         >
                           <CheckIcon /> Approve
-                        </Button>
-                        <Button
-                          size="sm"
-                          onClick={() =>
-                            approveMutation.mutate({
-                              deploymentId: review.deployment.id,
-                              promote: true,
-                            })
-                          }
-                          disabled={!decisionsReady || approveMutation.isPending}
-                        >
-                          <RocketIcon /> Approve &amp; promote
                         </Button>
                         <Button
                           size="sm"

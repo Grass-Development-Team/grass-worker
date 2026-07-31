@@ -37,6 +37,7 @@ fn group_view(group: &team_group::Model) -> serde_json::Value {
         "review_policy": {
             "production": review_policy.and_then(|policy| policy.get("production")),
             "preview": review_policy.and_then(|policy| policy.get("preview")),
+            "domain": review_policy.and_then(|policy| policy.get("domain")),
         },
         "is_default": group.is_default,
         "created_at": ts(group.created_at),
@@ -170,6 +171,8 @@ pub struct ReviewPolicyOverrideRequest {
     pub production: Option<String>,
     #[serde(default)]
     pub preview: Option<String>,
+    #[serde(default)]
+    pub domain: Option<String>,
 }
 
 fn review_policy_value(
@@ -189,7 +192,8 @@ fn review_policy_value(
 
     let production = validate_mode(policy.production, op)?;
     let preview = validate_mode(policy.preview, op)?;
-    if production.is_none() && preview.is_none() {
+    let domain = validate_mode(policy.domain, op)?;
+    if production.is_none() && preview.is_none() && domain.is_none() {
         return Ok(None);
     }
     let mut value = serde_json::Map::new();
@@ -198,6 +202,9 @@ fn review_policy_value(
     }
     if let Some(preview) = preview {
         value.insert("preview".to_owned(), json!(preview));
+    }
+    if let Some(domain) = domain {
+        value.insert("domain".to_owned(), json!(domain));
     }
     Ok(Some(serde_json::Value::Object(value)))
 }
@@ -491,4 +498,21 @@ pub async fn assign(
     Ok(ok_response(json!({
         "team": { "id": team.id, "slug": team.slug, "group_id": team.group_id },
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn review_policy_accepts_a_domain_override() {
+        let request: ReviewPolicyOverrideRequest = serde_json::from_value(serde_json::json!({
+            "domain": "manual",
+        }))
+        .unwrap();
+
+        let value = review_policy_value(request, "test.team_groups.review_policy").unwrap();
+
+        assert_eq!(value, Some(serde_json::json!({ "domain": "manual" })));
+    }
 }

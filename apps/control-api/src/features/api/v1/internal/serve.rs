@@ -393,7 +393,10 @@ pub async fn routes(
     let db = super::database(&state, OP)?;
     let deployments = deployment::Entity::find()
         .filter(deployment::Column::BuildStatus.eq(DeploymentBuildStatus::Ready))
-        .filter(deployment::Column::ServeStatus.eq(DeploymentServeStatus::Ready))
+        .filter(
+            deployment::Column::ServeStatus
+                .is_in([DeploymentServeStatus::Ready, DeploymentServeStatus::Retired]),
+        )
         .filter(deployment::Column::DeletedAt.is_null())
         .filter(
             Condition::any()

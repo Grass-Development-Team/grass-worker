@@ -65,6 +65,7 @@ pub fn can_transition_release(
             | (R::Rejected, R::PendingReview)
             | (R::Approved, R::Active)
             | (R::Active, R::Approved)
+            | (R::Active, R::Draft)
     )
 }
 
@@ -141,13 +142,12 @@ fn validate_release_readiness(
     build_status: &DeploymentBuildStatus,
     serve_status: &DeploymentServeStatus,
 ) -> Result<(), DeploymentStateError> {
-    if matches!(
-        (from, to),
-        (
-            DeploymentReleaseStatus::Active,
-            DeploymentReleaseStatus::Approved
+    if matches!(from, DeploymentReleaseStatus::Active)
+        && matches!(
+            to,
+            DeploymentReleaseStatus::Approved | DeploymentReleaseStatus::Draft
         )
-    ) {
+    {
         return Ok(());
     }
     if !matches!(build_status, DeploymentBuildStatus::Ready) {
@@ -1012,10 +1012,10 @@ mod tests {
         assert!(can_transition_release(&R::Rejected, &R::PendingReview));
         assert!(can_transition_release(&R::Approved, &R::Active));
         assert!(can_transition_release(&R::Active, &R::Approved));
+        assert!(can_transition_release(&R::Active, &R::Draft));
 
         assert!(!can_transition_release(&R::Rejected, &R::Active));
         assert!(!can_transition_release(&R::Draft, &R::Approved));
-        assert!(!can_transition_release(&R::Active, &R::Draft));
         assert!(!can_transition_release(&R::Approved, &R::Rejected));
     }
 

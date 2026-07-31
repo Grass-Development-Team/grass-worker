@@ -28,6 +28,7 @@ pub mod team_group;
 pub mod team_invitation;
 pub mod team_member;
 pub mod user;
+pub mod user_notification;
 pub mod user_password_credential;
 
 #[allow(unused_imports)]
@@ -90,5 +91,7 @@ pub use team_invitation::Entity as TeamInvitation;
 pub use team_member::Entity as TeamMember;
 #[allow(unused_imports)]
 pub use user::Entity as User;
+#[allow(unused_imports)]
+pub use user_notification::Entity as UserNotification;
 #[allow(unused_imports)]
 pub use user_password_credential::Entity as UserPasswordCredential;
