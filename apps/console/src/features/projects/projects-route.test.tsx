@@ -43,6 +43,9 @@ describe("ProjectsRoute role capabilities", () => {
   it("keeps project creation available to members", async () => {
     renderProjects("member");
     await screen.findByText("No projects yet");
-    expect(screen.getByRole("button", { name: "New project" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "New project" })).toHaveAttribute(
+      "href",
+      "/projects/new",
+    );
   });
 });
