@@ -10,6 +10,7 @@ vi.mock("@/features/teams/team-context", () => ({
   TeamProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 vi.mock("@/layouts/app-layout", () => ({ AppLayout: () => <Outlet /> }));
+vi.mock("@/layouts/project-create-layout", () => ({ ProjectCreateLayout: () => <Outlet /> }));
 vi.mock("@/layouts/auth-layout", () => ({ AuthLayout: () => <Outlet /> }));
 vi.mock("@/features/auth/login-route", () => ({
   LoginRoute: () => <div>Login page</div>,
@@ -28,6 +29,9 @@ vi.mock("@/features/teams/accept-invitation-route", () => ({
 }));
 vi.mock("@/features/notifications/notifications-route", () => ({
   NotificationsRoute: () => <div>Notifications page</div>,
+}));
+vi.mock("@/features/projects/project-create-route", () => ({
+  ProjectCreateRoute: () => <div>Create project page</div>,
 }));
 
 function setUser(platformRole: "admin" | "user") {
@@ -106,6 +110,18 @@ it("allows authenticated users to open notifications", async () => {
   );
 
   expect(await screen.findByText("Notifications page")).toBeInTheDocument();
+});
+
+it("allows authenticated users to open the full-screen project creation route", async () => {
+  setUser("user");
+
+  render(
+    <MemoryRouter initialEntries={["/projects/new"]}>
+      <Router />
+    </MemoryRouter>,
+  );
+
+  expect(await screen.findByText("Create project page")).toBeInTheDocument();
 });
 
 it("redirects an unauthenticated visitor away from a protected route", async () => {

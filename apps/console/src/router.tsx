@@ -11,6 +11,11 @@ const AuthLayout = lazy(() =>
 const AppLayout = lazy(() =>
   import("@/layouts/app-layout").then(({ AppLayout }) => ({ default: AppLayout })),
 );
+const ProjectCreateLayout = lazy(() =>
+  import("@/layouts/project-create-layout").then(({ ProjectCreateLayout }) => ({
+    default: ProjectCreateLayout,
+  })),
+);
 const SetupRoute = lazy(() =>
   import("@/features/setup/setup-route").then(({ SetupRoute }) => ({ default: SetupRoute })),
 );
@@ -104,6 +109,11 @@ const QuotaRoute = lazy(() =>
 const ProjectsRoute = lazy(() =>
   import("@/features/projects/projects-route").then(({ ProjectsRoute }) => ({
     default: ProjectsRoute,
+  })),
+);
+const ProjectCreateRoute = lazy(() =>
+  import("@/features/projects/project-create-route").then(({ ProjectCreateRoute }) => ({
+    default: ProjectCreateRoute,
   })),
 );
 const ProjectLayout = lazy(() =>
@@ -214,6 +224,17 @@ export function Router() {
               </GuestRoute>
             }
           />
+        </Route>
+        <Route
+          element={
+            <ProtectedRoute>
+              <TeamProvider>
+                <ProjectCreateLayout />
+              </TeamProvider>
+            </ProtectedRoute>
+          }
+        >
+          <Route path="/projects/new" element={<ProjectCreateRoute />} />
         </Route>
         <Route
           element={
