@@ -116,6 +116,20 @@ describe("ProjectCreateRoute", () => {
     });
   });
 
+  it("accepts scp-style SSH repository URLs", async () => {
+    const user = userEvent.setup();
+    renderCreate();
+
+    await user.type(screen.getByLabelText("Project name"), "SSH Site");
+    await user.type(screen.getByLabelText("Git repository URL"), "git@github.com:acme/site.git");
+    await user.click(screen.getByRole("button", { name: "Create project" }));
+
+    await waitFor(() => expect(projectsApi.create).toHaveBeenCalledTimes(1));
+    expect(projectsApi.create).toHaveBeenCalledWith(
+      expect.objectContaining({ repository_url: "git@github.com:acme/site.git" }),
+    );
+  });
+
   it("shows an API error without leaving the page", async () => {
     const user = userEvent.setup();
     vi.mocked(projectsApi.create).mockRejectedValueOnce(new Error("Slug already exists"));
@@ -149,9 +163,42 @@ describe("ProjectCreateRoute", () => {
   });
 
   it("waits for team permissions before deciding access", () => {
-    renderCreate("member", true);
+    vi.mocked(useTeam).mockReturnValue({
+      activeTeam: null,
+      activeRole: null,
+      isLoading: true,
+    } as ReturnType<typeof useTeam>);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <MemoryRouter initialEntries={["/projects/new"]}>
+        <QueryClientProvider client={client}>
+          <ProjectCreateRoute />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
 
     expect(screen.getByText("Loading team permissions...")).toBeInTheDocument();
     expect(screen.queryByLabelText("Project name")).not.toBeInTheDocument();
+  });
+
+  it("shows a retry state when teams fail to load", () => {
+    vi.mocked(useTeam).mockReturnValue({
+      activeTeam: null,
+      activeRole: null,
+      isLoading: false,
+      error: new Error("Network unavailable"),
+      refreshTeams: vi.fn(),
+    } as ReturnType<typeof useTeam>);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <MemoryRouter initialEntries={["/projects/new"]}>
+        <QueryClientProvider client={client}>
+          <ProjectCreateRoute />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Network unavailable");
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
   });
 });

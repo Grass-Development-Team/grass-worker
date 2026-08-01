@@ -132,16 +132,8 @@ function AccessState() {
 }
 
 export function ProjectCreateRoute() {
-  const { activeTeam, activeRole, isLoading } = useTeam();
+  const { activeTeam, activeRole, error, isLoading, refreshTeams } = useTeam();
   const teamId = activeTeam?.id;
-
-  if (!teamId) {
-    return (
-      <div className="flex flex-1 items-center justify-center px-6 py-16">
-        <p className="text-sm text-muted-foreground">Select a team to create a project.</p>
-      </div>
-    );
-  }
 
   if (isLoading) {
     return (
@@ -149,6 +141,30 @@ export function ProjectCreateRoute() {
         <p className="text-sm text-muted-foreground" role="status">
           Loading team permissions...
         </p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-1 items-center justify-center px-6 py-16">
+        <div role="alert" className="max-w-sm space-y-4 text-center">
+          <div>
+            <h1 className="text-lg font-semibold">Unable to load teams</h1>
+            <p className="mt-2 text-sm text-muted-foreground">{error.message}</p>
+          </div>
+          <Button variant="outline" onClick={() => void refreshTeams()}>
+            Try again
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!teamId) {
+    return (
+      <div className="flex flex-1 items-center justify-center px-6 py-16">
+        <p className="text-sm text-muted-foreground">Select a team to create a project.</p>
       </div>
     );
   }
@@ -242,8 +258,7 @@ function CreateProjectForm({ teamId }: { teamId: string }) {
               <FieldLabel htmlFor="project-repo">Git repository URL</FieldLabel>
               <Input
                 id="project-repo"
-                type="url"
-                placeholder="https://github.com/acme/site.git"
+                placeholder="https://github.com/acme/site.git or git@github.com:acme/site.git"
                 value={repositoryUrl}
                 onChange={(event) => setRepositoryUrl(event.target.value)}
               />
