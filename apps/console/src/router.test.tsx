@@ -11,6 +11,9 @@ vi.mock("@/features/teams/team-context", () => ({
 }));
 vi.mock("@/layouts/app-layout", () => ({ AppLayout: () => <Outlet /> }));
 vi.mock("@/layouts/auth-layout", () => ({ AuthLayout: () => <Outlet /> }));
+vi.mock("@/features/auth/login-route", () => ({
+  LoginRoute: () => <div>Login page</div>,
+}));
 vi.mock("@/features/dashboard/dashboard-route", () => ({
   DashboardRoute: () => <div>Overview page</div>,
 }));
@@ -55,7 +58,7 @@ function setGuest() {
 describe("Administration routing", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("redirects a regular platform user away from /admin", () => {
+  it("redirects a regular platform user away from /admin", async () => {
     setUser("user");
 
     render(
@@ -64,11 +67,11 @@ describe("Administration routing", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByText("Overview page")).toBeInTheDocument();
+    expect(await screen.findByText("Overview page")).toBeInTheDocument();
     expect(screen.queryByText("Administration page")).not.toBeInTheDocument();
   });
 
-  it("allows a platform administrator to open /admin", () => {
+  it("allows a platform administrator to open /admin", async () => {
     setUser("admin");
 
     render(
@@ -77,11 +80,11 @@ describe("Administration routing", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByText("Administration page")).toBeInTheDocument();
+    expect(await screen.findByText("Administration page")).toBeInTheDocument();
   });
 });
 
-it("allows unauthenticated visitors to inspect an invitation link", () => {
+it("allows unauthenticated visitors to inspect an invitation link", async () => {
   setGuest();
 
   render(
@@ -90,10 +93,10 @@ it("allows unauthenticated visitors to inspect an invitation link", () => {
     </MemoryRouter>,
   );
 
-  expect(screen.getByText("Invitation page")).toBeInTheDocument();
+  expect(await screen.findByText("Invitation page")).toBeInTheDocument();
 });
 
-it("allows authenticated users to open notifications", () => {
+it("allows authenticated users to open notifications", async () => {
   setUser("user");
 
   render(
@@ -102,5 +105,18 @@ it("allows authenticated users to open notifications", () => {
     </MemoryRouter>,
   );
 
-  expect(screen.getByText("Notifications page")).toBeInTheDocument();
+  expect(await screen.findByText("Notifications page")).toBeInTheDocument();
+});
+
+it("redirects an unauthenticated visitor away from a protected route", async () => {
+  setGuest();
+
+  render(
+    <MemoryRouter initialEntries={["/notifications?filter=unread"]}>
+      <Router />
+    </MemoryRouter>,
+  );
+
+  expect(await screen.findByText("Login page")).toBeInTheDocument();
+  expect(screen.queryByText("Notifications page")).not.toBeInTheDocument();
 });

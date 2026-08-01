@@ -98,3 +98,39 @@ jobs:
 
       - name: Audit Console dependencies
         run: cd apps/console && vp pm audit
+
+  node-delivery-smoke:
+    name: Node delivery smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and smoke build output
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-node-delivery-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-node-delivery-
+            ${{ runner.os }}-cargo-
+
+      - name: Build Node runtime image
+        run: docker build --tag grass-build:smoke docker/build-image
+
+      - name: Exercise checkout, build, output, and static delivery
+        run: >-
+          cargo test -p grass-node
+          serve::release_smoke::checks_out_builds_packages_stages_and_serves_vite
+          -- --ignored --exact --nocapture
+        env:
+          GRASS_NODE_SMOKE_IMAGE: grass-build:smoke
+          GRASS_NODE_SMOKE_SOCKET: unix:///var/run/docker.sock

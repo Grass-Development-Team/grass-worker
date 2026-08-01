@@ -13,13 +13,6 @@
 
 # 第二阶段
 
-## P0：发布质量与回归防线
-
-- P0.1 Console 关键路径覆盖：补齐 Setup 主流程、Quota 和 Protected Route 测试；
-- P0.2 Log Viewer 连续性测试：覆盖 WebSocket 与 HTTP 补拉的 seq 去重、乱序合并、缺口检测和连续水位推进；
-- P0.3 Console 路由级拆包：对 Admin、Deployments、Setup 等 feature 使用动态 import，消除主 bundle 超过 500 KB 的现有警告；
-- P0.4 Node 构建冒烟：在 CI 中用最小 Vite 仓库完成 checkout -> build -> output -> serve，验证容器运行时和真实静态交付链路；
-
 ## P1：产品能力
 
 - P1.1 Artifact 清理策略：日志保留天数、Preview/失败部署保留期、Production 最近 N 个、定时任务和 active deployment 保护；
