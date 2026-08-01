@@ -1036,6 +1036,9 @@ async fn ensure_artifact(
 }
 
 #[cfg(test)]
+mod release_smoke;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
