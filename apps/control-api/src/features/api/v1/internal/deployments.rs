@@ -1,36 +1,44 @@
 use axum::{
     Extension, Json,
-    body::Bytes,
+    body::Body,
     extract::{Path, State},
-    http::HeaderMap,
-    response::IntoResponse,
+    http::{HeaderMap, HeaderValue, header},
+    response::{IntoResponse, Response},
 };
 use grass_cache::Cache;
 use grass_node_protocol::{
     AppendBuildLogRequest, AppendBuildLogResponse, ClaimRequest, ClaimResponse, ClaimedDeployment,
-    ReportedStatus, StageRequest, StageResponse, UploadArtifactResponse, artifact_headers,
+    ObserveSshHostKeyRequest, ObserveSshHostKeyResponse, RedeemGitCredentialRequest,
+    RedeemGitCredentialResponse, ReportedStatus, StageRequest, StageResponse,
+    UploadArtifactResponse, artifact_headers,
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, TransactionTrait,
+};
 use serde_json::json;
+use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
-        deployments::{self, BuildTransition, ReviewMode},
+        delivery,
+        deployments::{self, BuildTransition, ReadyReleaseAction},
         quotas::QuotaDimension,
-        teams,
+        scheduler::{self, NodeUsage},
+        source_credentials, ssh_host_keys, teams,
     },
     infra::{
         database::entity::{
-            AuditEventResult, DeploymentArtifactKind, DeploymentBuildStatus,
-            DeploymentReleaseStatus, ProjectRuntime, ReleaseReason, deployment,
-            deployment_artifact, node, team,
+            AuditEventResult, DeploymentArtifactKind, DeploymentBuildStatus, NodeStatus,
+            ProjectRuntime, ReleaseReason, deployment, deployment_artifact, node,
+            node_deployment_migration, team,
         },
         error::{AppError, ok_response},
         http::middlewares::node_auth::AuthenticatedNode,
         quota::{QuotaCharge, QuotaService},
-        storage::LocalStorage,
+        storage::{LocalStorage, StorageError},
     },
     state::ControlApiState,
 };
@@ -53,7 +61,7 @@ async fn team_for(
         })
 }
 
-async fn owned_deployment(
+async fn build_owned_deployment(
     db: &sea_orm::DatabaseConnection,
     node: &node::Model,
     deployment_id: Uuid,
@@ -66,16 +74,28 @@ async fn owned_deployment(
             op,
             message: "deployment not found".to_owned(),
         })?;
-    if deployment.node_id != Some(node.id) {
+    if deployment.build_node_id != Some(node.id) {
         return Err(AppError::Forbidden {
             op,
-            message: "deployment is not assigned to this node".to_owned(),
+            message: "deployment build is not assigned to this node".to_owned(),
         });
     }
     Ok(deployment)
 }
 
 // --- Claim ------------------------------------------------------------------
+
+fn can_claim_new_build(status: &NodeStatus) -> bool {
+    matches!(status, NodeStatus::Active)
+}
+
+fn current_node_for_claim_query(node_id: Uuid) -> sea_orm::Select<node::Entity> {
+    node::Entity::find_by_id(node_id)
+        .filter(node::Column::DeletedAt.is_null())
+        .filter(node::Column::Status.eq(NodeStatus::Active))
+        .filter(node::Column::BuildEnabled.eq(true))
+        .lock_exclusive()
+}
 
 /// POST /api/v1/internal/deployments/claim
 pub async fn claim(
@@ -87,7 +107,17 @@ pub async fn claim(
     let db = super::database(&state, OP)?;
     let cache = super::cache(&state, OP)?;
 
+    if !node.build_enabled {
+        return Err(AppError::Forbidden {
+            op: OP,
+            message: "node does not have build capability".to_owned(),
+        });
+    }
+
     if body.capacity == 0 {
+        return Ok(ok_response(ClaimResponse { deployment: None }));
+    }
+    if !can_claim_new_build(&node.status) {
         return Ok(ok_response(ClaimResponse { deployment: None }));
     }
 
@@ -129,6 +159,43 @@ pub async fn claim(
                 return Err(error);
             }
         };
+        let transaction = match db.begin().await {
+            Ok(transaction) => transaction,
+            Err(source) => {
+                quota.release_build_slot(team.id).await;
+                return Err(AppError::Infrastructure {
+                    op: OP,
+                    source: source.into(),
+                });
+            }
+        };
+        let current_node = match current_node_for_claim_query(node.id)
+            .one(&transaction)
+            .await
+        {
+            Ok(current_node) => current_node,
+            Err(source) => {
+                let _ = transaction.rollback().await;
+                quota.release_build_slot(team.id).await;
+                return Err(AppError::Infrastructure {
+                    op: OP,
+                    source: source.into(),
+                });
+            }
+        };
+        if current_node.is_none() {
+            let rollback_result =
+                transaction
+                    .rollback()
+                    .await
+                    .map_err(|source| AppError::Infrastructure {
+                        op: OP,
+                        source: source.into(),
+                    });
+            quota.release_build_slot(team.id).await;
+            rollback_result?;
+            return Ok(ok_response(ClaimResponse { deployment: None }));
+        }
 
         // Optimistic claim: only one node can flip pending → claimed.
         let claim_result = deployment::Entity::update_many()
@@ -137,7 +204,7 @@ pub async fn claim(
                 sea_orm::ActiveEnum::as_enum(&DeploymentBuildStatus::Claimed),
             )
             .col_expr(
-                deployment::Column::NodeId,
+                deployment::Column::BuildNodeId,
                 sea_orm::sea_query::Expr::value(node.id),
             )
             .col_expr(
@@ -146,7 +213,7 @@ pub async fn claim(
             )
             .filter(deployment::Column::Id.eq(candidate.id))
             .filter(deployment::Column::BuildStatus.eq(DeploymentBuildStatus::Pending))
-            .exec(db)
+            .exec(&transaction)
             .await;
         let claim_result = match claim_result {
             Ok(result) => result,
@@ -160,17 +227,50 @@ pub async fn claim(
         };
 
         if claim_result.rows_affected == 0 {
+            let rollback_result =
+                transaction
+                    .rollback()
+                    .await
+                    .map_err(|source| AppError::Infrastructure {
+                        op: OP,
+                        source: source.into(),
+                    });
             quota.release_build_slot(team.id).await;
+            rollback_result?;
             continue;
         }
 
+        let source_credential_lease = match candidate.source_credential_version_id {
+            Some(version_id) => {
+                match source_credentials::issue_lease(
+                    &transaction,
+                    node.id,
+                    candidate.id,
+                    version_id,
+                )
+                .await
+                {
+                    Ok(lease) => Some(lease),
+                    Err(error) => {
+                        let _ = transaction.rollback().await;
+                        quota.release_build_slot(team.id).await;
+                        return Err(AppError::Infrastructure {
+                            op: OP,
+                            source: anyhow::Error::new(error),
+                        });
+                    }
+                }
+            }
+            None => None,
+        };
+
         // The claim is committed; a missing timeline event must not fail it.
         if let Err(error) = deployments::append_event(
-            db,
+            &transaction,
             candidate.id,
             crate::infra::database::entity::DeploymentEventKind::Build,
             "build status changed to claimed",
-            json!({ "status": "claimed", "node_id": node.id }),
+            json!({ "status": "claimed", "build_node_id": node.id }),
         )
         .await
         {
@@ -179,6 +279,13 @@ pub async fn claim(
                 %error,
                 "failed to append claim event"
             );
+        }
+        if let Err(source) = transaction.commit().await {
+            quota.release_build_slot(team.id).await;
+            return Err(AppError::Infrastructure {
+                op: OP,
+                source: source.into(),
+            });
         }
 
         let root_directory = candidate
@@ -204,11 +311,115 @@ pub async fn claim(
                 output_directory: candidate.output_directory.clone(),
                 build_timeout_seconds,
                 preview_host: candidate.preview_host.clone(),
+                source_credential_lease,
             }),
         }));
     }
 
     Ok(ok_response(ClaimResponse { deployment: None }))
+}
+
+/// POST /api/v1/internal/deployments/{deployment_id}/source-credential
+pub async fn redeem_source_credential(
+    State(state): State<ControlApiState>,
+    Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
+    Path(deployment_id): Path<Uuid>,
+    Json(body): Json<RedeemGitCredentialRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "internal.deployments.source_credential";
+    let db = super::database(&state, OP)?;
+    build_owned_deployment(db, &node, deployment_id, OP).await?;
+    let keyring = state.config.read().unwrap().secrets.git_credentials.clone();
+    let redeemed =
+        source_credentials::redeem_lease(db, &keyring, node.id, deployment_id, &body.lease)
+            .await
+            .map_err(|error| match error {
+                source_credentials::SourceCredentialError::InvalidLease => AppError::Unauthorized {
+                    op: OP,
+                    message: "source credential lease is invalid or expired".to_owned(),
+                },
+                source_credentials::SourceCredentialError::Revoked => AppError::Conflict {
+                    op: OP,
+                    message: "source credential has been revoked".to_owned(),
+                },
+                source_credentials::SourceCredentialError::Database(source) => {
+                    AppError::Infrastructure {
+                        op: OP,
+                        source: source.into(),
+                    }
+                }
+                source_credentials::SourceCredentialError::Other(source) => {
+                    AppError::Infrastructure { op: OP, source }
+                }
+                _ => AppError::Internal {
+                    op: OP,
+                    message: "source credential could not be decrypted".to_owned(),
+                },
+            })?;
+    Ok(ok_response(RedeemGitCredentialResponse {
+        credential: redeemed.credential,
+        host: redeemed.host,
+        port: redeemed.port,
+    }))
+}
+
+/// POST /api/v1/internal/deployments/{deployment_id}/ssh-host-key
+pub async fn observe_ssh_host_key(
+    State(state): State<ControlApiState>,
+    Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
+    Path(deployment_id): Path<Uuid>,
+    Json(body): Json<ObserveSshHostKeyRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "internal.deployments.ssh_host_key";
+    let db = super::database(&state, OP)?;
+    let deployment = build_owned_deployment(db, &node, deployment_id, OP).await?;
+    let endpoint = deployment
+        .source_repository_url
+        .as_deref()
+        .and_then(|url| grass_git_source::parse_repository_url(url).ok())
+        .filter(|endpoint| endpoint.transport == grass_git_source::GitTransport::Ssh)
+        .ok_or_else(|| AppError::Validation {
+            op: OP,
+            message: "deployment does not use an SSH repository".to_owned(),
+        })?;
+    if !endpoint.host.eq_ignore_ascii_case(&body.host) || endpoint.port != body.port {
+        return Err(AppError::Validation {
+            op: OP,
+            message: "SSH host key endpoint does not match deployment".to_owned(),
+        });
+    }
+    let key = ssh_host_keys::observe(
+        db,
+        ssh_host_keys::ObserveHostKeyParams {
+            team_id: deployment.team_id,
+            host: endpoint.host,
+            port: endpoint.port,
+            key_type: body.key_type,
+            public_key: body.public_key,
+            fingerprint_sha256: body.fingerprint_sha256,
+            node_id: node.id,
+        },
+    )
+    .await
+    .map_err(|error| match error {
+        ssh_host_keys::SshHostKeyError::Invalid => AppError::Validation {
+            op: OP,
+            message: "SSH host key payload is invalid".to_owned(),
+        },
+        ssh_host_keys::SshHostKeyError::NotFound => AppError::NotFound {
+            op: OP,
+            message: "SSH host key not found".to_owned(),
+        },
+        ssh_host_keys::SshHostKeyError::Database(source) => AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        },
+    })?;
+    let approved = key.status == crate::infra::database::entity::SshHostKeyStatus::Approved;
+    Ok(ok_response(ObserveSshHostKeyResponse {
+        approved,
+        known_hosts_line: approved.then(|| ssh_host_keys::known_hosts_line(&key)),
+    }))
 }
 
 // --- Stage reports ----------------------------------------------------------
@@ -223,7 +434,7 @@ pub async fn stage(
     const OP: &str = "internal.deployments.stage";
     let db = super::database(&state, OP)?;
     let cache = super::cache(&state, OP)?;
-    let deployment = owned_deployment(db, &node, deployment_id, OP).await?;
+    let deployment = build_owned_deployment(db, &node, deployment_id, OP).await?;
     let quota = QuotaService::new(db, cache);
 
     // A user cancel wins over any progress report: tell the Node to stop.
@@ -233,7 +444,10 @@ pub async fn stage(
         .ok()
         .flatten()
         .is_some();
-    if matches!(deployment.build_status, DeploymentBuildStatus::Canceled) || cancel_flagged {
+    if crate::features::api::v1::projects::deployments::cancellation_was_requested(
+        &deployment.build_status,
+        cancel_flagged,
+    ) {
         // The Node acknowledges by reporting canceled; account build minutes
         // when it does. The concurrency slot was already released by
         // cancel_deployment_core when the cancel was issued, so we must not
@@ -291,41 +505,77 @@ pub async fn stage(
 
             let was_started = matches!(status, ReportedStatus::Building)
                 && !matches!(deployment.build_status, DeploymentBuildStatus::Building);
-            let updated = deployments::transition_build(
-                db,
-                deployment,
-                BuildTransition {
-                    to: target.clone(),
-                    stage: body.stage.clone(),
-                    failure_code: body.failure_code.clone(),
-                    failure_message: body.failure_message.clone(),
-                    node_id: Some(node.id),
-                },
-            )
-            .await
-            .map_err(|error| {
-                crate::features::api::v1::projects::deployments::map_state_error(error, OP)
-            })?;
+            let transition = BuildTransition {
+                to: target.clone(),
+                stage: body.stage.clone(),
+                failure_code: body.failure_code.clone(),
+                failure_message: body.failure_message.clone(),
+                build_node_id: Some(node.id),
+            };
+            let (updated, build_transitioned, ready_action) =
+                if matches!(target, DeploymentBuildStatus::Ready) {
+                    finalize_ready(db, deployment, transition).await?
+                } else if matches!(
+                    target,
+                    DeploymentBuildStatus::Failed | DeploymentBuildStatus::Canceled
+                ) {
+                    let transaction =
+                        db.begin()
+                            .await
+                            .map_err(|source| AppError::Infrastructure {
+                                op: OP,
+                                source: source.into(),
+                            })?;
+                    let updated = delivery::transition_unsuccessful_build(
+                        &transaction,
+                        deployment,
+                        transition,
+                    )
+                    .await
+                    .map_err(|error| {
+                        crate::features::api::v1::projects::deployments::map_delivery_error(
+                            error, OP,
+                        )
+                    })?;
+                    transaction
+                        .commit()
+                        .await
+                        .map_err(|source| AppError::Infrastructure {
+                            op: OP,
+                            source: source.into(),
+                        })?;
+                    (updated, true, ReadyReleaseAction::None)
+                } else {
+                    let updated = deployments::transition_build(db, deployment, transition)
+                        .await
+                        .map_err(|error| {
+                            crate::features::api::v1::projects::deployments::map_state_error(
+                                error, OP,
+                            )
+                        })?;
+                    (updated, true, ReadyReleaseAction::None)
+                };
 
             if was_started {
                 let _ = audits::create_audit_event(
                     db,
                     CreateAuditEventParams {
                         actor_user_id: None,
+                        actor_node_id: Some(node.id),
                         team_id: Some(team_id),
                         action: "deployment.build_started".to_owned(),
                         target_type: "deployment".to_owned(),
                         target_id: Some(updated.id),
                         result: AuditEventResult::Success,
                         reason: None,
-                        metadata: json!({ "node_id": node.id }),
+                        metadata: json!({ "build_node_id": node.id }),
                     },
                 )
                 .await;
             }
 
-            if is_terminal {
-                quota.release_build_slot(team_id).await;
+            if is_terminal && build_transitioned {
+                quota.release_build_slot_once(team_id, updated.id).await;
                 if let Some(minutes) = body.build_minutes.filter(|minutes| *minutes > 0) {
                     quota
                         .charge_unchecked(
@@ -345,6 +595,7 @@ pub async fn stage(
                     db,
                     CreateAuditEventParams {
                         actor_user_id: None,
+                        actor_node_id: Some(node.id),
                         team_id: Some(team_id),
                         action: "deployment.build_finished".to_owned(),
                         target_type: "deployment".to_owned(),
@@ -372,10 +623,24 @@ pub async fn stage(
                 {
                     let _ = record_build_log_artifact(db, &updated).await;
                 }
+            }
 
-                if matches!(target, DeploymentBuildStatus::Ready) {
-                    auto_activate_if_allowed(db, updated).await?;
-                }
+            if matches!(ready_action, ReadyReleaseAction::RequestReview) {
+                let _ = audits::create_audit_event(
+                    db,
+                    CreateAuditEventParams {
+                        actor_user_id: None,
+                        actor_node_id: None,
+                        team_id: Some(team_id),
+                        action: "deployment.review_requested".to_owned(),
+                        target_type: "deployment".to_owned(),
+                        target_id: Some(updated.id),
+                        result: AuditEventResult::Success,
+                        reason: None,
+                        metadata: json!({ "automatic": true }),
+                    },
+                )
+                .await;
             }
 
             StageResponse {
@@ -396,6 +661,7 @@ async fn record_build_log_artifact(
     let existing = deployment_artifact::Entity::find()
         .filter(deployment_artifact::Column::DeploymentId.eq(deployment.id))
         .filter(deployment_artifact::Column::Kind.eq(DeploymentArtifactKind::BuildLog))
+        .filter(deployment_artifact::Column::DeletedAt.is_null())
         .one(db)
         .await?;
     if existing.is_some() {
@@ -413,6 +679,7 @@ async fn record_build_log_artifact(
         checksum_sha256: Set(None),
         size_bytes: Set(None),
         manifest: Set(json!({})),
+        deleted_at: Set(None),
         created_at: Set(time::OffsetDateTime::now_utc()),
     }
     .insert(db)
@@ -420,24 +687,19 @@ async fn record_build_log_artifact(
     Ok(())
 }
 
-/// Auto-activation after a successful build, controlled by the release
-/// review policy: `auto` environments activate immediately, `manual`
-/// environments wait for review and promote.
-async fn auto_activate_if_allowed(
-    db: &sea_orm::DatabaseConnection,
-    deployment: deployment::Model,
-) -> Result<(), AppError> {
-    const OP: &str = "internal.deployments.auto_activate";
-    let policy = deployments::review_policy(db)
-        .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    if !matches!(policy.mode_for(&deployment.environment), ReviewMode::Auto) {
-        return Ok(());
-    }
-    if !matches!(deployment.release_status, DeploymentReleaseStatus::Draft) {
-        return Ok(());
-    }
+/// Commits a successful build and its initial release state atomically.
+/// Repeated Ready reports only repair historical Ready/Draft rows and do not
+/// repeat terminal accounting side effects.
+fn ready_report_needs_build_transition(status: &DeploymentBuildStatus) -> bool {
+    !matches!(status, DeploymentBuildStatus::Ready)
+}
 
+async fn finalize_ready(
+    db: &sea_orm::DatabaseConnection,
+    requested_deployment: deployment::Model,
+    transition: BuildTransition,
+) -> Result<(deployment::Model, bool, ReadyReleaseAction), AppError> {
+    const OP: &str = "internal.deployments.finalize_ready";
     let transaction = db
         .begin()
         .await
@@ -445,11 +707,71 @@ async fn auto_activate_if_allowed(
             op: OP,
             source: source.into(),
         })?;
-    let activated = deployments::activate(&transaction, deployment, ReleaseReason::Auto, None)
+
+    scheduler::lock_placement(&transaction)
         .await
-        .map_err(|error| {
-            crate::features::api::v1::projects::deployments::map_state_error(error, OP)
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
         })?;
+
+    // Serialize retries for this deployment and make the decision from the
+    // latest row, not from the pre-transaction request snapshot.
+    let deployment = deployments::get_by_id_for_update(&transaction, requested_deployment.id)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "deployment not found".to_owned(),
+        })?;
+    let build_transitioned = ready_report_needs_build_transition(&deployment.build_status);
+    let deployment = if build_transitioned {
+        deployments::transition_build(&transaction, deployment, transition)
+            .await
+            .map_err(|error| {
+                crate::features::api::v1::projects::deployments::map_state_error(error, OP)
+            })?
+    } else {
+        deployment
+    };
+    let policy = deployments::review_policy_for_team(&transaction, deployment.team_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let action = deployments::ready_release_action(
+        policy.mode_for(&deployment.environment),
+        &deployment.release_status,
+    );
+    let deployment = match action {
+        ReadyReleaseAction::Activate => {
+            deployments::activate(&transaction, deployment, ReleaseReason::Auto, None)
+                .await
+                .map_err(|error| {
+                    crate::features::api::v1::projects::deployments::map_state_error(error, OP)
+                })?
+        }
+        ReadyReleaseAction::RequestReview => {
+            deployments::request_review(&transaction, deployment, None)
+                .await
+                .map_err(|error| {
+                    crate::features::api::v1::projects::deployments::map_state_error(error, OP)
+                })?
+                .0
+        }
+        ReadyReleaseAction::None => deployment,
+    };
+    delivery::reconcile_environment(
+        &transaction,
+        deployment.project_id,
+        deployment.environment.clone(),
+    )
+    .await
+    .map_err(|source| AppError::Infrastructure {
+        op: OP,
+        source: source.into(),
+    })?;
     transaction
         .commit()
         .await
@@ -458,12 +780,65 @@ async fn auto_activate_if_allowed(
             source: source.into(),
         })?;
 
-    tracing::info!(
-        operation = OP,
-        deployment_id = %activated.id,
-        environment = deployments::environment_value(&activated.environment),
-        "deployment auto-activated"
-    );
+    if matches!(action, ReadyReleaseAction::Activate) {
+        tracing::info!(
+            operation = OP,
+            deployment_id = %deployment.id,
+            environment = deployments::environment_value(&deployment.environment),
+            "deployment auto-activated"
+        );
+    }
+    Ok((deployment, build_transitioned, action))
+}
+
+pub(super) async fn auto_activate_if_allowed(
+    transaction: &sea_orm::DatabaseTransaction,
+    deployment: deployment::Model,
+) -> Result<(), AppError> {
+    const OP: &str = "internal.deployments.auto_activate";
+    let project_id = deployment.project_id;
+    let environment = deployment.environment.clone();
+    let activated = if deployment.pending_release_reason.is_some() {
+        delivery::complete_pending_release(transaction, deployment)
+            .await
+            .map_err(|error| {
+                crate::features::api::v1::projects::deployments::map_delivery_error(error, OP)
+            })?
+    } else {
+        let policy = deployments::review_policy_for_team(transaction, deployment.team_id)
+            .await
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+        let action = deployments::serve_ready_release_action(
+            policy.mode_for(&deployment.environment),
+            &deployment.release_status,
+        );
+        if matches!(action, ReadyReleaseAction::Activate) {
+            Some(
+                deployments::activate(transaction, deployment, ReleaseReason::Auto, None)
+                    .await
+                    .map_err(|error| {
+                        crate::features::api::v1::projects::deployments::map_state_error(error, OP)
+                    })?,
+            )
+        } else {
+            None
+        }
+    };
+    delivery::reconcile_environment(transaction, project_id, environment)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+
+    if let Some(deployment) = activated {
+        tracing::info!(
+            operation = OP,
+            deployment_id = %deployment.id,
+            environment = deployments::environment_value(&deployment.environment),
+            "deployment auto-activated after Serve became ready"
+        );
+    }
     Ok(())
 }
 
@@ -483,7 +858,7 @@ pub async fn append_build_log(
     const OP: &str = "internal.deployments.build_log";
     let db = super::database(&state, OP)?;
     let cache = super::cache(&state, OP)?;
-    let deployment = owned_deployment(db, &node, deployment_id, OP).await?;
+    let deployment = build_owned_deployment(db, &node, deployment_id, OP).await?;
 
     if body.lines.is_empty() {
         return Ok(ok_response(AppendBuildLogResponse { last_seq: 0 }));
@@ -521,95 +896,329 @@ pub async fn append_build_log(
 
 // --- Artifact upload / download ---------------------------------------------
 
+const BYTES_PER_MB: u64 = 1024 * 1024;
+
+#[derive(Debug)]
+struct ArtifactUploadMetadata {
+    checksum_sha256: String,
+    packed_size_bytes: u64,
+    unpacked_size_bytes: u64,
+    disk_mb: i64,
+}
+
+fn parse_upload_metadata(headers: &HeaderMap) -> Result<ArtifactUploadMetadata, String> {
+    let required = |name: &'static str| {
+        headers
+            .get(name)
+            .ok_or_else(|| format!("missing {name} header"))?
+            .to_str()
+            .map(str::to_owned)
+            .map_err(|_| format!("invalid {name} header"))
+    };
+    let checksum_sha256 = required(artifact_headers::CHECKSUM_SHA256)?;
+    if checksum_sha256.len() != 64
+        || !checksum_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(format!(
+            "invalid {} header",
+            artifact_headers::CHECKSUM_SHA256
+        ));
+    }
+    let parse_size = |name: &'static str| -> Result<u64, String> {
+        let value = required(name)?;
+        let value = value
+            .parse::<u64>()
+            .map_err(|_| format!("invalid {name} header"))?;
+        if value == 0 {
+            return Err(format!("invalid {name} header"));
+        }
+        Ok(value)
+    };
+    let packed_size_bytes = parse_size(artifact_headers::PACKED_SIZE_BYTES)?;
+    let unpacked_size_bytes = parse_size(artifact_headers::UNPACKED_SIZE_BYTES)?;
+    let disk_mb = i64::try_from(unpacked_size_bytes.div_ceil(BYTES_PER_MB))
+        .map_err(|_| "unpacked artifact size exceeds the supported range".to_owned())?;
+    Ok(ArtifactUploadMetadata {
+        checksum_sha256,
+        packed_size_bytes,
+        unpacked_size_bytes,
+        disk_mb,
+    })
+}
+
+fn validate_serve_disk(
+    capacity_disk_mb: i64,
+    current_deployment_disk_mb: i64,
+    usage: NodeUsage,
+    actual_disk_mb: i64,
+) -> Result<(), String> {
+    let current = u64::try_from(current_deployment_disk_mb)
+        .map_err(|_| "current deployment disk usage is invalid".to_owned())?;
+    let actual =
+        u64::try_from(actual_disk_mb).map_err(|_| "artifact disk usage is invalid".to_owned())?;
+    let capacity = u64::try_from(capacity_disk_mb)
+        .map_err(|_| "assigned Serve Node disk capacity is invalid".to_owned())?;
+    let required = usage.disk_mb.saturating_sub(current).saturating_add(actual);
+    if required > capacity {
+        return Err(format!(
+            "artifact needs {required} MB but the assigned Serve Node has {capacity} MB"
+        ));
+    }
+    Ok(())
+}
+
+fn optional_header(headers: &HeaderMap, name: &'static str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+}
+
 /// PUT /api/v1/internal/deployments/{deployment_id}/static-site
 pub async fn upload_static_site(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
     Path(deployment_id): Path<Uuid>,
     headers: HeaderMap,
-    bytes: Bytes,
+    body: Body,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "internal.deployments.static_site";
     let db = super::database(&state, OP)?;
     let cache = super::cache(&state, OP)?;
-    let deployment = owned_deployment(db, &node, deployment_id, OP).await?;
-
-    if bytes.is_empty() {
-        return Err(AppError::Validation {
-            op: OP,
-            message: "artifact body is empty".to_owned(),
-        });
-    }
-
+    let deployment = build_owned_deployment(db, &node, deployment_id, OP).await?;
+    let upload = parse_upload_metadata(&headers)
+        .map_err(|message| AppError::Validation { op: OP, message })?;
     let team = team_for(db, deployment.team_id, OP).await?;
     let quota = QuotaService::new(db, cache);
-    let size_mb = bytes.len().div_ceil(1024 * 1024) as i64;
-
-    if let Some(max_mb) = quota
+    let artifact_max_mb = quota
         .scalar_limit(OP, &team, QuotaDimension::ArtifactMaxMb)
-        .await?
-        && size_mb > max_mb
-    {
+        .await?;
+    let max_bytes = match artifact_max_mb {
+        Some(max_mb) => u64::try_from(max_mb)
+            .ok()
+            .and_then(|max_mb| max_mb.checked_mul(BYTES_PER_MB))
+            .ok_or_else(|| AppError::Validation {
+                op: OP,
+                message: "artifact quota is invalid".to_owned(),
+            })?,
+        None => u64::MAX,
+    };
+    if upload.packed_size_bytes > max_bytes {
         return Err(crate::infra::quota::quota_exceeded_error(
             OP,
             QuotaDimension::ArtifactMaxMb,
         ));
     }
-
-    let reservation = quota
+    let pending = match super::storage(&state)
+        .write_artifact_stream(
+            deployment.project_id,
+            deployment.id,
+            body.into_data_stream(),
+            max_bytes,
+        )
+        .await
+    {
+        Ok(pending) => pending,
+        Err(StorageError::LimitExceeded { .. }) => {
+            return Err(crate::infra::quota::quota_exceeded_error(
+                OP,
+                QuotaDimension::ArtifactMaxMb,
+            ));
+        }
+        Err(source) => {
+            return Err(AppError::Infrastructure {
+                op: OP,
+                source: source.into(),
+            });
+        }
+    };
+    if pending.size_bytes == 0 {
+        pending.discard().await;
+        return Err(AppError::Validation {
+            op: OP,
+            message: "artifact body is empty".to_owned(),
+        });
+    }
+    if u64::try_from(pending.size_bytes).ok() != Some(upload.packed_size_bytes) {
+        pending.discard().await;
+        return Err(AppError::Validation {
+            op: OP,
+            message: "artifact packed size does not match its metadata".to_owned(),
+        });
+    }
+    if pending.checksum_sha256 != upload.checksum_sha256 {
+        pending.discard().await;
+        return Err(AppError::Validation {
+            op: OP,
+            message: "artifact checksum does not match its metadata".to_owned(),
+        });
+    }
+    let size_mb = i64::try_from(upload.packed_size_bytes.div_ceil(BYTES_PER_MB)).map_err(|_| {
+        AppError::Validation {
+            op: OP,
+            message: "artifact packed size exceeds the supported range".to_owned(),
+        }
+    })?;
+    let reservation = match quota
         .reserve(
             OP,
             &team,
             None,
             &[QuotaCharge::amount(QuotaDimension::StorageMb, size_mb)],
         )
-        .await?;
-
-    let stored = match super::storage(&state)
-        .save_artifact(deployment.project_id, deployment.id, &bytes)
         .await
     {
-        Ok(stored) => stored,
-        Err(source) => {
-            quota.rollback(reservation).await;
-            return Err(AppError::Infrastructure { op: OP, source });
+        Ok(reservation) => reservation,
+        Err(error) => {
+            pending.discard().await;
+            return Err(error);
         }
     };
-
-    let header = |name: &str| {
-        headers
-            .get(name)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned)
-    };
     let manifest = json!({
-        "runtime_kind": header(artifact_headers::RUNTIME_KIND),
-        "output_api_version": header(artifact_headers::OUTPUT_API_VERSION),
-        "framework_name": header(artifact_headers::FRAMEWORK_NAME),
-        "framework_version": header(artifact_headers::FRAMEWORK_VERSION),
+        "runtime_kind": optional_header(&headers, artifact_headers::RUNTIME_KIND),
+        "output_api_version": optional_header(&headers, artifact_headers::OUTPUT_API_VERSION),
+        "framework_name": optional_header(&headers, artifact_headers::FRAMEWORK_NAME),
+        "framework_version": optional_header(&headers, artifact_headers::FRAMEWORK_VERSION),
+        "packed_size_bytes": upload.packed_size_bytes,
+        "unpacked_size_bytes": upload.unpacked_size_bytes,
     });
-
-    use sea_orm::{ActiveModelTrait, ActiveValue::Set};
-    let artifact = match (deployment_artifact::ActiveModel {
-        id: Set(Uuid::now_v7()),
-        deployment_id: Set(deployment.id),
-        kind: Set(DeploymentArtifactKind::GrassOutput),
-        storage_path: Set(stored.relative_path.clone()),
-        checksum_sha256: Set(Some(stored.checksum_sha256.clone())),
-        size_bytes: Set(Some(stored.size_bytes)),
-        manifest: Set(manifest),
-        created_at: Set(time::OffsetDateTime::now_utc()),
-    }
-    .insert(db)
-    .await)
-    {
-        Ok(artifact) => artifact,
-        Err(source) => {
-            quota.rollback(reservation).await;
-            return Err(AppError::Infrastructure {
+    let team_id = deployment.team_id;
+    let project_id = deployment.project_id;
+    let result: Result<_, AppError> = async move {
+        let transaction = db
+            .begin()
+            .await
+            .map_err(|source| AppError::Infrastructure {
                 op: OP,
                 source: source.into(),
+            })?;
+        scheduler::lock_placement(&transaction)
+            .await
+            .map_err(|source| AppError::Infrastructure {
+                op: OP,
+                source: source.into(),
+            })?;
+        let current = deployments::get_by_id(&transaction, deployment_id)
+            .await
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?
+            .ok_or_else(|| AppError::NotFound {
+                op: OP,
+                message: "deployment not found".to_owned(),
+            })?;
+        if current.build_node_id != Some(node.id) {
+            return Err(AppError::Forbidden {
+                op: OP,
+                message: "deployment build is not assigned to this node".to_owned(),
             });
+        }
+        let serve_node_id = current.serve_node_id.ok_or_else(|| AppError::Validation {
+            op: OP,
+            message: "deployment is not assigned to a Serve Node".to_owned(),
+        })?;
+        let serve_node = node::Entity::find_by_id(serve_node_id)
+            .filter(node::Column::DeletedAt.is_null())
+            .one(&transaction)
+            .await
+            .map_err(|source| AppError::Infrastructure {
+                op: OP,
+                source: source.into(),
+            })?
+            .ok_or_else(|| AppError::Validation {
+                op: OP,
+                message: "assigned Serve Node does not exist".to_owned(),
+            })?;
+        if !serve_node.serve_enabled {
+            return Err(AppError::Validation {
+                op: OP,
+                message: "assigned node does not have Serve capability".to_owned(),
+            });
+        }
+        let usage = scheduler::node_usage(&transaction)
+            .await
+            .map_err(|source| AppError::Infrastructure {
+                op: OP,
+                source: source.into(),
+            })?
+            .remove(&serve_node_id)
+            .unwrap_or_default();
+        validate_serve_disk(
+            serve_node.capacity_disk_mb,
+            current.serve_disk_mb,
+            usage,
+            upload.disk_mb,
+        )
+        .map_err(|message| AppError::Validation { op: OP, message })?;
+
+        let mut active: deployment::ActiveModel = current.into();
+        active.serve_disk_mb = Set(upload.disk_mb);
+        active
+            .update(&transaction)
+            .await
+            .map_err(|source| AppError::Infrastructure {
+                op: OP,
+                source: source.into(),
+            })?;
+
+        let stored = pending
+            .finalize()
+            .await
+            .map_err(|source| AppError::Infrastructure {
+                op: OP,
+                source: source.into(),
+            })?;
+        let existing = deployment_artifact::Entity::find()
+            .filter(deployment_artifact::Column::DeploymentId.eq(deployment_id))
+            .filter(deployment_artifact::Column::Kind.eq(DeploymentArtifactKind::GrassOutput))
+            .one(&transaction)
+            .await
+            .map_err(|source| AppError::Infrastructure {
+                op: OP,
+                source: source.into(),
+            })?;
+        let artifact = if let Some(existing) = existing {
+            let mut active: deployment_artifact::ActiveModel = existing.into();
+            active.storage_path = Set(stored.relative_path.clone());
+            active.checksum_sha256 = Set(Some(stored.checksum_sha256.clone()));
+            active.size_bytes = Set(Some(stored.size_bytes));
+            active.manifest = Set(manifest);
+            active.deleted_at = Set(None);
+            active.update(&transaction).await
+        } else {
+            deployment_artifact::ActiveModel {
+                id: Set(Uuid::now_v7()),
+                deployment_id: Set(deployment_id),
+                kind: Set(DeploymentArtifactKind::GrassOutput),
+                storage_path: Set(stored.relative_path.clone()),
+                checksum_sha256: Set(Some(stored.checksum_sha256.clone())),
+                size_bytes: Set(Some(stored.size_bytes)),
+                manifest: Set(manifest),
+                deleted_at: Set(None),
+                created_at: Set(time::OffsetDateTime::now_utc()),
+            }
+            .insert(&transaction)
+            .await
+        }
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+        transaction
+            .commit()
+            .await
+            .map_err(|source| AppError::Infrastructure {
+                op: OP,
+                source: source.into(),
+            })?;
+        Ok((artifact, stored))
+    }
+    .await;
+    let (artifact, stored) = match result {
+        Ok(result) => result,
+        Err(error) => {
+            quota.rollback(reservation).await;
+            return Err(error);
         }
     };
 
@@ -621,15 +1230,18 @@ pub async fn upload_static_site(
         db,
         CreateAuditEventParams {
             actor_user_id: None,
-            team_id: Some(deployment.team_id),
+            actor_node_id: Some(node.id),
+            team_id: Some(team_id),
             action: "artifact.uploaded".to_owned(),
             target_type: "deployment".to_owned(),
-            target_id: Some(deployment.id),
+            target_id: Some(deployment_id),
             result: AuditEventResult::Success,
             reason: None,
             metadata: json!({
                 "size_bytes": stored.size_bytes,
+                "unpacked_size_bytes": upload.unpacked_size_bytes,
                 "checksum_sha256": stored.checksum_sha256,
+                "project_id": project_id,
             }),
         },
     )
@@ -647,14 +1259,12 @@ pub async fn upload_static_site(
 /// Lets a serve Node re-fetch the grass-output archive after cache loss.
 pub async fn download_artifact(
     State(state): State<ControlApiState>,
-    Extension(AuthenticatedNode(_node)): Extension<AuthenticatedNode>,
+    Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
     Path(deployment_id): Path<Uuid>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Response, AppError> {
     const OP: &str = "internal.deployments.download_artifact";
     let db = super::database(&state, OP)?;
 
-    // Any authenticated Node may serve any deployment in the first stage;
-    // ownership is not required for downloads.
     let deployment = deployments::get_by_id(db, deployment_id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?
@@ -662,18 +1272,349 @@ pub async fn download_artifact(
             op: OP,
             message: "deployment not found".to_owned(),
         })?;
-
-    let bytes = super::storage(&state)
-        .read_artifact(deployment.project_id, deployment.id)
+    let is_migration_target = node_deployment_migration::Entity::find()
+        .filter(node_deployment_migration::Column::DeploymentId.eq(deployment.id))
+        .filter(node_deployment_migration::Column::TargetNodeId.eq(node.id))
+        .one(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?
+        .is_some_and(|migration| {
+            super::serve::migration_allows_artifact_download(&migration.status)
+        });
+    if deployment.serve_node_id != Some(node.id) && !is_migration_target {
+        return Err(AppError::Forbidden {
+            op: OP,
+            message: "deployment is not assigned to this Serve Node".to_owned(),
+        });
+    }
+    let artifact = deployment_artifact::Entity::find()
+        .filter(deployment_artifact::Column::DeploymentId.eq(deployment.id))
+        .filter(deployment_artifact::Column::Kind.eq(DeploymentArtifactKind::GrassOutput))
+        .filter(deployment_artifact::Column::DeletedAt.is_null())
+        .one(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "artifact not found".to_owned(),
+        })?;
+    let opened = super::storage(&state)
+        .open_artifact(&artifact.storage_path)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?
         .ok_or_else(|| AppError::NotFound {
             op: OP,
             message: "artifact not found".to_owned(),
         })?;
+    let packed_size_bytes = artifact
+        .size_bytes
+        .and_then(|size| u64::try_from(size).ok())
+        .ok_or_else(|| AppError::Internal {
+            op: OP,
+            message: "artifact packed size metadata is missing".to_owned(),
+        })?;
+    if opened.size_bytes != packed_size_bytes {
+        return Err(AppError::Internal {
+            op: OP,
+            message: "artifact file size does not match its metadata".to_owned(),
+        });
+    }
+    let checksum_sha256 = artifact.checksum_sha256.ok_or_else(|| AppError::Internal {
+        op: OP,
+        message: "artifact checksum metadata is missing".to_owned(),
+    })?;
+    let unpacked_size_bytes = deployments::artifact_unpacked_size_bytes(&artifact.manifest)
+        .ok_or_else(|| AppError::Internal {
+            op: OP,
+            message: "artifact unpacked size metadata is invalid".to_owned(),
+        })?;
+    let mut response = Response::new(Body::from_stream(ReaderStream::new(opened.file)));
+    let response_headers = response.headers_mut();
+    response_headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/zip"),
+    );
+    for (name, value) in [
+        (
+            header::CONTENT_LENGTH.as_str(),
+            packed_size_bytes.to_string(),
+        ),
+        (
+            artifact_headers::PACKED_SIZE_BYTES,
+            packed_size_bytes.to_string(),
+        ),
+        (
+            artifact_headers::UNPACKED_SIZE_BYTES,
+            unpacked_size_bytes.to_string(),
+        ),
+        (artifact_headers::CHECKSUM_SHA256, checksum_sha256),
+    ] {
+        response_headers.insert(
+            axum::http::HeaderName::from_static(name),
+            HeaderValue::from_str(&value).map_err(|_| AppError::Internal {
+                op: OP,
+                message: "artifact response metadata is invalid".to_owned(),
+            })?,
+        );
+    }
+    Ok(response)
+}
 
-    Ok((
-        [(axum::http::header::CONTENT_TYPE, "application/zip")],
-        bytes,
-    ))
+#[cfg(test)]
+mod artifact_tests {
+    use super::*;
+
+    #[test]
+    fn upload_metadata_requires_sizes_and_checksum() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            artifact_headers::CHECKSUM_SHA256,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .parse()
+                .unwrap(),
+        );
+        headers.insert(artifact_headers::PACKED_SIZE_BYTES, "9".parse().unwrap());
+        headers.insert(
+            artifact_headers::UNPACKED_SIZE_BYTES,
+            "1025".parse().unwrap(),
+        );
+
+        let metadata = parse_upload_metadata(&headers).unwrap();
+
+        assert_eq!(metadata.packed_size_bytes, 9);
+        assert_eq!(metadata.unpacked_size_bytes, 1025);
+        assert_eq!(metadata.disk_mb, 1);
+
+        headers.remove(artifact_headers::UNPACKED_SIZE_BYTES);
+        assert_eq!(
+            parse_upload_metadata(&headers).unwrap_err(),
+            "missing x-grass-unpacked-size-bytes header"
+        );
+    }
+
+    #[test]
+    fn actual_disk_replaces_the_deployments_reserved_disk() {
+        let usage = NodeUsage {
+            cpu_millicores: 400,
+            memory_mb: 512,
+            disk_mb: 900,
+            deployments: 3,
+        };
+
+        assert!(validate_serve_disk(1_024, 512, usage, 600).is_ok());
+        assert_eq!(
+            validate_serve_disk(1_024, 512, usage, 700).unwrap_err(),
+            "artifact needs 1088 MB but the assigned Serve Node has 1024 MB"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use grass_cache::{Cache, CacheBackend, CacheStore};
+    use sea_orm::{DbBackend, DbErr, MockDatabase, QueryTrait};
+    use time::OffsetDateTime;
+
+    use crate::infra::{
+        config::ControlApiConfig,
+        database::entity::{
+            DeploymentEnvironment, DeploymentReleaseStatus, DeploymentServeStatus, QuotaPeriod,
+            TeamKind, quota_limit, quota_plan,
+        },
+    };
+
+    use super::*;
+
+    #[test]
+    fn repeated_ready_reports_skip_the_build_transition() {
+        assert!(ready_report_needs_build_transition(
+            &DeploymentBuildStatus::Building
+        ));
+        assert!(!ready_report_needs_build_transition(
+            &DeploymentBuildStatus::Ready
+        ));
+    }
+
+    #[test]
+    fn draining_nodes_finish_existing_builds_without_claiming_new_ones() {
+        assert!(can_claim_new_build(&NodeStatus::Active));
+        assert!(!can_claim_new_build(&NodeStatus::Draining));
+        assert!(!can_claim_new_build(&NodeStatus::Offline));
+    }
+
+    #[test]
+    fn claim_rechecks_and_locks_the_current_node_row() {
+        let sql = current_node_for_claim_query(Uuid::nil())
+            .build(DbBackend::Postgres)
+            .to_string();
+        assert!(sql.contains("FOR UPDATE"));
+        assert!(sql.contains("deleted_at"));
+        assert!(sql.contains("status"));
+        assert!(sql.contains("build_enabled"));
+    }
+
+    #[tokio::test]
+    async fn claim_releases_the_build_slot_when_the_locked_node_query_fails() {
+        let now = OffsetDateTime::now_utc();
+        let team_id = Uuid::now_v7();
+        let project_id = Uuid::now_v7();
+        let node_id = Uuid::now_v7();
+        let plan_id = Uuid::now_v7();
+        let candidate = deployment::Model {
+            id: Uuid::now_v7(),
+            project_id,
+            team_id,
+            build_node_id: None,
+            serve_node_id: None,
+            environment: DeploymentEnvironment::Preview,
+            runtime_kind: ProjectRuntime::Static,
+            build_status: DeploymentBuildStatus::Pending,
+            serve_status: DeploymentServeStatus::Pending,
+            release_status: DeploymentReleaseStatus::Draft,
+            serve_cpu_millicores: 0,
+            serve_memory_mb: 0,
+            serve_disk_mb: 0,
+            overcommitted: false,
+            source_repository_url: Some("https://example.test/repository.git".to_owned()),
+            source_credential_version_id: None,
+            source_branch: Some("main".to_owned()),
+            commit_hash: None,
+            commit_message: None,
+            triggered_by_user_id: None,
+            install_command: None,
+            build_command: None,
+            output_directory: None,
+            source_metadata: json!({}),
+            preview_host: None,
+            build_stage: None,
+            failure_code: None,
+            failure_message: None,
+            serve_failure_code: None,
+            serve_failure_message: None,
+            pending_release_reason: None,
+            pending_release_actor_user_id: None,
+            pending_release_audit_visibility: None,
+            pending_release_requested_at: None,
+            claimed_at: None,
+            build_started_at: None,
+            build_finished_at: None,
+            serve_started_at: None,
+            serve_finished_at: None,
+            deleted_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let team = team::Model {
+            id: team_id,
+            slug: "claim-slot-release".to_owned(),
+            name: "Claim Slot Release".to_owned(),
+            kind: TeamKind::Team,
+            group_id: None,
+            explicit_quota_plan_id: None,
+            owner_user_id: None,
+            deleted_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let plan = quota_plan::Model {
+            id: plan_id,
+            code: "claim-slot-release".to_owned(),
+            name: "Claim Slot Release".to_owned(),
+            description: None,
+            is_default: true,
+            enabled: true,
+            created_at: now,
+            updated_at: now,
+        };
+        let limits = vec![
+            quota_limit::Model {
+                id: Uuid::now_v7(),
+                quota_plan_id: plan_id,
+                dimension: QuotaDimension::ConcurrentBuilds.as_str().to_owned(),
+                limit_value: 1,
+                period: QuotaPeriod::None,
+                created_at: now,
+                updated_at: now,
+            },
+            quota_limit::Model {
+                id: Uuid::now_v7(),
+                quota_plan_id: plan_id,
+                dimension: QuotaDimension::BuildTimeoutSeconds.as_str().to_owned(),
+                limit_value: 600,
+                period: QuotaPeriod::None,
+                created_at: now,
+                updated_at: now,
+            },
+        ];
+        let database = MockDatabase::new(DbBackend::Postgres)
+            .append_query_results([vec![candidate]])
+            .append_query_results([vec![team]])
+            .append_query_results([vec![plan.clone()]])
+            .append_query_results([limits.clone()])
+            .append_query_results([vec![plan]])
+            .append_query_results([limits])
+            .append_query_errors([DbErr::Custom("locked node query failed".to_owned())])
+            .into_connection();
+        let cache = CacheStore::connect_cache(CacheBackend::Moka, "")
+            .await
+            .unwrap();
+        let state = ControlApiState::new(ControlApiConfig::default(), "unused.toml");
+        state.database.set(database).unwrap();
+        assert!(state.cache.set(cache).is_ok());
+        let authenticated_node = node::Model {
+            id: node_id,
+            name: "build-1".to_owned(),
+            token_hash: "unused".to_owned(),
+            status: NodeStatus::Active,
+            build_enabled: true,
+            serve_enabled: false,
+            build_concurrency: 1,
+            base_url: None,
+            work_root: None,
+            capacity_cpu_millicores: 1_000,
+            capacity_memory_mb: 1_024,
+            capacity_disk_mb: 10_240,
+            max_deployments: 1,
+            metadata: json!({}),
+            last_heartbeat_at: Some(now),
+            desired_config: None,
+            desired_config_revision: 0,
+            effective_config: None,
+            effective_config_revision: 0,
+            config_sync_status: crate::infra::database::entity::NodeConfigSyncStatus::Applied,
+            config_sync_error: None,
+            node_token_configured: true,
+            config_updated_at: None,
+            config_applied_at: None,
+            deleted_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let result = claim(
+            State(state.clone()),
+            Extension(AuthenticatedNode(authenticated_node)),
+            Json(ClaimRequest { capacity: 1 }),
+        )
+        .await;
+
+        assert!(result.is_err());
+        let key = format!("quota:team:{team_id}:concurrent_builds");
+        assert_eq!(
+            state
+                .try_cache()
+                .unwrap()
+                .get(&key)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("0")
+        );
+    }
 }

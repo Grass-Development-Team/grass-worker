@@ -4,6 +4,7 @@ pub mod detail;
 pub mod hosts;
 pub mod lifecycle;
 pub mod list;
+pub mod source_credentials;
 
 use axum::{
     Router,
@@ -29,6 +30,12 @@ pub fn router() -> Router<ControlApiState> {
         .route(
             "/projects/{project_id}",
             get(detail::get).patch(detail::update),
+        )
+        .route(
+            "/projects/{project_id}/source-credential",
+            get(source_credentials::get)
+                .post(source_credentials::bind)
+                .delete(source_credentials::unbind),
         )
         .route("/projects/{project_id}/archive", post(lifecycle::archive))
         .route(
@@ -66,6 +73,10 @@ pub fn router() -> Router<ControlApiState> {
             get(deployments::list).post(deployments::create),
         )
         .route(
+            "/projects/{project_id}/serve-nodes",
+            get(deployments::serve_nodes),
+        )
+        .route(
             "/projects/{project_id}/deployments/{deployment_id}",
             get(deployments::detail),
         )
@@ -90,6 +101,10 @@ pub fn router() -> Router<ControlApiState> {
             post(deployments::cancel),
         )
         .route(
+            "/projects/{project_id}/deployments/{deployment_id}/unpublish",
+            post(deployments::unpublish),
+        )
+        .route(
             "/projects/{project_id}/deployments/{deployment_id}/retry",
             post(deployments::retry),
         )
@@ -101,18 +116,6 @@ pub fn router() -> Router<ControlApiState> {
             "/projects/{project_id}/deployments/{deployment_id}/rollback",
             post(deployments::rollback),
         )
-        .route(
-            "/projects/{project_id}/deployments/{deployment_id}/review/request",
-            post(deployments::review::request),
-        )
-        .route(
-            "/projects/{project_id}/deployments/{deployment_id}/review/approve",
-            post(deployments::review::approve),
-        )
-        .route(
-            "/projects/{project_id}/deployments/{deployment_id}/review/reject",
-            post(deployments::review::reject),
-        )
 }
 
 pub(crate) struct ProjectAccess {
@@ -121,6 +124,20 @@ pub(crate) struct ProjectAccess {
     pub role: TeamMemberRole,
     #[allow(dead_code)] // Read by deployment slices in Milestone 5.
     pub user_id: Uuid,
+}
+
+pub(crate) fn validate_repository_url(value: &str) -> Result<(), &'static str> {
+    grass_git_source::parse_repository_url(value)
+        .map(|_| ())
+        .map_err(|error| match error {
+            grass_git_source::RepositoryUrlError::UnsupportedTransport => {
+                "repository_url transport is not supported"
+            }
+            grass_git_source::RepositoryUrlError::EmbeddedCredential => {
+                "repository_url must not contain credentials"
+            }
+            grass_git_source::RepositoryUrlError::Invalid => "repository_url is invalid",
+        })
 }
 
 impl ProjectAccess {
@@ -135,7 +152,7 @@ impl ProjectAccess {
     }
 
     pub fn require_admin(&self, op: &'static str) -> Result<(), AppError> {
-        if !matches!(self.role, TeamMemberRole::Owner | TeamMemberRole::Admin) {
+        if !role_can_admin(&self.role) {
             return Err(AppError::Forbidden {
                 op,
                 message: "admin role required".to_owned(),
@@ -153,6 +170,10 @@ impl ProjectAccess {
         }
         Ok(())
     }
+}
+
+fn role_can_admin(role: &TeamMemberRole) -> bool {
+    matches!(role, TeamMemberRole::Owner | TeamMemberRole::Admin)
 }
 
 /// Loads a project and authorizes the session user through the owning
@@ -246,4 +267,47 @@ pub(crate) fn optional_trimmed(value: Option<String>) -> Option<String> {
         let trimmed = value.trim().to_owned();
         (!trimmed.is_empty()).then_some(trimmed)
     })
+}
+
+#[cfg(test)]
+mod repository_url_tests {
+    use super::{role_can_admin, validate_repository_url};
+    use crate::infra::database::entity::TeamMemberRole;
+
+    #[test]
+    fn project_urls_support_all_approved_git_transports() {
+        for value in [
+            "http://example.com/repo.git",
+            "https://example.com:8443/repo.git",
+            "ssh://git@example.com:2222/repo.git",
+            "git@example.com:repo.git",
+            "git://example.com:19418/repo.git",
+        ] {
+            assert!(validate_repository_url(value).is_ok(), "rejected {value}");
+        }
+    }
+
+    #[test]
+    fn project_urls_return_stable_safe_validation_messages() {
+        assert_eq!(
+            validate_repository_url("file:///srv/repo"),
+            Err("repository_url transport is not supported")
+        );
+        assert_eq!(
+            validate_repository_url("https://token@example.com/repo.git"),
+            Err("repository_url must not contain credentials")
+        );
+        assert_eq!(
+            validate_repository_url("../repo"),
+            Err("repository_url is invalid")
+        );
+    }
+
+    #[test]
+    fn only_owner_and_admin_can_manage_project_source_credentials() {
+        assert!(role_can_admin(&TeamMemberRole::Owner));
+        assert!(role_can_admin(&TeamMemberRole::Admin));
+        assert!(!role_can_admin(&TeamMemberRole::Member));
+        assert!(!role_can_admin(&TeamMemberRole::Viewer));
+    }
 }

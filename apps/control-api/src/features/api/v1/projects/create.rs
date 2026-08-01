@@ -13,7 +13,8 @@ use crate::{
     },
     infra::{
         database::entity::{
-            AuditEventResult, HostBindingEnvironment, HostBindingKind, ProjectRuntime,
+            AuditEventResult, HostBindingEnvironment, HostBindingKind, HostReviewStatus,
+            ProjectRuntime,
         },
         error::{AppError, ok_response},
         host_provision::service::{BindHostRequest, HostBindingService},
@@ -104,19 +105,10 @@ pub async fn handler(
     if let Some(url) = &body.repository_url {
         let trimmed = url.trim();
         if !trimmed.is_empty() {
-            let parsed = url::Url::parse(trimmed).map_err(|_| AppError::Validation {
+            super::validate_repository_url(trimmed).map_err(|message| AppError::Validation {
                 op: OP,
-                message: "repository_url must be a valid URL".to_owned(),
+                message: message.to_owned(),
             })?;
-            // Only http(s) is fetched by the build node; other schemes
-            // (file, ssh, ext, git) are rejected so a project setting cannot
-            // steer host-side git at a local path or command transport.
-            if !matches!(parsed.scheme(), "http" | "https") {
-                return Err(AppError::Validation {
-                    op: OP,
-                    message: "repository_url must use http or https".to_owned(),
-                });
-            }
         }
     }
 
@@ -147,6 +139,7 @@ pub async fn handler(
         db,
         CreateProjectParams {
             team_id: team.id,
+            created_by_user_id: Some(session.data.user_id),
             slug,
             name: body.name.trim().to_owned(),
             runtime,
@@ -183,6 +176,7 @@ pub async fn handler(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(session.data.user_id),
+            actor_node_id: None,
             team_id: Some(team.id),
             action: "project.created".to_owned(),
             target_type: "project".to_owned(),
@@ -271,6 +265,7 @@ async fn auto_assign_host(
                     kind: HostBindingKind::Platform,
                     environment: HostBindingEnvironment::Production,
                     is_primary: true,
+                    review_status: HostReviewStatus::NotRequired,
                     actor_user_id: Some(session.data.user_id),
                 },
             )
@@ -281,6 +276,7 @@ async fn auto_assign_host(
                     db,
                     CreateAuditEventParams {
                         actor_user_id: Some(session.data.user_id),
+                        actor_node_id: None,
                         team_id: Some(team.id),
                         action: "host.provisioned".to_owned(),
                         target_type: "project_host_binding".to_owned(),

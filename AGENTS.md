@@ -39,27 +39,25 @@ If the agent is unsure which phase applies, use `GW-AGENT / Working Context`.
 
 At the beginning of every new round of work, before proposing implementation details or modifying files, agents must read:
 
-1. `docs/architecture.md`
-2. `docs/roadmap.md`
+1. `docs/todo.md`
 
-These files define the current version scope:
+This file defines the current version and remaining scope:
 
-- `docs/architecture.md` is the current overall architecture and execution plan.
-- `docs/roadmap.md` is the roadmap for the current overall architecture and plan.
+- the version declared near the top is the GitHub Milestone version;
+- priority sections and small-feature IDs define the work that remains;
+- `# Future` records long-term directions that are not current scope.
 
-Both files should declare the current version near the top of the file. Agents must derive the GitHub Milestone version from those files instead of hardcoding a version in this document.
-
-If `docs/architecture.md` does not exist, the agent must ask the user how to proceed before implementation. If `docs/roadmap.md` does not exist, the agent must ask the user how to proceed before implementation.
+If `docs/todo.md` does not exist or does not declare a current version near the top, the agent must ask the user how to proceed before implementation.
 
 ## Operating Principles
 
 - Do not fabricate facts, files, issues, PRs, project IDs, labels, or test results.
 - Prefer reading existing documentation and code before asking the user for information.
 - Ask the user when a decision affects architecture, user experience, data model, external dependencies, security, irreversible operations, or repository workflow.
-- Do not expand the scope beyond the current plan and roadmap without explicit user approval.
-- Do not implement items listed under `# Future` in `docs/roadmap.md` as current-version functionality.
+- Do not expand the scope beyond the current approved plan and `docs/todo.md` without explicit user approval.
+- Do not implement items listed under `# Future` in `docs/todo.md` as current-version functionality.
 - First-stage functionality should be complete enough to support the planned full workflow. Do not remove required scope merely to create a smaller implementation.
-- A field, enum, interface, or explicit “not implemented yet” error may be added for future capabilities only when the current roadmap requires such a placeholder.
+- A field, enum, interface, or explicit “not implemented yet” error may be added for future capabilities only when the current TODO scope requires such a placeholder.
 
 ## Discovery and Brainstorming Loop
 
@@ -77,8 +75,7 @@ For each meaningful candidate approach:
    - creating small temporary local experiments when appropriate.
 4. Evaluate cost, risk, dependencies, and likely impact.
 5. Self-check whether the idea is appropriate:
-   - Does it fit `docs/architecture.md`?
-   - Does it fit `docs/roadmap.md`?
+   - Does it fit `docs/todo.md`?
    - Does it belong to the current version?
    - Does it belong to the selected Milestone and small feature?
    - Does it accidentally implement `# Future` scope?
@@ -136,11 +133,11 @@ Once approved, agents should follow this order:
 
 Before implementing, agents must use GitHub tools to inspect the current repository issues and find related work.
 
-The expected unit of implementation is usually one small feature inside a Milestone from `docs/roadmap.md`.
+The expected unit of implementation is usually one small feature from a priority section in `docs/todo.md`.
 
 Issue workflow:
 
-1. Determine the current version from the headers of `docs/architecture.md` and `docs/roadmap.md`.
+1. Determine the current version from the header of `docs/todo.md`.
 2. Determine the repository name from local git configuration or repository metadata.
 3. Search for an issue corresponding to the small feature, for example `M3.1 Quota 数据访问层`.
 4. Search for a parent issue corresponding to the Milestone, for example `Milestone 3：配额系统`.
@@ -161,7 +158,7 @@ Project rules:
 
 - The preferred Project name is `<project-name> <project-version>`.
 - Derive `<project-name>` from the repository name unless the user specifies otherwise.
-- Derive `<project-version>` from `docs/architecture.md` and `docs/roadmap.md`.
+- Derive `<project-version>` from `docs/todo.md`.
 - If the Project does not exist and the available tools support creating it, create it.
 - If the tools cannot create or locate the Project reliably, ask the user.
 
@@ -203,7 +200,7 @@ Branch rules:
 During implementation:
 
 - Keep changes aligned with the approved plan.
-- Prefer complete, roadmap-aligned functionality over artificial minimalism.
+- Prefer complete, TODO-aligned functionality over artificial minimalism.
 - Make small, coherent commits that are independently revertible.
 - Do not mix unrelated formatting changes into feature commits.
 - Do not commit temporary files, secrets, build artifacts, local caches, or experimental scratch files.
@@ -300,7 +297,7 @@ Database validation should follow these rules:
 - Prefer PostgreSQL client-only tooling for schema inspection when available, such as `psql` from a client package. Do not install, start, stop, initialize, or manage a local PostgreSQL server unless the user explicitly asks for that.
 - Verify applied migrations by checking the migration tracking table and confirming whether pending migrations remain.
 - Verify schema results directly after migration, including relevant tables, columns, column types, nullability, defaults, native enum types and values, indexes, partial unique indexes, and foreign keys.
-- For migrations that use database-native enum types, verify the created enum values match the architecture and roadmap state models.
+- For migrations that use database-native enum types, verify the created enum values match the approved data model and current TODO scope.
 - For migrations that add nullable lifecycle timestamp fields, verify nullable fields do not accidentally receive default timestamps unless the data model explicitly requires that behavior.
 - Do not assume a migration is correct just because rerunning the migrator reports no pending migrations. If a migration was already applied before code changed, the existing database may still reflect the older schema.
 - For fresh-schema validation, prefer a disposable database or schema provided or approved by the user.
@@ -368,14 +365,14 @@ If branch deletion, worktree cleanup, or local update cannot be performed with a
 
 ## Scope Control
 
-Agents must keep implementation aligned with the current version.
+Agents must keep implementation aligned with the current version and priority scope.
 
-- Use `docs/architecture.md` and `docs/roadmap.md` as source of truth.
+- Use `docs/todo.md` as the source of truth for unfinished work, current priority, and version.
 - Current-version tasks should map to a Milestone and, when possible, a small feature ID.
 - Do not implement `# Future` items as active functionality.
 - If a Future item appears necessary for a current task, propose a limited placeholder, explicit error, or alternative design and ask the user.
-- Do not silently change roadmap scope.
-- If roadmap and plan conflict, point out the conflict and ask the user which source to update.
+- Do not silently change TODO scope.
+- If `docs/todo.md` and an approved plan conflict, point out the conflict and ask the user which source to update.
 
 ## Security and Safety
 
@@ -389,9 +386,8 @@ Agents must keep implementation aligned with the current version.
 
 ## Current Project Notes
 
-- The repository roadmap is expected at `docs/roadmap.md`.
-- The current architecture and execution plan is expected at `docs/architecture.md`.
-- The current version must be read from those files.
+- The repository TODO is expected at `docs/todo.md`.
+- The current version and remaining scope must be read from that file.
 - The preferred GitHub Project name is `<repository-name> <current-version>`.
 - Default assignee should be inferred from local git configuration when possible.
 

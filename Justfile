@@ -1,8 +1,11 @@
 root := justfile_directory()
 console := root / "apps" / "console"
 
+[unix]
 set shell := ["sh", "-c"]
-set windows-shell := ["pwsh.exe", "-NoProfile", "-Command"]
+
+[windows]
+set shell := ["pwsh.exe", "-NoProfile", "-Command"]
 set dotenv-load := false
 
 _default:

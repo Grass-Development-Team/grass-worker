@@ -3,6 +3,7 @@ import { useState } from "react";
 import { AlertCircle, ArrowRight, Globe } from "lucide-react";
 
 import { setupApi } from "@/features/setup/setup.api";
+import { useBranding } from "@/features/branding/branding-context";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -16,7 +17,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 export function SiteStep({ onSuccess }: { onSuccess: () => void }) {
-  const [name, setName] = useState("Grass Worker");
+  const { siteName } = useBranding();
+  const [name, setName] = useState(siteName);
   const [siteUrl, setSiteUrl] = useState(window.location.origin);
   const [publicBaseUrl, setPublicBaseUrl] = useState(window.location.origin);
   const [error, setError] = useState<string | null>(null);
@@ -47,7 +49,7 @@ export function SiteStep({ onSuccess }: { onSuccess: () => void }) {
               id="site-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Grass Worker"
+              placeholder="My deployment platform"
               required
             />
             <Label htmlFor="site-url">Site URL</Label>

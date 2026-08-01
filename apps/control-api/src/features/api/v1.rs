@@ -2,8 +2,11 @@ pub mod admin;
 pub mod auth;
 pub mod internal;
 pub mod me;
+pub mod notifications;
+pub mod preview_auth;
 pub mod projects;
 pub mod setup;
+pub mod site_config;
 pub mod teams;
 
 use axum::{Router, middleware, routing::get};
@@ -21,6 +24,7 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
         ));
 
     Router::new()
+        .route("/site-config", get(site_config::get))
         .nest(
             "/setup",
             setup::router().layer(middleware::from_fn_with_state(
@@ -34,6 +38,17 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
                 state.clone(),
                 require_ready_mode,
             )),
+        )
+        .route(
+            "/preview/authorize",
+            get(preview_auth::authorize)
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    require_ready_mode,
+                ))
+                .layer(middleware::map_response(
+                    preview_auth::browser_authorization_headers,
+                )),
         )
         .route(
             "/me",
@@ -51,6 +66,12 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
             state.clone(),
             require_ready_mode,
         )))
+        .merge(
+            notifications::router().layer(middleware::from_fn_with_state(
+                state.clone(),
+                require_ready_mode,
+            )),
+        )
         .nest(
             "/internal",
             internal::router(state.clone())
@@ -66,10 +87,19 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
 
 #[cfg(test)]
 mod tests {
-    use axum::{body::Body, http::Request};
+    use axum::{
+        body::{Body, to_bytes},
+        http::Request,
+    };
+    use sea_orm::MockDatabase;
+    use time::OffsetDateTime;
     use tower::ServiceExt;
+    use uuid::Uuid;
 
-    use crate::infra::config::ControlApiConfig;
+    use crate::infra::{
+        config::ControlApiConfig,
+        database::entity::{SystemSettingValueKind, system_setting},
+    };
 
     use super::*;
 
@@ -88,6 +118,95 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn notification_routes_require_authentication() {
+        let setting = system_setting::Model {
+            id: Uuid::now_v7(),
+            key: "setup.finished".to_owned(),
+            value_kind: SystemSettingValueKind::Boolean,
+            value: serde_json::json!(true),
+            is_secret: false,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+        };
+        let database = MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([[setting]])
+            .into_connection();
+        let state = ControlApiState::new(ControlApiConfig::default(), "config.toml");
+        assert!(state.database.set(database).is_ok());
+        let response = router(state.clone())
+            .with_state(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/notifications")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn site_config_is_public_and_uses_the_configured_name() {
+        let setting = system_setting::Model {
+            id: Uuid::now_v7(),
+            key: "site.name".to_owned(),
+            value_kind: SystemSettingValueKind::String,
+            value: serde_json::json!("Acme Deploy"),
+            is_secret: false,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+        };
+        let database = MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([[setting]])
+            .into_connection();
+        let state = ControlApiState::new(ControlApiConfig::default(), "config.toml");
+        assert!(state.database.set(database).is_ok());
+
+        let response = router(state.clone())
+            .with_state(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/site-config")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["data"]["site_name"], "Acme Deploy");
+        assert_eq!(body["data"]["version"], env!("CARGO_PKG_VERSION"));
+    }
+
+    #[tokio::test]
+    async fn preview_authorization_responses_are_not_cached_or_referred() {
+        let state = ControlApiState::new(ControlApiConfig::default(), "config.toml");
+        let response = router(state.clone())
+            .with_state(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/preview/authorize?state=opaque")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response.headers()[axum::http::header::CACHE_CONTROL],
+            "no-store"
+        );
+        assert_eq!(
+            response.headers()[axum::http::header::REFERRER_POLICY],
+            "no-referrer"
+        );
     }
 
     #[tokio::test]

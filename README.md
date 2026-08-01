@@ -26,8 +26,7 @@ just run node          # Build/serve Node
 just run console       # Console dev server
 ```
 
-Architecture and roadmap live in [docs/architecture.md](docs/architecture.md)
-and [docs/roadmap.md](docs/roadmap.md).
+Current version and remaining work live in [docs/todo.md](docs/todo.md).
 
 ## License
 

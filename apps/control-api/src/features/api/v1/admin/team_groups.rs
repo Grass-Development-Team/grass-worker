@@ -27,12 +27,18 @@ use crate::{
 };
 
 fn group_view(group: &team_group::Model) -> serde_json::Value {
+    let review_policy = group.review_policy.as_ref();
     json!({
         "id": group.id,
         "code": group.code,
         "name": group.name,
         "description": group.description,
         "quota_plan_id": group.quota_plan_id,
+        "review_policy": {
+            "production": review_policy.and_then(|policy| policy.get("production")),
+            "preview": review_policy.and_then(|policy| policy.get("preview")),
+            "domain": review_policy.and_then(|policy| policy.get("domain")),
+        },
         "is_default": group.is_default,
         "created_at": ts(group.created_at),
     })
@@ -88,10 +94,11 @@ async fn audit_group_mutation(
     group_id: Uuid,
     metadata: serde_json::Value,
 ) {
-    let _ = audits::create_audit_event(
+    let _ = audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(actor),
+            actor_node_id: None,
             team_id: None,
             action: action.to_owned(),
             target_type: "team_group".to_owned(),
@@ -154,6 +161,52 @@ pub struct CreateTeamGroupRequest {
     pub description: Option<String>,
     #[serde(default)]
     pub quota_plan_id: Option<Uuid>,
+    #[serde(default)]
+    pub review_policy: Option<ReviewPolicyOverrideRequest>,
+}
+
+#[derive(Deserialize)]
+pub struct ReviewPolicyOverrideRequest {
+    #[serde(default)]
+    pub production: Option<String>,
+    #[serde(default)]
+    pub preview: Option<String>,
+    #[serde(default)]
+    pub domain: Option<String>,
+}
+
+fn review_policy_value(
+    policy: ReviewPolicyOverrideRequest,
+    op: &'static str,
+) -> Result<Option<serde_json::Value>, AppError> {
+    fn validate_mode(value: Option<String>, op: &'static str) -> Result<Option<String>, AppError> {
+        match value.as_deref() {
+            None => Ok(None),
+            Some("auto" | "manual") => Ok(value),
+            Some(_) => Err(AppError::Validation {
+                op,
+                message: "review policy must be auto, manual, or inherit".to_owned(),
+            }),
+        }
+    }
+
+    let production = validate_mode(policy.production, op)?;
+    let preview = validate_mode(policy.preview, op)?;
+    let domain = validate_mode(policy.domain, op)?;
+    if production.is_none() && preview.is_none() && domain.is_none() {
+        return Ok(None);
+    }
+    let mut value = serde_json::Map::new();
+    if let Some(production) = production {
+        value.insert("production".to_owned(), json!(production));
+    }
+    if let Some(preview) = preview {
+        value.insert("preview".to_owned(), json!(preview));
+    }
+    if let Some(domain) = domain {
+        value.insert("domain".to_owned(), json!(domain));
+    }
+    Ok(Some(serde_json::Value::Object(value)))
 }
 
 /// POST /api/v1/admin/team-groups
@@ -179,6 +232,11 @@ pub async fn create(
     if let Some(plan_id) = body.quota_plan_id {
         validate_plan_reference(db, plan_id, OP).await?;
     }
+    let review_policy = body
+        .review_policy
+        .map(|policy| review_policy_value(policy, OP))
+        .transpose()?
+        .flatten();
 
     let now = OffsetDateTime::now_utc();
     let group = team_group::ActiveModel {
@@ -187,6 +245,7 @@ pub async fn create(
         name: Set(body.name.trim().to_owned()),
         description: Set(body.description),
         quota_plan_id: Set(body.quota_plan_id),
+        review_policy: Set(review_policy),
         is_default: Set(false),
         deleted_at: Set(None),
         created_at: Set(now),
@@ -211,7 +270,7 @@ pub async fn create(
         data.user_id,
         "team_group.created",
         group.id,
-        json!({ "code": group.code }),
+        json!({ "code": group.code, "review_policy": group.review_policy }),
     )
     .await;
 
@@ -227,6 +286,8 @@ pub struct UpdateTeamGroupRequest {
     /// Explicit `null` detaches the quota plan.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub quota_plan_id: Option<Option<Uuid>>,
+    #[serde(default)]
+    pub review_policy: Option<ReviewPolicyOverrideRequest>,
     #[serde(default)]
     pub is_default: Option<bool>,
 }
@@ -261,6 +322,10 @@ pub async fn update(
     if let Some(Some(plan_id)) = body.quota_plan_id {
         validate_plan_reference(db, plan_id, OP).await?;
     }
+    let review_policy = body
+        .review_policy
+        .map(|policy| review_policy_value(policy, OP))
+        .transpose()?;
 
     let promote = body.is_default == Some(true) && !group.is_default;
     let mut active: team_group::ActiveModel = group.into();
@@ -272,6 +337,9 @@ pub async fn update(
     }
     if let Some(quota_plan_id) = body.quota_plan_id {
         active.quota_plan_id = Set(quota_plan_id);
+    }
+    if let Some(review_policy) = review_policy {
+        active.review_policy = Set(review_policy);
     }
     let group = active
         .update(db)
@@ -309,7 +377,11 @@ pub async fn update(
         data.user_id,
         "team_group.updated",
         group.id,
-        json!({ "code": group.code, "made_default": promote }),
+        json!({
+            "code": group.code,
+            "made_default": promote,
+            "review_policy": group.review_policy,
+        }),
     )
     .await;
 
@@ -407,10 +479,11 @@ pub async fn assign(
             source: source.into(),
         })?;
 
-    let _ = audits::create_audit_event(
+    let _ = audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
+            actor_node_id: None,
             team_id: Some(team.id),
             action: "team.group_changed".to_owned(),
             target_type: "team".to_owned(),
@@ -425,4 +498,21 @@ pub async fn assign(
     Ok(ok_response(json!({
         "team": { "id": team.id, "slug": team.slug, "group_id": team.group_id },
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn review_policy_accepts_a_domain_override() {
+        let request: ReviewPolicyOverrideRequest = serde_json::from_value(serde_json::json!({
+            "domain": "manual",
+        }))
+        .unwrap();
+
+        let value = review_policy_value(request, "test.team_groups.review_policy").unwrap();
+
+        assert_eq!(value, Some(serde_json::json!({ "domain": "manual" })));
+    }
 }

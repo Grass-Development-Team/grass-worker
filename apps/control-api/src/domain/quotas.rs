@@ -8,7 +8,8 @@
 use std::collections::HashMap;
 
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
+    EntityTrait, QueryFilter, TransactionTrait,
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -125,12 +126,19 @@ pub struct ResolvedQuota {
 
 impl ResolvedQuota {
     /// Returns the limit for a dimension. A missing limit row or a negative
-    /// stored value both mean unlimited, expressed as `None`.
+    /// stored value mean unlimited. SSR execution dimensions also reserve
+    /// zero for unlimited so an unconfigured SSR plan is usable.
     pub fn limit_for(&self, dimension: QuotaDimension) -> Option<i64> {
         self.limits
             .get(dimension.as_str())
             .copied()
-            .filter(|limit| *limit >= 0)
+            .filter(|limit| {
+                *limit >= 0
+                    && (!matches!(
+                        dimension,
+                        QuotaDimension::SsrProcesses | QuotaDimension::SsrHoursMonthly
+                    ) || *limit > 0)
+            })
     }
 }
 
@@ -449,6 +457,55 @@ pub async fn record_event<C: ConnectionTrait>(
     Ok(())
 }
 
+/// Records a quota delta at most once and updates the durable counter in the
+/// same transaction. A duplicate idempotency key is a successful no-op.
+pub async fn record_event_once(
+    db: &DatabaseConnection,
+    idempotency_key: String,
+    params: RecordEventParams,
+) -> anyhow::Result<bool> {
+    let transaction = db.begin().await?;
+    let now = OffsetDateTime::now_utc();
+    let inserted = quota_event::ActiveModel {
+        id: Set(Uuid::now_v7()),
+        team_id: Set(params.team_id),
+        dimension: Set(params.dimension.as_str().to_owned()),
+        kind: Set(params.kind.clone()),
+        delta_value: Set(params.delta_value),
+        idempotency_key: Set(Some(idempotency_key)),
+        resource_type: Set(params.resource_type),
+        resource_id: Set(params.resource_id),
+        metadata: Set(params.metadata),
+        created_at: Set(now),
+    }
+    .insert(&transaction)
+    .await;
+    if let Err(source) = inserted {
+        let source: anyhow::Error = source.into();
+        if crate::infra::database::is_unique_violation(&source) {
+            transaction.rollback().await?;
+            return Ok(false);
+        }
+        return Err(source);
+    }
+
+    if matches!(
+        params.kind,
+        QuotaEventKind::Consume | QuotaEventKind::Release | QuotaEventKind::Adjust
+    ) {
+        apply_counter_delta(
+            &transaction,
+            params.team_id,
+            params.dimension,
+            params.delta_value,
+            now,
+        )
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(true)
+}
+
 async fn apply_counter_delta<C: ConnectionTrait>(
     db: &C,
     team_id: Uuid,
@@ -647,5 +704,17 @@ mod tests {
         assert_eq!(resolved.limit_for(QuotaDimension::Projects), Some(3));
         assert_eq!(resolved.limit_for(QuotaDimension::Hosts), None);
         assert_eq!(resolved.limit_for(QuotaDimension::Members), None);
+        let ssr_unlimited = ResolvedQuota {
+            limits: HashMap::from([
+                ("ssr_processes".to_owned(), 0),
+                ("ssr_hours.monthly".to_owned(), 0),
+            ]),
+            ..resolved
+        };
+        assert_eq!(ssr_unlimited.limit_for(QuotaDimension::SsrProcesses), None);
+        assert_eq!(
+            ssr_unlimited.limit_for(QuotaDimension::SsrHoursMonthly),
+            None
+        );
     }
 }

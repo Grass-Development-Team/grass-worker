@@ -62,4 +62,21 @@ describe("request", () => {
       expect.objectContaining({ headers: {} }),
     );
   });
+
+  it("returns data from an accepted asynchronous operation", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: 202,
+          message: "Accepted",
+          data: { release_pending: true },
+        }),
+        { status: 202, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    await expect(
+      request("/api/v1/deployments/deploy-1/promote", { method: "POST" }),
+    ).resolves.toEqual({ release_pending: true });
+  });
 });

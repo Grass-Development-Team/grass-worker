@@ -7,16 +7,19 @@
 //! period. The serve path reaches a service by its container IP on the
 //! shared runtime network.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use anyhow::Context;
+use grass_node_protocol::ServeResources;
 use tokio::sync::{Mutex, mpsc};
 use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::{
+    client::ControlApiClient,
     config::NodeConfig,
     output::manifest::ServerSection,
     runtime::{BuildRuntime, ContainerRuntime, PrepareImageInput, RunServiceInput},
@@ -27,29 +30,50 @@ use crate::{
 pub const SSR_CONTAINER_PORT: u16 = 8321;
 const REAPER_INTERVAL: Duration = Duration::from_secs(60);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(300);
+const SSR_CONTAINER_PREFIX: &str = "grass-ssr-";
+const SSR_NODE_LABEL: &str = "dev.cxcs.grass.node-id";
+const SSR_DEPLOYMENT_LABEL: &str = "dev.cxcs.grass.deployment-id";
 
 struct ServiceEntry {
     upstream: String,
     container_name: String,
     last_used: Instant,
+    lease_id: Option<Uuid>,
 }
 
 pub struct SsrManager {
     runtime: Option<Arc<BuildRuntime>>,
+    node_id: Uuid,
     image: String,
     network: String,
-    cpu_limit: u32,
-    memory_mb: u64,
     idle_stop: Duration,
     startup_timeout: Duration,
+    client: Option<ControlApiClient>,
     services: Mutex<HashMap<Uuid, ServiceEntry>>,
     /// Per-deployment start locks so concurrent first requests start one
     /// container, not many.
     start_locks: Mutex<HashMap<Uuid, Arc<Mutex<()>>>>,
 }
 
-fn container_name(deployment_id: Uuid) -> String {
-    format!("grass-ssr-{}", deployment_id.simple())
+fn container_name(node_id: Uuid, deployment_id: Uuid) -> String {
+    format!(
+        "{SSR_CONTAINER_PREFIX}{}-{}",
+        node_id.simple(),
+        deployment_id.simple()
+    )
+}
+
+#[cfg(test)]
+fn legacy_container_name(deployment_id: Uuid) -> String {
+    format!("{SSR_CONTAINER_PREFIX}{}", deployment_id.simple())
+}
+
+fn container_deployment_id(name: &str) -> Option<Uuid> {
+    let id = name
+        .strip_prefix(SSR_CONTAINER_PREFIX)?
+        .rsplit('-')
+        .next()?;
+    (id.len() == 32).then(|| Uuid::parse_str(id).ok()).flatten()
 }
 
 /// Environment for an SSR server: the manifest-declared variables plus the
@@ -77,17 +101,53 @@ fn service_env(server: &ServerSection, port: u16) -> Vec<(String, String)> {
 }
 
 impl SsrManager {
-    pub fn new(runtime: Option<Arc<BuildRuntime>>, config: &NodeConfig) -> Self {
+    pub fn new(runtime: Option<Arc<BuildRuntime>>, node_id: Uuid, config: &NodeConfig) -> Self {
         Self {
             runtime,
+            node_id,
             image: config.runtime.default_serve_image.clone(),
             network: config.runtime.network.clone(),
-            cpu_limit: config.runtime.resources.cpu_limit,
-            memory_mb: config.runtime.resources.memory_mb,
             idle_stop: Duration::from_secs(config.serve.ssr.idle_stop_seconds),
             startup_timeout: Duration::from_secs(config.serve.ssr.startup_timeout_seconds.max(5)),
+            client: None,
             services: Mutex::new(HashMap::new()),
             start_locks: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn with_client(
+        runtime: Option<Arc<BuildRuntime>>,
+        node_id: Uuid,
+        config: &NodeConfig,
+        client: ControlApiClient,
+    ) -> Self {
+        let mut manager = Self::new(runtime, node_id, config);
+        manager.client = Some(client);
+        manager
+    }
+
+    fn service_input(
+        &self,
+        deployment_id: Uuid,
+        app_dir: std::path::PathBuf,
+        start_command: String,
+        server: &ServerSection,
+        resources: ServeResources,
+    ) -> RunServiceInput {
+        RunServiceInput {
+            name: container_name(self.node_id, deployment_id),
+            image: self.image.clone(),
+            app_dir,
+            start_command,
+            env: service_env(server, SSR_CONTAINER_PORT),
+            container_port: SSR_CONTAINER_PORT,
+            cpu_millicores: resources.cpu_millicores,
+            memory_mb: resources.memory_mb,
+            network: self.network.clone(),
+            labels: HashMap::from([
+                (SSR_NODE_LABEL.to_owned(), self.node_id.to_string()),
+                (SSR_DEPLOYMENT_LABEL.to_owned(), deployment_id.to_string()),
+            ]),
         }
     }
 
@@ -98,6 +158,7 @@ impl SsrManager {
         deployment_id: Uuid,
         deployment_dir: &Path,
         server: &ServerSection,
+        resources: ServeResources,
     ) -> anyhow::Result<String> {
         if let Some(upstream) = self.known_upstream(deployment_id).await {
             return Ok(upstream);
@@ -122,8 +183,23 @@ impl SsrManager {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("container runtime is unavailable on this node"))?;
 
+        let lease_id = if let Some(client) = &self.client {
+            Some(
+                client
+                    .acquire_ssr_lease(deployment_id)
+                    .await
+                    .context("SSR process/hour quota denied")?
+                    .lease_id,
+            )
+        } else {
+            None
+        };
+
         let app_dir = deployment_dir.to_path_buf();
         if !app_dir.join(&server.entry).is_file() {
+            if let (Some(client), Some(lease_id)) = (&self.client, lease_id) {
+                let _ = client.release_ssr_lease(deployment_id, lease_id).await;
+            }
             anyhow::bail!("server entry {} is missing from the artifact", server.entry);
         }
         let start_command = if server.start_command.trim().is_empty() {
@@ -138,29 +214,45 @@ impl SsrManager {
         runtime
             .prepare_image(PrepareImageInput { image: &self.image }, pull_tx)
             .await
-            .map_err(|error| anyhow::anyhow!("serve image unavailable: {error}"))?;
+            .map_err(|error| anyhow::anyhow!("serve image unavailable: {error}"))
+            .inspect_err(|_| {
+                if let (Some(client), Some(lease_id)) = (&self.client, lease_id) {
+                    let client = client.clone();
+                    tokio::spawn(async move {
+                        let _ = client.release_ssr_lease(deployment_id, lease_id).await;
+                    });
+                }
+            })?;
         let _ = drain.await;
 
-        let name = container_name(deployment_id);
+        let name = container_name(self.node_id, deployment_id);
         let running = runtime
-            .run_service(RunServiceInput {
-                name: name.clone(),
-                image: self.image.clone(),
+            .run_service(self.service_input(
+                deployment_id,
                 app_dir,
                 start_command,
-                env: service_env(server, SSR_CONTAINER_PORT),
-                container_port: SSR_CONTAINER_PORT,
-                cpu_limit: self.cpu_limit,
-                memory_mb: self.memory_mb,
-                network: self.network.clone(),
-            })
+                server,
+                resources,
+            ))
             .await
-            .map_err(|error| anyhow::anyhow!("ssr service start failed: {error}"))?;
+            .map_err(|error| anyhow::anyhow!("ssr service start failed: {error}"));
+        let running = match running {
+            Ok(running) => running,
+            Err(error) => {
+                if let (Some(client), Some(lease_id)) = (&self.client, lease_id) {
+                    let _ = client.release_ssr_lease(deployment_id, lease_id).await;
+                }
+                return Err(error);
+            }
+        };
 
         if let Err(error) = wait_ready(&running.upstream, self.startup_timeout).await {
             // Remove the container so the next request starts fresh instead
             // of proxying into a wedged process.
             let _ = runtime.stop_service(&name).await;
+            if let (Some(client), Some(lease_id)) = (&self.client, lease_id) {
+                let _ = client.release_ssr_lease(deployment_id, lease_id).await;
+            }
             return Err(error);
         }
 
@@ -176,6 +268,7 @@ impl SsrManager {
                 upstream: running.upstream.clone(),
                 container_name: name,
                 last_used: Instant::now(),
+                lease_id,
             },
         );
         Ok(running.upstream)
@@ -192,54 +285,177 @@ impl SsrManager {
     /// proxy connection failure, so the next request restarts it.
     pub async fn invalidate(&self, deployment_id: Uuid) {
         let removed = self.services.lock().await.remove(&deployment_id);
-        if let (Some(entry), Some(runtime)) = (removed, self.runtime.as_ref()) {
-            warn!(
-                operation = "node.ssr.invalidated",
-                deployment_id = %deployment_id,
-                "ssr service unreachable; stopping its container"
-            );
-            let _ = runtime.stop_service(&entry.container_name).await;
+        if let Some(entry) = removed {
+            if let Some(runtime) = self.runtime.as_ref() {
+                warn!(
+                    operation = "node.ssr.invalidated",
+                    deployment_id = %deployment_id,
+                    "ssr service unreachable; stopping its container"
+                );
+                let _ = runtime.stop_service(&entry.container_name).await;
+            }
+            if let (Some(client), Some(lease_id)) = (&self.client, entry.lease_id) {
+                let _ = client.release_ssr_lease(deployment_id, lease_id).await;
+            }
         }
+    }
+
+    /// Reconciles both services known to this process and deterministic
+    /// containers left behind while the Node was offline.
+    pub async fn reconcile_routes(
+        &self,
+        routed_here: &HashSet<Uuid>,
+        routed_anywhere: &HashSet<Uuid>,
+    ) -> anyhow::Result<()> {
+        let Some(runtime) = self.runtime.as_ref() else {
+            return Ok(());
+        };
+        let stale_start_locks = {
+            let locks = self.start_locks.lock().await;
+            locks
+                .iter()
+                .filter(|(id, _)| !routed_here.contains(id))
+                .map(|(id, lock)| (*id, lock.clone()))
+                .collect::<Vec<_>>()
+        };
+        let mut start_guards = Vec::with_capacity(stale_start_locks.len());
+        for (_, lock) in &stale_start_locks {
+            start_guards.push(lock.clone().lock_owned().await);
+        }
+
+        let removed_services = {
+            let mut services = self.services.lock().await;
+            let ids = services
+                .keys()
+                .filter(|id| !routed_here.contains(id))
+                .copied()
+                .collect::<Vec<_>>();
+            ids.into_iter()
+                .filter_map(|id| services.remove(&id).map(|entry| (id, entry)))
+                .collect::<Vec<_>>()
+        };
+        for (deployment_id, entry) in removed_services {
+            if let (Some(client), Some(lease_id)) = (&self.client, entry.lease_id) {
+                let _ = client.release_ssr_lease(deployment_id, lease_id).await;
+            }
+        }
+
+        let node_id = self.node_id.to_string();
+        let mut stale = HashSet::new();
+        for service in runtime.list_services(SSR_CONTAINER_PREFIX).await? {
+            let Some(deployment_id) = container_deployment_id(&service.name) else {
+                continue;
+            };
+            match service.labels.get(SSR_NODE_LABEL) {
+                Some(owner) if owner == &node_id && !routed_here.contains(&deployment_id) => {
+                    stale.insert(service.name);
+                }
+                None if !routed_anywhere.contains(&deployment_id) => {
+                    stale.insert(service.name);
+                }
+                _ => {}
+            }
+        }
+        for name in stale {
+            runtime.stop_service(&name).await?;
+        }
+        let mut locks = self.start_locks.lock().await;
+        for (id, original) in stale_start_locks {
+            if locks
+                .get(&id)
+                .is_some_and(|current| Arc::ptr_eq(current, &original))
+            {
+                locks.remove(&id);
+            }
+        }
+        drop(locks);
+        drop(start_guards);
+        Ok(())
     }
 
     /// Periodically stops services that have been idle for the configured
     /// period. A zero idle timeout disables the reaper.
     pub fn spawn_reaper(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
-            if self.idle_stop.is_zero() {
-                return;
-            }
             let mut interval = tokio::time::interval(REAPER_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 interval.tick().await;
-                let idle: Vec<(Uuid, String)> = {
+                let active_ids = self
+                    .services
+                    .lock()
+                    .await
+                    .keys()
+                    .copied()
+                    .collect::<Vec<_>>();
+                for deployment_id in active_ids {
+                    let lease_id = self
+                        .services
+                        .lock()
+                        .await
+                        .get(&deployment_id)
+                        .and_then(|entry| entry.lease_id);
+                    let Some(client) = self.client.as_ref() else {
+                        continue;
+                    };
+                    let Some(lease_id) = lease_id else {
+                        continue;
+                    };
+                    if let Err(error) = client.renew_ssr_lease(deployment_id, lease_id).await {
+                        warn!(operation = "node.ssr.lease_renew_failed", %error, deployment_id = %deployment_id, "SSR lease renewal failed; stopping service");
+                        self.invalidate(deployment_id).await;
+                    }
+                }
+                let idle: Vec<(Uuid, String, Option<Uuid>)> = {
                     let mut services = self.services.lock().await;
                     let expired: Vec<Uuid> = services
                         .iter()
-                        .filter(|(_, entry)| entry.last_used.elapsed() >= self.idle_stop)
+                        .filter(|(_, entry)| {
+                            !self.idle_stop.is_zero() && entry.last_used.elapsed() >= self.idle_stop
+                        })
                         .map(|(id, _)| *id)
                         .collect();
                     expired
                         .into_iter()
                         .filter_map(|id| {
-                            services.remove(&id).map(|entry| (id, entry.container_name))
+                            services
+                                .remove(&id)
+                                .map(|entry| (id, entry.container_name, entry.lease_id))
                         })
                         .collect()
                 };
                 let Some(runtime) = self.runtime.as_ref() else {
                     continue;
                 };
-                for (deployment_id, name) in idle {
+                for (deployment_id, name, lease_id) in idle {
                     info!(
                         operation = "node.ssr.idle_stop",
                         deployment_id = %deployment_id,
                         "stopping idle ssr service"
                     );
                     let _ = runtime.stop_service(&name).await;
+                    if let (Some(client), Some(lease_id)) = (&self.client, lease_id) {
+                        let _ = client.release_ssr_lease(deployment_id, lease_id).await;
+                    }
                 }
             }
         })
+    }
+
+    /// Releases all process leases during a graceful Node shutdown.
+    pub async fn release_all(&self) {
+        let entries = {
+            let mut services = self.services.lock().await;
+            services.drain().collect::<Vec<_>>()
+        };
+        for (deployment_id, entry) in entries {
+            if let Some(runtime) = &self.runtime {
+                let _ = runtime.stop_service(&entry.container_name).await;
+            }
+            if let (Some(client), Some(lease_id)) = (&self.client, entry.lease_id) {
+                let _ = client.release_ssr_lease(deployment_id, lease_id).await;
+            }
+        }
     }
 }
 
@@ -265,6 +481,7 @@ async fn wait_ready(upstream: &str, timeout: Duration) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use grass_node_protocol::ServeResources;
 
     fn server_section(port_env: &str, host_env: &str) -> ServerSection {
         ServerSection {
@@ -273,6 +490,16 @@ mod tests {
             port_env: port_env.to_owned(),
             host_env: host_env.to_owned(),
         }
+    }
+
+    async fn runtime_service_names(runtime: &BuildRuntime) -> Vec<String> {
+        runtime
+            .list_services(SSR_CONTAINER_PREFIX)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|service| service.name)
+            .collect()
     }
 
     #[test]
@@ -293,10 +520,81 @@ mod tests {
     }
 
     #[test]
-    fn container_names_are_deterministic_per_deployment() {
-        let id = Uuid::now_v7();
-        assert_eq!(container_name(id), container_name(id));
-        assert!(container_name(id).starts_with("grass-ssr-"));
+    fn container_names_are_deterministic_per_node_and_deployment() {
+        let node_id = Uuid::now_v7();
+        let deployment_id = Uuid::now_v7();
+        assert_eq!(
+            container_name(node_id, deployment_id),
+            container_name(node_id, deployment_id)
+        );
+        assert!(container_name(node_id, deployment_id).starts_with("grass-ssr-"));
+        assert_eq!(
+            container_deployment_id(&container_name(node_id, deployment_id)),
+            Some(deployment_id)
+        );
+        assert_eq!(
+            container_deployment_id(&legacy_container_name(deployment_id)),
+            Some(deployment_id)
+        );
+    }
+
+    #[test]
+    fn service_input_uses_assigned_serve_resources() {
+        let mut config = NodeConfig::default();
+        config.runtime.resources.cpu_limit = 4;
+        config.runtime.resources.memory_mb = 4_096;
+        let node_id = Uuid::now_v7();
+        let deployment_id = Uuid::now_v7();
+        let manager = SsrManager::new(None, node_id, &config);
+
+        let input = manager.service_input(
+            deployment_id,
+            Path::new("/tmp/app").to_path_buf(),
+            "node server.mjs".to_owned(),
+            &server_section("PORT", "HOST"),
+            ServeResources {
+                cpu_millicores: 200,
+                memory_mb: 256,
+                disk_mb: 512,
+            },
+        );
+
+        assert_eq!(input.cpu_millicores, 200);
+        assert_eq!(input.memory_mb, 256);
+        assert_eq!(input.labels[SSR_NODE_LABEL], node_id.to_string());
+        assert_eq!(
+            input.labels[SSR_DEPLOYMENT_LABEL],
+            deployment_id.to_string()
+        );
+    }
+
+    #[test]
+    fn service_container_names_do_not_collide_between_nodes() {
+        let config = NodeConfig::default();
+        let deployment_id = Uuid::now_v7();
+        let manager_a = SsrManager::new(None, Uuid::now_v7(), &config);
+        let manager_b = SsrManager::new(None, Uuid::now_v7(), &config);
+        let resources = ServeResources {
+            cpu_millicores: 200,
+            memory_mb: 256,
+            disk_mb: 512,
+        };
+        let input_a = manager_a.service_input(
+            deployment_id,
+            Path::new("/tmp/app").to_path_buf(),
+            "node server.mjs".to_owned(),
+            &server_section("PORT", "HOST"),
+            resources,
+        );
+        let input_b = manager_b.service_input(
+            deployment_id,
+            Path::new("/tmp/app").to_path_buf(),
+            "node server.mjs".to_owned(),
+            &server_section("PORT", "HOST"),
+            resources,
+        );
+
+        assert_ne!(input_a.name, input_b.name);
     }
 
     #[tokio::test]
@@ -321,5 +619,181 @@ mod tests {
             .await
             .unwrap();
         accept.abort();
+    }
+
+    #[tokio::test]
+    async fn route_reconciliation_stops_services_retired_while_node_was_offline() {
+        let runtime = Arc::new(BuildRuntime::Fake(crate::runtime::FakeRuntime::default()));
+        let config = NodeConfig::default();
+        let node_id = Uuid::now_v7();
+        let manager = SsrManager::new(Some(runtime.clone()), node_id, &config);
+        let retained = Uuid::now_v7();
+        let retired = Uuid::now_v7();
+        let resources = ServeResources {
+            cpu_millicores: 200,
+            memory_mb: 256,
+            disk_mb: 512,
+        };
+
+        for deployment_id in [retained, retired] {
+            runtime
+                .run_service(manager.service_input(
+                    deployment_id,
+                    Path::new("/tmp/app").to_path_buf(),
+                    "node server.mjs".to_owned(),
+                    &server_section("PORT", "HOST"),
+                    resources,
+                ))
+                .await
+                .unwrap();
+        }
+
+        manager
+            .reconcile_routes(
+                &std::collections::HashSet::from([retained]),
+                &std::collections::HashSet::from([retained]),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            runtime_service_names(&runtime).await,
+            vec![container_name(node_id, retained)]
+        );
+    }
+
+    #[tokio::test]
+    async fn reconciliation_does_not_stop_another_node_service_on_a_shared_runtime() {
+        let runtime = Arc::new(BuildRuntime::Fake(crate::runtime::FakeRuntime::default()));
+        let config = NodeConfig::default();
+        let node_a = Uuid::now_v7();
+        let node_b = Uuid::now_v7();
+        let manager_a = SsrManager::new(Some(runtime.clone()), node_a, &config);
+        let manager_b = SsrManager::new(Some(runtime.clone()), node_b, &config);
+        let deployment_a = Uuid::now_v7();
+        let deployment_b = Uuid::now_v7();
+        let resources = ServeResources {
+            cpu_millicores: 200,
+            memory_mb: 256,
+            disk_mb: 512,
+        };
+
+        for (manager, deployment_id) in [(&manager_a, deployment_a), (&manager_b, deployment_b)] {
+            runtime
+                .run_service(manager.service_input(
+                    deployment_id,
+                    Path::new("/tmp/app").to_path_buf(),
+                    "node server.mjs".to_owned(),
+                    &server_section("PORT", "HOST"),
+                    resources,
+                ))
+                .await
+                .unwrap();
+        }
+
+        manager_a
+            .reconcile_routes(
+                &std::collections::HashSet::from([deployment_a]),
+                &std::collections::HashSet::from([deployment_a, deployment_b]),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            runtime_service_names(&runtime).await,
+            vec![
+                container_name(node_a, deployment_a),
+                container_name(node_b, deployment_b)
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_unowned_service_is_removed_only_after_leaving_all_routes() {
+        let runtime = Arc::new(BuildRuntime::Fake(crate::runtime::FakeRuntime::default()));
+        let config = NodeConfig::default();
+        let manager = SsrManager::new(Some(runtime.clone()), Uuid::now_v7(), &config);
+        let deployment_id = Uuid::now_v7();
+        let mut input = manager.service_input(
+            deployment_id,
+            Path::new("/tmp/app").to_path_buf(),
+            "node server.mjs".to_owned(),
+            &server_section("PORT", "HOST"),
+            ServeResources {
+                cpu_millicores: 200,
+                memory_mb: 256,
+                disk_mb: 512,
+            },
+        );
+        input.name = legacy_container_name(deployment_id);
+        input.labels.clear();
+        runtime.run_service(input).await.unwrap();
+
+        manager
+            .reconcile_routes(
+                &std::collections::HashSet::new(),
+                &std::collections::HashSet::from([deployment_id]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime_service_names(&runtime).await,
+            vec![legacy_container_name(deployment_id)]
+        );
+
+        manager
+            .reconcile_routes(
+                &std::collections::HashSet::new(),
+                &std::collections::HashSet::new(),
+            )
+            .await
+            .unwrap();
+        assert!(runtime_service_names(&runtime).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reconciliation_waits_for_an_in_progress_service_start() {
+        let runtime = Arc::new(BuildRuntime::Fake(crate::runtime::FakeRuntime::default()));
+        let config = NodeConfig::default();
+        let manager = Arc::new(SsrManager::new(
+            Some(runtime.clone()),
+            Uuid::now_v7(),
+            &config,
+        ));
+        let deployment_id = Uuid::now_v7();
+        let start_lock = Arc::new(Mutex::new(()));
+        manager
+            .start_locks
+            .lock()
+            .await
+            .insert(deployment_id, start_lock.clone());
+        let guard = start_lock.lock().await;
+
+        let mut reconcile = {
+            let manager = manager.clone();
+            tokio::spawn(async move {
+                manager
+                    .reconcile_routes(
+                        &std::collections::HashSet::new(),
+                        &std::collections::HashSet::new(),
+                    )
+                    .await
+            })
+        };
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut reconcile)
+                .await
+                .is_err()
+        );
+
+        drop(guard);
+        reconcile.await.unwrap().unwrap();
+        assert!(
+            !manager
+                .start_locks
+                .lock()
+                .await
+                .contains_key(&deployment_id)
+        );
     }
 }

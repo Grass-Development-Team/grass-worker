@@ -221,6 +221,16 @@ fn stage_report(status: Option<ReportedStatus>, stage_name: &str) -> StageReques
     }
 }
 
+fn effective_build_timeout(
+    deployment_timeout_seconds: Option<i64>,
+    node_timeout_seconds: u64,
+) -> Option<Duration> {
+    deployment_timeout_seconds
+        .filter(|seconds| *seconds > 0)
+        .map(|seconds| Duration::from_secs(seconds as u64))
+        .or_else(|| (node_timeout_seconds > 0).then(|| Duration::from_secs(node_timeout_seconds)))
+}
+
 async fn report_stage_checked(
     client: &ControlApiClient,
     deployment_id: uuid::Uuid,
@@ -301,10 +311,53 @@ async fn run_pipeline(
     )
     .await?;
     collector.publish_stage(stage::CHECKOUT);
-    collector.log(
-        stage::CHECKOUT,
-        format!("cloning {}", claimed.repository_url),
-    );
+    collector.log(stage::CHECKOUT, "cloning configured repository");
+
+    let repository_exceptions = config.security.repository_exceptions();
+    let ssh_host = git::inspect_ssh_host_key(&claimed.repository_url, &repository_exceptions)
+        .await
+        .map_err(|error| BuildFailure::new("repository_target_blocked", error.to_string()))?;
+    let (known_hosts_line, ssh_target_ip) = match ssh_host {
+        Some(observed) => {
+            let response = client
+                .observe_ssh_host_key(deployment_id, &observed.request)
+                .await
+                .map_err(|_| {
+                    BuildFailure::new(
+                        "ssh_host_key_unavailable",
+                        "SSH host key could not be verified",
+                    )
+                })?;
+            if !response.approved {
+                return Err(BuildFailure::new(
+                    "ssh_host_key_pending",
+                    "SSH host key is awaiting owner or admin approval",
+                ));
+            }
+            let known_hosts_line = response.known_hosts_line.ok_or_else(|| {
+                BuildFailure::new(
+                    "ssh_host_key_unavailable",
+                    "approved SSH host key is unavailable",
+                )
+            })?;
+            (Some(known_hosts_line), Some(observed.target_ip))
+        }
+        None => (None, None),
+    };
+    let credential_access = match claimed.source_credential_lease.clone() {
+        Some(lease) => Some(
+            client
+                .redeem_source_credential(deployment_id, lease)
+                .await
+                .map_err(|_| {
+                    BuildFailure::new(
+                        "source_credential_unavailable",
+                        "source credential could not be obtained",
+                    )
+                })?,
+        ),
+        None => None,
+    };
 
     let checkout = git::checkout(
         &claimed.repository_url,
@@ -312,11 +365,26 @@ async fn run_pipeline(
         claimed.commit_hash.as_deref(),
         claimed.root_directory.as_deref(),
         workspace,
+        git::CheckoutAccess {
+            private_target_exceptions: &repository_exceptions,
+            credential: credential_access.as_ref(),
+            known_hosts_line: known_hosts_line.as_deref(),
+            ssh_target_ip,
+        },
     )
     .await
     .map_err(|error| match &error {
         git::CheckoutError::InvalidRootDirectory(_) => {
             BuildFailure::new("invalid_root_directory", error.to_string())
+        }
+        git::CheckoutError::InvalidRepositoryUrl(_) => {
+            BuildFailure::new("invalid_repository_url", error.to_string())
+        }
+        git::CheckoutError::ResolveFailed | git::CheckoutError::RepositoryTargetBlocked(_) => {
+            BuildFailure::new("repository_target_blocked", error.to_string())
+        }
+        git::CheckoutError::CredentialMismatch | git::CheckoutError::CredentialSetup => {
+            BuildFailure::new("source_credential_invalid", error.to_string())
         }
         _ => BuildFailure::new("git_clone_failed", error.to_string()),
     })?;
@@ -368,14 +436,10 @@ async fn run_pipeline(
 
     // Per-deployment override when set, otherwise the node's configured build
     // command timeout so a runaway build is always bounded.
-    let timeout = claimed
-        .build_timeout_seconds
-        .filter(|seconds| *seconds > 0)
-        .map(|seconds| Duration::from_secs(seconds as u64))
-        .or_else(|| {
-            (config.build.command_timeout_seconds > 0)
-                .then(|| Duration::from_secs(config.build.command_timeout_seconds))
-        });
+    let timeout = effective_build_timeout(
+        claimed.build_timeout_seconds,
+        config.build.command_timeout_seconds,
+    );
 
     // Install and build run in ONE container so state (node_modules) carries
     // over without host-path sharing; sentinel exit codes keep failure
@@ -547,21 +611,24 @@ if [ $rc -ne 0 ]; then echo \"build command failed with exit code $rc\"; exit 92
     collector.log(
         stage::ARCHIVE,
         format!(
-            "packed {} files ({} bytes, sha256 {})",
-            packed.file_count, packed.size_bytes, packed.checksum_sha256
+            "packed {} files ({} bytes packed, {} bytes unpacked, sha256 {})",
+            packed.file_count,
+            packed.size_bytes,
+            packed.unpacked_size_bytes,
+            packed.checksum_sha256
         ),
     );
 
     // --- Upload -------------------------------------------------------------
     report_stage_checked(client, deployment_id, &stage_report(None, stage::UPLOAD)).await?;
     collector.publish_stage(stage::UPLOAD);
-    let bytes = tokio::fs::read(&archive_path)
-        .await
-        .map_err(|error| BuildFailure::new("upload_failed", error.to_string()))?;
     let uploaded = client
         .upload_artifact(
             deployment_id,
-            bytes,
+            &archive_path,
+            packed.size_bytes,
+            packed.unpacked_size_bytes,
+            &packed.checksum_sha256,
             generated.runtime_kind,
             "1",
             Some(&generated.framework_name),
@@ -578,17 +645,33 @@ if [ $rc -ne 0 ]; then echo \"build command failed with exit code $rc\"; exit 92
         ),
     );
 
-    // Keep a local unpacked copy for the serve path on this node.
-    let artifact_cache =
-        PathBuf::from(&config.serve.artifact_cache_root).join(deployment_id.to_string());
-    let cache_archive = archive_path.clone();
-    let _ = tokio::task::spawn_blocking(move || {
-        if artifact_cache.exists() {
-            let _ = std::fs::remove_dir_all(&artifact_cache);
-        }
-        grass_archive::unpack_zip(&cache_archive, &artifact_cache)
-    })
-    .await;
-
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deployment_timeout_overrides_node_default() {
+        assert_eq!(
+            effective_build_timeout(Some(90), 600),
+            Some(Duration::from_secs(90))
+        );
+    }
+
+    #[test]
+    fn missing_or_non_positive_deployment_timeout_falls_back_to_node_config() {
+        for deployment_timeout in [None, Some(0), Some(-1)] {
+            assert_eq!(
+                effective_build_timeout(deployment_timeout, 600),
+                Some(Duration::from_secs(600))
+            );
+        }
+    }
+
+    #[test]
+    fn zero_node_timeout_keeps_the_runtime_unbounded() {
+        assert_eq!(effective_build_timeout(None, 0), None);
+    }
 }

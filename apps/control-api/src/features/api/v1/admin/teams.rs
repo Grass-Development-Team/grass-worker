@@ -216,10 +216,11 @@ pub async fn update(
     .await
     .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
-    let _ = audits::create_audit_event(
+    let _ = audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
+            actor_node_id: None,
             team_id: Some(team.id),
             action: "team.updated".to_owned(),
             target_type: "team".to_owned(),
@@ -282,10 +283,11 @@ pub async fn remove(
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
-    let _ = audits::create_audit_event(
+    let _ = audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
+            actor_node_id: None,
             team_id: Some(team.id),
             action: "team.deleted".to_owned(),
             target_type: "team".to_owned(),
@@ -359,10 +361,11 @@ pub async fn set_quota_plan(
             source: source.into(),
         })?;
 
-    let _ = audits::create_audit_event(
+    let _ = audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
+            actor_node_id: None,
             team_id: Some(team.id),
             action: "team.quota_plan_overridden".to_owned(),
             target_type: "team".to_owned(),
@@ -452,10 +455,11 @@ pub async fn create(
         }
     })?;
 
-    let _ = audits::create_audit_event(
+    let _ = audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
+            actor_node_id: None,
             team_id: Some(team.id),
             action: "team.created".to_owned(),
             target_type: "team".to_owned(),

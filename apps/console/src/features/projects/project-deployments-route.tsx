@@ -1,9 +1,10 @@
 import { DeploymentsTab } from "@/features/deployments/deployments-tab";
+import { canContributeToProjects } from "@/features/teams/team-permissions";
 
 import { useProject } from "./project-layout";
 
 export function ProjectDeploymentsRoute() {
-  const { project } = useProject();
+  const { project, role } = useProject();
 
   return (
     <div className="space-y-4">
@@ -13,7 +14,7 @@ export function ProjectDeploymentsRoute() {
           Every build of {project.name}, newest first.
         </p>
       </div>
-      <DeploymentsTab projectId={project.id} />
+      <DeploymentsTab projectId={project.id} canDeploy={canContributeToProjects(role)} />
     </div>
   );
 }

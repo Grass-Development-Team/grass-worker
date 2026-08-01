@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vite-plus/test";
 import { LoginForm } from "./login-form";
 import { SignupForm } from "./signup-form";
 import { useAuth } from "./auth-context";
+import { BrandingProvider } from "@/features/branding/branding-context";
 
 vi.mock("./auth-context", () => ({ useAuth: vi.fn() }));
 
@@ -125,4 +126,23 @@ it("rejects mismatched passwords without registering", async () => {
 
   expect(screen.getByText("Passwords do not match.")).toBeInTheDocument();
   expect(register).not.toHaveBeenCalled();
+});
+
+it("uses the configured site name on the registration page", () => {
+  vi.mocked(useAuth).mockReturnValue({ register: vi.fn() } as unknown as ReturnType<
+    typeof useAuth
+  >);
+
+  render(
+    <BrandingProvider branding={{ siteName: "Acme Deploy", version: "0.1.0" }}>
+      <MemoryRouter initialEntries={["/signup"]}>
+        <SignupForm />
+      </MemoryRouter>
+    </BrandingProvider>,
+  );
+
+  expect(
+    screen.getByRole("heading", { name: "Create your Acme Deploy account" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("Create your Grass Worker account")).not.toBeInTheDocument();
 });

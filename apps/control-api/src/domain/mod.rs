@@ -1,9 +1,17 @@
 pub mod audits;
+pub mod delivery;
 pub mod deployments;
 pub mod hosts;
+pub mod node_deletions;
 pub mod nodes;
+pub mod notifications;
 pub mod projects;
 pub mod quotas;
+pub mod retention;
+pub mod scheduler;
 pub mod settings;
+pub mod source_credentials;
+pub mod ssh_host_keys;
+pub mod ssr_leases;
 pub mod teams;
 pub mod users;

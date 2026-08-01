@@ -238,6 +238,49 @@ impl<'a> QuotaService<'a> {
         Ok(())
     }
 
+    /// Releases a resource's usage once in durable storage, then rebuilds
+    /// the corresponding cache counter. Repeating the same call is safe and
+    /// also repairs a cache update that failed after the durable commit.
+    pub async fn release_once(
+        &self,
+        op: &'static str,
+        team_id: Uuid,
+        charges: &[QuotaCharge],
+        resource_type: &str,
+        resource_id: Uuid,
+    ) -> Result<(), AppError> {
+        for charge in charges {
+            quotas::record_event_once(
+                self.db,
+                release_idempotency_key(resource_type, resource_id, charge.dimension),
+                RecordEventParams {
+                    team_id,
+                    dimension: charge.dimension,
+                    kind: QuotaEventKind::Release,
+                    delta_value: -charge.amount,
+                    resource_type: Some(resource_type.to_owned()),
+                    resource_id: Some(resource_id),
+                    metadata: serde_json::json!({ "idempotent": true }),
+                },
+            )
+            .await
+            .map_err(|source| AppError::Infrastructure { op, source })?;
+
+            let usage = quotas::effective_usage(self.db, team_id, charge.dimension)
+                .await
+                .map_err(|source| AppError::Infrastructure { op, source })?;
+            self.cache
+                .set(
+                    &counter_key(team_id, charge.dimension),
+                    &usage.to_string(),
+                    counter_ttl(charge.dimension),
+                )
+                .await
+                .map_err(|source| AppError::Infrastructure { op, source })?;
+        }
+        Ok(())
+    }
+
     /// Reads a scalar (non-counted) limit such as the build timeout or the
     /// per-artifact size limit. `None` means unlimited.
     #[allow(dead_code)] // Wired by build and artifact limits in Milestones 6 and 7.
@@ -295,6 +338,21 @@ impl<'a> QuotaService<'a> {
                 operation = "quota.release_build_slot",
                 %error,
                 team_id = %team_id,
+                "failed to release concurrent build slot"
+            );
+        }
+    }
+
+    /// Releases the slot owned by one deployment at most once. The marker is
+    /// atomic in both cache backends, so a user cancel racing a terminal Node
+    /// report cannot decrement the team's counter twice.
+    pub async fn release_build_slot_once(&self, team_id: Uuid, deployment_id: Uuid) {
+        if let Err(error) = release_build_slot_once(self.cache, team_id, deployment_id).await {
+            tracing::warn!(
+                operation = "quota.release_build_slot_once",
+                %error,
+                team_id = %team_id,
+                deployment_id = %deployment_id,
                 "failed to release concurrent build slot"
             );
         }
@@ -387,6 +445,7 @@ impl<'a> QuotaService<'a> {
             self.db,
             CreateAuditEventParams {
                 actor_user_id,
+                actor_node_id: None,
                 team_id: Some(team_id),
                 action: "quota.denied".to_owned(),
                 target_type: "team".to_owned(),
@@ -434,6 +493,35 @@ fn slot_key(team_id: Uuid) -> String {
     format!("quota:team:{team_id}:concurrent_builds")
 }
 
+fn slot_release_key(deployment_id: Uuid) -> String {
+    format!("quota:deployment:{deployment_id}:build_slot_released")
+}
+
+fn release_idempotency_key(
+    resource_type: &str,
+    resource_id: Uuid,
+    dimension: QuotaDimension,
+) -> String {
+    format!(
+        "release:{resource_type}:{resource_id}:{}",
+        dimension.as_str()
+    )
+}
+
+async fn release_build_slot_once(
+    cache: &CacheStore,
+    team_id: Uuid,
+    deployment_id: Uuid,
+) -> anyhow::Result<bool> {
+    let owns_release = cache
+        .set_if_absent(&slot_release_key(deployment_id), "1", STATIC_COUNTER_TTL)
+        .await?;
+    if owns_release {
+        cache.release_slot(&slot_key(team_id)).await?;
+    }
+    Ok(owns_release)
+}
+
 fn counter_ttl(dimension: QuotaDimension) -> Duration {
     match dimension.period() {
         QuotaPeriod::Monthly => MONTHLY_COUNTER_TTL,
@@ -463,5 +551,31 @@ mod tests {
             error.to_string(),
             "quota exceeded: deployments.monthly limit reached"
         );
+    }
+
+    #[test]
+    fn resource_release_idempotency_keys_are_dimension_scoped() {
+        let resource_id = Uuid::now_v7();
+        assert_eq!(
+            release_idempotency_key("project_host_binding", resource_id, QuotaDimension::Hosts),
+            format!("release:project_host_binding:{resource_id}:hosts")
+        );
+    }
+
+    #[tokio::test]
+    async fn deployment_slot_release_is_atomic() {
+        let cache = CacheStore::Moka(grass_cache::MokaCache::connect());
+        let team_id = Uuid::now_v7();
+        let deployment_id = Uuid::now_v7();
+        let key = slot_key(team_id);
+        assert!(cache.acquire_slot(&key, 10, BUILD_SLOT_TTL).await.unwrap());
+        assert!(cache.acquire_slot(&key, 10, BUILD_SLOT_TTL).await.unwrap());
+
+        let (first, second) = tokio::join!(
+            release_build_slot_once(&cache, team_id, deployment_id),
+            release_build_slot_once(&cache, team_id, deployment_id),
+        );
+        assert_ne!(first.unwrap(), second.unwrap());
+        assert_eq!(cache.get(&key).await.unwrap().as_deref(), Some("1"));
     }
 }

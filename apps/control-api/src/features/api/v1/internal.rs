@@ -34,7 +34,39 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
             "/deployments/{deployment_id}/artifact",
             get(deployments::download_artifact),
         )
+        .route(
+            "/deployments/{deployment_id}/source-credential",
+            post(deployments::redeem_source_credential),
+        )
+        .route(
+            "/deployments/{deployment_id}/ssh-host-key",
+            post(deployments::observe_ssh_host_key),
+        )
+        .route("/serve/assignments", get(serve::assignments))
+        .route(
+            "/serve/deployments/{deployment_id}/status",
+            post(serve::report_status),
+        )
+        .route(
+            "/serve/deployments/{deployment_id}/ssr-lease",
+            post(serve::acquire_ssr_lease),
+        )
+        .route(
+            "/serve/deployments/{deployment_id}/ssr-lease/{lease_id}/renew",
+            post(serve::renew_ssr_lease),
+        )
+        .route(
+            "/serve/deployments/{deployment_id}/ssr-lease/{lease_id}/release",
+            post(serve::release_ssr_lease),
+        )
+        .route("/serve/routes", get(serve::routes))
         .route("/serve/resolve-host", get(serve::resolve_host))
+        .route("/serve/preview/authorize", post(super::preview_auth::start))
+        .route(
+            "/serve/preview/exchange",
+            post(super::preview_auth::exchange),
+        )
+        .route("/serve/preview/verify", post(super::preview_auth::verify))
         .route("/log-stream", get(log_stream::ingest))
         .layer(middleware::from_fn_with_state(
             state,

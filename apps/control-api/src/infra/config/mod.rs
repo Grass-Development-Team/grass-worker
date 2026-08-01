@@ -1,3 +1,4 @@
+pub mod audit;
 pub mod cache;
 pub mod database;
 pub mod log;
@@ -11,14 +12,16 @@ pub mod storage;
 use std::{env, net::SocketAddr, path::Path};
 
 use anyhow::Context;
-use grass_config::{ConfigError, load_toml_or_default, overlay_bool, overlay_string, save_toml};
+use grass_config::{
+    ConfigError, load_toml_or_default, overlay_bool, overlay_string, overlay_u64, save_toml,
+};
 use serde::{Deserialize, Serialize};
 use tracing_subscriber::{EnvFilter, fmt};
 
 use self::{
-    cache::CacheConfig, database::DatabaseConfig, log::LogConfig, migration::MigrationConfig,
-    node_manager::NodeManagerConfig, secrets::SecretsConfig, server::ServerConfig,
-    session::SessionConfig, storage::StorageConfig,
+    audit::AuditConfig, cache::CacheConfig, database::DatabaseConfig, log::LogConfig,
+    migration::MigrationConfig, node_manager::NodeManagerConfig, secrets::SecretsConfig,
+    server::ServerConfig, session::SessionConfig, storage::StorageConfig,
 };
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -36,6 +39,8 @@ pub struct ControlApiConfig {
     #[serde(default)]
     pub session: SessionConfig,
     #[serde(default)]
+    pub audit: AuditConfig,
+    #[serde(default)]
     pub node_manager: NodeManagerConfig,
     #[serde(default)]
     pub migration: MigrationConfig,
@@ -46,11 +51,10 @@ pub struct ControlApiConfig {
 impl ControlApiConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let path = path.as_ref();
+        let config_exists = path.exists();
         let mut config = Self::load_persisted(path)?;
-        let has_environment_secret = env::var("GWAPI_SECRET_KEY")
-            .ok()
-            .is_some_and(|value| secret_key_is_strong(&value));
-        if !has_environment_secret && config.ensure_secret_key() {
+        if !config_exists {
+            config.ensure_secret_key();
             config.save(path)?;
         }
         apply_env(&mut config)?;
@@ -109,6 +113,18 @@ fn apply_env(config: &mut ControlApiConfig) -> Result<(), ConfigError> {
     overlay_string("GWAPI_REDIS_URL", &mut config.redis.url);
     overlay_string("GWAPI_STORAGE_ROOT", &mut config.storage.root);
     overlay_string("GWAPI_SECRET_KEY", &mut config.secrets.secret_key);
+    if let Ok(master_key) = env::var("GWAPI_GIT_CREDENTIAL_MASTER_KEY") {
+        let key_id = env::var("GWAPI_GIT_CREDENTIAL_KEY_ID")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "primary".to_owned());
+        config.secrets.git_credentials.active_key_id = key_id.clone();
+        config
+            .secrets
+            .git_credentials
+            .keys
+            .insert(key_id, master_key);
+    }
     overlay_bool(
         "GWAPI_NODE_MANAGER_AUTO_START_LOCAL_NODE",
         &mut config.node_manager.auto_start_local_node,
@@ -123,6 +139,10 @@ fn apply_env(config: &mut ControlApiConfig) -> Result<(), ConfigError> {
     );
     overlay_string("GWAPI_LOG_LEVEL", &mut config.log.level);
     overlay_string("LOG_LEVEL", &mut config.log.level);
+    overlay_u64(
+        "GWAPI_AUDIT_RETENTION_DAYS",
+        &mut config.audit.retention_days,
+    )?;
     Ok(())
 }
 
@@ -146,6 +166,18 @@ mod tests {
     }
 
     #[test]
+    fn audit_events_are_retained_for_ninety_days_by_default() {
+        let cfg = ControlApiConfig::default();
+
+        assert_eq!(cfg.audit.retention_days, 90);
+        assert!(
+            cfg.audit
+                .retention_cutoff(time::OffsetDateTime::UNIX_EPOCH)
+                .is_some()
+        );
+    }
+
+    #[test]
     fn documented_redis_section_enables_redis_backend() {
         let unique = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -159,6 +191,24 @@ mod tests {
 
         assert_eq!(config.redis.backend, grass_cache::CacheBackend::Redis);
         assert_eq!(config.redis.url, "redis://cache.example/2");
+    }
+
+    #[test]
+    fn loading_an_existing_config_does_not_rewrite_it() {
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("grass-worker-config-{unique}.toml"));
+        let original = "# Keep operator edits intact.\n[redis]\nurl = \"redis://cache.example/2\"\n\n[secrets]\nsecret_key = \"change-me\"\n";
+        fs::write(&path, original).unwrap();
+
+        let config = ControlApiConfig::load(&path).unwrap();
+        let persisted = fs::read_to_string(&path).unwrap();
+        fs::remove_file(path).unwrap();
+
+        assert_eq!(config.redis.url, "redis://cache.example/2");
+        assert_eq!(persisted, original);
     }
 
     #[test]

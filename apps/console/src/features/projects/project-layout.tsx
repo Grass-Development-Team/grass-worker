@@ -5,9 +5,11 @@ import { Outlet, useOutletContext, useParams } from "react-router";
 import { Skeleton } from "@/components/ui/skeleton";
 
 import { projectsApi, type Project } from "./projects.api";
+import type { TeamRole } from "../teams/teams.api";
 
 export interface ProjectOutletContext {
   project: Project;
+  role: TeamRole;
 }
 
 /** Access the current project from any route nested under ProjectLayout. */
@@ -37,7 +39,7 @@ export function ProjectLayout() {
     );
   }
 
-  const { project } = projectQuery.data;
+  const { project, role } = projectQuery.data;
 
   return (
     <div className="flex flex-1 flex-col gap-6">
@@ -47,7 +49,7 @@ export function ProjectLayout() {
           This project is archived. Deployments are paused until it is unarchived in Settings.
         </p>
       )}
-      <Outlet context={{ project } satisfies ProjectOutletContext} />
+      <Outlet context={{ project, role: role as TeamRole } satisfies ProjectOutletContext} />
     </div>
   );
 }

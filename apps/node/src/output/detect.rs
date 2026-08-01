@@ -14,6 +14,8 @@ pub enum Framework {
     Next,
     Nuxt,
     SvelteKit,
+    Remix,
+    ReactRouter,
     Astro,
     Unknown,
 }
@@ -25,6 +27,8 @@ impl Framework {
             Self::Next => "next",
             Self::Nuxt => "nuxt",
             Self::SvelteKit => "sveltekit",
+            Self::Remix => "remix",
+            Self::ReactRouter => "react-router",
             Self::Astro => "astro",
             Self::Unknown => "unknown",
         }
@@ -109,13 +113,43 @@ pub fn detect(root: &Path) -> Detection {
     }
 
     if let Some(version) = package.version_of("@sveltejs/kit") {
+        let config = read_config_containing(root, &["svelte.config.js", "svelte.config.ts"]);
         let uses_adapter_static = package.version_of("@sveltejs/adapter-static").is_some()
-            || read_config_containing(root, &["svelte.config.js", "svelte.config.ts"])
-                .contains("adapter-static");
+            || config.contains("adapter-static");
+        let uses_adapter_node = package.version_of("@sveltejs/adapter-node").is_some()
+            || config.contains("adapter-node");
         return Detection {
             framework: Framework::SvelteKit,
             framework_version: version,
-            static_signal: Some(uses_adapter_static),
+            static_signal: if uses_adapter_static {
+                Some(true)
+            } else if uses_adapter_node {
+                Some(false)
+            } else {
+                None
+            },
+        };
+    }
+
+    if let Some(version) = package
+        .version_of("@remix-run/node")
+        .or_else(|| package.version_of("@remix-run/dev"))
+    {
+        return Detection {
+            framework: Framework::Remix,
+            framework_version: version,
+            static_signal: None,
+        };
+    }
+
+    if let Some(version) = package
+        .version_of("@react-router/node")
+        .or_else(|| package.version_of("@react-router/dev"))
+    {
+        return Detection {
+            framework: Framework::ReactRouter,
+            framework_version: version,
+            static_signal: None,
         };
     }
 
@@ -209,6 +243,50 @@ mod tests {
         let detection = detect(&dir);
         assert_eq!(detection.framework, Framework::SvelteKit);
         assert_eq!(detection.static_signal, Some(true));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn detects_sveltekit_adapter_node_as_ssr() {
+        let dir = project(
+            r#"{"devDependencies":{"@sveltejs/kit":"2.0.0","@sveltejs/adapter-node":"5.0.0"}}"#,
+            &[],
+        );
+        let detection = detect(&dir);
+        assert_eq!(detection.framework, Framework::SvelteKit);
+        assert_eq!(detection.static_signal, Some(false));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn sveltekit_without_adapter_has_no_runtime_signal() {
+        let dir = project(r#"{"dependencies":{"@sveltejs/kit":"2.0.0"}}"#, &[]);
+        let detection = detect(&dir);
+        assert_eq!(detection.framework, Framework::SvelteKit);
+        assert_eq!(detection.static_signal, None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn detects_remix_node_and_react_router_node_only() {
+        let remix = project(r#"{"dependencies":{"@remix-run/node":"2.10.0"}}"#, &[]);
+        let remix_detection = detect(&remix);
+        assert_eq!(remix_detection.framework, Framework::Remix);
+        std::fs::remove_dir_all(remix).unwrap();
+
+        let router = project(
+            r#"{"dependencies":{"react-router":"7.0.0","@react-router/dev":"7.0.0"}}"#,
+            &[],
+        );
+        let router_detection = detect(&router);
+        assert_eq!(router_detection.framework, Framework::ReactRouter);
+        std::fs::remove_dir_all(router).unwrap();
+    }
+
+    #[test]
+    fn ordinary_react_router_is_not_ssr() {
+        let dir = project(r#"{"dependencies":{"react-router":"7.0.0"}}"#, &[]);
+        assert_eq!(detect(&dir).framework, Framework::Unknown);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

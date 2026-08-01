@@ -3,7 +3,10 @@
 //! Podman exposes a Docker-compatible API on its socket, so both backends
 //! share this implementation; only the socket path differs.
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use bollard::Docker;
 use bollard::models::{
@@ -11,15 +14,15 @@ use bollard::models::{
 };
 use bollard::query_parameters::{
     CreateContainerOptions, CreateImageOptions, DownloadFromContainerOptions,
-    InspectContainerOptions, LogsOptions, RemoveContainerOptions, StartContainerOptions,
-    StopContainerOptions, UploadToContainerOptions, WaitContainerOptions,
+    InspectContainerOptions, ListContainersOptions, LogsOptions, RemoveContainerOptions,
+    StartContainerOptions, StopContainerOptions, UploadToContainerOptions, WaitContainerOptions,
 };
 use futures_util::StreamExt;
 use tokio::sync::{mpsc, watch};
 
 use super::{
     BuildExecutionResult, ContainerRuntimeError, PrepareImageInput, RunBuildInput, RunServiceInput,
-    RunningService,
+    RunningService, ServiceContainer,
 };
 
 pub struct SocketRuntime {
@@ -93,6 +96,16 @@ fn upstream_address(
     let endpoint = networks.get(network).or_else(|| networks.values().next())?;
     let ip = endpoint.ip_address.as_deref().filter(|ip| !ip.is_empty())?;
     Some(format!("{ip}:{port}"))
+}
+
+fn service_nano_cpus(cpu_millicores: u64) -> i64 {
+    i64::try_from(cpu_millicores)
+        .unwrap_or(i64::MAX)
+        .saturating_mul(1_000_000)
+}
+
+fn service_memory_bytes(memory_mb: u64) -> i64 {
+    memory_mb.saturating_mul(1024 * 1024).min(i64::MAX as u64) as i64
 }
 
 /// Unpacks an exported tar under `destination`; `unpack_in` rejects entries
@@ -397,7 +410,16 @@ impl super::ContainerRuntime for SocketRuntime {
                 .as_ref()
                 .and_then(|state| state.running)
                 .unwrap_or(false);
+            let labels_match = input.labels.iter().all(|(name, value)| {
+                existing
+                    .config
+                    .as_ref()
+                    .and_then(|config| config.labels.as_ref())
+                    .and_then(|labels| labels.get(name))
+                    == Some(value)
+            });
             if running
+                && labels_match
                 && let Some(upstream) =
                     upstream_address(&existing, &input.network, input.container_port)
             {
@@ -421,8 +443,8 @@ impl super::ContainerRuntime for SocketRuntime {
             working_dir: Some("/app".to_owned()),
             env: Some(env),
             host_config: Some(HostConfig {
-                memory: Some((input.memory_mb * 1024 * 1024) as i64),
-                nano_cpus: Some(i64::from(input.cpu_limit) * 1_000_000_000),
+                memory: Some(service_memory_bytes(input.memory_mb)),
+                nano_cpus: Some(service_nano_cpus(input.cpu_millicores)),
                 network_mode: Some(input.network.clone()),
                 restart_policy: Some(RestartPolicy {
                     name: Some(RestartPolicyNameEnum::ON_FAILURE),
@@ -430,6 +452,7 @@ impl super::ContainerRuntime for SocketRuntime {
                 }),
                 ..Default::default()
             }),
+            labels: Some(input.labels.clone()),
             ..Default::default()
         };
         self.docker
@@ -504,5 +527,57 @@ impl super::ContainerRuntime for SocketRuntime {
             .await;
         self.remove_container(service_id).await;
         Ok(())
+    }
+
+    async fn list_services(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<ServiceContainer>, ContainerRuntimeError> {
+        let mut filters = HashMap::new();
+        filters.insert("name".to_owned(), vec![prefix.to_owned()]);
+        let containers = self
+            .docker
+            .list_containers(Some(ListContainersOptions {
+                all: true,
+                filters: Some(filters),
+                ..Default::default()
+            }))
+            .await
+            .map_err(|error| runtime_error("service list", error))?;
+        let mut services = containers
+            .into_iter()
+            .flat_map(|container| {
+                let labels = container.labels.unwrap_or_default();
+                container
+                    .names
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(move |name| ServiceContainer {
+                        name: name.trim_start_matches('/').to_owned(),
+                        labels: labels.clone(),
+                    })
+            })
+            .filter(|service| service.name.starts_with(prefix))
+            .collect::<Vec<_>>();
+        services.sort_by(|left, right| left.name.cmp(&right.name));
+        services.dedup_by(|left, right| left.name == right.name);
+        Ok(services)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_cpu_millicores_convert_to_docker_nano_cpus() {
+        assert_eq!(service_nano_cpus(200), 200_000_000);
+        assert_eq!(service_nano_cpus(50), 50_000_000);
+    }
+
+    #[test]
+    fn service_memory_megabytes_convert_without_overflow() {
+        assert_eq!(service_memory_bytes(256), 268_435_456);
+        assert_eq!(service_memory_bytes(u64::MAX), i64::MAX);
     }
 }

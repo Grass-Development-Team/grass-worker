@@ -260,8 +260,8 @@ const DEFAULT_QUOTA_LIMITS: &[QuotaLimitSeed] = &[
         pro: 20,
         ultra: 50,
     },
-    // Reserved SSR runtime dimensions. SSR execution is not implemented in
-    // the first stage, so these stay at zero until the runtime lands.
+    // SSR execution dimensions default to zero, which means unlimited until
+    // an administrator configures an explicit process or hour limit.
     QuotaLimitSeed {
         dimension: "ssr_processes",
         period: QuotaPeriod::None,
@@ -293,6 +293,11 @@ fn default_system_settings() -> Vec<SystemSettingSeed> {
             }),
         },
         SystemSettingSeed {
+            key: "domain_review_policy.default",
+            value_kind: SystemSettingValueKind::Json,
+            value_json: json!("auto"),
+        },
+        SystemSettingSeed {
             key: "team_roles.default",
             value_kind: SystemSettingValueKind::Json,
             value_json: json!(["owner", "admin", "member", "viewer"]),
@@ -309,6 +314,26 @@ fn default_system_settings() -> Vec<SystemSettingSeed> {
                 "team_group": DEFAULT_TEAM_GROUP_CODE,
                 "owner_role": "owner",
             }),
+        },
+        SystemSettingSeed {
+            key: "artifact_retention.log_days",
+            value_kind: SystemSettingValueKind::Json,
+            value_json: json!(90),
+        },
+        SystemSettingSeed {
+            key: "artifact_retention.preview_days",
+            value_kind: SystemSettingValueKind::Json,
+            value_json: json!(7),
+        },
+        SystemSettingSeed {
+            key: "artifact_retention.failed_days",
+            value_kind: SystemSettingValueKind::Json,
+            value_json: json!(30),
+        },
+        SystemSettingSeed {
+            key: "artifact_retention.production_keep",
+            value_kind: SystemSettingValueKind::Json,
+            value_json: json!(10),
         },
     ]
 }
@@ -412,6 +437,7 @@ async fn upsert_team_group(
                 quota_plan_id: Set(Some(
                     quota_plan_id_by_code(database, seed.quota_plan_code).await?,
                 )),
+                review_policy: Set(None),
                 is_default: Set(is_default),
                 deleted_at: Set(None),
                 created_at: Set(now),

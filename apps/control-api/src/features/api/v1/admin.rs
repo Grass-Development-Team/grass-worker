@@ -1,4 +1,6 @@
 pub mod audit_events;
+pub mod deployments;
+pub mod domains;
 pub mod host_sources;
 pub mod nodes;
 pub mod projects;
@@ -63,12 +65,37 @@ pub fn router() -> Router<ControlApiState> {
         )
         .route("/settings", get(settings::get).patch(settings::update))
         .route("/projects", get(projects::list))
+        .route("/projects/{project_id}", get(projects::detail))
+        .route(
+            "/projects/{project_id}/slug",
+            axum::routing::patch(projects::update_slug),
+        )
+        .route(
+            "/projects/{project_id}/deployments",
+            get(projects::deployments),
+        )
+        .route("/projects/{project_id}/domains", get(projects::domains))
+        .route("/projects/{project_id}/activity", get(projects::activity))
         .route("/projects/{project_id}/archive", post(projects::archive))
         .route(
             "/projects/{project_id}/unarchive",
             post(projects::unarchive),
         )
         .route("/projects/{project_id}/delete", post(projects::remove))
+        .route(
+            "/deployments/{deployment_id}/withdraw",
+            post(deployments::withdraw),
+        )
+        .route(
+            "/deployments/{deployment_id}/republish",
+            post(deployments::republish),
+        )
+        .route("/domains/{domain_id}/approve", post(domains::approve))
+        .route("/domains/{domain_id}/reject", post(domains::reject))
+        .route(
+            "/domains/{domain_id}",
+            axum::routing::delete(domains::remove),
+        )
         .route("/reviews", get(reviews::list))
         .route(
             "/deployments/{deployment_id}/review/approve",
@@ -83,8 +110,17 @@ pub fn router() -> Router<ControlApiState> {
             "/nodes/local-process",
             get(nodes::local_process_status).post(nodes::local_process_action),
         )
-        .route("/nodes/{node_id}", get(nodes::detail))
+        .route(
+            "/nodes/{node_id}",
+            get(nodes::detail).patch(nodes::update_capacity),
+        )
         .route("/nodes/{node_id}/health", get(nodes::health))
+        .route("/nodes/{node_id}/deletion-plan", get(nodes::deletion_plan))
+        .route("/nodes/{node_id}/deletion", post(nodes::queue_deletion))
+        .route(
+            "/nodes/{node_id}/configuration",
+            axum::routing::put(nodes::update_configuration),
+        )
         .route("/nodes/{node_id}/rotate-token", post(nodes::rotate_token))
 }
 
@@ -95,6 +131,16 @@ pub(crate) fn database<'a>(
     state.try_database().ok_or_else(|| AppError::Internal {
         op,
         message: "database not available".to_owned(),
+    })
+}
+
+pub(crate) fn cache<'a>(
+    state: &'a ControlApiState,
+    op: &'static str,
+) -> Result<&'a grass_cache::CacheStore, AppError> {
+    state.try_cache().ok_or_else(|| AppError::Internal {
+        op,
+        message: "cache not available".to_owned(),
     })
 }
 

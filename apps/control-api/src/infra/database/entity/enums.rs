@@ -114,9 +114,18 @@ string_active_enum!(DeploymentReleaseStatus, "deployment_release_status", {
     Active => "active",
 });
 
+string_active_enum!(DeploymentServeStatus, "deployment_serve_status", {
+    Pending => "pending",
+    Syncing => "syncing",
+    Ready => "ready",
+    Failed => "failed",
+    Retired => "retired",
+});
+
 string_active_enum!(DeploymentEventKind, "deployment_event_kind", {
     System => "system",
     Build => "build",
+    Serve => "serve",
     Release => "release",
     Review => "review",
     Host => "host",
@@ -177,6 +186,13 @@ string_active_enum!(HostBindingStatus, "host_binding_status", {
     Disabled => "disabled",
 });
 
+string_active_enum!(HostReviewStatus, "host_review_status", {
+    NotRequired => "not_required",
+    Pending => "pending",
+    Approved => "approved",
+    Rejected => "rejected",
+});
+
 string_active_enum!(HostProvisionEventStatus, "host_provision_event_status", {
     Success => "success",
     Pending => "pending",
@@ -191,6 +207,29 @@ string_active_enum!(NodeStatus, "node_status", {
     Disabled => "disabled",
 });
 
+string_active_enum!(NodeConfigSyncStatus, "node_config_sync_status", {
+    Pending => "pending",
+    Applying => "applying",
+    Applied => "applied",
+    Failed => "failed",
+});
+
+string_active_enum!(NodeDeletionStatus, "node_deletion_status", {
+    Queued => "queued",
+    Migrating => "migrating",
+    Draining => "draining",
+    Deleting => "deleting",
+    Failed => "failed",
+    Completed => "completed",
+});
+
+string_active_enum!(NodeDeploymentMigrationStatus, "node_deployment_migration_status", {
+    Pending => "pending",
+    Syncing => "syncing",
+    Ready => "ready",
+    Failed => "failed",
+});
+
 string_active_enum!(SystemSettingValueKind, "system_setting_value_kind", {
     String => "string",
     Number => "number",
@@ -203,4 +242,37 @@ string_active_enum!(AuditEventResult, "audit_event_result", {
     Success => "success",
     Failure => "failure",
     Denied => "denied",
+});
+
+string_active_enum!(AuditActorType, "audit_actor_type", {
+    Anonymous => "anonymous",
+    User => "user",
+    System => "system",
+    Node => "node",
+});
+
+string_active_enum!(AuditEventVisibility, "audit_event_visibility", {
+    Platform => "platform",
+    Team => "team",
+});
+
+string_active_enum!(SourceCredentialKind, "source_credential_kind", {
+    Https => "https",
+    Ssh => "ssh",
+});
+
+impl SourceCredentialKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Https => "https",
+            Self::Ssh => "ssh",
+        }
+    }
+}
+
+string_active_enum!(SshHostKeyStatus, "ssh_host_key_status", {
+    Pending => "pending",
+    Approved => "approved",
+    Rejected => "rejected",
+    Superseded => "superseded",
 });

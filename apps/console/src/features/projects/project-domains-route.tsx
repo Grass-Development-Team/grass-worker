@@ -15,6 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { canContributeToProjects } from "@/features/teams/team-permissions";
 
 import { projectsApi, type HostStatus } from "./projects.api";
 import { useProject } from "./project-layout";
@@ -35,8 +36,9 @@ export function hostStatusVariant(
 }
 
 export function ProjectDomainsRoute() {
-  const { project } = useProject();
+  const { project, role } = useProject();
   const projectId = project.id;
+  const canEdit = canContributeToProjects(role);
   const queryClient = useQueryClient();
   const [newHost, setNewHost] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -86,26 +88,28 @@ export function ProjectDomainsRoute() {
         </p>
       </div>
 
-      <form
-        className="flex items-end gap-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (newHost.trim()) addMutation.mutate();
-        }}
-      >
-        <Field className="max-w-sm flex-1">
-          <FieldLabel htmlFor="new-host">Add domain</FieldLabel>
-          <Input
-            id="new-host"
-            placeholder="app.example.com"
-            value={newHost}
-            onChange={(event) => setNewHost(event.target.value)}
-          />
-        </Field>
-        <Button type="submit" disabled={addMutation.isPending || !newHost.trim()}>
-          <PlusIcon /> Add
-        </Button>
-      </form>
+      {canEdit && (
+        <form
+          className="flex items-end gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (newHost.trim()) addMutation.mutate();
+          }}
+        >
+          <Field className="max-w-sm flex-1">
+            <FieldLabel htmlFor="new-host">Add domain</FieldLabel>
+            <Input
+              id="new-host"
+              placeholder="app.example.com"
+              value={newHost}
+              onChange={(event) => setNewHost(event.target.value)}
+            />
+          </Field>
+          <Button type="submit" disabled={addMutation.isPending || !newHost.trim()}>
+            <PlusIcon /> Add
+          </Button>
+        </form>
+      )}
       {error && (
         <p role="alert" className="text-sm text-destructive">
           {error}
@@ -128,7 +132,7 @@ export function ProjectDomainsRoute() {
                 <TableHead>Kind</TableHead>
                 <TableHead>Environment</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
+                {canEdit && <TableHead className="text-right">Actions</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -150,38 +154,40 @@ export function ProjectDomainsRoute() {
                   <TableCell>
                     <Badge variant={hostStatusVariant(host.status)}>{host.status}</Badge>
                   </TableCell>
-                  <TableCell className="space-x-1 text-right">
-                    {(host.status === "pending" || host.status === "failed") &&
-                      host.host_source_id && (
+                  {canEdit && (
+                    <TableCell className="space-x-1 text-right">
+                      {(host.status === "pending" || host.status === "failed") &&
+                        host.host_source_id && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => provisionMutation.mutate(host.id)}
+                            disabled={provisionMutation.isPending}
+                          >
+                            Retry
+                          </Button>
+                        )}
+                      {!host.is_primary && (
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => provisionMutation.mutate(host.id)}
-                          disabled={provisionMutation.isPending}
+                          onClick={() => primaryMutation.mutate(host.id)}
+                          disabled={primaryMutation.isPending}
                         >
-                          Retry
+                          Make primary
                         </Button>
                       )}
-                    {!host.is_primary && (
                       <Button
                         size="sm"
-                        variant="outline"
-                        onClick={() => primaryMutation.mutate(host.id)}
-                        disabled={primaryMutation.isPending}
+                        variant="ghost"
+                        aria-label={`Remove ${host.host}`}
+                        onClick={() => removeMutation.mutate(host.id)}
+                        disabled={removeMutation.isPending}
                       >
-                        Make primary
+                        <Trash2Icon />
                       </Button>
-                    )}
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      aria-label={`Remove ${host.host}`}
-                      onClick={() => removeMutation.mutate(host.id)}
-                      disabled={removeMutation.isPending}
-                    >
-                      <Trash2Icon />
-                    </Button>
-                  </TableCell>
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </TableBody>

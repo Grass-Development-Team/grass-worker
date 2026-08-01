@@ -5,7 +5,7 @@
 //! write outside the destination directory.
 
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -14,8 +14,15 @@ use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 #[derive(Debug)]
 pub struct PackedArchive {
     pub size_bytes: u64,
+    pub unpacked_size_bytes: u64,
     pub checksum_sha256: String,
     pub file_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnpackedArchive {
+    pub file_count: usize,
+    pub unpacked_size_bytes: u64,
 }
 
 /// Packs `source_dir` into a zip at `destination`. Entry names are relative
@@ -45,7 +52,7 @@ pub fn pack_dir(source_dir: &Path, destination: &Path) -> anyhow::Result<PackedA
     entries.sort();
 
     let mut file_count = 0;
-    let mut buffer = Vec::new();
+    let mut unpacked_size_bytes = 0_u64;
     for path in entries {
         let relative = path
             .strip_prefix(source_dir)
@@ -57,18 +64,30 @@ pub fn pack_dir(source_dir: &Path, destination: &Path) -> anyhow::Result<PackedA
             .join("/");
 
         writer.start_file(&name, options)?;
-        buffer.clear();
-        File::open(&path)?.read_to_end(&mut buffer)?;
-        writer.write_all(&buffer)?;
+        let mut source = File::open(&path)?;
+        unpacked_size_bytes = unpacked_size_bytes
+            .checked_add(std::io::copy(&mut source, &mut writer)?)
+            .ok_or_else(|| anyhow::anyhow!("archive unpacked size overflow"))?;
         file_count += 1;
     }
 
     writer.finish()?;
 
-    let bytes = std::fs::read(destination)?;
+    let size_bytes = std::fs::metadata(destination)?.len();
+    let mut archive = File::open(destination)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = archive.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
     Ok(PackedArchive {
-        size_bytes: bytes.len() as u64,
-        checksum_sha256: hex::encode(Sha256::digest(&bytes)),
+        size_bytes,
+        unpacked_size_bytes,
+        checksum_sha256: hex::encode(hasher.finalize()),
         file_count,
     })
 }
@@ -102,14 +121,14 @@ pub fn sanitize_entry_name(name: &str) -> anyhow::Result<PathBuf> {
 }
 
 /// Unpacks a zip archive into `destination`, refusing entries that would
-/// escape it. Returns the number of extracted files.
-pub fn unpack_zip(archive_path: &Path, destination: &Path) -> anyhow::Result<usize> {
+/// escape it. Returns the extracted file count and total unpacked bytes.
+pub fn unpack_zip(archive_path: &Path, destination: &Path) -> anyhow::Result<UnpackedArchive> {
     let file = File::open(archive_path)?;
     unpack_zip_reader(file, destination)
 }
 
 /// Unpacks zip bytes into `destination` with the same entry validation.
-pub fn unpack_zip_bytes(bytes: &[u8], destination: &Path) -> anyhow::Result<usize> {
+pub fn unpack_zip_bytes(bytes: &[u8], destination: &Path) -> anyhow::Result<UnpackedArchive> {
     unpack_zip_reader(std::io::Cursor::new(bytes), destination)
 }
 
@@ -120,16 +139,37 @@ const MAX_ENTRIES: usize = 50_000;
 const MAX_TOTAL_UNPACKED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_ENTRY_UNPACKED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
+#[derive(Clone, Copy)]
+struct UnpackLimits {
+    entries: usize,
+    entry_bytes: u64,
+    total_bytes: u64,
+}
+
+const DEFAULT_UNPACK_LIMITS: UnpackLimits = UnpackLimits {
+    entries: MAX_ENTRIES,
+    entry_bytes: MAX_ENTRY_UNPACKED_BYTES,
+    total_bytes: MAX_TOTAL_UNPACKED_BYTES,
+};
+
 fn unpack_zip_reader<R: Read + std::io::Seek>(
     reader: R,
     destination: &Path,
-) -> anyhow::Result<usize> {
+) -> anyhow::Result<UnpackedArchive> {
+    unpack_zip_reader_with_limits(reader, destination, DEFAULT_UNPACK_LIMITS)
+}
+
+fn unpack_zip_reader_with_limits<R: Read + std::io::Seek>(
+    reader: R,
+    destination: &Path,
+    limits: UnpackLimits,
+) -> anyhow::Result<UnpackedArchive> {
     let mut archive = ZipArchive::new(reader)?;
-    if archive.len() > MAX_ENTRIES {
+    if archive.len() > limits.entries {
         anyhow::bail!(
             "archive has {} entries, exceeding the {} entry limit",
             archive.len(),
-            MAX_ENTRIES
+            limits.entries
         );
     }
     std::fs::create_dir_all(destination)?;
@@ -146,6 +186,13 @@ fn unpack_zip_reader<R: Read + std::io::Seek>(
             continue;
         }
 
+        if entry.size() > limits.entry_bytes {
+            anyhow::bail!("archive entry {name} exceeds the per-entry unpack size limit");
+        }
+        if entry.size() > limits.total_bytes.saturating_sub(total_written) {
+            anyhow::bail!("archive exceeds the total unpack size limit");
+        }
+
         let safe = sanitize_entry_name(&name)?;
         let target = destination.join(&safe);
         if let Some(parent) = target.parent() {
@@ -154,23 +201,29 @@ fn unpack_zip_reader<R: Read + std::io::Seek>(
         let mut output = File::create(&target)?;
         // Bound each entry independently, then re-check the running total so
         // neither one huge entry nor many small entries can overrun the caps.
-        let remaining_total = MAX_TOTAL_UNPACKED_BYTES.saturating_sub(total_written);
-        let entry_cap = MAX_ENTRY_UNPACKED_BYTES.min(remaining_total);
+        let remaining_total = limits.total_bytes.saturating_sub(total_written);
+        let entry_cap = limits.entry_bytes.min(remaining_total);
         let written = std::io::copy(&mut entry.by_ref().take(entry_cap + 1), &mut output)?;
-        if written > entry_cap {
-            anyhow::bail!(
-                "archive entry {name} exceeds the unpack size limit; refusing decompression bomb"
-            );
+        if written > limits.entry_bytes {
+            anyhow::bail!("archive entry {name} exceeds the per-entry unpack size limit");
+        }
+        if written > remaining_total {
+            anyhow::bail!("archive exceeds the total unpack size limit");
         }
         total_written += written;
         extracted += 1;
     }
 
-    Ok(extracted)
+    Ok(UnpackedArchive {
+        file_count: extracted,
+        unpacked_size_bytes: total_written,
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use super::*;
 
     fn temp_dir(label: &str) -> PathBuf {
@@ -180,6 +233,21 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn zip_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = ZipWriter::new(&mut bytes);
+            for (name, contents) in entries {
+                writer
+                    .start_file(*name, SimpleFileOptions::default())
+                    .unwrap();
+                writer.write_all(contents).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        bytes.into_inner()
     }
 
     #[test]
@@ -198,8 +266,12 @@ mod tests {
         assert_eq!(packed.checksum_sha256.len(), 64);
 
         let dest = temp_dir("dest");
-        let extracted = unpack_zip(&archive_path, &dest).unwrap();
-        assert_eq!(extracted, 3);
+        let unpacked = unpack_zip(&archive_path, &dest).unwrap();
+        assert_eq!(unpacked.file_count, 3);
+        assert_eq!(
+            unpacked.unpacked_size_bytes,
+            ("version = 1\n".len() + "<html></html>".len() + "console.log(1)".len()) as u64
+        );
         assert_eq!(
             std::fs::read_to_string(dest.join("static/index.html")).unwrap(),
             "<html></html>"
@@ -208,6 +280,20 @@ mod tests {
         for dir in [source, archive_dir, dest] {
             std::fs::remove_dir_all(dir).unwrap();
         }
+    }
+
+    #[test]
+    fn packed_archive_reports_unpacked_bytes() {
+        let source = temp_dir("unpacked-size");
+        std::fs::write(source.join("a"), b"123").unwrap();
+        std::fs::write(source.join("b"), b"4567").unwrap();
+        let archive_dir = temp_dir("unpacked-size-archive");
+
+        let packed = pack_dir(&source, &archive_dir.join("out.zip")).unwrap();
+
+        assert_eq!(packed.unpacked_size_bytes, 7);
+        std::fs::remove_dir_all(source).unwrap();
+        std::fs::remove_dir_all(archive_dir).unwrap();
     }
 
     #[test]
@@ -257,5 +343,59 @@ mod tests {
 
         std::fs::remove_dir_all(source).unwrap();
         std::fs::remove_dir_all(archive_dir).unwrap();
+    }
+
+    #[test]
+    fn rejects_archives_over_the_entry_count_limit() {
+        let bytes = zip_bytes(&[("one", b""), ("two", b""), ("three", b"")]);
+        let destination = temp_dir("entry-count-limit");
+        let error = unpack_zip_reader_with_limits(
+            std::io::Cursor::new(bytes),
+            &destination,
+            UnpackLimits {
+                entries: 2,
+                entry_bytes: 100,
+                total_bytes: 100,
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("entry limit"));
+        std::fs::remove_dir_all(destination).unwrap();
+    }
+
+    #[test]
+    fn rejects_archives_over_the_per_entry_byte_limit() {
+        let bytes = zip_bytes(&[("large", b"12345")]);
+        let destination = temp_dir("entry-byte-limit");
+        let error = unpack_zip_reader_with_limits(
+            std::io::Cursor::new(bytes),
+            &destination,
+            UnpackLimits {
+                entries: 10,
+                entry_bytes: 4,
+                total_bytes: 100,
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("per-entry"));
+        std::fs::remove_dir_all(destination).unwrap();
+    }
+
+    #[test]
+    fn rejects_archives_over_the_total_byte_limit() {
+        let bytes = zip_bytes(&[("one", b"1234"), ("two", b"5678")]);
+        let destination = temp_dir("total-byte-limit");
+        let error = unpack_zip_reader_with_limits(
+            std::io::Cursor::new(bytes),
+            &destination,
+            UnpackLimits {
+                entries: 10,
+                entry_bytes: 10,
+                total_bytes: 7,
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("total unpack"));
+        std::fs::remove_dir_all(destination).unwrap();
     }
 }

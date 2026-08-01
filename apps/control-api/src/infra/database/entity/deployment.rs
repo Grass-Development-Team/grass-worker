@@ -1,7 +1,8 @@
 use sea_orm::entity::prelude::*;
 
 use super::enums::{
-    DeploymentBuildStatus, DeploymentEnvironment, DeploymentReleaseStatus, ProjectRuntime,
+    AuditEventVisibility, DeploymentBuildStatus, DeploymentEnvironment, DeploymentReleaseStatus,
+    DeploymentServeStatus, ProjectRuntime, ReleaseReason,
 };
 
 #[allow(dead_code)]
@@ -12,12 +13,19 @@ pub struct Model {
     pub id: Uuid,
     pub project_id: Uuid,
     pub team_id: Uuid,
-    pub node_id: Option<Uuid>,
+    pub build_node_id: Option<Uuid>,
+    pub serve_node_id: Option<Uuid>,
     pub environment: DeploymentEnvironment,
     pub runtime_kind: ProjectRuntime,
     pub build_status: DeploymentBuildStatus,
+    pub serve_status: DeploymentServeStatus,
     pub release_status: DeploymentReleaseStatus,
+    pub serve_cpu_millicores: i64,
+    pub serve_memory_mb: i64,
+    pub serve_disk_mb: i64,
+    pub overcommitted: bool,
     pub source_repository_url: Option<String>,
+    pub source_credential_version_id: Option<Uuid>,
     pub source_branch: Option<String>,
     pub commit_hash: Option<String>,
     pub commit_message: Option<String>,
@@ -30,9 +38,17 @@ pub struct Model {
     pub build_stage: Option<String>,
     pub failure_code: Option<String>,
     pub failure_message: Option<String>,
+    pub serve_failure_code: Option<String>,
+    pub serve_failure_message: Option<String>,
+    pub pending_release_reason: Option<ReleaseReason>,
+    pub pending_release_actor_user_id: Option<Uuid>,
+    pub pending_release_audit_visibility: Option<AuditEventVisibility>,
+    pub pending_release_requested_at: Option<TimeDateTimeWithTimeZone>,
     pub claimed_at: Option<TimeDateTimeWithTimeZone>,
     pub build_started_at: Option<TimeDateTimeWithTimeZone>,
     pub build_finished_at: Option<TimeDateTimeWithTimeZone>,
+    pub serve_started_at: Option<TimeDateTimeWithTimeZone>,
+    pub serve_finished_at: Option<TimeDateTimeWithTimeZone>,
     pub deleted_at: Option<TimeDateTimeWithTimeZone>,
     pub created_at: TimeDateTimeWithTimeZone,
     pub updated_at: TimeDateTimeWithTimeZone,
@@ -59,12 +75,20 @@ pub enum Relation {
     Team,
     #[sea_orm(
         belongs_to = "super::node::Entity",
-        from = "Column::NodeId",
+        from = "Column::BuildNodeId",
         to = "super::node::Column::Id",
         on_update = "NoAction",
         on_delete = "SetNull"
     )]
-    Node,
+    BuildNode,
+    #[sea_orm(
+        belongs_to = "super::node::Entity",
+        from = "Column::ServeNodeId",
+        to = "super::node::Column::Id",
+        on_update = "NoAction",
+        on_delete = "SetNull"
+    )]
+    ServeNode,
 }
 
 impl Related<super::project::Entity> for Entity {
@@ -81,7 +105,7 @@ impl Related<super::team::Entity> for Entity {
 
 impl Related<super::node::Entity> for Entity {
     fn to() -> RelationDef {
-        Relation::Node.def()
+        Relation::BuildNode.def()
     }
 }
 

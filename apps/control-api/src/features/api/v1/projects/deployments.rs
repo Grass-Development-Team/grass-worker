@@ -1,7 +1,6 @@
 pub mod logs;
-pub mod review;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use axum::{
     Json,
@@ -17,22 +16,26 @@ use crate::infra::http::timestamps::ts;
 use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
+        delivery::{self, DeliveryError, ReleaseRequestOutcome},
         deployments::{
             self, BuildTransition, CreateDeploymentParams, DeploymentListFilter,
             DeploymentStateError, ReviewMode,
         },
         hosts, projects,
         quotas::QuotaDimension,
+        scheduler::{self, PlacementMode, ScheduleError},
+        source_credentials,
     },
     infra::{
         database::entity::{
-            AuditEventResult, DeploymentBuildStatus, DeploymentEnvironment,
+            AuditEventResult, AuditEventVisibility, DeploymentBuildStatus, DeploymentEnvironment,
             DeploymentReleaseStatus, HostBindingEnvironment, HostBindingStatus, ReleaseReason,
-            deployment, project_host_binding, user,
+            deployment, node, project_host_binding, user,
         },
-        error::{AppError, ok_response},
+        error::{AppError, accepted_response, ok_response},
         http::extractors::Session,
         quota::{QuotaCharge, QuotaService},
+        route_invalidation,
     },
     state::ControlApiState,
 };
@@ -41,7 +44,9 @@ pub(crate) fn map_state_error(error: DeploymentStateError, op: &'static str) -> 
     match error {
         DeploymentStateError::InvalidBuildTransition { .. }
         | DeploymentStateError::InvalidReleaseTransition { .. }
-        | DeploymentStateError::BuildNotReady => AppError::Conflict {
+        | DeploymentStateError::InvalidServeTransition { .. }
+        | DeploymentStateError::BuildNotReady
+        | DeploymentStateError::ServeNotReady => AppError::Conflict {
             op,
             message: error.to_string(),
         },
@@ -66,6 +71,22 @@ fn parse_environment(value: &str, op: &'static str) -> Result<DeploymentEnvironm
 /// Cache key checked by Nodes to learn a build was canceled server-side.
 pub(crate) fn cancel_flag_key(deployment_id: Uuid) -> String {
     format!("deployment:{deployment_id}:cancel")
+}
+
+pub(crate) fn cancellation_was_requested(
+    status: &DeploymentBuildStatus,
+    cancel_flagged: bool,
+) -> bool {
+    matches!(status, DeploymentBuildStatus::Canceled) || cancel_flagged
+}
+
+fn cancellation_releases_build_slot(status: &DeploymentBuildStatus) -> bool {
+    matches!(
+        status,
+        DeploymentBuildStatus::Claimed
+            | DeploymentBuildStatus::Queued
+            | DeploymentBuildStatus::Building
+    )
 }
 
 // --- DTO --------------------------------------------------------------------
@@ -100,18 +121,23 @@ impl UrlContext {
         })
     }
 
-    fn urls(&self, deployment: &deployment::Model) -> serde_json::Value {
-        let preview_url = deployment
-            .preview_host
-            .as_ref()
-            .map(|host| format!("{}://{}", self.public_scheme, host));
-        let production_url = matches!(deployment.release_status, DeploymentReleaseStatus::Active)
+    fn urls(&self, deployment: &deployment::Model, preview_available: bool) -> serde_json::Value {
+        let preview_url = preview_available
             .then(|| {
-                self.production_host
+                deployment
+                    .preview_host
                     .as_ref()
                     .map(|host| format!("{}://{}", self.public_scheme, host))
             })
             .flatten();
+        let production_url =
+            production_url_is_available(&deployment.environment, &deployment.release_status)
+                .then(|| {
+                    self.production_host
+                        .as_ref()
+                        .map(|host| format!("{}://{}", self.public_scheme, host))
+                })
+                .flatten();
 
         json!({
             "preview_url": preview_url,
@@ -120,10 +146,20 @@ impl UrlContext {
     }
 }
 
+fn production_url_is_available(
+    environment: &DeploymentEnvironment,
+    release_status: &DeploymentReleaseStatus,
+) -> bool {
+    matches!(environment, DeploymentEnvironment::Production)
+        && matches!(release_status, DeploymentReleaseStatus::Active)
+}
+
 pub(crate) fn deployment_view(
     deployment: &deployment::Model,
     urls: &UrlContext,
+    effective_preview_ids: &HashSet<Uuid>,
     users: &HashMap<Uuid, user::Model>,
+    nodes: &HashMap<Uuid, node::Model>,
 ) -> serde_json::Value {
     let duration_seconds = match (deployment.build_started_at, deployment.build_finished_at) {
         (Some(started), Some(finished)) => Some((finished - started).whole_seconds().max(0)),
@@ -139,16 +175,40 @@ pub(crate) fn deployment_view(
                 "display_name": user.display_name,
             })
         });
+    let node_view = |node_id: Option<Uuid>| {
+        node_id.and_then(|node_id| {
+            nodes.get(&node_id).map(|node| {
+                json!({
+                    "id": node.id,
+                    "name": node.name,
+                })
+            })
+        })
+    };
 
     let mut view = json!({
         "id": deployment.id,
         "project_id": deployment.project_id,
         "team_id": deployment.team_id,
-        "node_id": deployment.node_id,
+        "build_node": node_view(deployment.build_node_id),
+        "serve_node": node_view(deployment.serve_node_id),
         "environment": deployments::environment_value(&deployment.environment),
         "runtime_kind": projects::runtime_value(&deployment.runtime_kind),
         "build_status": deployments::build_status_value(&deployment.build_status),
+        "serve_status": deployments::serve_status_value(&deployment.serve_status),
         "release_status": deployments::release_status_value(&deployment.release_status),
+        "release_pending": deployment.pending_release_reason.is_some(),
+        "pending_release_reason": deployment
+            .pending_release_reason
+            .as_ref()
+            .map(deployments::release_reason_value),
+        "pending_release_requested_at": ts(deployment.pending_release_requested_at),
+        "serve_resources": {
+            "cpu_millicores": deployment.serve_cpu_millicores,
+            "memory_mb": deployment.serve_memory_mb,
+            "disk_mb": deployment.serve_disk_mb,
+        },
+        "overcommitted": deployment.overcommitted,
         "build_stage": deployment.build_stage,
         "source": {
             "repository_url": deployment.source_repository_url,
@@ -159,18 +219,46 @@ pub(crate) fn deployment_view(
         "triggered_by": triggered_by,
         "failure_code": deployment.failure_code,
         "failure_message": deployment.failure_message,
+        "serve_failure_code": deployment.serve_failure_code,
+        "serve_failure_message": deployment.serve_failure_message,
         "duration_seconds": duration_seconds,
         "claimed_at": ts(deployment.claimed_at),
         "build_started_at": ts(deployment.build_started_at),
         "build_finished_at": ts(deployment.build_finished_at),
+        "serve_started_at": ts(deployment.serve_started_at),
+        "serve_finished_at": ts(deployment.serve_finished_at),
         "created_at": ts(deployment.created_at),
     });
-    if let serde_json::Value::Object(map) = urls.urls(deployment)
+    if let serde_json::Value::Object(map) =
+        urls.urls(deployment, effective_preview_ids.contains(&deployment.id))
         && let serde_json::Value::Object(view_map) = &mut view
     {
         view_map.extend(map);
     }
     view
+}
+
+async fn effective_preview_ids(
+    db: &sea_orm::DatabaseConnection,
+    project_id: Uuid,
+    op: &'static str,
+) -> Result<HashSet<Uuid>, AppError> {
+    let mut ids = HashSet::new();
+    for environment in [
+        DeploymentEnvironment::Production,
+        DeploymentEnvironment::Preview,
+    ] {
+        if let Some(deployment) = delivery::effective_preview(db, project_id, environment)
+            .await
+            .map_err(|source| AppError::Infrastructure {
+                op,
+                source: source.into(),
+            })?
+        {
+            ids.insert(deployment.id);
+        }
+    }
+    Ok(ids)
 }
 
 pub(crate) async fn load_users(
@@ -190,6 +278,27 @@ pub(crate) async fn load_users(
         .await?
         .into_iter()
         .map(|user| (user.id, user))
+        .collect())
+}
+
+pub(crate) async fn load_nodes(
+    db: &sea_orm::DatabaseConnection,
+    deployments: &[deployment::Model],
+) -> anyhow::Result<HashMap<Uuid, node::Model>> {
+    let node_ids: Vec<Uuid> = deployments
+        .iter()
+        .flat_map(|deployment| [deployment.build_node_id, deployment.serve_node_id])
+        .flatten()
+        .collect();
+    if node_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    Ok(node::Entity::find()
+        .filter(node::Column::Id.is_in(node_ids))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|node| (node.id, node))
         .collect())
 }
 
@@ -227,10 +336,111 @@ pub struct CreateDeploymentRequest {
     pub commit_hash: Option<String>,
     #[serde(default)]
     pub commit_message: Option<String>,
+    #[serde(default)]
+    pub serve_node_id: Option<Uuid>,
 }
 
 fn default_environment() -> String {
     "production".to_owned()
+}
+
+fn map_schedule_error(error: ScheduleError, op: &'static str) -> AppError {
+    match error {
+        ScheduleError::Database(source) => AppError::Infrastructure {
+            op,
+            source: source.into(),
+        },
+        error @ ScheduleError::InvalidData => AppError::Infrastructure {
+            op,
+            source: anyhow::Error::new(error),
+        },
+        other => AppError::Conflict {
+            op,
+            message: other.to_string(),
+        },
+    }
+}
+
+pub(crate) fn map_delivery_error(error: DeliveryError, op: &'static str) -> AppError {
+    match error {
+        DeliveryError::ReleaseAlreadyPending => AppError::Conflict {
+            op,
+            message: error.to_string(),
+        },
+        DeliveryError::State(error) => map_state_error(error, op),
+        DeliveryError::Schedule(error) => map_schedule_error(error, op),
+        DeliveryError::Database(source) => AppError::Infrastructure {
+            op,
+            source: source.into(),
+        },
+        DeliveryError::InvalidResources
+        | DeliveryError::InvalidUnsuccessfulBuildTransition
+        | DeliveryError::Other(_) => AppError::Infrastructure {
+            op,
+            source: anyhow::Error::new(error),
+        },
+    }
+}
+
+async fn create_placed_deployment(
+    db: &sea_orm::DatabaseConnection,
+    params: CreateDeploymentParams,
+    selected_node_id: Option<Uuid>,
+    op: &'static str,
+) -> Result<deployment::Model, AppError> {
+    let requested = deployments::runtime_serve_resources(&params.project.runtime);
+    let transaction = db
+        .begin()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op,
+            source: source.into(),
+        })?;
+    let placement =
+        match scheduler::place_deployment(&transaction, requested, selected_node_id).await {
+            Ok(placement) => placement,
+            Err(error) => {
+                let error = map_schedule_error(error, op);
+                let _ = transaction.rollback().await;
+                return Err(error);
+            }
+        };
+    let deployment = match deployments::create_deployment(&transaction, params, placement).await {
+        Ok(deployment) => deployment,
+        Err(source) => {
+            let _ = transaction.rollback().await;
+            return Err(AppError::Infrastructure { op, source });
+        }
+    };
+    let mode = match placement.mode {
+        PlacementMode::Automatic => "automatic",
+        PlacementMode::Manual => "manual",
+    };
+    if let Err(source) = deployments::append_event(
+        &transaction,
+        deployment.id,
+        crate::infra::database::entity::DeploymentEventKind::Serve,
+        "deployment assigned to serve node",
+        json!({
+            "mode": mode,
+            "serve_node_id": placement.node_id,
+            "resources": requested,
+            "overcommitted": placement.overcommitted,
+        }),
+    )
+    .await
+    {
+        let _ = transaction.rollback().await;
+        return Err(AppError::Infrastructure { op, source });
+    }
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op,
+            source: source.into(),
+        })?;
+    Ok(deployment)
 }
 
 /// POST /api/v1/projects/{project_id}/deployments
@@ -275,15 +485,40 @@ pub async fn create(
         )
         .await?;
 
-    // Preview deployments get a unique wildcard host when an auto-assign
-    // source exists; production serves through the project's bindings.
-    let preview_host = if matches!(environment, DeploymentEnvironment::Preview) {
+    // Every deployment gets a protected moderation host when an auto-assign
+    // source exists. Production bindings remain inactive until promotion.
+    let preview_host = if environment_gets_preview_host(&environment) {
         preview_host_for_project(db, &access.project).await
     } else {
         None
     };
+    let source_credential_version_id =
+        match source_credentials::current_version_for_project(db, &access.project).await {
+            Ok(version_id) => version_id,
+            Err(error) => {
+                quota.rollback(reservation).await;
+                return Err(AppError::Conflict {
+                    op: OP,
+                    message: error.to_string(),
+                });
+            }
+        };
+    if access
+        .project
+        .repository_url
+        .as_deref()
+        .and_then(|url| grass_git_source::parse_repository_url(url).ok())
+        .is_some_and(|endpoint| endpoint.transport == grass_git_source::GitTransport::Ssh)
+        && source_credential_version_id.is_none()
+    {
+        quota.rollback(reservation).await;
+        return Err(AppError::Validation {
+            op: OP,
+            message: "SSH repositories require a bound source credential".to_owned(),
+        });
+    }
 
-    let deployment = match deployments::create_deployment(
+    let deployment = match create_placed_deployment(
         db,
         CreateDeploymentParams {
             project: access.project.clone(),
@@ -293,14 +528,17 @@ pub async fn create(
             commit_hash: super::optional_trimmed(body.commit_hash),
             commit_message: super::optional_trimmed(body.commit_message),
             preview_host,
+            source_credential_version_id,
         },
+        body.serve_node_id,
+        OP,
     )
     .await
     {
         Ok(deployment) => deployment,
-        Err(source) => {
+        Err(error) => {
             quota.rollback(reservation).await;
-            return Err(AppError::Infrastructure { op: OP, source });
+            return Err(error);
         }
     };
     quota
@@ -311,6 +549,7 @@ pub async fn create(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(session.data.user_id),
+            actor_node_id: None,
             team_id: Some(access.team.id),
             action: "deployment.created".to_owned(),
             target_type: "deployment".to_owned(),
@@ -329,19 +568,36 @@ pub async fn create(
     // deployment immediately with the stable message instead of letting it
     // sit in the queue forever.
     let deployment = match deployments::runtime_failure(&deployment.runtime_kind) {
-        Some((code, message)) => deployments::transition_build(
-            db,
-            deployment,
-            BuildTransition {
-                to: DeploymentBuildStatus::Failed,
-                stage: None,
-                failure_code: Some(code.to_owned()),
-                failure_message: Some(message.to_owned()),
-                node_id: None,
-            },
-        )
-        .await
-        .map_err(|error| map_state_error(error, OP))?,
+        Some((code, message)) => {
+            let transaction = db
+                .begin()
+                .await
+                .map_err(|source| AppError::Infrastructure {
+                    op: OP,
+                    source: source.into(),
+                })?;
+            let deployment = delivery::transition_unsuccessful_build(
+                &transaction,
+                deployment,
+                BuildTransition {
+                    to: DeploymentBuildStatus::Failed,
+                    stage: None,
+                    failure_code: Some(code.to_owned()),
+                    failure_message: Some(message.to_owned()),
+                    build_node_id: None,
+                },
+            )
+            .await
+            .map_err(|error| map_delivery_error(error, OP))?;
+            transaction
+                .commit()
+                .await
+                .map_err(|source| AppError::Infrastructure {
+                    op: OP,
+                    source: source.into(),
+                })?;
+            deployment
+        }
         None => deployment,
     };
 
@@ -351,9 +607,13 @@ pub async fn create(
     let users = load_users(db, std::slice::from_ref(&deployment))
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let nodes = load_nodes(db, std::slice::from_ref(&deployment))
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let preview_ids = effective_preview_ids(db, access.project.id, OP).await?;
 
     Ok(ok_response(json!({
-        "deployment": deployment_view(&deployment, &urls, &users),
+        "deployment": deployment_view(&deployment, &urls, &preview_ids, &users, &nodes),
     })))
 }
 
@@ -376,6 +636,13 @@ async fn preview_host_for_project(
         }
         _ => None,
     }
+}
+
+fn environment_gets_preview_host(environment: &DeploymentEnvironment) -> bool {
+    matches!(
+        environment,
+        DeploymentEnvironment::Production | DeploymentEnvironment::Preview
+    )
 }
 
 // --- List / detail ----------------------------------------------------------
@@ -431,11 +698,15 @@ pub async fn list(
     let users = load_users(db, &deployments)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let nodes = load_nodes(db, &deployments)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let preview_ids = effective_preview_ids(db, access.project.id, OP).await?;
 
     Ok(ok_response(json!({
         "deployments": deployments
             .iter()
-            .map(|deployment| deployment_view(deployment, &urls, &users))
+            .map(|deployment| deployment_view(deployment, &urls, &preview_ids, &users, &nodes))
             .collect::<Vec<_>>(),
     })))
 }
@@ -456,6 +727,69 @@ fn parse_build_status(value: &str, op: &'static str) -> Result<DeploymentBuildSt
     }
 }
 
+/// GET /api/v1/projects/{project_id}/serve-nodes
+pub async fn serve_nodes(
+    State(state): State<ControlApiState>,
+    session: Session,
+    Path(project_id): Path<Uuid>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "deployments.serve_nodes";
+    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    let db = super::database(&state, OP)?;
+    let requested = deployments::runtime_serve_resources(&access.project.runtime);
+    let candidates = scheduler::eligible_candidates(db)
+        .await
+        .map_err(|error| map_schedule_error(error, OP))?;
+    let node_ids: Vec<Uuid> = candidates
+        .iter()
+        .map(|candidate| candidate.node_id)
+        .collect();
+    let nodes: HashMap<Uuid, node::Model> = if node_ids.is_empty() {
+        HashMap::new()
+    } else {
+        node::Entity::find()
+            .filter(node::Column::Id.is_in(node_ids))
+            .all(db)
+            .await
+            .map_err(|source| AppError::Infrastructure {
+                op: OP,
+                source: source.into(),
+            })?
+            .into_iter()
+            .map(|node| (node.id, node))
+            .collect()
+    };
+
+    let views = candidates
+        .iter()
+        .filter_map(|candidate| {
+            let node = nodes.get(&candidate.node_id)?;
+            let placement = scheduler::choose_candidate(
+                std::slice::from_ref(candidate),
+                requested,
+                None,
+            )
+            .ok();
+            let max_deployments = u64::from(candidate.capacity.max_deployments);
+            let overflow_used = candidate.usage.deployments.saturating_sub(max_deployments);
+            Some(json!({
+                "id": node.id,
+                "name": node.name,
+                "healthy": true,
+                "capacity": candidate.capacity,
+                "usage": candidate.usage,
+                "normal_available": placement.is_some_and(|placement| !placement.overcommitted),
+                "schedulable": placement.is_some(),
+                "overflow_only": placement.is_some_and(|placement| placement.overcommitted),
+                "disk_available_mb": candidate.capacity.disk_mb.saturating_sub(candidate.usage.disk_mb),
+                "remaining_overflow_slots": 2_u64.saturating_sub(overflow_used),
+            }))
+        })
+        .collect::<Vec<_>>();
+
+    Ok(ok_response(json!({ "serve_nodes": views })))
+}
+
 /// GET /api/v1/projects/{project_id}/deployments/{deployment_id}
 pub async fn detail(
     State(state): State<ControlApiState>,
@@ -473,6 +807,9 @@ pub async fn detail(
     let users = load_users(db, std::slice::from_ref(&deployment))
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let nodes = load_nodes(db, std::slice::from_ref(&deployment))
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     let events = deployments::list_events(db, deployment.id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
@@ -482,12 +819,16 @@ pub async fn detail(
     let reviews = deployments::list_reviews(db, deployment.id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    let policy = deployments::review_policy(db)
+    let was_active = deployments::was_active(db, deployment.id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let policy = deployments::review_policy_for_team(db, deployment.team_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let preview_ids = effective_preview_ids(db, access.project.id, OP).await?;
 
     Ok(ok_response(json!({
-        "deployment": deployment_view(&deployment, &urls, &users),
+        "deployment": deployment_view(&deployment, &urls, &preview_ids, &users, &nodes),
         "events": events.iter().map(|event| json!({
             "id": event.id,
             "kind": event_kind_value(&event.kind),
@@ -513,6 +854,7 @@ pub async fn detail(
             "reviewed_at": ts(review.reviewed_at),
         })).collect::<Vec<_>>(),
         "review_required": matches!(policy.mode_for(&deployment.environment), ReviewMode::Manual),
+        "was_active": was_active,
     })))
 }
 
@@ -521,6 +863,7 @@ fn event_kind_value(kind: &crate::infra::database::entity::DeploymentEventKind) 
     match kind {
         K::System => "system",
         K::Build => "build",
+        K::Serve => "serve",
         K::Release => "release",
         K::Review => "review",
         K::Host => "host",
@@ -614,27 +957,36 @@ pub(crate) async fn cancel_deployment_core(
     actor_user_id: Uuid,
     op: &'static str,
 ) -> Result<deployment::Model, AppError> {
-    let was_running = matches!(
-        deployment.build_status,
-        DeploymentBuildStatus::Claimed
-            | DeploymentBuildStatus::Queued
-            | DeploymentBuildStatus::Building
-    );
+    let was_running = cancellation_releases_build_slot(&deployment.build_status);
     let team_id = deployment.team_id;
 
-    let deployment = deployments::transition_build(
-        db,
+    let transaction = db
+        .begin()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op,
+            source: source.into(),
+        })?;
+    let deployment = delivery::transition_unsuccessful_build(
+        &transaction,
         deployment,
         BuildTransition {
             to: DeploymentBuildStatus::Canceled,
             stage: None,
             failure_code: None,
             failure_message: Some("canceled by user".to_owned()),
-            node_id: None,
+            build_node_id: None,
         },
     )
     .await
-    .map_err(|error| map_state_error(error, op))?;
+    .map_err(|error| map_delivery_error(error, op))?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op,
+            source: source.into(),
+        })?;
 
     if was_running {
         // Cooperative flag for the Node driving this build; it stops the
@@ -648,7 +1000,7 @@ pub(crate) async fn cancel_deployment_core(
             )
             .await;
         QuotaService::new(db, cache)
-            .release_build_slot(team_id)
+            .release_build_slot_once(team_id, deployment.id)
             .await;
     }
 
@@ -656,6 +1008,7 @@ pub(crate) async fn cancel_deployment_core(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(actor_user_id),
+            actor_node_id: None,
             team_id: Some(team_id),
             action: "deployment.canceled".to_owned(),
             target_type: "deployment".to_owned(),
@@ -689,8 +1042,97 @@ pub async fn cancel(
     let urls = UrlContext::load(db, access.project.id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let nodes = load_nodes(db, std::slice::from_ref(&deployment))
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let preview_ids = effective_preview_ids(db, access.project.id, OP).await?;
     Ok(ok_response(json!({
-        "deployment": deployment_view(&deployment, &urls, &HashMap::new()),
+        "deployment": deployment_view(
+            &deployment,
+            &urls,
+            &preview_ids,
+            &HashMap::new(),
+            &nodes,
+        ),
+    })))
+}
+
+/// POST /api/v1/projects/{project_id}/deployments/{deployment_id}/unpublish
+pub async fn unpublish(
+    State(state): State<ControlApiState>,
+    session: Session,
+    Path((project_id, deployment_id)): Path<(Uuid, Uuid)>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "deployments.unpublish";
+    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    access.require_admin(OP)?;
+    let db = super::database(&state, OP)?;
+    let transaction = db
+        .begin()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let deployment = deployments::get_by_id_for_update(&transaction, deployment_id)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?
+        .filter(|deployment| deployment.project_id == access.project.id)
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "deployment not found".to_owned(),
+        })?;
+    let deployment = delivery::remove_publication(
+        &transaction,
+        deployment,
+        delivery::PublicationRemovalKind::TeamUser,
+    )
+    .await
+    .map_err(|error| map_delivery_error(error, OP))?;
+    audits::create_audit_event(
+        &transaction,
+        CreateAuditEventParams {
+            actor_user_id: Some(session.data.user_id),
+            actor_node_id: None,
+            team_id: Some(access.team.id),
+            action: "deployment.unpublished".to_owned(),
+            target_type: "deployment".to_owned(),
+            target_id: Some(deployment.id),
+            result: AuditEventResult::Success,
+            reason: None,
+            metadata: json!({ "project_id": project_id }),
+        },
+    )
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let secret_key = state.config.read().unwrap().secrets.secret_key.clone();
+    route_invalidation::invalidate_deployment_best_effort(db, &secret_key, deployment.id, OP).await;
+
+    let urls = UrlContext::load(db, access.project.id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let nodes = load_nodes(db, std::slice::from_ref(&deployment))
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let preview_ids = effective_preview_ids(db, access.project.id, OP).await?;
+    Ok(ok_response(json!({
+        "deployment": deployment_view(
+            &deployment,
+            &urls,
+            &preview_ids,
+            &HashMap::new(),
+            &nodes,
+        ),
     })))
 }
 
@@ -731,16 +1173,13 @@ pub async fn retry(
         )
         .await?;
 
-    let preview_host = if matches!(
-        source_deployment.environment,
-        DeploymentEnvironment::Preview
-    ) {
+    let preview_host = if environment_gets_preview_host(&source_deployment.environment) {
         preview_host_for_project(db, &access.project).await
     } else {
         None
     };
 
-    let new_deployment = match deployments::create_deployment(
+    let new_deployment = match create_placed_deployment(
         db,
         CreateDeploymentParams {
             project: access.project.clone(),
@@ -750,14 +1189,17 @@ pub async fn retry(
             commit_hash: source_deployment.commit_hash.clone(),
             commit_message: source_deployment.commit_message.clone(),
             preview_host,
+            source_credential_version_id: source_deployment.source_credential_version_id,
         },
+        None,
+        OP,
     )
     .await
     {
         Ok(deployment) => deployment,
-        Err(source) => {
+        Err(error) => {
             quota.rollback(reservation).await;
-            return Err(AppError::Infrastructure { op: OP, source });
+            return Err(error);
         }
     };
     quota
@@ -775,27 +1217,54 @@ pub async fn retry(
     .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
     let new_deployment = match deployments::runtime_failure(&new_deployment.runtime_kind) {
-        Some((code, message)) => deployments::transition_build(
-            db,
-            new_deployment,
-            BuildTransition {
-                to: DeploymentBuildStatus::Failed,
-                stage: None,
-                failure_code: Some(code.to_owned()),
-                failure_message: Some(message.to_owned()),
-                node_id: None,
-            },
-        )
-        .await
-        .map_err(|error| map_state_error(error, OP))?,
+        Some((code, message)) => {
+            let transaction = db
+                .begin()
+                .await
+                .map_err(|source| AppError::Infrastructure {
+                    op: OP,
+                    source: source.into(),
+                })?;
+            let deployment = delivery::transition_unsuccessful_build(
+                &transaction,
+                new_deployment,
+                BuildTransition {
+                    to: DeploymentBuildStatus::Failed,
+                    stage: None,
+                    failure_code: Some(code.to_owned()),
+                    failure_message: Some(message.to_owned()),
+                    build_node_id: None,
+                },
+            )
+            .await
+            .map_err(|error| map_delivery_error(error, OP))?;
+            transaction
+                .commit()
+                .await
+                .map_err(|source| AppError::Infrastructure {
+                    op: OP,
+                    source: source.into(),
+                })?;
+            deployment
+        }
         None => new_deployment,
     };
 
     let urls = UrlContext::load(db, access.project.id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let nodes = load_nodes(db, std::slice::from_ref(&new_deployment))
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let preview_ids = effective_preview_ids(db, access.project.id, OP).await?;
     Ok(ok_response(json!({
-        "deployment": deployment_view(&new_deployment, &urls, &HashMap::new()),
+        "deployment": deployment_view(
+            &new_deployment,
+            &urls,
+            &preview_ids,
+            &HashMap::new(),
+            &nodes,
+        ),
     })))
 }
 
@@ -812,7 +1281,6 @@ pub async fn promote(
         deployment_id,
         ReleaseReason::Promote,
         "deployments.promote",
-        "deployment.promoted",
     )
     .await
 }
@@ -845,9 +1313,28 @@ pub async fn rollback(
         deployment_id,
         ReleaseReason::Rollback,
         OP,
-        "deployment.rolled_back",
     )
     .await
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ActivationAction {
+    Release,
+    RequestReview,
+}
+
+fn activation_action(
+    status: &DeploymentReleaseStatus,
+    review_required: bool,
+) -> Result<ActivationAction, &'static str> {
+    match status {
+        DeploymentReleaseStatus::Rejected => {
+            Err("rejected deployments must be re-submitted for review")
+        }
+        DeploymentReleaseStatus::PendingReview => Err("deployment is waiting for review"),
+        DeploymentReleaseStatus::Draft if review_required => Ok(ActivationAction::RequestReview),
+        _ => Ok(ActivationAction::Release),
+    }
 }
 
 async fn activate_deployment(
@@ -857,7 +1344,6 @@ async fn activate_deployment(
     deployment_id: Uuid,
     reason: ReleaseReason,
     op: &'static str,
-    audit_action: &str,
 ) -> Result<axum::response::Response, AppError> {
     let access = super::project_access(&state, &session, project_id, false, op).await?;
     access.require_admin(op)?;
@@ -867,7 +1353,7 @@ async fn activate_deployment(
     if !matches!(deployment.build_status, DeploymentBuildStatus::Ready) {
         return Err(AppError::Conflict {
             op,
-            message: "only ready deployments can be activated".to_owned(),
+            message: "only deployments with a ready build can be activated".to_owned(),
         });
     }
     if matches!(deployment.release_status, DeploymentReleaseStatus::Active) {
@@ -879,31 +1365,17 @@ async fn activate_deployment(
 
     // Production activation must pass the review policy; rejected builds
     // can never activate.
-    let policy = deployments::review_policy(db)
+    let policy = deployments::review_policy_for_team(db, deployment.team_id)
         .await
         .map_err(|source| AppError::Infrastructure { op, source })?;
     let review_required = matches!(policy.mode_for(&deployment.environment), ReviewMode::Manual);
-    match deployment.release_status {
-        DeploymentReleaseStatus::Rejected => {
-            return Err(AppError::Conflict {
+    let action =
+        activation_action(&deployment.release_status, review_required).map_err(|message| {
+            AppError::Conflict {
                 op,
-                message: "rejected deployments must be re-submitted for review".to_owned(),
-            });
-        }
-        DeploymentReleaseStatus::PendingReview => {
-            return Err(AppError::Conflict {
-                op,
-                message: "deployment is waiting for review".to_owned(),
-            });
-        }
-        DeploymentReleaseStatus::Draft if review_required => {
-            return Err(AppError::Conflict {
-                op,
-                message: "release review is required before activation".to_owned(),
-            });
-        }
-        _ => {}
-    }
+                message: message.to_owned(),
+            }
+        })?;
 
     let transaction = db
         .begin()
@@ -912,10 +1384,71 @@ async fn activate_deployment(
             op,
             source: source.into(),
         })?;
-    let activated =
-        deployments::activate(&transaction, deployment, reason, Some(session.data.user_id))
+    let (deployment, release_pending, review_id, audit_action) = match action {
+        ActivationAction::RequestReview => {
+            let deployment = deployments::get_by_id_for_update(&transaction, deployment.id)
+                .await
+                .map_err(|source| AppError::Infrastructure {
+                    op,
+                    source: source.into(),
+                })?
+                .ok_or_else(|| AppError::NotFound {
+                    op,
+                    message: "deployment not found".to_owned(),
+                })?;
+            let (deployment, review) =
+                deployments::request_review(&transaction, deployment, Some(session.data.user_id))
+                    .await
+                    .map_err(|error| map_state_error(error, op))?;
+            (
+                deployment,
+                false,
+                Some(review.id),
+                "deployment.review_requested",
+            )
+        }
+        ActivationAction::Release => {
+            let outcome = delivery::request_release(
+                &transaction,
+                deployment,
+                reason.clone(),
+                session.data.user_id,
+                AuditEventVisibility::Team,
+            )
             .await
-            .map_err(|error| map_state_error(error, op))?;
+            .map_err(|error| map_delivery_error(error, op))?;
+            let (deployment, release_pending) = match outcome {
+                ReleaseRequestOutcome::Activated(deployment) => (deployment, false),
+                ReleaseRequestOutcome::SyncQueued(deployment) => (deployment, true),
+            };
+            (
+                deployment,
+                release_pending,
+                None,
+                delivery::release_audit_action(&reason, release_pending),
+            )
+        }
+    };
+    audits::create_audit_event(
+        &transaction,
+        CreateAuditEventParams {
+            actor_user_id: Some(session.data.user_id),
+            actor_node_id: None,
+            team_id: Some(access.team.id),
+            action: audit_action.to_owned(),
+            target_type: "deployment".to_owned(),
+            target_id: Some(deployment.id),
+            result: AuditEventResult::Success,
+            reason: None,
+            metadata: json!({
+                "project_id": project_id,
+                "release_pending": release_pending,
+                "review_id": review_id,
+            }),
+        },
+    )
+    .await
+    .map_err(|source| AppError::Infrastructure { op, source })?;
     transaction
         .commit()
         .await
@@ -924,26 +1457,149 @@ async fn activate_deployment(
             source: source.into(),
         })?;
 
-    let _ = audits::create_audit_event(
-        db,
-        CreateAuditEventParams {
-            actor_user_id: Some(session.data.user_id),
-            team_id: Some(access.team.id),
-            action: audit_action.to_owned(),
-            target_type: "deployment".to_owned(),
-            target_id: Some(activated.id),
-            result: AuditEventResult::Success,
-            reason: None,
-            metadata: json!({ "project_id": project_id }),
-        },
-    )
-    .await;
-
     let urls = UrlContext::load(db, access.project.id)
         .await
         .map_err(|source| AppError::Infrastructure { op, source })?;
-    Ok(ok_response(json!({
-        "deployment": deployment_view(&activated, &urls, &HashMap::new()),
-    }))
-    .into_response())
+    let nodes = load_nodes(db, std::slice::from_ref(&deployment))
+        .await
+        .map_err(|source| AppError::Infrastructure { op, source })?;
+    let preview_ids = effective_preview_ids(db, access.project.id, op).await?;
+    let response = json!({
+        "deployment": deployment_view(
+            &deployment,
+            &urls,
+            &preview_ids,
+            &HashMap::new(),
+            &nodes,
+        ),
+        "release_pending": release_pending,
+        "review_id": review_id,
+    });
+    Ok(if release_pending {
+        accepted_response(response).into_response()
+    } else {
+        ok_response(response).into_response()
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manual_review_drafts_are_submitted_instead_of_rejected() {
+        assert_eq!(
+            activation_action(&DeploymentReleaseStatus::Draft, true),
+            Ok(ActivationAction::RequestReview)
+        );
+        assert_eq!(
+            activation_action(&DeploymentReleaseStatus::Draft, false),
+            Ok(ActivationAction::Release)
+        );
+    }
+
+    #[test]
+    fn pending_and_rejected_deployments_cannot_be_activated_directly() {
+        assert_eq!(
+            activation_action(&DeploymentReleaseStatus::PendingReview, true),
+            Err("deployment is waiting for review")
+        );
+        assert_eq!(
+            activation_action(&DeploymentReleaseStatus::Rejected, true),
+            Err("rejected deployments must be re-submitted for review")
+        );
+    }
+
+    #[test]
+    fn deployment_request_defaults_to_automatic_placement() {
+        let request: CreateDeploymentRequest =
+            serde_json::from_str(r#"{"environment":"preview"}"#).unwrap();
+
+        assert_eq!(request.serve_node_id, None);
+    }
+
+    #[test]
+    fn every_environment_gets_a_protected_preview_host() {
+        assert!(environment_gets_preview_host(
+            &DeploymentEnvironment::Preview
+        ));
+        assert!(environment_gets_preview_host(
+            &DeploymentEnvironment::Production
+        ));
+    }
+
+    #[test]
+    fn production_urls_are_only_exposed_for_active_production_deployments() {
+        assert!(production_url_is_available(
+            &DeploymentEnvironment::Production,
+            &DeploymentReleaseStatus::Active,
+        ));
+        assert!(!production_url_is_available(
+            &DeploymentEnvironment::Preview,
+            &DeploymentReleaseStatus::Active,
+        ));
+        assert!(!production_url_is_available(
+            &DeploymentEnvironment::Production,
+            &DeploymentReleaseStatus::Approved,
+        ));
+    }
+
+    #[test]
+    fn static_and_ssr_requests_use_fixed_first_phase_resources() {
+        assert_eq!(
+            deployments::runtime_serve_resources(
+                &crate::infra::database::entity::ProjectRuntime::Static
+            ),
+            grass_node_protocol::ServeResources {
+                cpu_millicores: 50,
+                memory_mb: 64,
+                disk_mb: 256,
+            }
+        );
+        assert_eq!(
+            deployments::runtime_serve_resources(
+                &crate::infra::database::entity::ProjectRuntime::Ssr
+            ),
+            grass_node_protocol::ServeResources {
+                cpu_millicores: 200,
+                memory_mb: 256,
+                disk_mb: 512,
+            }
+        );
+    }
+
+    #[test]
+    fn user_cancel_owns_the_single_slot_release() {
+        for status in [
+            DeploymentBuildStatus::Claimed,
+            DeploymentBuildStatus::Queued,
+            DeploymentBuildStatus::Building,
+        ] {
+            assert!(cancellation_releases_build_slot(&status));
+        }
+
+        // After cancel_deployment_core transitions the row, every later Node
+        // report takes the early cancellation branch and cannot reach the
+        // terminal-stage slot release.
+        assert!(cancellation_was_requested(
+            &DeploymentBuildStatus::Canceled,
+            false
+        ));
+        assert!(cancellation_was_requested(
+            &DeploymentBuildStatus::Building,
+            true
+        ));
+    }
+
+    #[test]
+    fn canceling_a_non_running_deployment_does_not_release_a_slot() {
+        for status in [
+            DeploymentBuildStatus::Pending,
+            DeploymentBuildStatus::Ready,
+            DeploymentBuildStatus::Failed,
+            DeploymentBuildStatus::Canceled,
+        ] {
+            assert!(!cancellation_releases_build_slot(&status));
+        }
+    }
 }

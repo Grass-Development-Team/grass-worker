@@ -9,17 +9,21 @@ rust-version.workspace = true
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+base64.workspace = true
 bollard.workspace = true
 tar.workspace = true
 clap.workspace = true
 futures-util.workspace = true
 grass-archive.workspace = true
 grass-config.workspace = true
+grass-git-source.workspace = true
 grass-node-protocol.workspace = true
 grass-validator.workspace = true
 hex.workspace = true
 mime_guess.workspace = true
 sha2.workspace = true
+subtle = "2"
+sysinfo.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 url.workspace = true
@@ -28,7 +32,8 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio-tungstenite.workspace = true
-tokio = { workspace = true, features = ["fs", "macros", "process", "rt-multi-thread", "signal", "net", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-std", "io-util", "macros", "process", "rt-multi-thread", "signal", "net", "sync", "time"] }
+tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
