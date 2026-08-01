@@ -94,8 +94,15 @@ async fn main() -> anyhow::Result<()> {
             .spawn()
         });
 
+    let mut ssr_manager_for_shutdown = None;
     let (artifact_sync, route_refresh, ssr_reaper, serve_task) = if config.node.capabilities.serve {
-        let ssr_manager = Arc::new(serve::ssr::SsrManager::new(runtime, node_id, &config));
+        let ssr_manager = Arc::new(serve::ssr::SsrManager::with_client(
+            runtime,
+            node_id,
+            &config,
+            client.clone(),
+        ));
+        ssr_manager_for_shutdown = Some(ssr_manager.clone());
         let ssr_reaper = ssr_manager.clone().spawn_reaper();
         let route_table = Arc::new(serve::routes::RouteTable::default());
         let route_refresh = serve::routes::spawn(
@@ -141,6 +148,9 @@ async fn main() -> anyhow::Result<()> {
     }
     if let Some(ssr_reaper) = ssr_reaper {
         ssr_reaper.abort();
+    }
+    if let Some(ssr_manager) = ssr_manager_for_shutdown {
+        ssr_manager.release_all().await;
     }
 
     if let Some(build_loop) = build_loop {

@@ -260,8 +260,8 @@ const DEFAULT_QUOTA_LIMITS: &[QuotaLimitSeed] = &[
         pro: 20,
         ultra: 50,
     },
-    // Reserved SSR runtime dimensions. SSR execution is not implemented in
-    // the first stage, so these stay at zero until the runtime lands.
+    // SSR execution dimensions default to zero, which means unlimited until
+    // an administrator configures an explicit process or hour limit.
     QuotaLimitSeed {
         dimension: "ssr_processes",
         period: QuotaPeriod::None,

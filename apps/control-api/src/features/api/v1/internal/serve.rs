@@ -8,7 +8,7 @@ use axum::{
 use grass_node_protocol::{
     ReportServeStatusRequest, ReportServeStatusResponse, ReportedServeStatus, ResolveHostResponse,
     RouteSnapshotResponse, ServeAccess, ServeArtifact, ServeAssignment, ServeAssignmentStatus,
-    ServeAssignmentsResponse, ServeResources, ServeRoute,
+    ServeAssignmentsResponse, ServeResources, ServeRoute, SsrLeaseResponse,
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
-    domain::{delivery, deployments, hosts, projects, scheduler},
+    domain::{delivery, deployments, hosts, projects, scheduler, ssr_leases},
     infra::{
         database::entity::{
             DeploymentArtifactKind, DeploymentBuildStatus, DeploymentEnvironment,
@@ -97,6 +97,99 @@ fn ensure_serve_node(
         });
     }
     Ok(())
+}
+
+fn map_lease_error(error: ssr_leases::LeaseError, op: &'static str) -> AppError {
+    match error {
+        ssr_leases::LeaseError::ProcessQuota => AppError::QuotaExceeded {
+            op,
+            message: "quota exceeded: ssr_processes limit reached".to_owned(),
+        },
+        ssr_leases::LeaseError::HourQuota => AppError::QuotaExceeded {
+            op,
+            message: "quota exceeded: ssr_hours.monthly limit reached".to_owned(),
+        },
+        ssr_leases::LeaseError::NotAssigned => AppError::Forbidden {
+            op,
+            message: "deployment is not an SSR Serve assignment for this node".to_owned(),
+        },
+        ssr_leases::LeaseError::WrongNode => AppError::Forbidden {
+            op,
+            message: "SSR lease belongs to another node".to_owned(),
+        },
+        ssr_leases::LeaseError::NotFound => AppError::NotFound {
+            op,
+            message: "SSR lease not found or expired".to_owned(),
+        },
+        ssr_leases::LeaseError::Database(source) => AppError::Infrastructure { op, source },
+    }
+}
+
+fn lease_response(
+    lease: &crate::infra::database::entity::ssr_process_lease::Model,
+) -> SsrLeaseResponse {
+    SsrLeaseResponse {
+        lease_id: lease.id,
+        expires_at_unix: lease.expires_at.unix_timestamp(),
+        hour_block_start_unix: lease.hour_block_start.unix_timestamp(),
+    }
+}
+
+/// POST /api/v1/internal/serve/deployments/{deployment_id}/ssr-lease
+pub async fn acquire_ssr_lease(
+    State(state): State<ControlApiState>,
+    Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
+    Path(deployment_id): Path<Uuid>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "internal.serve.ssr_lease.acquire";
+    ensure_serve_node(&node, OP)?;
+    let db = super::database(&state, OP)?;
+    let lease = ssr_leases::acquire(db, deployment_id, node.id, time::OffsetDateTime::now_utc())
+        .await
+        .map_err(|error| map_lease_error(error, OP))?;
+    Ok(ok_response(lease_response(&lease)))
+}
+
+/// POST /api/v1/internal/serve/deployments/{deployment_id}/ssr-lease/{lease_id}/renew
+pub async fn renew_ssr_lease(
+    State(state): State<ControlApiState>,
+    Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
+    Path((deployment_id, lease_id)): Path<(Uuid, Uuid)>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "internal.serve.ssr_lease.renew";
+    ensure_serve_node(&node, OP)?;
+    let db = super::database(&state, OP)?;
+    let lease = ssr_leases::renew(
+        db,
+        lease_id,
+        deployment_id,
+        node.id,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .map_err(|error| map_lease_error(error, OP))?;
+    Ok(ok_response(lease_response(&lease)))
+}
+
+/// POST /api/v1/internal/serve/deployments/{deployment_id}/ssr-lease/{lease_id}/release
+pub async fn release_ssr_lease(
+    State(state): State<ControlApiState>,
+    Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
+    Path((deployment_id, lease_id)): Path<(Uuid, Uuid)>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "internal.serve.ssr_lease.release";
+    ensure_serve_node(&node, OP)?;
+    let db = super::database(&state, OP)?;
+    let released = ssr_leases::release(
+        db,
+        lease_id,
+        deployment_id,
+        node.id,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .map_err(|error| map_lease_error(error, OP))?;
+    Ok(ok_response(serde_json::json!({ "released": released })))
 }
 
 fn shadow_migration_statuses() -> [NodeDeploymentMigrationStatus; 3] {

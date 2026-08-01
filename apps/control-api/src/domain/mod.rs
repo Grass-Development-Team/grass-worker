@@ -11,5 +11,6 @@ pub mod scheduler;
 pub mod settings;
 pub mod source_credentials;
 pub mod ssh_host_keys;
+pub mod ssr_leases;
 pub mod teams;
 pub mod users;

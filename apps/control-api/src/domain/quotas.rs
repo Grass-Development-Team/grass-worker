@@ -126,12 +126,19 @@ pub struct ResolvedQuota {
 
 impl ResolvedQuota {
     /// Returns the limit for a dimension. A missing limit row or a negative
-    /// stored value both mean unlimited, expressed as `None`.
+    /// stored value mean unlimited. SSR execution dimensions also reserve
+    /// zero for unlimited so an unconfigured SSR plan is usable.
     pub fn limit_for(&self, dimension: QuotaDimension) -> Option<i64> {
         self.limits
             .get(dimension.as_str())
             .copied()
-            .filter(|limit| *limit >= 0)
+            .filter(|limit| {
+                *limit >= 0
+                    && (!matches!(
+                        dimension,
+                        QuotaDimension::SsrProcesses | QuotaDimension::SsrHoursMonthly
+                    ) || *limit > 0)
+            })
     }
 }
 
@@ -697,5 +704,17 @@ mod tests {
         assert_eq!(resolved.limit_for(QuotaDimension::Projects), Some(3));
         assert_eq!(resolved.limit_for(QuotaDimension::Hosts), None);
         assert_eq!(resolved.limit_for(QuotaDimension::Members), None);
+        let ssr_unlimited = ResolvedQuota {
+            limits: HashMap::from([
+                ("ssr_processes".to_owned(), 0),
+                ("ssr_hours.monthly".to_owned(), 0),
+            ]),
+            ..resolved
+        };
+        assert_eq!(ssr_unlimited.limit_for(QuotaDimension::SsrProcesses), None);
+        assert_eq!(
+            ssr_unlimited.limit_for(QuotaDimension::SsrHoursMonthly),
+            None
+        );
     }
 }

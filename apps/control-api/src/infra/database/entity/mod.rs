@@ -22,6 +22,7 @@ pub mod source_credential;
 pub mod source_credential_lease;
 pub mod source_credential_version;
 pub mod ssh_host_key;
+pub mod ssr_process_lease;
 pub mod system_setting;
 pub mod team;
 pub mod team_group;

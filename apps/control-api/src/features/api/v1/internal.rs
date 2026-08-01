@@ -47,6 +47,18 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
             "/serve/deployments/{deployment_id}/status",
             post(serve::report_status),
         )
+        .route(
+            "/serve/deployments/{deployment_id}/ssr-lease",
+            post(serve::acquire_ssr_lease),
+        )
+        .route(
+            "/serve/deployments/{deployment_id}/ssr-lease/{lease_id}/renew",
+            post(serve::renew_ssr_lease),
+        )
+        .route(
+            "/serve/deployments/{deployment_id}/ssr-lease/{lease_id}/release",
+            post(serve::release_ssr_lease),
+        )
         .route("/serve/routes", get(serve::routes))
         .route("/serve/resolve-host", get(serve::resolve_host))
         .route("/serve/preview/authorize", post(super::preview_auth::start))

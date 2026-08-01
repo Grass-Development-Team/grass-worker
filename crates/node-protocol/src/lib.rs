@@ -425,6 +425,13 @@ pub struct ReportServeStatusResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SsrLeaseResponse {
+    pub lease_id: Uuid,
+    pub expires_at_unix: i64,
+    pub hour_block_start_unix: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServeRoute {
     pub host: String,
     pub deployment_id: Uuid,

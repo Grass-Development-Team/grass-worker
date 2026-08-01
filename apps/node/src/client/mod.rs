@@ -10,9 +10,9 @@ use grass_node_protocol::{
     ObserveSshHostKeyRequest, ObserveSshHostKeyResponse, RedeemGitCredentialRequest,
     RedeemGitCredentialResponse, RegisterRequest, RegisterResponse, ReportServeStatusRequest,
     ReportServeStatusResponse, ResolveHostResponse, RouteSnapshotResponse, ServeAssignment,
-    ServeAssignmentsResponse, StageRequest, StageResponse, StartPreviewAuthorizationRequest,
-    StartPreviewAuthorizationResponse, UploadArtifactResponse, VerifyPreviewGrantRequest,
-    VerifyPreviewGrantResponse, artifact_headers,
+    ServeAssignmentsResponse, SsrLeaseResponse, StageRequest, StageResponse,
+    StartPreviewAuthorizationRequest, StartPreviewAuthorizationResponse, UploadArtifactResponse,
+    VerifyPreviewGrantRequest, VerifyPreviewGrantResponse, artifact_headers,
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -400,6 +400,42 @@ impl ControlApiClient {
             "serve.report_status",
         )
         .await
+    }
+
+    pub async fn acquire_ssr_lease(&self, deployment_id: Uuid) -> anyhow::Result<SsrLeaseResponse> {
+        self.post_json(
+            &format!("/serve/deployments/{deployment_id}/ssr-lease"),
+            &serde_json::json!({}),
+            "serve.ssr_lease.acquire",
+        )
+        .await
+    }
+
+    pub async fn renew_ssr_lease(
+        &self,
+        deployment_id: Uuid,
+        lease_id: Uuid,
+    ) -> anyhow::Result<SsrLeaseResponse> {
+        self.post_json(
+            &format!("/serve/deployments/{deployment_id}/ssr-lease/{lease_id}/renew"),
+            &serde_json::json!({}),
+            "serve.ssr_lease.renew",
+        )
+        .await
+    }
+
+    pub async fn release_ssr_lease(
+        &self,
+        deployment_id: Uuid,
+        lease_id: Uuid,
+    ) -> anyhow::Result<()> {
+        self.post_json::<_, serde_json::Value>(
+            &format!("/serve/deployments/{deployment_id}/ssr-lease/{lease_id}/release"),
+            &serde_json::json!({}),
+            "serve.ssr_lease.release",
+        )
+        .await
+        .map(|_| ())
     }
 
     pub async fn route_snapshot(&self) -> Result<RouteSnapshotResponse, RouteSnapshotError> {
