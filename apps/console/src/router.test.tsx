@@ -11,6 +11,9 @@ vi.mock("@/features/teams/team-context", () => ({
 }));
 vi.mock("@/layouts/app-layout", () => ({ AppLayout: () => <Outlet /> }));
 vi.mock("@/layouts/auth-layout", () => ({ AuthLayout: () => <Outlet /> }));
+vi.mock("@/features/auth/login-route", () => ({
+  LoginRoute: () => <div>Login page</div>,
+}));
 vi.mock("@/features/dashboard/dashboard-route", () => ({
   DashboardRoute: () => <div>Overview page</div>,
 }));
@@ -103,4 +106,17 @@ it("allows authenticated users to open notifications", () => {
   );
 
   expect(screen.getByText("Notifications page")).toBeInTheDocument();
+});
+
+it("redirects an unauthenticated visitor away from a protected route", () => {
+  setGuest();
+
+  render(
+    <MemoryRouter initialEntries={["/notifications?filter=unread"]}>
+      <Router />
+    </MemoryRouter>,
+  );
+
+  expect(screen.getByText("Login page")).toBeInTheDocument();
+  expect(screen.queryByText("Notifications page")).not.toBeInTheDocument();
 });
