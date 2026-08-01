@@ -132,13 +132,23 @@ function AccessState() {
 }
 
 export function ProjectCreateRoute() {
-  const { activeTeam, activeRole } = useTeam();
+  const { activeTeam, activeRole, isLoading } = useTeam();
   const teamId = activeTeam?.id;
 
   if (!teamId) {
     return (
       <div className="flex flex-1 items-center justify-center px-6 py-16">
         <p className="text-sm text-muted-foreground">Select a team to create a project.</p>
+      </div>
+    );
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-1 items-center justify-center px-6 py-16">
+        <p className="text-sm text-muted-foreground" role="status">
+          Loading team permissions...
+        </p>
       </div>
     );
   }

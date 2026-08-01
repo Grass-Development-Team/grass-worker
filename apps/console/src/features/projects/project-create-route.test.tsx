@@ -20,10 +20,11 @@ function LocationProbe() {
   return <output data-testid="location">{location.pathname}</output>;
 }
 
-function renderCreate(role: "member" | "viewer" = "member") {
+function renderCreate(role: "member" | "viewer" = "member", isLoading = false) {
   vi.mocked(useTeam).mockReturnValue({
     activeTeam: { id: "team-1", name: "Acme", slug: "acme", role },
     activeRole: role,
+    isLoading,
   } as ReturnType<typeof useTeam>);
 
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -144,6 +145,13 @@ describe("ProjectCreateRoute", () => {
     renderCreate("viewer");
 
     expect(screen.getByRole("alert")).toHaveTextContent("You do not have permission");
+    expect(screen.queryByLabelText("Project name")).not.toBeInTheDocument();
+  });
+
+  it("waits for team permissions before deciding access", () => {
+    renderCreate("member", true);
+
+    expect(screen.getByText("Loading team permissions...")).toBeInTheDocument();
     expect(screen.queryByLabelText("Project name")).not.toBeInTheDocument();
   });
 });
