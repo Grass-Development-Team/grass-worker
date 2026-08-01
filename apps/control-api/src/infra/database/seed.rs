@@ -315,6 +315,26 @@ fn default_system_settings() -> Vec<SystemSettingSeed> {
                 "owner_role": "owner",
             }),
         },
+        SystemSettingSeed {
+            key: "artifact_retention.log_days",
+            value_kind: SystemSettingValueKind::Json,
+            value_json: json!(90),
+        },
+        SystemSettingSeed {
+            key: "artifact_retention.preview_days",
+            value_kind: SystemSettingValueKind::Json,
+            value_json: json!(7),
+        },
+        SystemSettingSeed {
+            key: "artifact_retention.failed_days",
+            value_kind: SystemSettingValueKind::Json,
+            value_json: json!(30),
+        },
+        SystemSettingSeed {
+            key: "artifact_retention.production_keep",
+            value_kind: SystemSettingValueKind::Json,
+            value_json: json!(10),
+        },
     ]
 }
 

@@ -661,6 +661,7 @@ async fn record_build_log_artifact(
     let existing = deployment_artifact::Entity::find()
         .filter(deployment_artifact::Column::DeploymentId.eq(deployment.id))
         .filter(deployment_artifact::Column::Kind.eq(DeploymentArtifactKind::BuildLog))
+        .filter(deployment_artifact::Column::DeletedAt.is_null())
         .one(db)
         .await?;
     if existing.is_some() {
@@ -678,6 +679,7 @@ async fn record_build_log_artifact(
         checksum_sha256: Set(None),
         size_bytes: Set(None),
         manifest: Set(json!({})),
+        deleted_at: Set(None),
         created_at: Set(time::OffsetDateTime::now_utc()),
     }
     .insert(db)
@@ -1181,6 +1183,7 @@ pub async fn upload_static_site(
             active.checksum_sha256 = Set(Some(stored.checksum_sha256.clone()));
             active.size_bytes = Set(Some(stored.size_bytes));
             active.manifest = Set(manifest);
+            active.deleted_at = Set(None);
             active.update(&transaction).await
         } else {
             deployment_artifact::ActiveModel {
@@ -1191,6 +1194,7 @@ pub async fn upload_static_site(
                 checksum_sha256: Set(Some(stored.checksum_sha256.clone())),
                 size_bytes: Set(Some(stored.size_bytes)),
                 manifest: Set(manifest),
+                deleted_at: Set(None),
                 created_at: Set(time::OffsetDateTime::now_utc()),
             }
             .insert(&transaction)
@@ -1289,6 +1293,7 @@ pub async fn download_artifact(
     let artifact = deployment_artifact::Entity::find()
         .filter(deployment_artifact::Column::DeploymentId.eq(deployment.id))
         .filter(deployment_artifact::Column::Kind.eq(DeploymentArtifactKind::GrassOutput))
+        .filter(deployment_artifact::Column::DeletedAt.is_null())
         .one(db)
         .await
         .map_err(|source| AppError::Infrastructure {

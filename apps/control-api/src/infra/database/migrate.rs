@@ -26,6 +26,8 @@ impl MigratorTrait for Migrator {
             Box::new(migration::m20260729_000015_node_deletion_queue::Migration),
             Box::new(migration::m20260730_000016_domain_review_policy::Migration),
             Box::new(migration::m20260731_000017_project_notifications::Migration),
+            Box::new(migration::m20260801_000018_artifact_retention::Migration),
+            Box::new(migration::m20260801_000019_ssr_process_leases::Migration),
         ]
     }
 }
@@ -102,7 +104,7 @@ mod tests {
     fn registers_audit_foundation_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 17);
+        assert_eq!(migrations.len(), 19);
         assert_eq!(
             migrations.get(11).expect("twelfth migration").name(),
             "m20260729_000012_audit_foundation"
@@ -131,7 +133,7 @@ mod tests {
     fn registers_team_group_review_policy_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 17);
+        assert_eq!(migrations.len(), 19);
         assert_eq!(
             migrations.get(12).expect("thirteenth migration").name(),
             "m20260729_000013_team_group_review_policy"
@@ -142,7 +144,7 @@ mod tests {
     fn registers_node_config_sync_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 17);
+        assert_eq!(migrations.len(), 19);
         assert_eq!(
             migrations.get(13).expect("fourteenth migration").name(),
             "m20260729_000014_node_config_sync"
@@ -153,7 +155,7 @@ mod tests {
     fn registers_node_deletion_queue_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 17);
+        assert_eq!(migrations.len(), 19);
         assert_eq!(
             migrations.get(14).expect("fifteenth migration").name(),
             "m20260729_000015_node_deletion_queue"
@@ -164,7 +166,7 @@ mod tests {
     fn registers_domain_review_policy_after_node_deletion_queue() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 17);
+        assert_eq!(migrations.len(), 19);
         assert_eq!(
             migrations.get(14).expect("fifteenth migration").name(),
             "m20260729_000015_node_deletion_queue"
@@ -179,14 +181,22 @@ mod tests {
     fn registers_project_notifications_after_domain_review_policy() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 17);
+        assert_eq!(migrations.len(), 19);
         assert_eq!(
             migrations.get(15).expect("sixteenth migration").name(),
             "m20260730_000016_domain_review_policy"
         );
         assert_eq!(
-            migrations.last().expect("last migration").name(),
+            migrations.get(16).expect("seventeenth migration").name(),
             "m20260731_000017_project_notifications"
+        );
+        assert_eq!(
+            migrations.get(17).expect("eighteenth migration").name(),
+            "m20260801_000018_artifact_retention"
+        );
+        assert_eq!(
+            migrations.last().expect("last migration").name(),
+            "m20260801_000019_ssr_process_leases"
         );
     }
 

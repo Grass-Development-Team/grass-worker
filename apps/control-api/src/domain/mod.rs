@@ -7,6 +7,7 @@ pub mod nodes;
 pub mod notifications;
 pub mod projects;
 pub mod quotas;
+pub mod retention;
 pub mod scheduler;
 pub mod settings;
 pub mod source_credentials;

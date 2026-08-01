@@ -275,6 +275,7 @@ pub async fn assignments(
     let artifacts = deployment_artifact::Entity::find()
         .filter(deployment_artifact::Column::DeploymentId.is_in(deployment_ids))
         .filter(deployment_artifact::Column::Kind.eq(DeploymentArtifactKind::GrassOutput))
+        .filter(deployment_artifact::Column::DeletedAt.is_null())
         .all(db)
         .await
         .map_err(|source| AppError::Infrastructure {
@@ -641,6 +642,7 @@ async fn artifact_available(
     Ok(deployment_artifact::Entity::find()
         .filter(deployment_artifact::Column::DeploymentId.eq(deployment_id))
         .filter(deployment_artifact::Column::Kind.eq(DeploymentArtifactKind::GrassOutput))
+        .filter(deployment_artifact::Column::DeletedAt.is_null())
         .one(db)
         .await?
         .is_some())

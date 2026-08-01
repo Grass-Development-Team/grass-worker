@@ -435,6 +435,7 @@ pub async fn list_artifacts<C: ConnectionTrait>(
 ) -> anyhow::Result<Vec<deployment_artifact::Model>> {
     deployment_artifact::Entity::find()
         .filter(deployment_artifact::Column::DeploymentId.eq(deployment_id))
+        .filter(deployment_artifact::Column::DeletedAt.is_null())
         .order_by_asc(deployment_artifact::Column::CreatedAt)
         .all(db)
         .await

@@ -215,6 +215,17 @@ impl LocalStorage {
         }))
     }
 
+    /// Removes a stored artifact. Missing files are already clean and are
+    /// treated as a successful deletion so cleanup can safely retry.
+    pub async fn remove(&self, relative_path: &str) -> anyhow::Result<()> {
+        let path = self.resolve(relative_path)?;
+        match tokio::fs::remove_file(path).await {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     /// Appends log lines to the deployment build log.
     pub async fn append_build_log(
         &self,

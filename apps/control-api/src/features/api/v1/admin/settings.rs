@@ -6,7 +6,7 @@ use serde_json::json;
 use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
-        nodes, settings,
+        nodes, retention, settings,
     },
     infra::{
         database::entity::{AuditEventResult, SystemSettingValueKind},
@@ -49,6 +49,9 @@ pub async fn get(State(state): State<ControlApiState>) -> Result<impl IntoRespon
         .await?
         .unwrap_or_else(|| "auto".to_owned());
     let config = state.config.read().unwrap().clone();
+    let artifact_retention = retention::RetentionPolicy::load(db)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     let storage_root = setting_string(db, STORAGE_ROOT_KEY, OP)
         .await?
         .unwrap_or_else(|| config.storage.root.clone());
@@ -74,6 +77,12 @@ pub async fn get(State(state): State<ControlApiState>) -> Result<impl IntoRespon
         },
         "domain_review": {
             "default": domain_review,
+        },
+        "artifact_retention": {
+            "log_retention_days": artifact_retention.log_retention_days,
+            "preview_retention_days": artifact_retention.preview_retention_days,
+            "failed_retention_days": artifact_retention.failed_retention_days,
+            "production_keep": artifact_retention.production_keep,
         },
         "server": {
             "host": config.server.host,
@@ -111,6 +120,10 @@ pub struct UpdateSettingsRequest {
     pub review_production: Option<String>,
     pub review_preview: Option<String>,
     pub domain_review_default: Option<String>,
+    pub log_retention_days: Option<u64>,
+    pub preview_retention_days: Option<u64>,
+    pub failed_retention_days: Option<u64>,
+    pub production_keep: Option<u64>,
     pub server_host: Option<String>,
     pub server_port: Option<u16>,
     pub redis_backend: Option<String>,
@@ -136,6 +149,10 @@ struct PreparedSettingsUpdate {
     review_production: Option<String>,
     review_preview: Option<String>,
     domain_review_default: Option<String>,
+    log_retention_days: Option<u64>,
+    preview_retention_days: Option<u64>,
+    failed_retention_days: Option<u64>,
+    production_keep: Option<u64>,
     server_host: Option<std::net::IpAddr>,
     server_port: Option<u16>,
     redis_backend: Option<grass_cache::CacheBackend>,
@@ -528,6 +545,10 @@ fn prepare_settings_update(
         review_production,
         review_preview,
         domain_review_default,
+        log_retention_days: body.log_retention_days,
+        preview_retention_days: body.preview_retention_days,
+        failed_retention_days: body.failed_retention_days,
+        production_keep: body.production_keep,
         server_host,
         server_port: body.server_port,
         redis_backend,
@@ -551,6 +572,10 @@ fn prepare_settings_update(
         && prepared.review_production.is_none()
         && prepared.review_preview.is_none()
         && prepared.domain_review_default.is_none()
+        && prepared.log_retention_days.is_none()
+        && prepared.preview_retention_days.is_none()
+        && prepared.failed_retention_days.is_none()
+        && prepared.production_keep.is_none()
         && prepared.server_host.is_none()
         && prepared.server_port.is_none()
         && prepared.redis_backend.is_none()
@@ -763,6 +788,59 @@ pub async fn update(
         changed.push("domain_review_default");
     }
 
+    let retention_requested = body.log_retention_days.is_some()
+        || body.preview_retention_days.is_some()
+        || body.failed_retention_days.is_some()
+        || body.production_keep.is_some();
+    let current_retention = if retention_requested {
+        retention::RetentionPolicy::load(&transaction)
+            .await
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?
+    } else {
+        retention::RetentionPolicy::default()
+    };
+    macro_rules! update_retention {
+        ($field:ident, $key:expr, $label:literal, $current:expr) => {
+            if let Some(value) = body.$field {
+                before.insert($label.to_owned(), json!($current));
+                settings::set_setting(
+                    &transaction,
+                    $key,
+                    SystemSettingValueKind::Json,
+                    json!(value),
+                )
+                .await
+                .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+                after.insert($label.to_owned(), json!(value));
+                changed.push($label);
+            }
+        };
+    }
+    update_retention!(
+        log_retention_days,
+        retention::LOG_RETENTION_DAYS_KEY,
+        "log_retention_days",
+        current_retention.log_retention_days
+    );
+    update_retention!(
+        preview_retention_days,
+        retention::PREVIEW_RETENTION_DAYS_KEY,
+        "preview_retention_days",
+        current_retention.preview_retention_days
+    );
+    update_retention!(
+        failed_retention_days,
+        retention::FAILED_RETENTION_DAYS_KEY,
+        "failed_retention_days",
+        current_retention.failed_retention_days
+    );
+    update_retention!(
+        production_keep,
+        retention::PRODUCTION_KEEP_KEY,
+        "production_keep",
+        current_retention.production_keep
+    );
+
     if let Some(root) = body.storage_root.as_deref() {
         let configured_root = state.config.read().unwrap().storage.root.clone();
         before.insert(
@@ -855,6 +933,10 @@ mod tests {
         let db = MockDatabase::new(sea_orm::DbBackend::Postgres)
             .append_query_results([
                 Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
@@ -990,6 +1072,10 @@ mod tests {
             Vec::<crate::infra::database::entity::system_setting::Model>::new(),
             Vec::<crate::infra::database::entity::system_setting::Model>::new(),
             Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
         ]);
         if audit_succeeds {
             mock.append_exec_results([sea_orm::MockExecResult {
@@ -1075,6 +1161,10 @@ mod tests {
         let db = MockDatabase::new(sea_orm::DbBackend::Postgres)
             .append_query_results([
                 Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),

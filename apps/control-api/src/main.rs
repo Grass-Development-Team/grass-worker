@@ -31,6 +31,8 @@ async fn main() -> anyhow::Result<()> {
     init::cache(&state).await?;
     spawn_node_health_sweep(state.clone());
     spawn_audit_retention_sweep(state.clone());
+    spawn_artifact_retention_sweep(state.clone());
+    spawn_ssr_lease_sweep(state.clone());
     spawn_node_deletion_sweep(state.clone());
     auto_start_local_node(&state).await;
     let addr = init::address(&state);
@@ -176,6 +178,88 @@ fn spawn_node_deletion_sweep(state: ControlApiState) {
                     %error,
                     "node deletion sweep failed"
                 );
+            }
+        }
+    });
+}
+
+/// Applies the administrator-configured artifact retention policy immediately
+/// at startup and then once per day. Tombstoned rows are retried even when the
+/// original filesystem deletion failed.
+fn spawn_artifact_retention_sweep(state: ControlApiState) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(86_400));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            let Some(db) = state.try_database() else {
+                continue;
+            };
+            let Some(cache) = state.try_cache() else {
+                continue;
+            };
+            let policy = match domain::retention::RetentionPolicy::load(db).await {
+                Ok(policy) => policy,
+                Err(error) => {
+                    tracing::warn!(
+                        operation = "control_api.artifact_retention_policy",
+                        %error,
+                        "failed to load artifact retention policy"
+                    );
+                    continue;
+                }
+            };
+            let storage_root = state.config.read().unwrap().storage.root.clone();
+            let storage = infra::storage::LocalStorage::new(storage_root);
+            match domain::retention::sweep(
+                db,
+                cache,
+                &storage,
+                policy,
+                time::OffsetDateTime::now_utc(),
+            )
+            .await
+            {
+                Ok(result) if result.tombstoned > 0 || result.removed > 0 || result.failed > 0 => {
+                    info!(
+                        operation = "control_api.artifact_retention_sweep",
+                        tombstoned = result.tombstoned,
+                        removed = result.removed,
+                        failed = result.failed,
+                        "artifact retention sweep completed"
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => tracing::warn!(
+                    operation = "control_api.artifact_retention_sweep",
+                    %error,
+                    "artifact retention sweep failed"
+                ),
+            }
+        }
+    });
+}
+
+fn spawn_ssr_lease_sweep(state: ControlApiState) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            let Some(db) = state.try_database() else {
+                continue;
+            };
+            match domain::ssr_leases::release_expired(db, time::OffsetDateTime::now_utc()).await {
+                Ok(0) => {}
+                Ok(count) => info!(
+                    operation = "control_api.ssr_lease_sweep",
+                    count, "released expired SSR leases"
+                ),
+                Err(error) => tracing::warn!(
+                    operation = "control_api.ssr_lease_sweep",
+                    %error,
+                    "SSR lease sweep failed"
+                ),
             }
         }
     });

@@ -567,6 +567,7 @@ async fn process_job(db: &DatabaseConnection, job_id: Uuid) -> anyhow::Result<()
             let artifact = deployment_artifact::Entity::find()
                 .filter(deployment_artifact::Column::DeploymentId.eq(migration.deployment_id))
                 .filter(deployment_artifact::Column::Kind.eq(DeploymentArtifactKind::GrassOutput))
+                .filter(deployment_artifact::Column::DeletedAt.is_null())
                 .one(&transaction)
                 .await?;
             let artifact_error = match artifact.as_ref() {
@@ -914,6 +915,7 @@ mod tests {
                 checksum_sha256: Set(Some("a".repeat(64))),
                 size_bytes: Set(Some(128)),
                 manifest: Set(serde_json::json!({ "unpacked_size_bytes": 256 })),
+                deleted_at: Set(None),
                 created_at: Set(OffsetDateTime::now_utc()),
             }
             .insert(db)

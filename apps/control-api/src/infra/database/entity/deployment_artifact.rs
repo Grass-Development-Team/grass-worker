@@ -14,6 +14,7 @@ pub struct Model {
     pub checksum_sha256: Option<String>,
     pub size_bytes: Option<i64>,
     pub manifest: Json,
+    pub deleted_at: Option<TimeDateTimeWithTimeZone>,
     pub created_at: TimeDateTimeWithTimeZone,
 }
 
