@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, LogOutIcon, MoonIcon, SunIcon } from "lucide-react";
+import { ArrowLeftIcon, LogOutIcon, MoonIcon, SunIcon, UserRoundIcon } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useState } from "react";
 import { Link, Outlet, useNavigate } from "react-router";
@@ -88,6 +88,12 @@ export function ProjectCreateLayout() {
                 <p className="truncate text-sm font-medium">{user?.display_name ?? user?.email}</p>
                 <p className="truncate text-xs text-muted-foreground">{user?.email}</p>
               </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem asChild>
+                <Link to="/account/profile">
+                  <UserRoundIcon /> Personal settings
+                </Link>
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={signOut}>
                 <LogOutIcon /> Log out

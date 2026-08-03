@@ -120,4 +120,27 @@ describe("authApi.register", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(getCsrfToken()).toBe("restored-token");
   });
+
+  it("updates the current display name", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      response({
+        user: {
+          id: "user-1",
+          email: "leo@example.com",
+          display_name: "Leonard",
+          platform_role: "user",
+        },
+      }),
+    );
+
+    await authApi.updateMe({ display_name: "Leonard" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/me",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ display_name: "Leonard" }),
+      }),
+    );
+  });
 });

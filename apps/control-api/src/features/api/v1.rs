@@ -52,10 +52,12 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
         )
         .route(
             "/me",
-            get(me::handler).layer(middleware::from_fn_with_state(
-                state.clone(),
-                require_ready_mode,
-            )),
+            get(me::handler)
+                .patch(me::update)
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    require_ready_mode,
+                )),
         )
         .nest("/admin", administration)
         .merge(teams::router().layer(middleware::from_fn_with_state(
@@ -131,8 +133,18 @@ mod tests {
             created_at: OffsetDateTime::UNIX_EPOCH,
             updated_at: OffsetDateTime::UNIX_EPOCH,
         };
+        let logo_setting = system_setting::Model {
+            id: Uuid::now_v7(),
+            key: "site.logo_url".to_owned(),
+            value_kind: SystemSettingValueKind::String,
+            value: serde_json::json!("/assets/acme-logo.svg"),
+            is_secret: false,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+        };
         let database = MockDatabase::new(sea_orm::DbBackend::Postgres)
             .append_query_results([[setting]])
+            .append_query_results([[logo_setting]])
             .into_connection();
         let state = ControlApiState::new(ControlApiConfig::default(), "config.toml");
         assert!(state.database.set(database).is_ok());
@@ -161,8 +173,18 @@ mod tests {
             created_at: OffsetDateTime::UNIX_EPOCH,
             updated_at: OffsetDateTime::UNIX_EPOCH,
         };
+        let logo_setting = system_setting::Model {
+            id: Uuid::now_v7(),
+            key: "site.logo_url".to_owned(),
+            value_kind: SystemSettingValueKind::String,
+            value: serde_json::json!("/assets/acme-logo.svg"),
+            is_secret: false,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+        };
         let database = MockDatabase::new(sea_orm::DbBackend::Postgres)
             .append_query_results([[setting]])
+            .append_query_results([[logo_setting]])
             .into_connection();
         let state = ControlApiState::new(ControlApiConfig::default(), "config.toml");
         assert!(state.database.set(database).is_ok());
@@ -182,6 +204,7 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["data"]["site_name"], "Acme Deploy");
+        assert_eq!(body["data"]["logo_url"], "/assets/acme-logo.svg");
         assert_eq!(body["data"]["version"], env!("CARGO_PKG_VERSION"));
     }
 

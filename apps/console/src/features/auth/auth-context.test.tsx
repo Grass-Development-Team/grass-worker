@@ -12,6 +12,7 @@ vi.mock("./auth.api", () => ({
     restore: vi.fn(),
     login: vi.fn(),
     register: vi.fn(),
+    updateMe: vi.fn(),
     logout: vi.fn(),
   },
 }));
@@ -19,6 +20,35 @@ vi.mock("./auth.api", () => ({
 afterEach(() => {
   vi.clearAllMocks();
   setCsrfToken(null);
+});
+
+it("updates the current user after saving the profile", async () => {
+  vi.mocked(authApi.restore).mockResolvedValue({
+    user: {
+      id: "user-1",
+      email: "leo@example.com",
+      display_name: "Leo",
+      platform_role: "user",
+    },
+  });
+  vi.mocked(authApi.updateMe).mockResolvedValue({
+    user: {
+      id: "user-1",
+      email: "leo@example.com",
+      display_name: "Leonard",
+      platform_role: "user",
+    },
+  });
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <AuthProvider>{children}</AuthProvider>
+  );
+  const { result } = renderHook(() => useAuth(), { wrapper });
+  await waitFor(() => expect(result.current.user?.display_name).toBe("Leo"));
+
+  await act(() => result.current.updateProfile("Leonard"));
+
+  expect(authApi.updateMe).toHaveBeenCalledWith({ display_name: "Leonard" });
+  expect(result.current.user?.display_name).toBe("Leonard");
 });
 
 it("clears local authentication when an API request reports an expired session", async () => {
