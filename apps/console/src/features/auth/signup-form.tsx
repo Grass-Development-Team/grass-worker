@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { ActivityIcon } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router";
 
+import { SiteLogo } from "@/components/site-logo";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -61,7 +61,7 @@ export function SignupForm({ className, ...props }: React.ComponentPropsWithoutR
           to="/"
           className="bg-primary text-primary-foreground flex size-9 items-center justify-center rounded-lg"
         >
-          <ActivityIcon className="size-5" />
+          <SiteLogo className="size-5" />
           <span className="sr-only">{siteName}</span>
         </Link>
         <h1 className="text-xl font-semibold">Create your {siteName} account</h1>

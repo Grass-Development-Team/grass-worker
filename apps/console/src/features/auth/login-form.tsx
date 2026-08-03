@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { ActivityIcon } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router";
 
+import { SiteLogo } from "@/components/site-logo";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -106,7 +106,7 @@ export function LoginForm({
     <div className={cn("flex flex-col gap-6", className)} {...props}>
       <div className="flex flex-col items-center gap-2">
         <div className="bg-primary text-primary-foreground flex size-9 items-center justify-center rounded-lg">
-          <ActivityIcon className="size-5" />
+          <SiteLogo className="size-5" />
           <span className="sr-only">{siteName}</span>
         </div>
         <h1 className="text-xl font-semibold">Welcome to {siteName}</h1>
