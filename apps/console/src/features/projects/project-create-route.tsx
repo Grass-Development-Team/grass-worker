@@ -124,7 +124,7 @@ function AccessState() {
           </p>
         </div>
         <Button variant="outline" asChild>
-          <Link to="/projects">Back to projects</Link>
+          <Link to="/projects">Back to Projects</Link>
         </Button>
       </div>
     </div>

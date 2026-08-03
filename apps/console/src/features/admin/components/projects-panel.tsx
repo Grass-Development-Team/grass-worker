@@ -223,7 +223,7 @@ export function ProjectsPanel() {
               onClick={() => deleting && deleteMutation.mutate(deleting.id)}
               disabled={deleteMutation.isPending}
             >
-              {deleteMutation.isPending ? "Deleting…" : "Delete project"}
+              {deleteMutation.isPending ? "Deleting…" : "Delete Project"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
