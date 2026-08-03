@@ -1,3 +1,4 @@
+pub mod announcement;
 pub mod audit_event;
 pub mod deployment;
 pub mod deployment_artifact;
@@ -32,6 +33,8 @@ pub mod user;
 pub mod user_notification;
 pub mod user_password_credential;
 
+#[allow(unused_imports)]
+pub use announcement::Entity as Announcement;
 #[allow(unused_imports)]
 pub use audit_event::Entity as AuditEvent;
 #[allow(unused_imports)]

@@ -18,3 +18,4 @@ pub mod m20260731_000017_project_notifications;
 pub mod m20260801_000018_artifact_retention;
 pub mod m20260801_000019_ssr_process_leases;
 pub mod m20260803_000020_notification_content;
+pub mod m20260803_000021_announcements;

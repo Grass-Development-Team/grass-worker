@@ -15,7 +15,7 @@ pub mod users;
 use axum::{
     Router,
     response::IntoResponse,
-    routing::{get, patch, post},
+    routing::{delete, get, patch, post},
 };
 use serde_json::json;
 
@@ -67,7 +67,11 @@ pub fn router() -> Router<ControlApiState> {
         .route("/settings", get(settings::get).patch(settings::update))
         .route(
             "/announcements",
-            get(announcements::get).post(announcements::publish),
+            get(announcements::list).post(announcements::publish),
+        )
+        .route(
+            "/announcements/{announcement_id}",
+            delete(announcements::remove),
         )
         .route("/projects", get(projects::list))
         .route("/projects/{project_id}", get(projects::detail))

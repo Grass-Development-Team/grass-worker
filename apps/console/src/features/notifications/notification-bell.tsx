@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BellIcon, CheckCheckIcon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
 
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +13,8 @@ import { notificationsApi, type NotificationItem } from "./notifications.api";
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
   const [announcement, setAnnouncement] = useState<NotificationItem | null>(null);
+  const [autoPopup, setAutoPopup] = useState<NotificationItem | null>(null);
+  const [autoPopupCutoff, setAutoPopupCutoff] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const unreadQuery = useQuery({
     queryKey: ["notifications", "unread-count"],
@@ -26,10 +28,18 @@ export function NotificationBell() {
     queryFn: () => notificationsApi.list(1, 8),
     enabled: open,
   });
+  const autoPopupQuery = useQuery({
+    queryKey: ["notifications", "auto-popup"],
+    queryFn: notificationsApi.autoPopup,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
+  });
   const refresh = () =>
     Promise.all([
       queryClient.invalidateQueries({ queryKey: ["notifications", "list"] }),
       queryClient.invalidateQueries({ queryKey: ["notifications", "unread-count"] }),
+      queryClient.invalidateQueries({ queryKey: ["notifications", "auto-popup"] }),
     ]);
   const markRead = useMutation({
     mutationFn: notificationsApi.markRead,
@@ -41,6 +51,12 @@ export function NotificationBell() {
   });
   const count = unreadQuery.data?.count ?? 0;
   const label = count > 0 ? `Notifications, ${count} unread` : "Notifications";
+
+  useEffect(() => {
+    const candidate = autoPopupQuery.data?.notification;
+    if (!candidate || (autoPopupCutoff && candidate.created_at <= autoPopupCutoff)) return;
+    setAutoPopup(candidate);
+  }, [autoPopupCutoff, autoPopupQuery.data?.notification]);
 
   return (
     <>
@@ -118,6 +134,15 @@ export function NotificationBell() {
         announcement={announcement}
         onOpenChange={(nextOpen) => {
           if (!nextOpen) setAnnouncement(null);
+        }}
+      />
+      <AnnouncementDialog
+        announcement={autoPopup}
+        onOpenChange={(nextOpen) => {
+          if (nextOpen || !autoPopup) return;
+          setAutoPopupCutoff(autoPopup.created_at);
+          setAutoPopup(null);
+          if (!autoPopup.read_at) markRead.mutate(autoPopup.id);
         }}
       />
     </>
