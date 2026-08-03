@@ -5,6 +5,7 @@ import type {
 } from "@/features/deployments/deployments.api";
 import type { AuditPage } from "@/features/audit/audit.api";
 import { request } from "@/lib/api";
+import type { Announcement } from "@/features/announcements/announcements.api";
 
 export interface AdministrationStatus {
   service: string;
@@ -414,9 +415,16 @@ export interface AdminSettings {
   restart_required_sections: Array<"server" | "redis" | "node_manager" | "migration" | "log">;
 }
 
-export interface AdminAnnouncement {
-  title: string | null;
-  content: string | null;
+export type AdminAnnouncement = Announcement;
+
+export interface AdminAnnouncementsPage {
+  announcements: AdminAnnouncement[];
+  pagination: {
+    page: number;
+    per_page: number;
+    total: number;
+    total_pages: number;
+  };
 }
 
 export const adminApi = {
@@ -740,12 +748,21 @@ export const adminApi = {
 
   getSettings: () => request<AdminSettings>("/api/v1/admin/settings"),
 
-  getAnnouncement: () => request<AdminAnnouncement>("/api/v1/admin/announcements"),
+  listAnnouncements: (page = 1, perPage = 20) =>
+    request<AdminAnnouncementsPage>(`/api/v1/admin/announcements?page=${page}&per_page=${perPage}`),
 
-  publishAnnouncement: (input: { title: string; content: string }) =>
-    request<AdminAnnouncement & { recipients: number }>("/api/v1/admin/announcements", {
-      method: "POST",
-      body: JSON.stringify(input),
+  publishAnnouncement: (input: { title: string; content: string; auto_popup: boolean }) =>
+    request<{ announcement: AdminAnnouncement; recipients: number }>(
+      "/api/v1/admin/announcements",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    ),
+
+  removeAnnouncement: (announcementId: string) =>
+    request<{ ok: true }>(`/api/v1/admin/announcements/${announcementId}`, {
+      method: "DELETE",
     }),
 
   updateSettings: (input: {

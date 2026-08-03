@@ -29,6 +29,7 @@ impl MigratorTrait for Migrator {
             Box::new(migration::m20260801_000018_artifact_retention::Migration),
             Box::new(migration::m20260801_000019_ssr_process_leases::Migration),
             Box::new(migration::m20260803_000020_notification_content::Migration),
+            Box::new(migration::m20260803_000021_announcements::Migration),
         ]
     }
 }
@@ -105,7 +106,7 @@ mod tests {
     fn registers_audit_foundation_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 20);
+        assert_eq!(migrations.len(), 21);
         assert_eq!(
             migrations.get(11).expect("twelfth migration").name(),
             "m20260729_000012_audit_foundation"
@@ -134,7 +135,7 @@ mod tests {
     fn registers_team_group_review_policy_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 20);
+        assert_eq!(migrations.len(), 21);
         assert_eq!(
             migrations.get(12).expect("thirteenth migration").name(),
             "m20260729_000013_team_group_review_policy"
@@ -145,7 +146,7 @@ mod tests {
     fn registers_node_config_sync_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 20);
+        assert_eq!(migrations.len(), 21);
         assert_eq!(
             migrations.get(13).expect("fourteenth migration").name(),
             "m20260729_000014_node_config_sync"
@@ -156,7 +157,7 @@ mod tests {
     fn registers_node_deletion_queue_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 20);
+        assert_eq!(migrations.len(), 21);
         assert_eq!(
             migrations.get(14).expect("fifteenth migration").name(),
             "m20260729_000015_node_deletion_queue"
@@ -167,7 +168,7 @@ mod tests {
     fn registers_domain_review_policy_after_node_deletion_queue() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 20);
+        assert_eq!(migrations.len(), 21);
         assert_eq!(
             migrations.get(14).expect("fifteenth migration").name(),
             "m20260729_000015_node_deletion_queue"
@@ -182,7 +183,7 @@ mod tests {
     fn registers_project_notifications_after_domain_review_policy() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 20);
+        assert_eq!(migrations.len(), 21);
         assert_eq!(
             migrations.get(15).expect("sixteenth migration").name(),
             "m20260730_000016_domain_review_policy"
@@ -197,13 +198,13 @@ mod tests {
         );
         assert_eq!(
             migrations.last().expect("last migration").name(),
-            "m20260803_000020_notification_content"
+            "m20260803_000021_announcements"
         );
     }
 
     #[tokio::test]
     #[ignore = "requires GRASS_TEST_DATABASE_URL"]
-    async fn postgres_notification_content_schema_matches_the_domain_model_and_is_reversible()
+    async fn postgres_notification_and_announcement_schema_matches_the_domain_model_and_is_reversible()
     -> anyhow::Result<()> {
         let _migration_guard = MIGRATION_TEST_LOCK.lock().await;
         let database_url = std::env::var("GRASS_TEST_DATABASE_URL")
@@ -212,19 +213,24 @@ mod tests {
 
         let verification = async {
             Migrator::up(&test_db.db, Some(19)).await?;
-            assert_migration_tracking(&test_db.db, 19, 1).await?;
+            assert_migration_tracking(&test_db.db, 19, 2).await?;
 
             Migrator::up(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 20, 0).await?;
+            assert_migration_tracking(&test_db.db, 20, 1).await?;
             assert_notification_content_schema(&test_db.db).await?;
 
+            Migrator::up(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 21, 0).await?;
+            assert_announcement_schema(&test_db.db).await?;
+
             Migrator::down(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 19, 1).await?;
-            assert_notification_content_schema_absent(&test_db.db).await?;
+            assert_migration_tracking(&test_db.db, 20, 1).await?;
+            assert_announcement_schema_absent(&test_db.db).await?;
+            assert_notification_content_schema(&test_db.db).await?;
 
             Migrator::up(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 20, 0).await?;
-            assert_notification_content_schema(&test_db.db).await
+            assert_migration_tracking(&test_db.db, 21, 0).await?;
+            assert_announcement_schema(&test_db.db).await
         }
         .await;
         let cleanup = test_db.cleanup().await;
@@ -615,44 +621,148 @@ WHERE conname = 'ck_user_notifications_announcement_content'
         Ok(())
     }
 
-    async fn assert_notification_content_schema_absent(
-        db: &DatabaseConnection,
-    ) -> anyhow::Result<()> {
+    async fn assert_announcement_schema(db: &DatabaseConnection) -> anyhow::Result<()> {
+        let columns = query_column_shapes(
+            db,
+            r#"
+SELECT column_name, udt_name, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'announcements'
+ORDER BY ordinal_position
+"#,
+        )
+        .await?;
+        ensure!(
+            columns
+                == vec![
+                    column("id", "uuid", "NO", None),
+                    column("title", "text", "NO", None),
+                    column("content", "text", "NO", None),
+                    column("auto_popup", "bool", "NO", Some("false")),
+                    column("created_by_user_id", "uuid", "YES", None),
+                    column("published_at", "timestamptz", "NO", None),
+                ],
+            "unexpected announcement columns: {columns:#?}"
+        );
+
+        let notification_columns = query_column_shapes(
+            db,
+            r#"
+SELECT column_name, udt_name, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'user_notifications'
+  AND column_name = 'announcement_id'
+"#,
+        )
+        .await?;
+        ensure!(
+            notification_columns == vec![column("announcement_id", "uuid", "YES", None)],
+            "unexpected notification announcement column: {notification_columns:#?}"
+        );
+
+        let constraints = db
+            .query_all_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT conname, pg_get_constraintdef(oid) AS definition
+FROM pg_constraint
+WHERE conname IN (
+    'ck_announcements_title_length',
+    'ck_announcements_content_length',
+    'ck_user_notifications_announcement_content'
+)
+ORDER BY conname
+"#,
+            ))
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok((
+                    row.try_get::<String>("", "conname")?,
+                    row.try_get::<String>("", "definition")?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, sea_orm::DbErr>>()?;
+        ensure!(constraints.len() == 3, "missing announcement constraints");
+        ensure!(constraints["ck_announcements_title_length"].contains("120"));
+        ensure!(constraints["ck_announcements_content_length"].contains("10000"));
+        ensure!(
+            constraints["ck_user_notifications_announcement_content"]
+                .contains("announcement_id IS NOT NULL")
+        );
+
+        let foreign_keys = db
+            .query_all_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT pg_get_constraintdef(oid) AS definition
+FROM pg_constraint
+WHERE contype = 'f'
+  AND conrelid IN ('announcements'::regclass, 'user_notifications'::regclass)
+"#,
+            ))
+            .await?
+            .into_iter()
+            .map(|row| row.try_get::<String>("", "definition"))
+            .collect::<Result<Vec<_>, sea_orm::DbErr>>()?;
+        ensure!(
+            foreign_keys
+                .iter()
+                .any(|definition| definition.contains("REFERENCES announcements")
+                    && definition.contains("ON DELETE CASCADE")),
+            "notification announcement foreign key is not cascading"
+        );
+        ensure!(
+            foreign_keys
+                .iter()
+                .any(|definition| definition.contains("REFERENCES users")
+                    && definition.contains("ON DELETE SET NULL")),
+            "announcement creator foreign key is not nullable"
+        );
+
+        let indexes = db
+            .query_all_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT indexname
+FROM pg_indexes
+WHERE schemaname = current_schema()
+  AND indexname = 'ix_announcements_published_at'
+"#,
+            ))
+            .await?;
+        ensure!(indexes.len() == 1, "announcement history index is missing");
+        Ok(())
+    }
+
+    async fn assert_announcement_schema_absent(db: &DatabaseConnection) -> anyhow::Result<()> {
         let row = db
             .query_one_raw(Statement::from_string(
                 DatabaseBackend::Postgres,
                 r#"
 SELECT
+  to_regclass('announcements') IS NULL AS table_absent,
   NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
+    SELECT 1
+    FROM information_schema.columns
     WHERE table_schema = current_schema()
       AND table_name = 'user_notifications'
-      AND column_name IN ('title', 'content')
-  ) AS content_columns_absent,
-  NOT EXISTS (
-    SELECT 1 FROM pg_constraint
+      AND column_name = 'announcement_id'
+  ) AS notification_column_absent,
+  EXISTS (
+    SELECT 1
+    FROM pg_constraint
     WHERE conname = 'ck_user_notifications_announcement_content'
-  ) AS constraint_absent,
-  (
-    SELECT is_nullable FROM information_schema.columns
-    WHERE table_schema = current_schema()
-      AND table_name = 'user_notifications'
-      AND column_name = 'project_name'
-  ) = 'NO' AS project_name_required,
-  (
-    SELECT is_nullable FROM information_schema.columns
-    WHERE table_schema = current_schema()
-      AND table_name = 'user_notifications'
-      AND column_name = 'project_slug'
-  ) = 'NO' AS project_slug_required
+  ) AS legacy_constraint_present
 "#,
             ))
             .await?
-            .context("notification content absence query returned no row")?;
-        ensure!(row.try_get::<bool>("", "content_columns_absent")?);
-        ensure!(row.try_get::<bool>("", "constraint_absent")?);
-        ensure!(row.try_get::<bool>("", "project_name_required")?);
-        ensure!(row.try_get::<bool>("", "project_slug_required")?);
+            .context("announcement absence query returned no row")?;
+        ensure!(row.try_get::<bool>("", "table_absent")?);
+        ensure!(row.try_get::<bool>("", "notification_column_absent")?);
+        ensure!(row.try_get::<bool>("", "legacy_constraint_present")?);
         Ok(())
     }
 

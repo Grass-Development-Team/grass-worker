@@ -10,6 +10,8 @@ import { DashboardRoute } from "./dashboard-route";
 vi.mock("@/features/auth/auth-context", () => ({ useAuth: vi.fn() }));
 vi.mock("@/features/teams/team-context", () => ({ useTeam: vi.fn() }));
 
+let announcementResponse: unknown;
+
 function jsonResponse(data: unknown): Response {
   return new Response(JSON.stringify({ code: 200, message: "OK", data }), {
     status: 200,
@@ -17,7 +19,11 @@ function jsonResponse(data: unknown): Response {
   });
 }
 
-function renderDashboard(platformRole: "admin" | "user") {
+function renderDashboard(
+  platformRole: "admin" | "user",
+  announcementData: unknown = { projects: [] },
+) {
+  announcementResponse = announcementData;
   vi.mocked(useAuth).mockReturnValue({
     user: {
       id: "user-1",
@@ -44,7 +50,12 @@ function renderDashboard(platformRole: "admin" | "user") {
 describe("Dashboard administration shortcut", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResponse({ projects: [] }));
+    announcementResponse = { projects: [] };
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      return String(input).includes("/announcements")
+        ? jsonResponse(announcementResponse)
+        : jsonResponse({ projects: [] });
+    });
   });
   afterEach(() => vi.restoreAllMocks());
 
@@ -56,5 +67,22 @@ describe("Dashboard administration shortcut", () => {
   it("shows Administration to a platform administrator", () => {
     renderDashboard("admin");
     expect(screen.getByRole("link", { name: "Administration" })).toBeInTheDocument();
+  });
+
+  it("shows announcement history on the overview page", async () => {
+    renderDashboard("user", {
+      announcements: [
+        {
+          id: "announcement-1",
+          title: "Maintenance window",
+          content: "The service will restart shortly.",
+          auto_popup: false,
+          published_at: "2026-08-03T02:00:00Z",
+        },
+      ],
+      pagination: { page: 1, per_page: 5, total: 1, total_pages: 1 },
+    });
+
+    expect(await screen.findByRole("button", { name: /Maintenance window/i })).toBeInTheDocument();
   });
 });

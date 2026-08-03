@@ -1,5 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
-import { FolderGitIcon, PlusIcon, SettingsIcon, ShieldCheckIcon, UsersIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  FolderGitIcon,
+  MegaphoneIcon,
+  PlusIcon,
+  SettingsIcon,
+  ShieldCheckIcon,
+  UsersIcon,
+} from "lucide-react";
+import { useState } from "react";
 import { Link } from "react-router";
 
 import { Badge } from "@/components/ui/badge";
@@ -16,6 +26,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/features/auth/auth-context";
 import { projectsApi } from "@/features/projects/projects.api";
 import { useTeam } from "@/features/teams/team-context";
+import { announcementsApi, type Announcement } from "@/features/announcements/announcements.api";
+import { AnnouncementDialog } from "@/features/notifications/notification-items";
 
 const initial = (value: string) => value.slice(0, 1).toUpperCase();
 
@@ -23,6 +35,8 @@ export function DashboardRoute() {
   const { user } = useAuth();
   const { activeTeam } = useTeam();
   const teamId = activeTeam?.id;
+  const [announcementPage, setAnnouncementPage] = useState(1);
+  const [selectedAnnouncement, setSelectedAnnouncement] = useState<Announcement | null>(null);
 
   const projectsQuery = useQuery({
     queryKey: ["projects", teamId],
@@ -30,6 +44,11 @@ export function DashboardRoute() {
     enabled: Boolean(teamId),
   });
   const projects = projectsQuery.data?.projects ?? [];
+  const announcementsQuery = useQuery({
+    queryKey: ["announcements", announcementPage],
+    queryFn: () => announcementsApi.list(announcementPage),
+  });
+  const announcements = announcementsQuery.data?.announcements ?? [];
 
   return (
     <div className="flex w-full flex-col gap-8">
@@ -46,6 +65,84 @@ export function DashboardRoute() {
           </Link>
         </Button>
       </div>
+
+      <section className="space-y-3" aria-labelledby="dashboard-announcements-heading">
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <h2 id="dashboard-announcements-heading" className="text-base font-semibold">
+              Announcements
+            </h2>
+            <p className="text-sm text-muted-foreground">Recent updates from the platform.</p>
+          </div>
+        </div>
+        {announcementsQuery.isPending ? (
+          <div className="h-24 animate-pulse border bg-muted/30" aria-busy="true" />
+        ) : announcementsQuery.isError ? (
+          <p role="alert" className="text-sm text-destructive">
+            {announcementsQuery.error.message}
+          </p>
+        ) : announcements.length === 0 ? (
+          <div className="flex min-h-24 items-center justify-center border-y text-sm text-muted-foreground">
+            No announcements.
+          </div>
+        ) : (
+          <div className="divide-y overflow-hidden rounded-md border">
+            {announcements.map((announcement) => (
+              <button
+                key={announcement.id}
+                type="button"
+                className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 px-4 py-4 text-left transition-colors hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:outline-none"
+                onClick={() => setSelectedAnnouncement(announcement)}
+              >
+                <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                  <MegaphoneIcon className="size-4" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium">{announcement.title}</span>
+                  <span className="mt-1 block truncate text-xs text-muted-foreground">
+                    {announcement.content}
+                  </span>
+                </span>
+                <time
+                  dateTime={announcement.published_at}
+                  className="pt-0.5 text-xs text-muted-foreground"
+                >
+                  {new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(
+                    new Date(announcement.published_at),
+                  )}
+                </time>
+              </button>
+            ))}
+          </div>
+        )}
+        {announcementsQuery.data?.pagination?.total_pages &&
+          announcementsQuery.data.pagination.total_pages > 1 && (
+            <nav className="flex items-center justify-between" aria-label="Announcement pages">
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setAnnouncementPage((current) => Math.max(1, current - 1))}
+                disabled={announcementPage <= 1}
+                aria-label="Previous page"
+              >
+                <ArrowLeftIcon />
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                {announcementsQuery.data.pagination.page} /{" "}
+                {announcementsQuery.data.pagination.total_pages}
+              </span>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setAnnouncementPage((current) => current + 1)}
+                disabled={announcementPage >= announcementsQuery.data.pagination.total_pages}
+                aria-label="Next page"
+              >
+                <ArrowRightIcon />
+              </Button>
+            </nav>
+          )}
+      </section>
 
       <section className="space-y-3">
         <h2 className="text-base font-semibold">Projects</h2>
@@ -130,6 +227,10 @@ export function DashboardRoute() {
           )}
         </div>
       </section>
+      <AnnouncementDialog
+        announcement={selectedAnnouncement}
+        onOpenChange={(open) => !open && setSelectedAnnouncement(null)}
+      />
     </div>
   );
 }

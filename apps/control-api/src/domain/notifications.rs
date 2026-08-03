@@ -9,7 +9,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::infra::database::entity::{
-    TeamMemberRole, UserStatus, project, team_member, user, user_notification,
+    TeamMemberRole, UserStatus, announcement, project, team_member, user, user_notification,
 };
 
 pub struct CreateProjectNotification<'a> {
@@ -21,6 +21,7 @@ pub struct CreateProjectNotification<'a> {
 }
 
 pub struct CreateAnnouncementNotification {
+    pub announcement_id: Uuid,
     pub actor_user_id: Uuid,
     pub title: String,
     pub content: String,
@@ -136,6 +137,7 @@ pub async fn create_project_notification<C: ConnectionTrait>(
             actor_user_id: Set(Some(params.actor_user_id)),
             team_id: Set(Some(params.project.team_id)),
             project_id: Set(Some(params.project.id)),
+            announcement_id: Set(None),
             action: Set(params.action.to_owned()),
             project_name: Set(Some(params.project.name.clone())),
             project_slug: Set(Some(params.project.slug.clone())),
@@ -187,6 +189,7 @@ pub async fn create_announcement_notifications<C: ConnectionTrait>(
             actor_user_id: Set(Some(params.actor_user_id)),
             team_id: Set(None),
             project_id: Set(None),
+            announcement_id: Set(Some(params.announcement_id)),
             action: Set("site.announcement".to_owned()),
             project_name: Set(None),
             project_slug: Set(None),
@@ -246,6 +249,24 @@ pub async fn unread_count<C: ConnectionTrait>(
         .count(db)
         .await
         .map_err(Into::into)
+}
+
+pub async fn latest_auto_popup<C: ConnectionTrait>(
+    db: &C,
+    recipient_user_id: Uuid,
+) -> anyhow::Result<Option<user_notification::Model>> {
+    Ok(user_notification::Entity::find()
+        .find_also_related(announcement::Entity)
+        .filter(user_notification::Column::RecipientUserId.eq(recipient_user_id))
+        .filter(user_notification::Column::Action.eq("site.announcement"))
+        .filter(user_notification::Column::ReadAt.is_null())
+        .filter(announcement::Column::AutoPopup.eq(true))
+        .order_by_desc(user_notification::Column::CreatedAt)
+        .order_by_desc(user_notification::Column::Id)
+        .all(db)
+        .await?
+        .into_iter()
+        .find_map(|(notification, announcement)| announcement.map(|_| notification)))
 }
 
 pub async fn mark_read<C: ConnectionTrait>(

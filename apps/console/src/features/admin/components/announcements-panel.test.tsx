@@ -12,23 +12,30 @@ vi.mock("../admin.api", async (importOriginal) => {
     ...actual,
     adminApi: {
       ...actual.adminApi,
-      getAnnouncement: vi.fn(),
+      listAnnouncements: vi.fn(),
       publishAnnouncement: vi.fn(),
+      removeAnnouncement: vi.fn(),
     },
   };
 });
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(adminApi.getAnnouncement).mockResolvedValue({
-    title: "Current notice",
-    content: "Current content",
+  vi.mocked(adminApi.listAnnouncements).mockResolvedValue({
+    announcements: [],
+    pagination: { page: 1, per_page: 20, total: 0, total_pages: 0 },
   });
   vi.mocked(adminApi.publishAnnouncement).mockResolvedValue({
-    title: "Planned maintenance",
-    content: "The service will restart.",
+    announcement: {
+      id: "announcement-1",
+      title: "Planned maintenance",
+      content: "The service will restart.",
+      auto_popup: true,
+      published_at: "2026-08-03T02:00:00Z",
+    },
     recipients: 4,
   });
+  vi.mocked(adminApi.removeAnnouncement).mockResolvedValue({ ok: true });
 });
 
 it("publishes a new announcement to active users", async () => {
@@ -52,6 +59,36 @@ it("publishes a new announcement to active users", async () => {
   expect(adminApi.publishAnnouncement.mock.calls[0]?.[0]).toEqual({
     title: "Planned maintenance",
     content: "The service will restart.",
+    auto_popup: false,
   });
   expect(await screen.findByText("Announcement published.")).toBeInTheDocument();
+});
+
+it("deletes an announcement from the history", async () => {
+  const user = userEvent.setup();
+  vi.mocked(adminApi.listAnnouncements).mockResolvedValue({
+    announcements: [
+      {
+        id: "announcement-1",
+        title: "Old notice",
+        content: "Old content",
+        auto_popup: false,
+        published_at: "2026-08-02T02:00:00Z",
+      },
+    ],
+    pagination: { page: 1, per_page: 20, total: 1, total_pages: 1 },
+  });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <AnnouncementsPanel />
+    </QueryClientProvider>,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "Delete Old notice" }));
+  await user.click(screen.getByRole("button", { name: "Delete announcement" }));
+
+  await waitFor(() =>
+    expect(adminApi.removeAnnouncement.mock.calls[0]?.[0]).toBe("announcement-1"),
+  );
 });

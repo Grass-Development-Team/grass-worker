@@ -18,6 +18,8 @@ import { cn } from "@/lib/utils";
 
 import type { NotificationItem } from "./notifications.api";
 
+export type AnnouncementDialogItem = Pick<NotificationItem, "title" | "content" | "created_at">;
+
 function formatTimestamp(value: string) {
   return new Intl.DateTimeFormat(undefined, {
     month: "short",
@@ -139,7 +141,7 @@ export function AnnouncementDialog({
   announcement,
   onOpenChange,
 }: {
-  announcement: NotificationItem | null;
+  announcement: AnnouncementDialogItem | null;
   onOpenChange: (open: boolean) => void;
 }) {
   return (

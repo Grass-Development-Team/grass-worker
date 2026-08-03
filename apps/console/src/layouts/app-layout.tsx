@@ -45,7 +45,9 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { AdminSidebarNav } from "@/features/admin/components/admin-sidebar-nav";
+import { SettingsSidebarNav } from "@/features/admin/components/settings-sidebar-nav";
 import { adminSections } from "@/features/admin/admin-sections";
+import { AccountSidebarNav } from "@/features/account/account-sidebar-nav";
 import { useAuth } from "@/features/auth/auth-context";
 import { useBranding, usePageTitle } from "@/features/branding/branding-context";
 import {
@@ -224,6 +226,8 @@ function AppLayoutContent() {
       ? projectMatch.params.projectId
       : null;
   const inAdmin = location.pathname === "/admin" || location.pathname.startsWith("/admin/");
+  const inAdminSettings = location.pathname.startsWith("/admin/settings");
+  const inAccountSettings = location.pathname.startsWith("/account/");
   const title = pageTitle(location.pathname, Boolean(projectId));
   usePageTitle(title || null);
 
@@ -260,8 +264,12 @@ function AppLayoutContent() {
         <SidebarContent>
           {projectId ? (
             <ProjectSidebarNav projectId={projectId} />
+          ) : inAdminSettings ? (
+            <SettingsSidebarNav />
           ) : inAdmin ? (
             <AdminSidebarNav />
+          ) : inAccountSettings ? (
+            <AccountSidebarNav />
           ) : (
             <TeamSidebarNav
               navigation={navigation}

@@ -3,6 +3,7 @@ import { request } from "@/lib/api";
 export interface NotificationItem {
   id: string;
   action: string;
+  announcement_id?: string | null;
   title: string;
   project: {
     id: string | null;
@@ -31,6 +32,9 @@ export const notificationsApi = {
     request<NotificationsPage>(`/api/v1/notifications?page=${page}&per_page=${perPage}`),
 
   unreadCount: () => request<{ count: number }>("/api/v1/notifications/unread-count"),
+
+  autoPopup: () =>
+    request<{ notification: NotificationItem | null }>("/api/v1/notifications/auto-popup"),
 
   markRead: (notificationId: string) =>
     request<{ ok: true }>(`/api/v1/notifications/${notificationId}/read`, {

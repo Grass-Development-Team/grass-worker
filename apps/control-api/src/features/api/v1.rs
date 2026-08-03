@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod announcements;
 pub mod auth;
 pub mod internal;
 pub mod me;
@@ -68,6 +69,12 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
             state.clone(),
             require_ready_mode,
         )))
+        .merge(
+            announcements::router().layer(middleware::from_fn_with_state(
+                state.clone(),
+                require_ready_mode,
+            )),
+        )
         .merge(
             notifications::router().layer(middleware::from_fn_with_state(
                 state.clone(),
@@ -153,6 +160,36 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/notifications")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn announcement_routes_require_authentication() {
+        let setting = system_setting::Model {
+            id: Uuid::now_v7(),
+            key: "setup.finished".to_owned(),
+            value_kind: SystemSettingValueKind::Boolean,
+            value: serde_json::json!(true),
+            is_secret: false,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+        };
+        let database = MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([[setting]])
+            .into_connection();
+        let state = ControlApiState::new(ControlApiConfig::default(), "config.toml");
+        assert!(state.database.set(database).is_ok());
+        let response = router(state.clone())
+            .with_state(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/announcements")
                     .body(Body::empty())
                     .unwrap(),
             )

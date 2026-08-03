@@ -21,6 +21,7 @@ use crate::{
 pub fn router() -> Router<ControlApiState> {
     Router::new()
         .route("/notifications", get(list))
+        .route("/notifications/auto-popup", get(auto_popup))
         .route("/notifications/unread-count", get(unread_count))
         .route("/notifications/read-all", post(mark_all_read))
         .route("/notifications/{notification_id}/read", post(mark_read))
@@ -56,6 +57,7 @@ fn notification_view(item: &user_notification::Model) -> serde_json::Value {
     json!({
         "id": item.id,
         "action": item.action,
+        "announcement_id": item.announcement_id,
         "title": item.title.as_deref().unwrap_or_else(|| notifications::notification_title(&item.action)),
         "project": project,
         "content": item.content,
@@ -64,6 +66,20 @@ fn notification_view(item: &user_notification::Model) -> serde_json::Value {
         "read_at": ts(item.read_at),
         "created_at": ts(item.created_at),
     })
+}
+
+pub async fn auto_popup(
+    State(state): State<ControlApiState>,
+    session: Session,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "notifications.auto_popup";
+    let notification =
+        notifications::latest_auto_popup(database(&state, OP)?, session.data.user_id)
+            .await
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    Ok(ok_response(json!({
+        "notification": notification.as_ref().map(notification_view),
+    })))
 }
 
 pub async fn list(
@@ -147,6 +163,7 @@ mod tests {
             actor_user_id: Some(Uuid::now_v7()),
             team_id: Some(Uuid::now_v7()),
             project_id: Some(Uuid::now_v7()),
+            announcement_id: None,
             action: "project.slug_updated".to_owned(),
             project_name: Some("Demo".to_owned()),
             project_slug: Some("demo-site".to_owned()),
@@ -178,6 +195,7 @@ mod tests {
             actor_user_id: Some(Uuid::now_v7()),
             team_id: None,
             project_id: None,
+            announcement_id: None,
             action: "site.announcement".to_owned(),
             project_name: None,
             project_slug: None,
