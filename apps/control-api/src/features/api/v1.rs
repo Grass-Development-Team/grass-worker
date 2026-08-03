@@ -318,6 +318,8 @@ mod tests {
 
         for uri in [
             "/admin/audit-events",
+            "/admin/cleanup/audit-events",
+            "/admin/cleanup/build-logs",
             "/admin/team-groups",
             "/admin/quota-plans",
             "/admin/host-sources",

@@ -2,7 +2,7 @@
 
 use sea_orm::{
     ActiveValue::Set, ColumnTrait, Condition, ConnectionTrait, EntityTrait, PaginatorTrait,
-    QueryFilter,
+    QueryFilter, QuerySelect,
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -389,6 +389,38 @@ pub async fn list_events<C: ConnectionTrait>(
         total,
         total_pages: total.div_ceil(per_page),
     })
+}
+
+pub async fn count_events<C: ConnectionTrait>(
+    db: &C,
+    filter: AuditEventFilter,
+) -> anyhow::Result<u64> {
+    audit_event_query(&filter)
+        .count(db)
+        .await
+        .map_err(Into::into)
+}
+
+pub async fn delete_events<C: ConnectionTrait>(
+    db: &C,
+    filter: AuditEventFilter,
+) -> anyhow::Result<u64> {
+    let ids = audit_event_query(&filter)
+        .select_only()
+        .column(audit_event::Column::Id)
+        .into_tuple::<Uuid>()
+        .all(db)
+        .await?;
+    if ids.is_empty() {
+        return Ok(0);
+    }
+
+    audit_event::Entity::delete_many()
+        .filter(audit_event::Column::Id.is_in(ids))
+        .exec(db)
+        .await
+        .map(|result| result.rows_affected)
+        .map_err(Into::into)
 }
 
 pub async fn prune_events_before<C: ConnectionTrait>(

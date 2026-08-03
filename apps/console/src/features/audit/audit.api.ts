@@ -33,6 +33,7 @@ export interface AuditFilters {
   actor_type?: AuditActorType;
   target_type?: string;
   target_id?: string;
+  team_id?: string;
   result?: AuditResult;
   from?: number;
   to?: number;

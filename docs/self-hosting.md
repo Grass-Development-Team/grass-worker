@@ -410,6 +410,9 @@ SSH, and `git://` connections are pinned to an address that passed this policy.
 - User-facing API access and key business actions are recorded with separate
   platform/team visibility; audit metadata and before/after values are
   redacted before storage.
+- **Administration → Cleanup** previews and removes filtered audit events or
+  persisted deployment build logs. Active, pending-release, assigned, and
+  migrating deployment logs are protected and reported as skipped.
 - Secrets never land in the repository: node tokens are stored hashed, and
   DNS provider credentials belong in host source config or environment
   variables.

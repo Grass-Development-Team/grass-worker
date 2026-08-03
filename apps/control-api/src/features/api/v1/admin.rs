@@ -1,5 +1,6 @@
 pub mod announcements;
 pub mod audit_events;
+pub mod build_logs;
 pub mod deployments;
 pub mod domains;
 pub mod host_sources;
@@ -41,6 +42,14 @@ pub fn router() -> Router<ControlApiState> {
             patch(host_sources::update).delete(host_sources::remove),
         )
         .route("/audit-events", get(audit_events::list))
+        .route(
+            "/cleanup/audit-events",
+            get(audit_events::cleanup_preview).delete(audit_events::cleanup),
+        )
+        .route(
+            "/cleanup/build-logs",
+            get(build_logs::cleanup_preview).delete(build_logs::cleanup),
+        )
         .route(
             "/team-groups",
             get(team_groups::list).post(team_groups::create),
