@@ -64,11 +64,6 @@ const primaryNavigation = [
   { title: "Projects", url: "/projects", icon: FolderGitIcon },
   { title: "Usage", url: "/quota", icon: GaugeIcon },
 ];
-const administrationNavigation = {
-  title: "Administration",
-  url: "/admin",
-  icon: ShieldCheckIcon,
-};
 const settingsNavigation = [
   { title: "General", url: "/settings/team", icon: SettingsIcon },
   { title: "Members", url: "/settings/members", icon: UsersIcon },
@@ -215,10 +210,7 @@ function AppLayoutContent() {
   const [actionError, setActionError] = useState<string | null>(null);
   const showSettings = activeRole ? canViewTeamSettings(activeRole) : false;
   const showAudit = activeRole ? canViewTeamAudit(activeRole) : false;
-  const navigation =
-    user?.platform_role === "admin"
-      ? [...primaryNavigation, administrationNavigation]
-      : primaryNavigation;
+  const navigation = primaryNavigation;
 
   const projectMatch = matchPath("/projects/:projectId/*", location.pathname);
   const projectId =
@@ -307,6 +299,13 @@ function AppLayoutContent() {
                       <UserRoundIcon /> Personal settings
                     </NavLink>
                   </DropdownMenuItem>
+                  {user?.platform_role === "admin" && (
+                    <DropdownMenuItem asChild>
+                      <NavLink to="/admin">
+                        <ShieldCheckIcon /> Administration
+                      </NavLink>
+                    </DropdownMenuItem>
+                  )}
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={signOut}>
                     <LogOutIcon /> Log out

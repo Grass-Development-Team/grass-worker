@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -58,14 +59,25 @@ function renderLayout(
 describe("App layout administration navigation", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("hides Administration from a regular platform user", () => {
+  it("hides Administration from a regular platform user's account menu", async () => {
     renderLayout("user");
+
+    await userEvent.click(screen.getByRole("button", { name: /User/ }));
+
     expect(screen.queryByRole("link", { name: "Administration" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Administration" })).not.toBeInTheDocument();
   });
 
-  it("shows Administration to a platform administrator", () => {
+  it("shows Administration in a platform administrator's account menu", async () => {
     renderLayout("admin");
-    expect(screen.getByRole("link", { name: "Administration" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Administration" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /User/ }));
+
+    expect(screen.getByRole("menuitem", { name: "Administration" })).toHaveAttribute(
+      "href",
+      "/admin",
+    );
   });
 
   it.each(["member", "viewer"] as const)("hides team Audit from %s", (role) => {
