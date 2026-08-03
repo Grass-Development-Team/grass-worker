@@ -219,7 +219,7 @@ function CreateProjectForm({ teamId }: { teamId: string }) {
         <div className="max-w-xl">
           <p className="text-sm font-medium text-muted-foreground">Start with the basics</p>
           <h1 className="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl">
-            Configure project
+            Configure Project
           </h1>
           <p className="mt-3 max-w-lg text-sm leading-6 text-muted-foreground">
             Connect a repository and choose a framework preset. You can refine the build settings
@@ -282,7 +282,7 @@ function CreateProjectForm({ teamId }: { teamId: string }) {
               </p>
             )}
             <Button type="submit" size="lg" className="w-full" disabled={createMutation.isPending}>
-              {createMutation.isPending ? "Creating project..." : "Create project"}
+              {createMutation.isPending ? "Creating Project..." : "Create Project"}
             </Button>
           </div>
         </form>

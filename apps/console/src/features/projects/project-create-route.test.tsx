@@ -67,7 +67,7 @@ describe("ProjectCreateRoute", () => {
   it("renders the full-screen form without a dialog", () => {
     renderCreate();
 
-    expect(screen.getByRole("heading", { name: "Configure project" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Configure Project" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Framework Presets" })).toBeInTheDocument();
     expect(screen.getByLabelText("Project name")).toBeInTheDocument();
     expect(screen.getByLabelText("Slug")).toBeInTheDocument();
@@ -99,7 +99,7 @@ describe("ProjectCreateRoute", () => {
 
     await user.type(screen.getByLabelText("Project name"), "SSR Site");
     await user.click(screen.getByRole("button", { name: /Next\.js \(SSR\)/ }));
-    await user.click(screen.getByRole("button", { name: "Create project" }));
+    await user.click(screen.getByRole("button", { name: "Create Project" }));
 
     await waitFor(() => expect(projectsApi.create).toHaveBeenCalledTimes(1));
     expect(projectsApi.create).toHaveBeenCalledWith({
@@ -122,7 +122,7 @@ describe("ProjectCreateRoute", () => {
 
     await user.type(screen.getByLabelText("Project name"), "SSH Site");
     await user.type(screen.getByLabelText("Git repository URL"), "git@github.com:acme/site.git");
-    await user.click(screen.getByRole("button", { name: "Create project" }));
+    await user.click(screen.getByRole("button", { name: "Create Project" }));
 
     await waitFor(() => expect(projectsApi.create).toHaveBeenCalledTimes(1));
     expect(projectsApi.create).toHaveBeenCalledWith(
@@ -136,10 +136,10 @@ describe("ProjectCreateRoute", () => {
     renderCreate();
 
     await user.type(screen.getByLabelText("Project name"), "Existing Site");
-    await user.click(screen.getByRole("button", { name: "Create project" }));
+    await user.click(screen.getByRole("button", { name: "Create Project" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Slug already exists");
-    expect(screen.getByRole("heading", { name: "Configure project" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Configure Project" })).toBeInTheDocument();
     expect(screen.getByTestId("location")).toHaveTextContent("/projects/new");
   });
 
@@ -148,7 +148,7 @@ describe("ProjectCreateRoute", () => {
     renderCreate();
 
     await user.type(screen.getByLabelText("Project name"), "Marketing Site");
-    await user.click(screen.getByRole("button", { name: "Create project" }));
+    await user.click(screen.getByRole("button", { name: "Create Project" }));
 
     await waitFor(() =>
       expect(screen.getByTestId("location")).toHaveTextContent("/projects/project-1"),
