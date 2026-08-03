@@ -30,6 +30,29 @@ Or use the Docker image (both binaries are included):
 docker build -t grass-worker .
 ```
 
+Published images use Debian Bookworm as the default runtime. The `-slim` and
+`-alpine` tags select Debian Bookworm Slim and Alpine 3.22 respectively:
+
+```text
+ghcr.io/yuanzui-cf/grass-worker:<version>
+ghcr.io/yuanzui-cf/grass-worker:<version>-slim
+ghcr.io/yuanzui-cf/grass-worker:<version>-alpine
+```
+
+Build all local runtime variants with Docker Bake:
+
+```sh
+docker buildx bake
+```
+
+To build one target, use its Dockerfile stage:
+
+```sh
+docker build --target runtime -t grass-worker:debian .
+docker build --target runtime-slim -t grass-worker:slim .
+docker build --target runtime-alpine -t grass-worker:alpine .
+```
+
 ## 2. Start the Control API
 
 Copy `config.toml.example` to `config.toml` and set at least the database

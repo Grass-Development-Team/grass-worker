@@ -35,7 +35,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Derive image metadata
+      - name: Derive Debian image metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -46,15 +46,52 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha
 
-      - name: Build and push image
-        uses: docker/build-push-action@v6
+      - name: Derive Slim image metadata
+        id: meta-slim
+        uses: docker/metadata-action@v5
         with:
-          context: .
+          images: ghcr.io/${{ github.repository }}
+          flavor: suffix=-slim
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - name: Derive Alpine image metadata
+        id: meta-alpine
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          flavor: suffix=-alpine
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - name: Prepare Bake labels
+        id: bake-labels
+        env:
+          LABELS: ${{ steps.meta.outputs.labels }}
+        run: |
+          {
+            echo 'labels_json<<EOF'
+            printf '%s\n' "$LABELS" | jq -Rn '[inputs | split("=") | {(.[0]): (.[1:] | join("="))}] | add // {}'
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push runtime variants
+        uses: docker/bake-action@v6
+        with:
+          files: docker-bake.hcl
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          TAGS_DEBIAN: ${{ steps.meta.outputs.tags }}
+          TAGS_SLIM: ${{ steps.meta-slim.outputs.tags }}
+          TAGS_ALPINE: ${{ steps.meta-alpine.outputs.tags }}
+          LABELS_JSON: ${{ steps.bake-labels.outputs.labels_json }}
 
   binaries:
     name: Release binaries
