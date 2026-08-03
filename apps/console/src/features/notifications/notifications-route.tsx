@@ -4,8 +4,8 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
-import { NotificationItems } from "./notification-items";
-import { notificationsApi } from "./notifications.api";
+import { AnnouncementDialog, NotificationItems } from "./notification-items";
+import { notificationsApi, type NotificationItem } from "./notifications.api";
 
 function errorMessage(cause: unknown) {
   return cause instanceof Error ? cause.message : "Unable to update notifications.";
@@ -14,6 +14,7 @@ function errorMessage(cause: unknown) {
 export function NotificationsRoute() {
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
+  const [announcement, setAnnouncement] = useState<NotificationItem | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const query = useQuery({
     queryKey: ["notifications", "list", page],
@@ -91,6 +92,7 @@ export function NotificationsRoute() {
         <div className="overflow-hidden rounded-md border">
           <NotificationItems
             notifications={query.data.notifications}
+            onAnnouncement={setAnnouncement}
             onOpen={(item) => {
               if (!item.read_at) markRead.mutate(item.id);
             }}
@@ -123,6 +125,12 @@ export function NotificationsRoute() {
           </Button>
         </nav>
       )}
+      <AnnouncementDialog
+        announcement={announcement}
+        onOpenChange={(open) => {
+          if (!open) setAnnouncement(null);
+        }}
+      />
     </div>
   );
 }

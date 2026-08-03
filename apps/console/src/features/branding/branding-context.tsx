@@ -4,11 +4,13 @@ import { APP_NAME, APP_VERSION } from "@/lib/constants";
 
 export interface Branding {
   siteName: string;
+  logoUrl?: string | null;
   version: string;
 }
 
 const defaultBranding: Branding = {
   siteName: APP_NAME,
+  logoUrl: null,
   version: APP_VERSION,
 };
 
@@ -28,9 +30,12 @@ export function BrandingProvider({
   branding?: Branding;
   children: React.ReactNode;
 }) {
-  const value = branding ?? defaultBranding;
+  const value = { ...defaultBranding, ...branding };
   const [pageTitle, setPageTitle] = useState<string | null>(null);
-  const context = useMemo(() => ({ ...value, setPageTitle }), [value.siteName, value.version]);
+  const context = useMemo(
+    () => ({ ...value, setPageTitle }),
+    [value.siteName, value.logoUrl, value.version],
+  );
 
   useEffect(() => {
     document.title = pageTitle ? `${pageTitle} · ${value.siteName}` : value.siteName;

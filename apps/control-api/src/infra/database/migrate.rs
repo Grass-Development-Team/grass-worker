@@ -28,6 +28,7 @@ impl MigratorTrait for Migrator {
             Box::new(migration::m20260731_000017_project_notifications::Migration),
             Box::new(migration::m20260801_000018_artifact_retention::Migration),
             Box::new(migration::m20260801_000019_ssr_process_leases::Migration),
+            Box::new(migration::m20260803_000020_notification_content::Migration),
         ]
     }
 }
@@ -104,7 +105,7 @@ mod tests {
     fn registers_audit_foundation_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 19);
+        assert_eq!(migrations.len(), 20);
         assert_eq!(
             migrations.get(11).expect("twelfth migration").name(),
             "m20260729_000012_audit_foundation"
@@ -133,7 +134,7 @@ mod tests {
     fn registers_team_group_review_policy_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 19);
+        assert_eq!(migrations.len(), 20);
         assert_eq!(
             migrations.get(12).expect("thirteenth migration").name(),
             "m20260729_000013_team_group_review_policy"
@@ -144,7 +145,7 @@ mod tests {
     fn registers_node_config_sync_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 19);
+        assert_eq!(migrations.len(), 20);
         assert_eq!(
             migrations.get(13).expect("fourteenth migration").name(),
             "m20260729_000014_node_config_sync"
@@ -155,7 +156,7 @@ mod tests {
     fn registers_node_deletion_queue_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 19);
+        assert_eq!(migrations.len(), 20);
         assert_eq!(
             migrations.get(14).expect("fifteenth migration").name(),
             "m20260729_000015_node_deletion_queue"
@@ -166,7 +167,7 @@ mod tests {
     fn registers_domain_review_policy_after_node_deletion_queue() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 19);
+        assert_eq!(migrations.len(), 20);
         assert_eq!(
             migrations.get(14).expect("fifteenth migration").name(),
             "m20260729_000015_node_deletion_queue"
@@ -181,7 +182,7 @@ mod tests {
     fn registers_project_notifications_after_domain_review_policy() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 19);
+        assert_eq!(migrations.len(), 20);
         assert_eq!(
             migrations.get(15).expect("sixteenth migration").name(),
             "m20260730_000016_domain_review_policy"
@@ -196,8 +197,45 @@ mod tests {
         );
         assert_eq!(
             migrations.last().expect("last migration").name(),
-            "m20260801_000019_ssr_process_leases"
+            "m20260803_000020_notification_content"
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires GRASS_TEST_DATABASE_URL"]
+    async fn postgres_notification_content_schema_matches_the_domain_model_and_is_reversible()
+    -> anyhow::Result<()> {
+        let _migration_guard = MIGRATION_TEST_LOCK.lock().await;
+        let database_url = std::env::var("GRASS_TEST_DATABASE_URL")
+            .expect("GRASS_TEST_DATABASE_URL must be set to run this ignored migration test");
+        let test_db = PostgresMigrationDatabase::start(&database_url).await?;
+
+        let verification = async {
+            Migrator::up(&test_db.db, Some(19)).await?;
+            assert_migration_tracking(&test_db.db, 19, 1).await?;
+
+            Migrator::up(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 20, 0).await?;
+            assert_notification_content_schema(&test_db.db).await?;
+
+            Migrator::down(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 19, 1).await?;
+            assert_notification_content_schema_absent(&test_db.db).await?;
+
+            Migrator::up(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 20, 0).await?;
+            assert_notification_content_schema(&test_db.db).await
+        }
+        .await;
+        let cleanup = test_db.cleanup().await;
+
+        match (verification, cleanup) {
+            (Err(verification_error), Err(cleanup_error)) => Err(verification_error.context(
+                format!("disposable schema cleanup also failed: {cleanup_error:#}"),
+            )),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Ok(()), Ok(())) => Ok(()),
+        }
     }
 
     #[tokio::test]
@@ -512,6 +550,109 @@ SELECT
             .context("notification absence query returned no row")?;
         ensure!(row.try_get::<bool>("", "notifications_absent")?);
         ensure!(row.try_get::<bool>("", "creator_absent")?);
+        Ok(())
+    }
+
+    async fn assert_notification_content_schema(db: &DatabaseConnection) -> anyhow::Result<()> {
+        let columns = query_column_shapes(
+            db,
+            r#"
+SELECT column_name, udt_name, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'user_notifications'
+  AND column_name IN ('project_name', 'project_slug', 'title', 'content')
+ORDER BY ordinal_position
+"#,
+        )
+        .await?;
+        ensure!(
+            columns
+                == vec![
+                    ColumnShape {
+                        name: "project_name".to_owned(),
+                        udt_name: "text".to_owned(),
+                        nullable: "YES".to_owned(),
+                        default: None,
+                    },
+                    ColumnShape {
+                        name: "project_slug".to_owned(),
+                        udt_name: "text".to_owned(),
+                        nullable: "YES".to_owned(),
+                        default: None,
+                    },
+                    ColumnShape {
+                        name: "title".to_owned(),
+                        udt_name: "text".to_owned(),
+                        nullable: "YES".to_owned(),
+                        default: None,
+                    },
+                    ColumnShape {
+                        name: "content".to_owned(),
+                        udt_name: "text".to_owned(),
+                        nullable: "YES".to_owned(),
+                        default: None,
+                    },
+                ],
+            "unexpected notification content columns: {columns:?}"
+        );
+
+        let row = db
+            .query_one_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT pg_get_constraintdef(oid) AS definition
+FROM pg_constraint
+WHERE conname = 'ck_user_notifications_announcement_content'
+"#,
+            ))
+            .await?
+            .context("announcement content constraint was not created")?;
+        let definition = row.try_get::<String>("", "definition")?;
+        ensure!(definition.contains("site.announcement"));
+        ensure!(definition.contains("team_id IS NULL"));
+        ensure!(definition.contains("project_id IS NULL"));
+        Ok(())
+    }
+
+    async fn assert_notification_content_schema_absent(
+        db: &DatabaseConnection,
+    ) -> anyhow::Result<()> {
+        let row = db
+            .query_one_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT
+  NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'user_notifications'
+      AND column_name IN ('title', 'content')
+  ) AS content_columns_absent,
+  NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'ck_user_notifications_announcement_content'
+  ) AS constraint_absent,
+  (
+    SELECT is_nullable FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'user_notifications'
+      AND column_name = 'project_name'
+  ) = 'NO' AS project_name_required,
+  (
+    SELECT is_nullable FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'user_notifications'
+      AND column_name = 'project_slug'
+  ) = 'NO' AS project_slug_required
+"#,
+            ))
+            .await?
+            .context("notification content absence query returned no row")?;
+        ensure!(row.try_get::<bool>("", "content_columns_absent")?);
+        ensure!(row.try_get::<bool>("", "constraint_absent")?);
+        ensure!(row.try_get::<bool>("", "project_name_required")?);
+        ensure!(row.try_get::<bool>("", "project_slug_required")?);
         Ok(())
     }
 

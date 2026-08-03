@@ -1,5 +1,4 @@
 import {
-  ActivityIcon,
   FolderGitIcon,
   GaugeIcon,
   HomeIcon,
@@ -10,6 +9,7 @@ import {
   SettingsIcon,
   ShieldCheckIcon,
   SunIcon,
+  UserRoundIcon,
   UsersIcon,
 } from "lucide-react";
 import { useTheme } from "next-themes";
@@ -17,6 +17,7 @@ import { useEffect, useState } from "react";
 import { matchPath, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { SiteLogo } from "@/components/site-logo";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -86,6 +87,7 @@ function pageTitle(pathname: string, inProject: boolean): string {
   }
   if (pathname === "/quota") return "Usage";
   if (pathname === "/notifications") return "Notifications";
+  if (pathname.startsWith("/account/profile")) return "Personal Settings";
   if (pathname.startsWith("/settings/team")) return "Team Settings";
   if (pathname.startsWith("/settings/members")) return "Members";
   if (pathname.startsWith("/settings/audit")) return "Audit";
@@ -247,7 +249,7 @@ function AppLayoutContent() {
             <SidebarMenuItem>
               <SidebarMenuButton asChild>
                 <NavLink to="/" aria-label={`${siteName} Console`}>
-                  <ActivityIcon />
+                  <SiteLogo className="size-4" />
                   <span className="font-semibold">{siteName}</span>
                 </NavLink>
               </SidebarMenuButton>
@@ -291,6 +293,12 @@ function AppLayoutContent() {
                     </p>
                     <p className="truncate text-xs text-muted-foreground">{user?.email}</p>
                   </DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem asChild>
+                    <NavLink to="/account/profile">
+                      <UserRoundIcon /> Personal settings
+                    </NavLink>
+                  </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={signOut}>
                     <LogOutIcon /> Log out

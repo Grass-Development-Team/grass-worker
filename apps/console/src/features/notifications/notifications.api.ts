@@ -8,7 +8,8 @@ export interface NotificationItem {
     id: string | null;
     name: string;
     slug: string;
-  };
+  } | null;
+  content: string | null;
   reason: string | null;
   target_url: string;
   read_at: string | null;

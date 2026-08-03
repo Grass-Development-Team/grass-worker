@@ -86,7 +86,13 @@ export function App() {
   if (isSetupMode) {
     return (
       <BrandingProvider
-        branding={siteConfig && { siteName: siteConfig.site_name, version: siteConfig.version }}
+        branding={
+          siteConfig && {
+            siteName: siteConfig.site_name,
+            logoUrl: siteConfig.logo_url,
+            version: siteConfig.version,
+          }
+        }
       >
         <Router />
       </BrandingProvider>
@@ -95,7 +101,13 @@ export function App() {
 
   return (
     <BrandingProvider
-      branding={siteConfig && { siteName: siteConfig.site_name, version: siteConfig.version }}
+      branding={
+        siteConfig && {
+          siteName: siteConfig.site_name,
+          logoUrl: siteConfig.logo_url,
+          version: siteConfig.version,
+        }
+      }
     >
       <AuthProvider>
         <Router />

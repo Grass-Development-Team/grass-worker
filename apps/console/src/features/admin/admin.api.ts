@@ -383,7 +383,12 @@ export interface AdminReview {
 }
 
 export interface AdminSettings {
-  site: { name: string | null; url: string | null; public_base_url: string | null };
+  site: {
+    name: string | null;
+    logo_url: string | null;
+    url: string | null;
+    public_base_url: string | null;
+  };
   storage: { root: string };
   signup: { policy: "open" | "invite_only" | "closed" };
   review: { production: "auto" | "manual"; preview: "auto" | "manual" };
@@ -407,6 +412,11 @@ export interface AdminSettings {
   migration: { auto_migrate: boolean };
   log: { level: string; format: "pretty" | "json" };
   restart_required_sections: Array<"server" | "redis" | "node_manager" | "migration" | "log">;
+}
+
+export interface AdminAnnouncement {
+  title: string | null;
+  content: string | null;
 }
 
 export const adminApi = {
@@ -730,8 +740,17 @@ export const adminApi = {
 
   getSettings: () => request<AdminSettings>("/api/v1/admin/settings"),
 
+  getAnnouncement: () => request<AdminAnnouncement>("/api/v1/admin/announcements"),
+
+  publishAnnouncement: (input: { title: string; content: string }) =>
+    request<AdminAnnouncement & { recipients: number }>("/api/v1/admin/announcements", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
   updateSettings: (input: {
     site_name?: string;
+    site_logo_url?: string;
     site_url?: string;
     public_base_url?: string;
     storage_root?: string;

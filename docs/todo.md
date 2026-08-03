@@ -2,7 +2,7 @@
 
 当前版本：0.1.0
 
-> 状态（2026-07-31）：第一阶段和第二阶段平台治理、交付防护已交付。本文档是未完成工作、当前优先级和后续范围的唯一来源；已完成能力不在这里重复维护。
+> 状态（2026-08-01）：第一阶段和第二阶段平台治理、交付防护已交付。本文档是未完成工作、当前优先级和后续范围的唯一来源；已完成能力不在这里重复维护。
 
 ## 使用规则
 
@@ -15,9 +15,6 @@
 
 ## P1：产品能力
 
-- P1.1 Artifact 清理策略：日志保留天数、Preview/失败部署保留期、Production 最近 N 个、定时任务和 active deployment 保护；
-- P1.2 SSR 配额增强：最大 SSR 进程数和每月 SSR 运行小时数；
-- P1.3 更多 SSR 框架：SvelteKit adapter-node、Remix / React Router SSR；
 - P1.4 Custom Grass Output：允许用户提供 `.grass/output/output.toml`，并定义 manifest 安全校验策略；
 - P1.5 认证增强：OAuth、MFA、密码策略和密码找回；
 - P1.6 消息外发：SMTP、邀请邮件、部署结果通知和 Webhook；

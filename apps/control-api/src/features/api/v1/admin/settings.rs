@@ -17,6 +17,7 @@ use crate::{
 };
 
 const SITE_NAME_KEY: &str = "site.name";
+const SITE_LOGO_URL_KEY: &str = "site.logo_url";
 const SITE_URL_KEY: &str = "site.url";
 const PUBLIC_BASE_URL_KEY: &str = "site.public_base_url";
 const STORAGE_ROOT_KEY: &str = "storage.root";
@@ -60,6 +61,7 @@ pub async fn get(State(state): State<ControlApiState>) -> Result<impl IntoRespon
     Ok(ok_response(json!({
         "site": {
             "name": setting_string(db, SITE_NAME_KEY, OP).await?,
+            "logo_url": setting_string(db, SITE_LOGO_URL_KEY, OP).await?,
             "url": setting_string(db, SITE_URL_KEY, OP).await?,
             "public_base_url": setting_string(db, PUBLIC_BASE_URL_KEY, OP).await?,
         },
@@ -113,6 +115,7 @@ pub async fn get(State(state): State<ControlApiState>) -> Result<impl IntoRespon
 #[derive(Default, Deserialize)]
 pub struct UpdateSettingsRequest {
     pub site_name: Option<String>,
+    pub site_logo_url: Option<String>,
     pub site_url: Option<String>,
     pub public_base_url: Option<String>,
     pub storage_root: Option<String>,
@@ -142,6 +145,7 @@ pub struct UpdateSettingsRequest {
 
 struct PreparedSettingsUpdate {
     site_name: Option<String>,
+    site_logo_url: Option<String>,
     site_url: Option<String>,
     public_base_url: Option<String>,
     storage_root: Option<String>,
@@ -369,6 +373,29 @@ fn validate_review_mode(value: &str, op: &'static str) -> Result<(), AppError> {
     }
 }
 
+fn validate_logo_url(value: &str, op: &'static str) -> Result<String, AppError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(String::new());
+    }
+    if value.starts_with('/') && !value.starts_with("//") {
+        return Ok(value.to_owned());
+    }
+    let parsed = url::Url::parse(value).map_err(|_| AppError::Validation {
+        op,
+        message: "logo URL must be an absolute http or https URL or a root-relative path"
+            .to_owned(),
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host().is_none() {
+        return Err(AppError::Validation {
+            op,
+            message: "logo URL must be an absolute http or https URL or a root-relative path"
+                .to_owned(),
+        });
+    }
+    Ok(value.to_owned())
+}
+
 fn prepare_settings_update(
     body: UpdateSettingsRequest,
     op: &'static str,
@@ -380,6 +407,12 @@ fn prepare_settings_update(
             message: "site name cannot be empty".to_owned(),
         });
     }
+
+    let site_logo_url = body
+        .site_logo_url
+        .as_deref()
+        .map(|value| validate_logo_url(value, op))
+        .transpose()?;
 
     let site_url = body
         .site_url
@@ -538,6 +571,7 @@ fn prepare_settings_update(
 
     let prepared = PreparedSettingsUpdate {
         site_name,
+        site_logo_url,
         site_url,
         public_base_url,
         storage_root,
@@ -565,6 +599,7 @@ fn prepare_settings_update(
         log_format,
     };
     if prepared.site_name.is_none()
+        && prepared.site_logo_url.is_none()
         && prepared.site_url.is_none()
         && prepared.public_base_url.is_none()
         && prepared.storage_root.is_none()
@@ -690,6 +725,20 @@ pub async fn update(
             .map_err(|source| AppError::Infrastructure { op: OP, source })?;
         after.insert("site_name".to_owned(), json!(name));
         changed.push("site_name");
+    }
+    if let Some(logo_url) = body.site_logo_url.as_deref() {
+        before.insert(
+            "site_logo_url".to_owned(),
+            setting_string(&transaction, SITE_LOGO_URL_KEY, OP)
+                .await?
+                .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null),
+        );
+        settings::set_string(&transaction, SITE_LOGO_URL_KEY, logo_url)
+            .await
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+        after.insert("site_logo_url".to_owned(), json!(logo_url));
+        changed.push("site_logo_url");
     }
     if let Some(url) = body.site_url.as_deref() {
         before.insert(
@@ -943,6 +992,7 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
+                Vec::new(),
             ])
             .into_connection();
         let mut config = ControlApiConfig::default();
@@ -1076,6 +1126,7 @@ mod tests {
             Vec::<crate::infra::database::entity::system_setting::Model>::new(),
             Vec::<crate::infra::database::entity::system_setting::Model>::new(),
             Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
         ]);
         if audit_succeeds {
             mock.append_exec_results([sea_orm::MockExecResult {
@@ -1147,6 +1198,26 @@ mod tests {
     }
 
     #[test]
+    fn logo_url_accepts_https_and_root_relative_values_but_rejects_other_schemes() {
+        let https: UpdateSettingsRequest = serde_json::from_value(serde_json::json!({
+            "site_logo_url": " https://cdn.example.com/logo.svg "
+        }))
+        .unwrap();
+        let relative: UpdateSettingsRequest = serde_json::from_value(serde_json::json!({
+            "site_logo_url": "/assets/logo.svg"
+        }))
+        .unwrap();
+        let invalid: UpdateSettingsRequest = serde_json::from_value(serde_json::json!({
+            "site_logo_url": "javascript:alert(1)"
+        }))
+        .unwrap();
+
+        assert!(prepare_settings_update(https, "test.settings.prepare").is_ok());
+        assert!(prepare_settings_update(relative, "test.settings.prepare").is_ok());
+        assert!(prepare_settings_update(invalid, "test.settings.prepare").is_err());
+    }
+
+    #[test]
     fn session_ttl_must_fit_timestamp_arithmetic() {
         let request: UpdateSettingsRequest = serde_json::from_value(serde_json::json!({
             "session_ttl_seconds": (i64::MAX as u64) + 1
@@ -1161,6 +1232,7 @@ mod tests {
         let db = MockDatabase::new(sea_orm::DbBackend::Postgres)
             .append_query_results([
                 Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+                Vec::new(),
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),

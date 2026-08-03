@@ -78,6 +78,11 @@ export const authApi = {
     request<MeResponse>("/api/v1/me", {
       credentials: "include" as RequestCredentials,
     }),
+  updateMe: (input: { display_name: string | null }) =>
+    request<MeResponse>("/api/v1/me", {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
   csrf: async () => {
     const data = await request<CsrfResponse>("/api/v1/auth/csrf", {
       credentials: "include" as RequestCredentials,
