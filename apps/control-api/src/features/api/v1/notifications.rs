@@ -43,15 +43,22 @@ fn database<'a>(
 }
 
 fn notification_view(item: &user_notification::Model) -> serde_json::Value {
-    json!({
-        "id": item.id,
-        "action": item.action,
-        "title": notifications::notification_title(&item.action),
-        "project": {
+    let is_announcement = item.action == "site.announcement";
+    let project = if is_announcement {
+        serde_json::Value::Null
+    } else {
+        json!({
             "id": item.project_id,
             "name": item.project_name,
             "slug": item.project_slug,
-        },
+        })
+    };
+    json!({
+        "id": item.id,
+        "action": item.action,
+        "title": item.title.as_deref().unwrap_or_else(|| notifications::notification_title(&item.action)),
+        "project": project,
+        "content": item.content,
         "reason": item.reason,
         "target_url": item.target_url,
         "read_at": ts(item.read_at),
@@ -141,9 +148,11 @@ mod tests {
             team_id: Some(Uuid::now_v7()),
             project_id: Some(Uuid::now_v7()),
             action: "project.slug_updated".to_owned(),
-            project_name: "Demo".to_owned(),
-            project_slug: "demo-site".to_owned(),
+            project_name: Some("Demo".to_owned()),
+            project_slug: Some("demo-site".to_owned()),
             actor_label: "Platform Admin".to_owned(),
+            title: None,
+            content: None,
             reason: Some("Reserved wording".to_owned()),
             target_url: "/projects/demo/deployments".to_owned(),
             read_at: None,
@@ -159,5 +168,33 @@ mod tests {
         assert_eq!(value["reason"], "Reserved wording");
         assert_eq!(value["target_url"], "/projects/demo/deployments");
         assert!(value["read_at"].is_null());
+    }
+
+    #[test]
+    fn announcement_response_exposes_content_without_project_metadata() {
+        let item = user_notification::Model {
+            id: Uuid::now_v7(),
+            recipient_user_id: Uuid::now_v7(),
+            actor_user_id: Some(Uuid::now_v7()),
+            team_id: None,
+            project_id: None,
+            action: "site.announcement".to_owned(),
+            project_name: None,
+            project_slug: None,
+            actor_label: "Platform Admin".to_owned(),
+            title: Some("Maintenance window".to_owned()),
+            content: Some("The API will restart at 10:00 UTC.".to_owned()),
+            reason: None,
+            target_url: "/notifications".to_owned(),
+            read_at: None,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+        };
+
+        let value = notification_view(&item);
+
+        assert_eq!(value["title"], "Maintenance window");
+        assert_eq!(value["content"], "The API will restart at 10:00 UTC.");
+        assert!(value["project"].is_null());
+        assert_eq!(value["target_url"], "/notifications");
     }
 }

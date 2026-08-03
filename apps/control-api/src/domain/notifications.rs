@@ -20,6 +20,12 @@ pub struct CreateProjectNotification<'a> {
     pub target_url: String,
 }
 
+pub struct CreateAnnouncementNotification {
+    pub actor_user_id: Uuid,
+    pub title: String,
+    pub content: String,
+}
+
 pub struct NotificationPage {
     pub notifications: Vec<user_notification::Model>,
     pub page: u64,
@@ -41,6 +47,7 @@ pub fn notification_title(action: &str) -> &'static str {
         "project.unarchived" => "Project unarchived",
         "project.deleted" => "Project deleted",
         "project.restored" => "Project restored",
+        "site.announcement" => "Announcement",
         _ => "Project updated",
     }
 }
@@ -130,11 +137,64 @@ pub async fn create_project_notification<C: ConnectionTrait>(
             team_id: Set(Some(params.project.team_id)),
             project_id: Set(Some(params.project.id)),
             action: Set(params.action.to_owned()),
-            project_name: Set(params.project.name.clone()),
-            project_slug: Set(params.project.slug.clone()),
+            project_name: Set(Some(params.project.name.clone())),
+            project_slug: Set(Some(params.project.slug.clone())),
             actor_label: Set(actor_label.clone()),
+            title: Set(None),
+            content: Set(None),
             reason: Set(params.reason.clone()),
             target_url: Set(params.target_url.clone()),
+            read_at: Set(None),
+            created_at: Set(now),
+        }
+    }))
+    .exec_without_returning(db)
+    .await?;
+
+    Ok(count)
+}
+
+pub async fn create_announcement_notifications<C: ConnectionTrait>(
+    db: &C,
+    params: CreateAnnouncementNotification,
+) -> anyhow::Result<usize> {
+    let recipients = user::Entity::find()
+        .filter(user::Column::Status.eq(UserStatus::Active))
+        .filter(user::Column::DeletedAt.is_null())
+        .all(db)
+        .await?;
+    if recipients.is_empty() {
+        return Ok(0);
+    }
+
+    let actor_label = user::Entity::find_by_id(params.actor_user_id)
+        .one(db)
+        .await?
+        .map(|actor| {
+            actor
+                .display_name
+                .filter(|label| !label.trim().is_empty())
+                .unwrap_or(actor.email)
+        })
+        .unwrap_or_else(|| "Platform administrator".to_owned());
+    let count = recipients.len();
+    let now = OffsetDateTime::now_utc();
+
+    user_notification::Entity::insert_many(recipients.into_iter().map(|recipient| {
+        user_notification::ActiveModel {
+            id: Set(Uuid::now_v7()),
+            recipient_user_id: Set(recipient.id),
+            actor_user_id: Set(Some(params.actor_user_id)),
+            team_id: Set(None),
+            project_id: Set(None),
+            action: Set("site.announcement".to_owned()),
+            project_name: Set(None),
+            project_slug: Set(None),
+            actor_label: Set(actor_label.clone()),
+            title: Set(Some(params.title.clone())),
+            content: Set(Some(params.content.clone())),
+            reason: Set(None),
+            target_url: Set("/notifications".to_owned()),
             read_at: Set(None),
             created_at: Set(now),
         }
@@ -343,6 +403,11 @@ mod tests {
         assert_eq!(notification_title("domain.deleted"), "Domain deleted");
         assert_eq!(notification_title("project.archived"), "Project archived");
         assert_eq!(notification_title("project.restored"), "Project restored");
+    }
+
+    #[test]
+    fn announcements_use_a_stable_action_for_content_notifications() {
+        assert_eq!(notification_title("site.announcement"), "Announcement");
     }
 
     #[tokio::test]

@@ -1,3 +1,4 @@
+pub mod announcements;
 pub mod audit_events;
 pub mod deployments;
 pub mod domains;
@@ -64,6 +65,10 @@ pub fn router() -> Router<ControlApiState> {
             post(users::reset_password),
         )
         .route("/settings", get(settings::get).patch(settings::update))
+        .route(
+            "/announcements",
+            get(announcements::get).post(announcements::publish),
+        )
         .route("/projects", get(projects::list))
         .route("/projects/{project_id}", get(projects::detail))
         .route(
