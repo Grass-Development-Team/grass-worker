@@ -43,5 +43,11 @@ it("uses the public site configuration on the login page and document title", as
     await screen.findByRole("heading", { name: "Welcome to Acme Deploy" }),
   ).toBeInTheDocument();
   expect(document.title).toBe("Acme Deploy");
-  expect(document.querySelector('img[src="/brand.svg"]')).toBeInTheDocument();
+  const logo = document.querySelector('img[src="/brand.svg"]');
+  expect(logo).toBeInTheDocument();
+  expect(logo?.parentElement).not.toHaveClass("bg-primary");
+  expect(document.querySelector('link[data-branding-favicon="true"]')).toHaveAttribute(
+    "href",
+    "/brand.svg",
+  );
 });

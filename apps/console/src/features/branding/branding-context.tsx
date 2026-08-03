@@ -41,6 +41,24 @@ export function BrandingProvider({
     document.title = pageTitle ? `${pageTitle} · ${value.siteName}` : value.siteName;
   }, [pageTitle, value.siteName]);
 
+  useEffect(() => {
+    const selector = 'link[data-branding-favicon="true"]';
+    const existing = document.head.querySelector<HTMLLinkElement>(selector);
+
+    if (!value.logoUrl) {
+      existing?.remove();
+      return;
+    }
+
+    const favicon = existing ?? document.createElement("link");
+    favicon.rel = "icon";
+    favicon.dataset.brandingFavicon = "true";
+    favicon.href = value.logoUrl;
+    if (!existing) document.head.appendChild(favicon);
+
+    return () => favicon.remove();
+  }, [value.logoUrl]);
+
   return <BrandingContext.Provider value={context}>{children}</BrandingContext.Provider>;
 }
 

@@ -57,10 +57,7 @@ export function SignupForm({ className, ...props }: React.ComponentPropsWithoutR
   return (
     <div className={cn("flex flex-col gap-6", className)} {...props}>
       <div className="flex flex-col items-center gap-2">
-        <Link
-          to="/"
-          className="bg-primary text-primary-foreground flex size-9 items-center justify-center rounded-lg"
-        >
+        <Link to="/" className="flex size-10 items-center justify-center">
           <SiteLogo className="size-5" />
           <span className="sr-only">{siteName}</span>
         </Link>
