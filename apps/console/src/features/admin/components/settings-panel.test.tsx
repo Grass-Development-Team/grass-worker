@@ -21,6 +21,7 @@ vi.mock("../admin.api", async (importOriginal) => {
 const settings = {
   site: {
     name: "Old Name",
+    logo_url: "/assets/old-logo.svg",
     url: "https://console.example.com",
     public_base_url: "https://apps.example.com",
   },
@@ -70,6 +71,29 @@ it("invalidates the public site configuration after saving the site name", async
 
   await waitFor(() => expect(adminApi.updateSettings).toHaveBeenCalled());
   expect(client.getQueryState(["site-config"])?.isInvalidated).toBe(true);
+});
+
+it("saves the logo URL with the basic site settings", async () => {
+  const user = userEvent.setup();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <SettingsPanel section="basic" />
+    </QueryClientProvider>,
+  );
+
+  const logoUrl = await screen.findByLabelText("Logo URL");
+  expect(logoUrl).toHaveValue("/assets/old-logo.svg");
+  await user.clear(logoUrl);
+  await user.type(logoUrl, "https://cdn.example.com/logo.svg");
+  await user.click(within(logoUrl.closest("form")!).getByRole("button", { name: "Save" }));
+
+  await waitFor(() =>
+    expect(adminApi.updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ site_logo_url: "https://cdn.example.com/logo.svg" }),
+    ),
+  );
+  expect(screen.queryByLabelText("Server host")).not.toBeInTheDocument();
 });
 
 it("shows every non-secret Control API setting and only secret configuration status", async () => {

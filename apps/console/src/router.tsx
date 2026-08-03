@@ -98,6 +98,16 @@ const SettingsPanel = lazy(() =>
     default: SettingsPanel,
   })),
 );
+const SettingsLayout = lazy(() =>
+  import("@/features/admin/components/settings-layout").then(({ SettingsLayout }) => ({
+    default: SettingsLayout,
+  })),
+);
+const AnnouncementsPanel = lazy(() =>
+  import("@/features/admin/components/announcements-panel").then(({ AnnouncementsPanel }) => ({
+    default: AnnouncementsPanel,
+  })),
+);
 const AuditEventsTable = lazy(() =>
   import("@/features/audit/audit-events-table").then(({ AuditEventsTable }) => ({
     default: AuditEventsTable,
@@ -159,6 +169,11 @@ const TeamAuditRoute = lazy(() =>
 const NotificationsRoute = lazy(() =>
   import("@/features/notifications/notifications-route").then(({ NotificationsRoute }) => ({
     default: NotificationsRoute,
+  })),
+);
+const ProfileRoute = lazy(() =>
+  import("@/features/account/profile-route").then(({ ProfileRoute }) => ({
+    default: ProfileRoute,
   })),
 );
 
@@ -249,6 +264,7 @@ export function Router() {
           <Route path="/dashboard" element={<Navigate to="/" replace />} />
           <Route path="/quota" element={<QuotaRoute />} />
           <Route path="/notifications" element={<NotificationsRoute />} />
+          <Route path="/account/profile" element={<ProfileRoute />} />
           <Route path="/projects" element={<ProjectsRoute />} />
           <Route path="/projects/:projectId" element={<ProjectLayout />}>
             <Route index element={<ProjectOverviewRoute />} />
@@ -276,7 +292,14 @@ export function Router() {
             <Route path="team-groups" element={<TeamGroupsPanel />} />
             <Route path="users" element={<UsersPanel />} />
             <Route path="teams" element={<TeamsPanel />} />
-            <Route path="settings" element={<SettingsPanel />} />
+            <Route path="settings" element={<SettingsLayout />}>
+              <Route index element={<Navigate to="/admin/settings/basic" replace />} />
+              <Route path="basic" element={<SettingsPanel section="basic" />} />
+              <Route path="announcements" element={<AnnouncementsPanel />} />
+              <Route path="governance" element={<SettingsPanel section="governance" />} />
+              <Route path="infrastructure" element={<SettingsPanel section="infrastructure" />} />
+              <Route path="runtime" element={<SettingsPanel section="runtime" />} />
+            </Route>
             <Route path="audit" element={<AuditEventsTable />} />
           </Route>
           <Route element={<TeamSettingsGuard />}>
