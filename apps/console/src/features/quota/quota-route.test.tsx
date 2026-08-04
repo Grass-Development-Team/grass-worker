@@ -53,9 +53,10 @@ describe("QuotaRoute", () => {
       "aria-valuenow",
       "40",
     );
-    expect(
-      screen.getByRole("progressbar", { name: "Deployments this month usage" }),
-    ).toHaveAttribute("aria-valuenow", "100");
+    expect(screen.getByRole("progressbar", { name: "Deployments usage" })).toHaveAttribute(
+      "aria-valuenow",
+      "100",
+    );
     const storageRow = screen.getByText("Artifact storage (MB)").closest("tr");
     expect(storageRow).not.toBeNull();
     expect(within(storageRow as HTMLElement).getByText("Unlimited")).toBeInTheDocument();

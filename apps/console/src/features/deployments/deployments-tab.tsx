@@ -45,9 +45,11 @@ import { BuildStatusBadge, ReleaseStatusBadge, ServeStatusBadge } from "./compon
 export function DeploymentsTab({
   projectId,
   canDeploy,
+  hasRepository = true,
 }: {
   projectId: string;
   canDeploy: boolean;
+  hasRepository?: boolean;
 }) {
   const queryClient = useQueryClient();
   const [environmentFilter, setEnvironmentFilter] = useState<"all" | DeploymentEnvironment>("all");
@@ -139,6 +141,15 @@ export function DeploymentsTab({
           </div>
         )}
       </div>
+      {!hasRepository && (
+        <p className="text-sm text-muted-foreground">
+          Connect a repository in{" "}
+          <Link to={`/projects/${projectId}/settings/build-and-deployment`} className="underline">
+            Build and Deployment settings
+          </Link>{" "}
+          before creating a deployment.
+        </p>
+      )}
       <Dialog
         open={deploymentEnvironment !== null}
         onOpenChange={(open) => {
@@ -224,7 +235,9 @@ export function DeploymentsTab({
           <p className="text-sm text-muted-foreground">
             {canDeploy
               ? "No deployments yet. Deploy production or preview to start a build."
-              : "No deployments yet."}
+              : hasRepository
+                ? "No deployments yet."
+                : "No deployments yet. Connect a repository to enable deployments."}
           </p>
         ) : (
           <Table>

@@ -65,6 +65,17 @@ pub async fn get_source_by_id<C: ConnectionTrait>(
         .map_err(Into::into)
 }
 
+pub async fn get_source_by_id_including_deleted<C: ConnectionTrait>(
+    db: &C,
+    source_id: Uuid,
+) -> anyhow::Result<Option<host_source::Model>> {
+    host_source::Entity::find()
+        .filter(host_source::Column::Id.eq(source_id))
+        .one(db)
+        .await
+        .map_err(Into::into)
+}
+
 async fn default_source_exists<C: ConnectionTrait>(
     db: &C,
     exclude: Option<Uuid>,
@@ -268,6 +279,20 @@ pub async fn list_bindings_for_project<C: ConnectionTrait>(
         .filter(project_host_binding::Column::ProjectId.eq(project_id))
         .filter(project_host_binding::Column::DeletedAt.is_null())
         .order_by_asc(project_host_binding::Column::CreatedAt)
+        .all(db)
+        .await
+        .map_err(Into::into)
+}
+
+pub async fn list_bindings_for_project_for_update<C: ConnectionTrait>(
+    db: &C,
+    project_id: Uuid,
+) -> anyhow::Result<Vec<project_host_binding::Model>> {
+    project_host_binding::Entity::find()
+        .filter(project_host_binding::Column::ProjectId.eq(project_id))
+        .filter(project_host_binding::Column::DeletedAt.is_null())
+        .order_by_asc(project_host_binding::Column::CreatedAt)
+        .lock(LockType::Update)
         .all(db)
         .await
         .map_err(Into::into)

@@ -27,6 +27,7 @@ function renderLayout(
   platformRole: "admin" | "user",
   teamRole: "owner" | "admin" | "member" | "viewer" = "owner",
   path = "/",
+  isLoading = false,
 ) {
   vi.mocked(useAuth).mockReturnValue({
     user: {
@@ -38,9 +39,10 @@ function renderLayout(
     logout: vi.fn(),
   } as ReturnType<typeof useAuth>);
   vi.mocked(useTeam).mockReturnValue({
-    activeTeam: { id: "team-1", slug: "team", name: "Team", kind: "team" },
+    activeTeam: isLoading ? null : { id: "team-1", slug: "team", name: "Team", kind: "team" },
     activeRole: teamRole,
     error: null,
+    isLoading,
     refreshTeams: vi.fn(),
   } as ReturnType<typeof useTeam>);
 
@@ -102,6 +104,13 @@ describe("App layout administration navigation", () => {
       "href",
       "/notifications",
     );
+  });
+
+  it("keeps workspace chrome stable while teams are loading", () => {
+    renderLayout("user", "owner", "/", true);
+
+    expect(screen.getByText("Loading workspace")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toBeInTheDocument();
   });
 
   it("replaces the administration sidebar inside Settings", () => {

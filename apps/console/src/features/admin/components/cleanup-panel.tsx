@@ -24,9 +24,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { AuditActorType, AuditFilters, AuditResult } from "@/features/audit/audit.api";
+import { AuditEventResults } from "@/features/audit/audit-events-table";
 
 import {
   cleanupApi,
+  type AuditCleanupPreview,
   type BuildLogCleanupFilters,
   type CleanupPreview,
   type CleanupResult,
@@ -134,14 +136,20 @@ function ResultMessage({ result }: { result: CleanupResult | null }) {
 export function CleanupPanel() {
   const [audit, setAudit] = useState(initialAudit);
   const [buildLogs, setBuildLogs] = useState(initialBuildLogs);
-  const [auditPreview, setAuditPreview] = useState<CleanupPreview | null>(null);
+  const [auditPreview, setAuditPreview] = useState<AuditCleanupPreview | null>(null);
   const [buildLogPreview, setBuildLogPreview] = useState<CleanupPreview | null>(null);
   const [auditResult, setAuditResult] = useState<CleanupResult | null>(null);
   const [buildLogResult, setBuildLogResult] = useState<CleanupResult | null>(null);
   const [pendingDelete, setPendingDelete] = useState<"audit" | "build-logs" | null>(null);
 
   const auditPreviewMutation = useMutation({
-    mutationFn: () => cleanupApi.previewAudit(auditFilters(audit)),
+    mutationFn: ({ page, snapshotBefore }: { page: number; snapshotBefore?: number }) =>
+      cleanupApi.previewAudit({
+        ...auditFilters(audit),
+        page,
+        per_page: 25,
+        snapshot_before: snapshotBefore,
+      }),
     onSuccess: (value) => {
       setAuditPreview(value);
       setAuditResult(null);
@@ -155,7 +163,11 @@ export function CleanupPanel() {
     },
   });
   const auditDeleteMutation = useMutation({
-    mutationFn: () => cleanupApi.deleteAudit(auditFilters(audit)),
+    mutationFn: () =>
+      cleanupApi.deleteAudit({
+        ...auditFilters(audit),
+        snapshot_before: auditPreview?.snapshot_before,
+      }),
     onSuccess: (value) => {
       setAuditResult(value);
       setAuditPreview(null);
@@ -197,7 +209,7 @@ export function CleanupPanel() {
               className="flex flex-col gap-4"
               onSubmit={(event) => {
                 event.preventDefault();
-                auditPreviewMutation.mutate();
+                auditPreviewMutation.mutate({ page: 1 });
               }}
             >
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -339,6 +351,18 @@ export function CleanupPanel() {
                 </p>
               )}
               <ResultMessage result={auditResult} />
+              <AuditEventResults
+                events={auditPreview?.events}
+                pagination={auditPreview?.pagination}
+                isLoading={auditPreviewMutation.isPending}
+                emptyMessage="No audit events match this cleanup filter."
+                onPageChange={(page) =>
+                  auditPreviewMutation.mutate({
+                    page,
+                    snapshotBefore: auditPreview?.snapshot_before,
+                  })
+                }
+              />
             </form>
           </CardContent>
         </Card>

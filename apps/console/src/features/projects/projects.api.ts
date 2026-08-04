@@ -49,6 +49,7 @@ export interface ProjectHost {
   failure_reason: string | null;
   is_primary: boolean;
   host_source_id: string | null;
+  serving?: boolean;
   created_at: string;
   provision_events?: ProvisionEvent[];
 }

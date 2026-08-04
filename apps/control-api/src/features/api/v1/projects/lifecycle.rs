@@ -11,13 +11,16 @@ use uuid::Uuid;
 use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
-        notifications, projects,
+        hosts, notifications, projects,
         quotas::QuotaDimension,
         teams,
     },
     infra::{
-        database::entity::{AuditEventResult, ProjectRuntime, TeamMemberRole, project},
+        database::entity::{
+            AuditEventResult, ProjectRuntime, TeamMemberRole, project, project_host_binding,
+        },
         error::{AppError, ok_response},
+        host_provision::service::HostBindingService,
         http::extractors::Session,
         quota::{QuotaCharge, QuotaService},
     },
@@ -92,6 +95,62 @@ fn runtime_dimension(runtime: &ProjectRuntime) -> QuotaDimension {
         ProjectRuntime::Ssr => QuotaDimension::ProjectsSsr,
         _ => QuotaDimension::ProjectsStatic,
     }
+}
+
+pub(crate) async fn soft_delete_project_records<C: ConnectionTrait>(
+    db: &C,
+    project: project::Model,
+) -> anyhow::Result<(project::Model, Vec<project_host_binding::Model>)> {
+    let bindings = hosts::list_bindings_for_project_for_update(db, project.id).await?;
+    for binding in &bindings {
+        hosts::soft_delete_binding(db, binding.clone()).await?;
+    }
+    let project = projects::soft_delete(db, project).await?;
+    Ok((project, bindings))
+}
+
+pub(crate) async fn finalize_deleted_project_resources(
+    db: &sea_orm::DatabaseConnection,
+    cache: &grass_cache::CacheStore,
+    op: &'static str,
+    project: &project::Model,
+    bindings: &[project_host_binding::Model],
+) -> Result<(), AppError> {
+    let quota = QuotaService::new(db, cache);
+    let host_charge = [QuotaCharge::one(QuotaDimension::Hosts)];
+    for binding in bindings {
+        if let Some(source_id) = binding.host_source_id
+            && let Some(source) = hosts::get_source_by_id_including_deleted(db, source_id)
+                .await
+                .map_err(|source| AppError::Infrastructure { op, source })?
+        {
+            HostBindingService::new(db, cache)
+                .deprovision(op, binding, &source)
+                .await?;
+        }
+        quota
+            .release_once(
+                op,
+                project.team_id,
+                &host_charge,
+                "project_host_binding",
+                binding.id,
+            )
+            .await?;
+    }
+
+    quota
+        .release_once(
+            op,
+            project.team_id,
+            &[
+                QuotaCharge::one(QuotaDimension::Projects),
+                QuotaCharge::one(runtime_dimension(&project.runtime)),
+            ],
+            "project",
+            project.id,
+        )
+        .await
 }
 
 /// POST /api/v1/projects/{project_id}/archive
@@ -190,8 +249,6 @@ pub async fn delete(
     let db = super::database(&state, OP)?;
     let cache = super::cache(&state, OP)?;
 
-    let runtime = access.project.runtime.clone();
-    let team_id = access.project.team_id;
     let transaction = db
         .begin()
         .await
@@ -199,7 +256,7 @@ pub async fn delete(
             op: OP,
             source: source.into(),
         })?;
-    let project = projects::soft_delete(&transaction, access.project)
+    let (project, bindings) = soft_delete_project_records(&transaction, access.project)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     record_lifecycle_event(
@@ -219,18 +276,7 @@ pub async fn delete(
             source: source.into(),
         })?;
 
-    QuotaService::new(db, cache)
-        .release(
-            OP,
-            team_id,
-            &[
-                QuotaCharge::one(QuotaDimension::Projects),
-                QuotaCharge::one(runtime_dimension(&runtime)),
-            ],
-            "project",
-            Some(project.id),
-        )
-        .await?;
+    finalize_deleted_project_resources(db, cache, OP, &project, &bindings).await?;
     Ok(ok_response(
         json!({ "project": super::project_view(&project) }),
     ))

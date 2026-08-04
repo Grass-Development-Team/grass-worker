@@ -1,4 +1,4 @@
-import type { AuditFilters } from "@/features/audit/audit.api";
+import type { AuditEvent, AuditFilters, AuditPage } from "@/features/audit/audit.api";
 import { request } from "@/lib/api";
 
 export interface BuildLogCleanupFilters {
@@ -16,6 +16,16 @@ export interface CleanupPreview {
   skipped: number;
 }
 
+export interface AuditCleanupFilters extends AuditFilters {
+  snapshot_before?: number;
+}
+
+export interface AuditCleanupPreview extends CleanupPreview {
+  events: AuditEvent[];
+  pagination: AuditPage["pagination"];
+  snapshot_before: number;
+}
+
 export interface CleanupResult {
   deleted: number;
   skipped: number;
@@ -31,10 +41,10 @@ function query(filters: Record<string, string | number | undefined>) {
 }
 
 export const cleanupApi = {
-  previewAudit: (filters: AuditFilters) =>
-    request<CleanupPreview>(`/api/v1/admin/cleanup/audit-events${query(filters)}`),
+  previewAudit: (filters: AuditCleanupFilters) =>
+    request<AuditCleanupPreview>(`/api/v1/admin/cleanup/audit-events${query(filters)}`),
 
-  deleteAudit: (filters: AuditFilters) =>
+  deleteAudit: (filters: AuditCleanupFilters) =>
     request<CleanupResult>("/api/v1/admin/cleanup/audit-events", {
       method: "DELETE",
       body: JSON.stringify(filters),
