@@ -6,6 +6,7 @@ pub mod hosts;
 pub mod node_deletions;
 pub mod nodes;
 pub mod notifications;
+pub mod platform_mail;
 pub mod projects;
 pub mod quotas;
 pub mod retention;

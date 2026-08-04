@@ -32,6 +32,20 @@ session_ttl_seconds = 2592000
 # permanently.
 retention_days = 90
 
+[mail]
+# Outbound email is optional. Use "local" for a sendmail-compatible MTA or
+# "smtp" for a remote SMTP server.
+mode = "none"
+from_address = "noreply@localhost"
+from_name = "Grass Worker"
+sendmail_command = "/usr/sbin/sendmail"
+smtp_host = ""
+smtp_port = 587
+smtp_security = "starttls"
+smtp_username = ""
+# Prefer GWAPI_MAIL_SMTP_PASSWORD instead of storing this value in the file.
+smtp_password = ""
+
 [node_manager]
 auto_start_local_node = false
 local_node_binary = "grass-node"

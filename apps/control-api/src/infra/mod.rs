@@ -5,6 +5,7 @@ pub mod host_provision;
 pub mod http;
 pub mod logger;
 pub mod logs;
+pub mod mail;
 pub mod node_manager;
 pub mod quota;
 pub mod route_invalidation;

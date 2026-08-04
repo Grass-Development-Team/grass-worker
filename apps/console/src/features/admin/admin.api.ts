@@ -398,6 +398,17 @@ export interface AdminSettings {
   database: { url_configured: boolean };
   redis: { backend: "moka" | "redis"; url_configured: boolean };
   secrets: { secret_key_configured: boolean; git_credentials_configured: boolean };
+  mail: {
+    mode: "none" | "local" | "smtp";
+    from_address: string;
+    from_name: string;
+    sendmail_command: string;
+    smtp_host: string;
+    smtp_port: number;
+    smtp_security: "none" | "starttls" | "tls";
+    smtp_username: string;
+    smtp_password_configured: boolean;
+  };
   session: {
     cookie_secure: boolean;
     idle_ttl_seconds: number;
@@ -782,6 +793,15 @@ export const adminApi = {
     session_idle_ttl_seconds?: number;
     session_ttl_seconds?: number;
     audit_retention_days?: number;
+    mail_mode?: "none" | "local" | "smtp";
+    mail_from_address?: string;
+    mail_from_name?: string;
+    mail_sendmail_command?: string;
+    mail_smtp_host?: string;
+    mail_smtp_port?: number;
+    mail_smtp_security?: "none" | "starttls" | "tls";
+    mail_smtp_username?: string;
+    mail_smtp_password?: string;
     node_manager_auto_start_local_node?: boolean;
     node_manager_local_node_binary?: string;
     node_manager_local_node_config?: string;

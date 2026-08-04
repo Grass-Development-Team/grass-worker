@@ -301,6 +301,7 @@ export function Router() {
               <Route index element={<Navigate to="/admin/settings/basic" replace />} />
               <Route path="basic" element={<SettingsPanel section="basic" />} />
               <Route path="announcements" element={<AnnouncementsPanel />} />
+              <Route path="email" element={<SettingsPanel section="email" />} />
               <Route path="governance" element={<SettingsPanel section="governance" />} />
               <Route path="infrastructure" element={<SettingsPanel section="infrastructure" />} />
               <Route path="runtime" element={<SettingsPanel section="runtime" />} />

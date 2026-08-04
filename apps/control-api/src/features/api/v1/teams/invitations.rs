@@ -5,6 +5,7 @@ use serde_json::json;
 use crate::infra::http::timestamps::ts;
 use crate::{
     domain::{
+        platform_mail,
         quotas::QuotaDimension,
         teams::{self, AcceptInvitationParams, CreateInvitationParams, InvitationError},
         users,
@@ -180,13 +181,24 @@ pub async fn create(
     )
     .await
     .map_err(map_invitation_error)?;
+    let invitation_role = super::role_value(&invitation.role);
+    let mail_config = state.config.read().unwrap().mail.clone();
+    platform_mail::send_invitation_best_effort(
+        db,
+        mail_config,
+        &invitation.email,
+        &team,
+        invitation_role,
+        &token,
+    )
+    .await;
 
     Ok(ok_response(json!({
         "invitation": {
             "id": invitation.id,
             "team_id": invitation.team_id,
             "email": invitation.email,
-            "role": super::role_value(&invitation.role),
+            "role": invitation_role,
             "status": "pending",
             "expires_at": ts(invitation.expires_at),
             "token": token,

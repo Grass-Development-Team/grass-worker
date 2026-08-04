@@ -28,7 +28,13 @@ import { adminApi, type AdminSettings } from "../admin.api";
 
 type UpdateSettingsInput = Parameters<typeof adminApi.updateSettings>[0];
 
-export type SettingsSection = "all" | "basic" | "governance" | "infrastructure" | "runtime";
+export type SettingsSection =
+  | "all"
+  | "basic"
+  | "email"
+  | "governance"
+  | "infrastructure"
+  | "runtime";
 
 function SettingsSectionView({
   section,
@@ -148,6 +154,15 @@ function SettingsForm({ initial, section }: { initial: AdminSettings; section: S
   const [sessionIdleTtl, setSessionIdleTtl] = useState(initial.session.idle_ttl_seconds);
   const [sessionTtl, setSessionTtl] = useState(initial.session.session_ttl_seconds);
   const [auditRetentionDays, setAuditRetentionDays] = useState(initial.audit.retention_days);
+  const [mailMode, setMailMode] = useState(initial.mail.mode);
+  const [mailFromAddress, setMailFromAddress] = useState(initial.mail.from_address);
+  const [mailFromName, setMailFromName] = useState(initial.mail.from_name);
+  const [sendmailCommand, setSendmailCommand] = useState(initial.mail.sendmail_command);
+  const [smtpHost, setSmtpHost] = useState(initial.mail.smtp_host);
+  const [smtpPort, setSmtpPort] = useState(initial.mail.smtp_port);
+  const [smtpSecurity, setSmtpSecurity] = useState(initial.mail.smtp_security);
+  const [smtpUsername, setSmtpUsername] = useState(initial.mail.smtp_username);
+  const [smtpPassword, setSmtpPassword] = useState("");
   const [autoStartLocalNode, setAutoStartLocalNode] = useState(
     initial.node_manager.auto_start_local_node,
   );
@@ -165,6 +180,7 @@ function SettingsForm({ initial, section }: { initial: AdminSettings; section: S
   const policies = useSettingsMutation();
   const server = useSettingsMutation();
   const sessions = useSettingsMutation();
+  const mail = useSettingsMutation();
   const nodeManager = useSettingsMutation();
   const startup = useSettingsMutation();
 
@@ -231,6 +247,155 @@ function SettingsForm({ initial, section }: { initial: AdminSettings; section: S
               </Field>
             </FieldGroup>
             <MutationError mutation={site.mutation} />
+          </SettingsCard>
+        </form>
+      </SettingsSectionView>
+
+      <SettingsSectionView section={section} visible="email">
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            mail.mutation.mutate({
+              mail_mode: mailMode,
+              mail_from_address: mailFromAddress,
+              mail_from_name: mailFromName,
+              mail_sendmail_command: sendmailCommand,
+              mail_smtp_host: smtpHost,
+              mail_smtp_port: smtpPort,
+              mail_smtp_security: smtpSecurity,
+              mail_smtp_username: smtpUsername,
+              ...(smtpPassword ? { mail_smtp_password: smtpPassword } : {}),
+            });
+          }}
+          onChange={() => mail.setSaved(false)}
+        >
+          <SettingsCard
+            title="Email delivery"
+            description="Platform mail transport for account and deployment messages."
+            hint="SMTP passwords are write-only. Leaving the password blank preserves the configured value."
+            action={<SaveAction pending={mail.mutation.isPending} saved={mail.saved} />}
+          >
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="settings-mail-mode">Delivery mode</FieldLabel>
+                <Select
+                  value={mailMode}
+                  onValueChange={(value) => {
+                    setMailMode(value as typeof mailMode);
+                    mail.setSaved(false);
+                  }}
+                >
+                  <SelectTrigger id="settings-mail-mode">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Disabled</SelectItem>
+                    <SelectItem value="local">Local MTA</SelectItem>
+                    <SelectItem value="smtp">SMTP</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field>
+                  <FieldLabel htmlFor="settings-mail-from-address">From address</FieldLabel>
+                  <Input
+                    id="settings-mail-from-address"
+                    type="email"
+                    value={mailFromAddress}
+                    onChange={(event) => setMailFromAddress(event.target.value)}
+                    required
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="settings-mail-from-name">From name</FieldLabel>
+                  <Input
+                    id="settings-mail-from-name"
+                    value={mailFromName}
+                    onChange={(event) => setMailFromName(event.target.value)}
+                    required
+                  />
+                </Field>
+              </div>
+              {mailMode === "local" && (
+                <Field>
+                  <FieldLabel htmlFor="settings-sendmail-command">Sendmail command</FieldLabel>
+                  <Input
+                    id="settings-sendmail-command"
+                    value={sendmailCommand}
+                    onChange={(event) => setSendmailCommand(event.target.value)}
+                    required
+                  />
+                </Field>
+              )}
+              {mailMode === "smtp" && (
+                <>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Field>
+                      <FieldLabel htmlFor="settings-smtp-host">SMTP host</FieldLabel>
+                      <Input
+                        id="settings-smtp-host"
+                        value={smtpHost}
+                        onChange={(event) => setSmtpHost(event.target.value)}
+                        required
+                      />
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="settings-smtp-port">SMTP port</FieldLabel>
+                      <Input
+                        id="settings-smtp-port"
+                        type="number"
+                        min={1}
+                        max={65_535}
+                        value={smtpPort}
+                        onChange={(event) => setSmtpPort(Number(event.target.value))}
+                        required
+                      />
+                    </Field>
+                  </div>
+                  <Field>
+                    <FieldLabel htmlFor="settings-smtp-security">SMTP security</FieldLabel>
+                    <Select
+                      value={smtpSecurity}
+                      onValueChange={(value) => {
+                        setSmtpSecurity(value as typeof smtpSecurity);
+                        mail.setSaved(false);
+                      }}
+                    >
+                      <SelectTrigger id="settings-smtp-security">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="starttls">STARTTLS</SelectItem>
+                        <SelectItem value="tls">Implicit TLS</SelectItem>
+                        <SelectItem value="none">None</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Field>
+                      <FieldLabel htmlFor="settings-smtp-username">SMTP username</FieldLabel>
+                      <Input
+                        id="settings-smtp-username"
+                        value={smtpUsername}
+                        onChange={(event) => setSmtpUsername(event.target.value)}
+                      />
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="settings-smtp-password">SMTP password</FieldLabel>
+                      <Input
+                        id="settings-smtp-password"
+                        type="password"
+                        value={smtpPassword}
+                        onChange={(event) => setSmtpPassword(event.target.value)}
+                        placeholder={initial.mail.smtp_password_configured ? "Configured" : ""}
+                        autoComplete="new-password"
+                      />
+                    </Field>
+                  </div>
+                </>
+              )}
+            </FieldGroup>
+            <MutationError mutation={mail.mutation} />
           </SettingsCard>
         </form>
       </SettingsSectionView>

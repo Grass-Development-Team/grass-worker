@@ -33,6 +33,17 @@ const settings = {
   database: { url_configured: true },
   redis: { backend: "redis", url_configured: true },
   secrets: { secret_key_configured: true, git_credentials_configured: false },
+  mail: {
+    mode: "smtp",
+    from_address: "noreply@example.com",
+    from_name: "Grass Worker",
+    sendmail_command: "/usr/sbin/sendmail",
+    smtp_host: "smtp.example.com",
+    smtp_port: 587,
+    smtp_security: "starttls",
+    smtp_username: "mailer",
+    smtp_password_configured: true,
+  },
   session: { cookie_secure: true, idle_ttl_seconds: 900, session_ttl_seconds: 2_592_000 },
   audit: { retention_days: 90 },
   node_manager: {
@@ -149,4 +160,27 @@ it("shows and saves the custom domain review default", async () => {
       expect.objectContaining({ domain_review_default: "manual" }),
     ),
   );
+});
+
+it("keeps the SMTP password write-only while saving mail settings", async () => {
+  const user = userEvent.setup();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <SettingsPanel section="email" />
+    </QueryClientProvider>,
+  );
+
+  expect(await screen.findByLabelText("Delivery mode")).toHaveTextContent("SMTP");
+  expect(screen.getByLabelText("SMTP password")).toHaveAttribute("placeholder", "Configured");
+  expect(screen.getByLabelText("SMTP password")).toHaveValue("");
+  await user.click(screen.getByRole("button", { name: "Save" }));
+
+  await waitFor(() => expect(adminApi.updateSettings).toHaveBeenCalled());
+  const input = vi.mocked(adminApi.updateSettings).mock.calls.at(-1)?.[0];
+  expect(input).toMatchObject({
+    mail_mode: "smtp",
+    mail_smtp_host: "smtp.example.com",
+  });
+  expect(input).not.toHaveProperty("mail_smtp_password");
 });
