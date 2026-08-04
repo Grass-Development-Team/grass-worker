@@ -15,7 +15,7 @@ interface AuthState {
   isLoading: boolean;
   login: (email: string, password: string, returnTo?: string) => Promise<LoginResponse>;
   register: (input: RegisterInput) => Promise<RegisterResponse>;
-  completeMfa: (challengeToken: string, factorId: string, code: string) => Promise<void>;
+  completeMfa: (challengeToken: string, factorId: string, code: string) => Promise<LoginResponse>;
   verifyEmail: (token: string) => Promise<void>;
   updateProfile: (displayName: string | null) => Promise<void>;
   logout: () => Promise<void>;
@@ -68,7 +68,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const completeMfa = useCallback(
     async (challengeToken: string, factorId: string, code: string) => {
       const data = await authApi.mfaVerify(challengeToken, factorId, code);
-      setUser(data.user);
+      if (isAuthResponse(data)) setUser(data.user);
+      return data;
     },
     [],
   );

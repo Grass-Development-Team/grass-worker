@@ -1,6 +1,6 @@
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    QueryOrder, QuerySelect, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -10,8 +10,8 @@ use uuid::Uuid;
 use crate::{
     domain::settings,
     infra::database::entity::{
-        AuthTokenKind, MfaFactorKind, PlatformRole, user, user_auth_token, user_mfa_factor,
-        user_password_credential, user_password_history,
+        AuthTokenKind, MfaFactorKind, PlatformRole, user_auth_token, user_mfa_factor,
+        user_mfa_policy, user_password_credential, user_password_history,
     },
 };
 
@@ -117,7 +117,6 @@ pub enum MfaEnforcement {
     None,
     PlatformAdmins,
     AllUsers,
-    SelectedUsers,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -125,16 +124,97 @@ pub enum MfaEnforcement {
 pub struct MfaPolicy {
     pub allowed_factors: Vec<String>,
     pub enforcement: MfaEnforcement,
-    pub selected_user_ids: Vec<Uuid>,
+    pub minimum_factors: usize,
+    pub required_factors: Vec<String>,
 }
 
 impl Default for MfaPolicy {
     fn default() -> Self {
         Self {
-            allowed_factors: vec!["totp".to_owned()],
+            allowed_factors: Vec::new(),
             enforcement: MfaEnforcement::None,
-            selected_user_ids: Vec::new(),
+            minimum_factors: 0,
+            required_factors: Vec::new(),
         }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
+pub struct UserMfaPolicy {
+    pub inherit_platform: bool,
+    pub minimum_factors: usize,
+    pub required_factors: Vec<String>,
+}
+
+impl Default for UserMfaPolicy {
+    fn default() -> Self {
+        Self {
+            inherit_platform: true,
+            minimum_factors: 0,
+            required_factors: Vec::new(),
+        }
+    }
+}
+
+impl UserMfaPolicy {
+    pub fn validate(&self, platform: &MfaPolicy) -> Result<(), &'static str> {
+        if self.inherit_platform {
+            if self.minimum_factors != 0 || !self.required_factors.is_empty() {
+                return Err("inherited user MFA policy cannot define custom requirements");
+            }
+            return Ok(());
+        }
+        if self.minimum_factors > platform.allowed_factors.len() {
+            return Err("user minimum MFA factors cannot exceed the enabled methods");
+        }
+        if self.required_factors.len() > platform.allowed_factors.len() {
+            return Err("user required MFA factors cannot exceed the enabled methods");
+        }
+        for factor in &self.required_factors {
+            if MfaFactorKind::parse(factor).is_none() || !platform.allowed_factors.contains(factor)
+            {
+                return Err("user required MFA factors must be enabled methods");
+            }
+        }
+        if self
+            .required_factors
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != self.required_factors.len()
+        {
+            return Err("user required MFA factors must not contain duplicates");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MfaRequirements {
+    pub minimum_factors: usize,
+    pub required_factors: Vec<MfaFactorKind>,
+}
+
+impl MfaRequirements {
+    pub fn is_enforced(&self) -> bool {
+        self.minimum_factors > 0 || !self.required_factors.is_empty()
+    }
+
+    pub fn met_by(&self, factors: &[user_mfa_factor::Model]) -> bool {
+        let kinds = factors
+            .iter()
+            .filter(|factor| factor.verified_at.is_some())
+            .fold(Vec::new(), |mut kinds, factor| {
+                if !kinds.contains(&factor.kind) {
+                    kinds.push(factor.kind.clone());
+                }
+                kinds
+            });
+        self.required_factors
+            .iter()
+            .all(|required| kinds.contains(required))
+            && kinds.len() >= self.minimum_factors
     }
 }
 
@@ -145,6 +225,12 @@ impl MfaPolicy {
         }
         if self.allowed_factors.is_empty() && !matches!(self.enforcement, MfaEnforcement::None) {
             return Err("enforced MFA requires at least one allowed factor");
+        }
+        if !matches!(self.enforcement, MfaEnforcement::None)
+            && self.minimum_factors == 0
+            && self.required_factors.is_empty()
+        {
+            return Err("enforced MFA requires a minimum or required method");
         }
         for factor in &self.allowed_factors {
             if MfaFactorKind::parse(factor).is_none() {
@@ -163,22 +249,25 @@ impl MfaPolicy {
         if self.allowed_factors.iter().any(|factor| factor == "email") && !mail_enabled {
             return Err("email MFA requires an enabled mail transport");
         }
-        if !matches!(self.enforcement, MfaEnforcement::SelectedUsers)
-            && !self.selected_user_ids.is_empty()
-        {
-            return Err("selected MFA users require selected_users enforcement");
+        if self.minimum_factors > self.allowed_factors.len() {
+            return Err("minimum MFA factors cannot exceed the enabled methods");
         }
-        if self.selected_user_ids.len() > 1_000 {
-            return Err("selected MFA users must not exceed 1000 entries");
+        if self.required_factors.len() > self.allowed_factors.len() {
+            return Err("required MFA factors cannot exceed the enabled methods");
+        }
+        for factor in &self.required_factors {
+            if MfaFactorKind::parse(factor).is_none() || !self.allowed_factors.contains(factor) {
+                return Err("required MFA factors must be enabled methods");
+            }
         }
         if self
-            .selected_user_ids
+            .required_factors
             .iter()
             .collect::<std::collections::HashSet<_>>()
             .len()
-            != self.selected_user_ids.len()
+            != self.required_factors.len()
         {
-            return Err("selected MFA users must not contain duplicates");
+            return Err("required MFA factors must not contain duplicates");
         }
         Ok(())
     }
@@ -189,12 +278,46 @@ impl MfaPolicy {
             .any(|allowed| allowed == kind.as_str())
     }
 
-    pub fn requires(&self, user_id: Uuid, role: &PlatformRole) -> bool {
-        match self.enforcement {
+    pub fn requirements_for(
+        &self,
+        user_policy: &UserMfaPolicy,
+        role: &PlatformRole,
+    ) -> MfaRequirements {
+        let platform_applies = match self.enforcement {
             MfaEnforcement::None => false,
             MfaEnforcement::PlatformAdmins => matches!(role, PlatformRole::Admin),
             MfaEnforcement::AllUsers => true,
-            MfaEnforcement::SelectedUsers => self.selected_user_ids.contains(&user_id),
+        };
+        let mut minimum_factors = if platform_applies {
+            self.minimum_factors
+        } else {
+            0
+        };
+        let platform_required_factors = if platform_applies {
+            self.required_factors.as_slice()
+        } else {
+            &[]
+        };
+        let mut required_factors = platform_required_factors
+            .iter()
+            .filter_map(|factor| MfaFactorKind::parse(factor))
+            .collect::<Vec<_>>();
+
+        if !user_policy.inherit_platform {
+            minimum_factors = minimum_factors.max(user_policy.minimum_factors);
+            for factor in &user_policy.required_factors {
+                if let Some(kind) = MfaFactorKind::parse(factor)
+                    && !required_factors.contains(&kind)
+                {
+                    required_factors.push(kind);
+                }
+            }
+        }
+        minimum_factors = minimum_factors.max(required_factors.len());
+
+        MfaRequirements {
+            minimum_factors,
+            required_factors,
         }
     }
 }
@@ -207,18 +330,67 @@ pub async fn mfa_policy(db: &DatabaseConnection) -> anyhow::Result<MfaPolicy> {
     load_json_setting(db, MFA_POLICY_KEY).await
 }
 
-pub async fn selected_mfa_users_exist(
+pub async fn user_mfa_policy(
     db: &DatabaseConnection,
-    user_ids: &[Uuid],
+    user_id: Uuid,
+) -> anyhow::Result<UserMfaPolicy> {
+    let Some(record) = user_mfa_policy::Entity::find_by_id(user_id).one(db).await? else {
+        return Ok(UserMfaPolicy::default());
+    };
+    user_mfa_policy_from_record(record)
+}
+
+pub async fn user_mfa_policies_are_compatible(
+    db: &DatabaseConnection,
+    platform: &MfaPolicy,
 ) -> anyhow::Result<bool> {
-    if user_ids.is_empty() {
-        return Ok(true);
+    for record in user_mfa_policy::Entity::find().all(db).await? {
+        if user_mfa_policy_from_record(record)?
+            .validate(platform)
+            .is_err()
+        {
+            return Ok(false);
+        }
     }
-    Ok(user::Entity::find()
-        .filter(user::Column::Id.is_in(user_ids.iter().copied()))
-        .count(db)
-        .await?
-        == user_ids.len() as u64)
+    Ok(true)
+}
+
+fn user_mfa_policy_from_record(record: user_mfa_policy::Model) -> anyhow::Result<UserMfaPolicy> {
+    Ok(UserMfaPolicy {
+        inherit_platform: record.inherit_platform,
+        minimum_factors: record.minimum_factors.max(0) as usize,
+        required_factors: serde_json::from_value(record.required_factors)
+            .map_err(|error| anyhow::anyhow!("invalid stored user MFA policy: {error}"))?,
+    })
+}
+
+pub async fn set_user_mfa_policy(
+    db: &DatabaseConnection,
+    user_id: Uuid,
+    policy: &UserMfaPolicy,
+) -> anyhow::Result<()> {
+    let now = OffsetDateTime::now_utc();
+    let required_factors = serde_json::to_value(&policy.required_factors)?;
+    if let Some(record) = user_mfa_policy::Entity::find_by_id(user_id).one(db).await? {
+        let mut active: user_mfa_policy::ActiveModel = record.into();
+        active.inherit_platform = Set(policy.inherit_platform);
+        active.minimum_factors = Set(policy.minimum_factors as i16);
+        active.required_factors = Set(required_factors);
+        active.updated_at = Set(now);
+        active.update(db).await?;
+    } else {
+        user_mfa_policy::ActiveModel {
+            user_id: Set(user_id),
+            inherit_platform: Set(policy.inherit_platform),
+            minimum_factors: Set(policy.minimum_factors as i16),
+            required_factors: Set(required_factors),
+            created_at: Set(now),
+            updated_at: Set(now),
+        }
+        .insert(db)
+        .await?;
+    }
+    Ok(())
 }
 
 pub async fn registration_verification_required(db: &DatabaseConnection) -> anyhow::Result<bool> {
@@ -532,33 +704,96 @@ mod tests {
     }
 
     #[test]
-    fn mfa_enforcement_matches_only_the_configured_scope() {
-        let user_id = Uuid::now_v7();
+    fn mfa_enforcement_combines_platform_and_user_requirements() {
         let mut policy = MfaPolicy {
-            enforcement: MfaEnforcement::SelectedUsers,
-            selected_user_ids: vec![user_id],
+            allowed_factors: vec!["totp".to_owned()],
+            enforcement: MfaEnforcement::PlatformAdmins,
+            minimum_factors: 1,
             ..Default::default()
         };
-        assert!(policy.requires(user_id, &PlatformRole::User));
-        assert!(!policy.requires(Uuid::now_v7(), &PlatformRole::Admin));
-        policy.enforcement = MfaEnforcement::PlatformAdmins;
-        policy.selected_user_ids.clear();
-        assert!(policy.requires(Uuid::now_v7(), &PlatformRole::Admin));
+        assert!(
+            !policy
+                .requirements_for(&UserMfaPolicy::default(), &PlatformRole::User)
+                .is_enforced()
+        );
+        assert!(
+            policy
+                .requirements_for(&UserMfaPolicy::default(), &PlatformRole::Admin)
+                .is_enforced()
+        );
+
+        policy.enforcement = MfaEnforcement::None;
+        let requirements = policy.requirements_for(
+            &UserMfaPolicy {
+                inherit_platform: false,
+                minimum_factors: 1,
+                required_factors: vec!["totp".to_owned()],
+            },
+            &PlatformRole::User,
+        );
+        assert_eq!(requirements.minimum_factors, 1);
+        assert_eq!(requirements.required_factors, vec![MfaFactorKind::Totp]);
+        assert_eq!(requirements.minimum_factors, 1);
     }
 
     #[test]
-    fn mfa_policy_rejects_duplicate_factors_and_selected_users() {
+    fn mfa_policy_rejects_duplicate_and_unavailable_requirements() {
         let mut policy = MfaPolicy {
             allowed_factors: vec!["totp".to_owned(), "totp".to_owned()],
             ..Default::default()
         };
         assert!(policy.validate(false).is_err());
 
-        let user_id = Uuid::now_v7();
         policy.allowed_factors = vec!["totp".to_owned()];
-        policy.enforcement = MfaEnforcement::SelectedUsers;
-        policy.selected_user_ids = vec![user_id, user_id];
+        policy.required_factors = vec!["email".to_owned()];
         assert!(policy.validate(false).is_err());
+
+        policy.required_factors.clear();
+        policy.minimum_factors = 2;
+        assert!(policy.validate(false).is_err());
+
+        policy.minimum_factors = 0;
+        policy.enforcement = MfaEnforcement::AllUsers;
+        assert!(policy.validate(false).is_err());
+    }
+
+    #[test]
+    fn mfa_requirements_count_only_distinct_verified_methods() {
+        let now = OffsetDateTime::now_utc();
+        let factor = |kind: MfaFactorKind, verified: bool| user_mfa_factor::Model {
+            id: Uuid::now_v7(),
+            user_id: Uuid::now_v7(),
+            kind,
+            label: None,
+            secret_envelope: None,
+            verified_at: verified.then_some(now),
+            last_used_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let requirements = MfaRequirements {
+            minimum_factors: 2,
+            required_factors: vec![MfaFactorKind::Email],
+        };
+
+        assert!(!requirements.met_by(&[
+            factor(MfaFactorKind::Totp, true),
+            factor(MfaFactorKind::Email, false),
+        ]));
+        assert!(requirements.met_by(&[
+            factor(MfaFactorKind::Totp, true),
+            factor(MfaFactorKind::Email, true),
+        ]));
+        assert!(
+            !MfaRequirements {
+                minimum_factors: 2,
+                required_factors: Vec::new(),
+            }
+            .met_by(&[
+                factor(MfaFactorKind::Totp, true),
+                factor(MfaFactorKind::Totp, true),
+            ])
+        );
     }
 
     #[test]

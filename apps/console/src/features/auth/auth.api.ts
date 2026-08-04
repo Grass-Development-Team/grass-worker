@@ -25,6 +25,7 @@ export interface PasswordPolicy {
 export interface MfaFactor {
   id: string;
   kind: MfaFactorKind;
+  label?: string | null;
   verified: boolean;
   created_at: string;
   last_used_at: string | null;
@@ -183,14 +184,14 @@ export const authApi = {
         ...(factorId ? { factor_id: factorId } : {}),
       }),
     }),
-  mfaVerify: async (challengeToken: string, factorId: string, code: string) =>
-    storeAuthenticatedResponse(
-      await request<AuthResponse>("/api/v1/auth/mfa/verify", {
-        method: "POST",
-        body: JSON.stringify({ challenge_token: challengeToken, factor_id: factorId, code }),
-        credentials: "include" as RequestCredentials,
-      }),
-    ),
+  mfaVerify: async (challengeToken: string, factorId: string, code: string) => {
+    const data = await request<LoginResponse>("/api/v1/auth/mfa/verify", {
+      method: "POST",
+      body: JSON.stringify({ challenge_token: challengeToken, factor_id: factorId, code }),
+      credentials: "include" as RequestCredentials,
+    });
+    return isAuthResponse(data) ? storeAuthenticatedResponse(data) : data;
+  },
   security: () => request<AccountSecurity>("/api/v1/me/security"),
   changePassword: (currentPassword: string, password: string) =>
     request<{ changed: true }>("/api/v1/me/password", {
@@ -221,6 +222,15 @@ export interface AccountSecurity {
   factors: MfaFactor[];
   allowed_factors: MfaFactorKind[];
   mfa_required: boolean;
+  mfa_requirements: {
+    minimum_factors: number;
+    required_factors: MfaFactorKind[];
+  };
+  mfa_policy: {
+    inherit_platform: boolean;
+    minimum_factors: number;
+    required_factors: MfaFactorKind[];
+  };
   password_policy: PasswordPolicy;
   mail_available: boolean;
 }

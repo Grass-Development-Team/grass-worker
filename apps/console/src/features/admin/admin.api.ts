@@ -199,12 +199,29 @@ export interface AdminUser {
   created_at: string;
 }
 
-export type AdminMfaEnforcement = "none" | "platform_admins" | "all_users" | "selected_users";
+export type AdminMfaEnforcement = "none" | "platform_admins" | "all_users";
 
 export interface AdminMfaPolicy {
   allowed_factors: Array<"totp" | "email">;
   enforcement: AdminMfaEnforcement;
-  selected_user_ids: string[];
+  minimum_factors: number;
+  required_factors: Array<"totp" | "email">;
+}
+
+export interface AdminUserMfaPolicy {
+  inherit_platform: boolean;
+  minimum_factors: number;
+  required_factors: Array<"totp" | "email">;
+}
+
+export interface AdminUserMfaResponse {
+  factors: AdminMfaFactor[];
+  policy: AdminUserMfaPolicy;
+  allowed_factors: Array<"totp" | "email">;
+  effective_requirements: {
+    minimum_factors: number;
+    required_factors: Array<"totp" | "email">;
+  };
 }
 
 export interface AdminPasswordPolicy {
@@ -613,7 +630,16 @@ export const adminApi = {
     ),
 
   listUserMfa: (userId: string) =>
-    request<{ factors: AdminMfaFactor[] }>(`/api/v1/admin/users/${userId}/mfa`),
+    request<AdminUserMfaResponse>(`/api/v1/admin/users/${userId}/mfa`),
+
+  updateUserMfaPolicy: (userId: string, policy: AdminUserMfaPolicy) =>
+    request<Pick<AdminUserMfaResponse, "policy" | "effective_requirements">>(
+      `/api/v1/admin/users/${userId}/mfa`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(policy),
+      },
+    ),
 
   resetUserMfaFactor: (userId: string, factorId: string) =>
     request<{ deleted: true }>(`/api/v1/admin/users/${userId}/mfa/${factorId}`, {

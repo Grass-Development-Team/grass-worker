@@ -22,6 +22,7 @@ use crate::{
         database::entity::{AuditEventResult, MfaFactorKind, user, user_mfa_factor},
         error::{AppError, ok_response},
         http::extractors::Session,
+        http::timestamps::ts,
     },
     state::ControlApiState,
 };
@@ -76,10 +77,16 @@ pub async fn begin_login_payload(
         .into_iter()
         .filter(|factor| policy.allows(&factor.kind))
         .collect::<Vec<_>>();
-    let mode = if !factors.is_empty() {
+    let user_policy = authentication::user_mfa_policy(db, user.id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let requirements = policy.requirements_for(&user_policy, &user.platform_role);
+    let mode = if !factors.is_empty() && requirements.met_by(&factors) {
         Some(ChallengeMode::Verify)
-    } else if policy.requires(user.id, &user.platform_role) {
+    } else if requirements.is_enforced() {
         Some(ChallengeMode::Enroll)
+    } else if !factors.is_empty() {
+        Some(ChallengeMode::Verify)
     } else {
         None
     };
@@ -282,6 +289,32 @@ pub async fn challenge_verify(
             .await
             .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     }
+    if enrolled {
+        record_factor_audit(db, user.id, "mfa.factor_enrolled", &factor_kind).await;
+    }
+    if challenge.mode == ChallengeMode::Enroll {
+        let factors = authentication::verified_mfa_factors(db, user.id)
+            .await
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?
+            .into_iter()
+            .filter(|candidate| policy.allows(&candidate.kind))
+            .collect::<Vec<_>>();
+        let user_policy = authentication::user_mfa_policy(db, user.id)
+            .await
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+        let requirements = policy.requirements_for(&user_policy, &user.platform_role);
+        if !requirements.met_by(&factors) {
+            return Ok(ok_response(json!({
+                "mfa_required": false,
+                "mfa_enrollment_required": true,
+                "challenge_token": token,
+                "factors": factors.iter().map(factor_view).collect::<Vec<_>>(),
+                "allowed_factors": policy.allowed_factors,
+                "return_to": challenge.return_to,
+            }))
+            .into_response());
+        }
+    }
     cache
         .take(&challenge_key(token))
         .await
@@ -290,9 +323,6 @@ pub async fn challenge_verify(
             op: OP,
             message: "MFA challenge was already used".to_owned(),
         })?;
-    if enrolled {
-        record_factor_audit(db, user.id, "mfa.factor_enrolled", &factor_kind).await;
-    }
     super::login::authenticated_response(&state, cache, jar, user).await
 }
 
@@ -400,11 +430,20 @@ pub async fn security(
     let password_policy = authentication::password_policy(db)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let user_policy = authentication::user_mfa_policy(db, user.id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let requirements = policy.requirements_for(&user_policy, &user.platform_role);
     Ok(ok_response(json!({
         "email_verified": user.email_verified_at.is_some(),
         "factors": factors.iter().map(factor_view).collect::<Vec<_>>(),
         "allowed_factors": policy.allowed_factors,
-        "mfa_required": policy.requires(user.id, &user.platform_role),
+        "mfa_required": requirements.is_enforced(),
+        "mfa_requirements": {
+            "minimum_factors": requirements.minimum_factors,
+            "required_factors": requirements.required_factors.iter().map(MfaFactorKind::as_str).collect::<Vec<_>>(),
+        },
+        "mfa_policy": user_policy,
         "password_policy": password_policy,
         "mail_available": state.config.read().unwrap().mail.enabled(),
     })))
@@ -475,17 +514,21 @@ pub async fn account_delete(
     let policy = authentication::mfa_policy(db)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    if factor.verified_at.is_some() && policy.requires(user.id, &user.platform_role) {
+    if factor.verified_at.is_some() {
+        let user_policy = authentication::user_mfa_policy(db, user.id)
+            .await
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+        let requirements = policy.requirements_for(&user_policy, &user.platform_role);
         let remaining = authentication::verified_mfa_factors(db, user.id)
             .await
             .map_err(|source| AppError::Infrastructure { op: OP, source })?
             .into_iter()
             .filter(|candidate| candidate.id != factor.id && policy.allows(&candidate.kind))
-            .count();
-        if remaining == 0 {
+            .collect::<Vec<_>>();
+        if requirements.is_enforced() && !requirements.met_by(&remaining) {
             return Err(AppError::Conflict {
                 op: OP,
-                message: "the enforced MFA policy requires one enrolled factor".to_owned(),
+                message: "the effective MFA policy requires more enrolled factors".to_owned(),
             });
         }
     }
@@ -703,9 +746,10 @@ fn factor_view(factor: &user_mfa_factor::Model) -> serde_json::Value {
     json!({
         "id": factor.id,
         "kind": factor.kind.as_str(),
+        "label": factor.label,
         "verified": factor.verified_at.is_some(),
-        "created_at": factor.created_at,
-        "last_used_at": factor.last_used_at,
+        "created_at": ts(factor.created_at),
+        "last_used_at": ts(factor.last_used_at),
     })
 }
 
