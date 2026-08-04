@@ -60,7 +60,7 @@ export function DashboardRoute() {
           <p className="text-sm text-muted-foreground">Projects and controls for this workspace.</p>
         </div>
         <Button asChild>
-          <Link to="/projects">
+          <Link to="/projects/new">
             <PlusIcon /> New Project
           </Link>
         </Button>
@@ -87,7 +87,7 @@ export function DashboardRoute() {
                 <EmptyDescription>Create your first project to start deploying.</EmptyDescription>
               </EmptyHeader>
               <Button asChild variant="outline" size="sm">
-                <Link to="/projects">Create a Project</Link>
+                <Link to="/projects/new">Create a Project</Link>
               </Button>
             </Empty>
           ) : (

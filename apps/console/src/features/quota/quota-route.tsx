@@ -91,7 +91,7 @@ export function QuotaRoute() {
                     <TableCell>
                       <span className="font-medium">{dimensionLabel(entry.dimension)}</span>
                       {entry.period === "monthly" && (
-                        <span className="ml-2 text-xs text-muted-foreground">monthly</span>
+                        <span className="ml-2 text-xs text-muted-foreground">(monthly)</span>
                       )}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">

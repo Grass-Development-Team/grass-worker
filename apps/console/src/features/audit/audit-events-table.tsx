@@ -30,7 +30,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-import { auditApi, type AuditActorType, type AuditEvent, type AuditResult } from "./audit.api";
+import {
+  auditApi,
+  type AuditActorType,
+  type AuditEvent,
+  type AuditPage,
+  type AuditResult,
+} from "./audit.api";
 
 function resultBadge(result: AuditEvent["result"]) {
   switch (result) {
@@ -98,6 +104,126 @@ function EventDetails({ event }: { event: AuditEvent }) {
   );
 }
 
+interface AuditEventResultsProps {
+  events?: AuditEvent[];
+  pagination?: AuditPage["pagination"];
+  isLoading?: boolean;
+  errorMessage?: string;
+  emptyMessage?: string;
+  onPageChange: (page: number) => void;
+}
+
+export function AuditEventResults({
+  events,
+  pagination,
+  isLoading = false,
+  errorMessage,
+  emptyMessage = "No audit events match this filter.",
+  onPageChange,
+}: AuditEventResultsProps) {
+  const [selected, setSelected] = useState<AuditEvent | null>(null);
+
+  return (
+    <div className="flex flex-col gap-4">
+      {isLoading && <Skeleton className="h-64 w-full" aria-busy="true" />}
+      {errorMessage && (
+        <p role="alert" className="text-sm text-destructive">
+          {errorMessage}
+        </p>
+      )}
+      {events &&
+        (events.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{emptyMessage}</p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Time</TableHead>
+                <TableHead>Actor</TableHead>
+                <TableHead>Action</TableHead>
+                <TableHead>Target</TableHead>
+                <TableHead>Result</TableHead>
+                <TableHead className="w-12">
+                  <span className="sr-only">Details</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {events.map((event) => (
+                <TableRow key={event.id}>
+                  <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                    {new Date(event.created_at).toLocaleString()}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs">{actorLabel(event)}</TableCell>
+                  <TableCell className="font-mono text-xs">{event.action}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    <p>{event.target_type}</p>
+                    {event.target_id && <p className="font-mono">{event.target_id.slice(0, 8)}</p>}
+                  </TableCell>
+                  <TableCell>{resultBadge(event.result)}</TableCell>
+                  <TableCell>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`View details for ${event.action}`}
+                      onClick={() => setSelected(event)}
+                    >
+                      <EyeIcon />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        ))}
+
+      {pagination && (
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-sm text-muted-foreground">
+            {pagination.total} {pagination.total === 1 ? "event" : "events"}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label="Previous page"
+              disabled={pagination.page <= 1 || isLoading}
+              onClick={() => onPageChange(Math.max(1, pagination.page - 1))}
+            >
+              <ArrowLeftIcon />
+            </Button>
+            <span className="min-w-20 text-center text-sm text-muted-foreground">
+              {pagination.page} / {Math.max(1, pagination.total_pages)}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label="Next page"
+              disabled={pagination.page >= pagination.total_pages || isLoading}
+              onClick={() => onPageChange(pagination.page + 1)}
+            >
+              <ArrowRightIcon />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <Sheet open={selected !== null} onOpenChange={(open) => !open && setSelected(null)}>
+        <SheetContent className="sm:max-w-xl">
+          <SheetHeader>
+            <SheetTitle>Audit event details</SheetTitle>
+            <SheetDescription>{selected?.action}</SheetDescription>
+          </SheetHeader>
+          {selected && <EventDetails event={selected} />}
+        </SheetContent>
+      </Sheet>
+    </div>
+  );
+}
+
 export function AuditEventsTable({ teamId }: { teamId?: string }) {
   const [action, setAction] = useState("");
   const [actorUserId, setActorUserId] = useState("");
@@ -108,7 +234,6 @@ export function AuditEventsTable({ teamId }: { teamId?: string }) {
   const [createdFrom, setCreatedFrom] = useState("");
   const [createdTo, setCreatedTo] = useState("");
   const [page, setPage] = useState(1);
-  const [selected, setSelected] = useState<AuditEvent | null>(null);
 
   const filters = {
     action: action.trim() || undefined,
@@ -209,103 +334,19 @@ export function AuditEventsTable({ teamId }: { teamId?: string }) {
         />
       </div>
 
-      {eventsQuery.isLoading && <Skeleton className="h-64 w-full" aria-busy="true" />}
-      {eventsQuery.isError && (
-        <p role="alert" className="text-sm text-destructive">
-          {eventsQuery.error instanceof Error
-            ? eventsQuery.error.message
-            : "Unable to load audit events."}
-        </p>
-      )}
-      {eventsQuery.data &&
-        (eventsQuery.data.events.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No audit events match this filter.</p>
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Time</TableHead>
-                <TableHead>Actor</TableHead>
-                <TableHead>Action</TableHead>
-                <TableHead>Target</TableHead>
-                <TableHead>Result</TableHead>
-                <TableHead className="w-12">
-                  <span className="sr-only">Details</span>
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {eventsQuery.data.events.map((event) => (
-                <TableRow key={event.id}>
-                  <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                    {new Date(event.created_at).toLocaleString()}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs">{actorLabel(event)}</TableCell>
-                  <TableCell className="font-mono text-xs">{event.action}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    <p>{event.target_type}</p>
-                    {event.target_id && <p className="font-mono">{event.target_id.slice(0, 8)}</p>}
-                  </TableCell>
-                  <TableCell>{resultBadge(event.result)}</TableCell>
-                  <TableCell>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      aria-label={`View details for ${event.action}`}
-                      onClick={() => setSelected(event)}
-                    >
-                      <EyeIcon />
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        ))}
-
-      {pagination && (
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-sm text-muted-foreground">
-            {pagination.total} {pagination.total === 1 ? "event" : "events"}
-          </p>
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              aria-label="Previous page"
-              disabled={pagination.page <= 1}
-              onClick={() => setPage((value) => Math.max(1, value - 1))}
-            >
-              <ArrowLeftIcon />
-            </Button>
-            <span className="min-w-20 text-center text-sm text-muted-foreground">
-              {pagination.page} / {Math.max(1, pagination.total_pages)}
-            </span>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              aria-label="Next page"
-              disabled={pagination.page >= pagination.total_pages}
-              onClick={() => setPage((value) => value + 1)}
-            >
-              <ArrowRightIcon />
-            </Button>
-          </div>
-        </div>
-      )}
-
-      <Sheet open={selected !== null} onOpenChange={(open) => !open && setSelected(null)}>
-        <SheetContent className="sm:max-w-xl">
-          <SheetHeader>
-            <SheetTitle>Audit event details</SheetTitle>
-            <SheetDescription>{selected?.action}</SheetDescription>
-          </SheetHeader>
-          {selected && <EventDetails event={selected} />}
-        </SheetContent>
-      </Sheet>
+      <AuditEventResults
+        events={eventsQuery.data?.events}
+        pagination={pagination}
+        isLoading={eventsQuery.isLoading}
+        errorMessage={
+          eventsQuery.isError
+            ? eventsQuery.error instanceof Error
+              ? eventsQuery.error.message
+              : "Unable to load audit events."
+            : undefined
+        }
+        onPageChange={setPage}
+      />
     </div>
   );
 }

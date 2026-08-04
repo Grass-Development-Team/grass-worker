@@ -28,6 +28,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Sidebar,
   SidebarContent,
@@ -203,7 +204,7 @@ function TeamSidebarNav({
 function AppLayoutContent() {
   const { user, logout } = useAuth();
   const { siteName, version } = useBranding();
-  const { activeTeam, activeRole, error, refreshTeams } = useTeam();
+  const { activeTeam, activeRole, error, isLoading, refreshTeams } = useTeam();
   const location = useLocation();
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -328,7 +329,7 @@ function AppLayoutContent() {
               to="/"
               className="truncate font-medium text-foreground/90 hover:text-foreground"
             >
-              {activeTeam?.name ?? "No team"}
+              {activeTeam?.name ?? (isLoading ? "Loading workspace" : "No team")}
             </NavLink>
             {projectId && (
               <>
@@ -375,6 +376,11 @@ function AppLayoutContent() {
                 <Button variant="outline" onClick={() => refreshTeams()}>
                   Retry
                 </Button>
+              </div>
+            ) : isLoading ? (
+              <div className="space-y-4" aria-busy="true" role="status">
+                <Skeleton className="h-8 w-56" />
+                <Skeleton className="h-40 w-full" />
               </div>
             ) : (
               <Outlet key={activeTeam?.id ?? "no-team"} />

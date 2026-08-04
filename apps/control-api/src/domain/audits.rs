@@ -2,7 +2,7 @@
 
 use sea_orm::{
     ActiveValue::Set, ColumnTrait, Condition, ConnectionTrait, EntityTrait, PaginatorTrait,
-    QueryFilter, QuerySelect,
+    QueryFilter,
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -198,6 +198,14 @@ pub async fn create_audit_event<C: ConnectionTrait>(
     create_domain_audit_event(db, params, None, serde_json::json!({})).await
 }
 
+pub async fn create_audit_event_with_changes<C: ConnectionTrait>(
+    db: &C,
+    params: CreateAuditEventParams,
+    changes: serde_json::Value,
+) -> anyhow::Result<()> {
+    create_domain_audit_event(db, params, None, changes).await
+}
+
 pub async fn create_platform_audit_event<C: ConnectionTrait>(
     db: &C,
     params: CreateAuditEventParams,
@@ -305,40 +313,40 @@ pub struct AuditEventFilter {
     pub per_page: u64,
 }
 
-pub fn audit_event_query(filter: &AuditEventFilter) -> sea_orm::Select<audit_event::Entity> {
-    let mut query = audit_event::Entity::find();
+pub fn audit_event_condition(filter: &AuditEventFilter) -> Condition {
+    let mut condition = Condition::all();
     if let Some(action) = filter.action.as_deref() {
-        query = query.filter(audit_event::Column::Action.starts_with(action));
+        condition = condition.add(audit_event::Column::Action.starts_with(action));
     }
     if let Some(actor_user_id) = filter.actor_user_id {
-        query = query.filter(audit_event::Column::ActorUserId.eq(actor_user_id));
+        condition = condition.add(audit_event::Column::ActorUserId.eq(actor_user_id));
     }
     if let Some(actor_type) = filter.actor_type.as_ref() {
-        query = query.filter(audit_event::Column::ActorType.eq(actor_type.clone()));
+        condition = condition.add(audit_event::Column::ActorType.eq(actor_type.clone()));
     }
     if let Some(target_type) = filter.target_type.as_deref() {
-        query = query.filter(audit_event::Column::TargetType.eq(target_type));
+        condition = condition.add(audit_event::Column::TargetType.eq(target_type));
     }
     if let Some(target_id) = filter.target_id {
-        query = query.filter(audit_event::Column::TargetId.eq(target_id));
+        condition = condition.add(audit_event::Column::TargetId.eq(target_id));
     }
     if let Some(team_id) = filter.team_id {
-        query = query.filter(audit_event::Column::TeamId.eq(team_id));
+        condition = condition.add(audit_event::Column::TeamId.eq(team_id));
     }
     if let Some(visibility) = filter.visibility.as_ref() {
-        query = query.filter(audit_event::Column::Visibility.eq(visibility.clone()));
+        condition = condition.add(audit_event::Column::Visibility.eq(visibility.clone()));
     }
     if let Some(result) = filter.result.as_ref() {
-        query = query.filter(audit_event::Column::Result.eq(result.clone()));
+        condition = condition.add(audit_event::Column::Result.eq(result.clone()));
     }
     if let Some(created_from) = filter.created_from {
-        query = query.filter(audit_event::Column::CreatedAt.gte(created_from));
+        condition = condition.add(audit_event::Column::CreatedAt.gte(created_from));
     }
     if let Some(created_to) = filter.created_to {
-        query = query.filter(audit_event::Column::CreatedAt.lte(created_to));
+        condition = condition.add(audit_event::Column::CreatedAt.lte(created_to));
     }
     if filter.team_visible_only {
-        query = query.filter(
+        condition = condition.add(
             Condition::any()
                 .add(audit_event::Column::Action.starts_with("deployment."))
                 .add(audit_event::Column::Action.eq("artifact.uploaded"))
@@ -350,7 +358,11 @@ pub fn audit_event_query(filter: &AuditEventFilter) -> sea_orm::Select<audit_eve
         );
     }
 
-    query
+    condition
+}
+
+pub fn audit_event_query(filter: &AuditEventFilter) -> sea_orm::Select<audit_event::Entity> {
+    audit_event::Entity::find().filter(audit_event_condition(filter))
 }
 
 pub struct AuditEventPage {
@@ -391,32 +403,12 @@ pub async fn list_events<C: ConnectionTrait>(
     })
 }
 
-pub async fn count_events<C: ConnectionTrait>(
-    db: &C,
-    filter: AuditEventFilter,
-) -> anyhow::Result<u64> {
-    audit_event_query(&filter)
-        .count(db)
-        .await
-        .map_err(Into::into)
-}
-
 pub async fn delete_events<C: ConnectionTrait>(
     db: &C,
     filter: AuditEventFilter,
 ) -> anyhow::Result<u64> {
-    let ids = audit_event_query(&filter)
-        .select_only()
-        .column(audit_event::Column::Id)
-        .into_tuple::<Uuid>()
-        .all(db)
-        .await?;
-    if ids.is_empty() {
-        return Ok(0);
-    }
-
     audit_event::Entity::delete_many()
-        .filter(audit_event::Column::Id.is_in(ids))
+        .filter(audit_event_condition(&filter))
         .exec(db)
         .await
         .map(|result| result.rows_affected)
@@ -446,8 +438,8 @@ mod tests {
     use super::{
         AuditEventFilter, CreateAuditEventParams, CreateRequestAuditEventParams, audit_event_query,
         create_audit_event, create_platform_audit_event_with_changes, create_request_audit_event,
-        domain_actor_type, list_events, prepare_request_event, prune_events_before, redact_json,
-        visibility_for_domain_event,
+        delete_events, domain_actor_type, list_events, prepare_request_event, prune_events_before,
+        redact_json, visibility_for_domain_event,
     };
 
     #[test]
@@ -669,6 +661,41 @@ mod tests {
         let statements = format!("{:?}", db.into_transaction_log());
         assert!(statements.contains("DELETE FROM \\\"audit_events\\\""));
         assert!(statements.contains("\\\"created_at\\\" <"));
+    }
+
+    #[tokio::test]
+    async fn cleanup_deletes_with_one_filtered_statement_without_materializing_ids() {
+        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_exec_results([sea_orm::MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 42,
+            }])
+            .into_connection();
+
+        let deleted = delete_events(
+            &db,
+            AuditEventFilter {
+                action: Some("auth.".to_owned()),
+                actor_type: Some(AuditActorType::User),
+                created_to: Some(OffsetDateTime::UNIX_EPOCH),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(deleted, 42);
+        let statements = format!("{:?}", db.into_transaction_log());
+        assert_eq!(statements.matches("Statement").count(), 1, "{statements}");
+        assert!(
+            statements.contains("DELETE FROM \\\"audit_events\\\""),
+            "{statements}"
+        );
+        assert!(statements.contains("\\\"action\\\" LIKE"), "{statements}");
+        assert!(statements.contains("\\\"actor_type\\\" ="), "{statements}");
+        assert!(statements.contains("\\\"created_at\\\" <="), "{statements}");
+        assert!(!statements.contains("SELECT"), "{statements}");
+        assert!(!statements.contains(" IN "), "{statements}");
     }
 
     #[tokio::test]

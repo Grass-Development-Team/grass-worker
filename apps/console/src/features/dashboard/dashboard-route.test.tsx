@@ -69,6 +69,22 @@ describe("Dashboard administration shortcut", () => {
     expect(screen.getByRole("link", { name: "Administration" })).toBeInTheDocument();
   });
 
+  it("links both dashboard project actions directly to project creation", async () => {
+    renderDashboard("user", {
+      announcements: [],
+      pagination: { page: 1, per_page: 5, total: 0, total_pages: 0 },
+    });
+
+    expect(screen.getByRole("link", { name: "New Project" })).toHaveAttribute(
+      "href",
+      "/projects/new",
+    );
+    expect(await screen.findByRole("link", { name: "Create a Project" })).toHaveAttribute(
+      "href",
+      "/projects/new",
+    );
+  });
+
   it("shows announcement history on the overview page", async () => {
     renderDashboard("user", {
       announcements: [

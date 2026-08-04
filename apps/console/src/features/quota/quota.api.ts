@@ -38,14 +38,14 @@ export const DIMENSION_LABELS: Record<string, string> = {
   "projects.ssr": "SSR projects",
   members: "Team members",
   hosts: "Bound hosts",
-  "deployments.monthly": "Deployments this month",
-  "build_minutes.monthly": "Build minutes this month",
+  "deployments.monthly": "Deployments",
+  "build_minutes.monthly": "Build minutes",
   build_timeout_seconds: "Build timeout (seconds)",
   storage_mb: "Artifact storage (MB)",
   artifact_max_mb: "Max artifact size (MB)",
   concurrent_builds: "Concurrent builds",
   ssr_processes: "SSR processes (reserved)",
-  "ssr_hours.monthly": "SSR hours this month (reserved)",
+  "ssr_hours.monthly": "SSR hours (reserved)",
 };
 
 export function dimensionLabel(dimension: string): string {

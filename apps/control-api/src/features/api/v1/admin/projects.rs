@@ -633,6 +633,7 @@ pub async fn remove(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.projects.delete";
     let db = super::database(&state, OP)?;
+    let cache = super::cache(&state, OP)?;
     let transaction = db
         .begin()
         .await
@@ -641,7 +642,11 @@ pub async fn remove(
             source: source.into(),
         })?;
     let project = load_project(&transaction, project_id, OP).await?;
-    let project = projects::soft_delete(&transaction, project)
+    let (project, bindings) =
+        crate::features::api::v1::projects::lifecycle::soft_delete_project_records(
+            &transaction,
+            project,
+        )
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     record_project_event(
@@ -660,6 +665,10 @@ pub async fn remove(
             op: OP,
             source: source.into(),
         })?;
+    crate::features::api::v1::projects::lifecycle::finalize_deleted_project_resources(
+        db, cache, OP, &project, &bindings,
+    )
+    .await?;
     Ok(ok_response(json!({ "deleted": true })))
 }
 
