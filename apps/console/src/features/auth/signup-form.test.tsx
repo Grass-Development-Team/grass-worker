@@ -53,7 +53,16 @@ it("keeps an invitation token from a protected-route redirect in the sign-up lin
 
 it("continues an invitation after an existing user logs in", async () => {
   const user = userEvent.setup();
-  const login = vi.fn().mockResolvedValue(undefined);
+  const login = vi.fn().mockResolvedValue({
+    user: {
+      id: "user-1",
+      email: "leo@example.com",
+      display_name: "Leo",
+      platform_role: "user",
+      email_verified: true,
+    },
+    csrf_token: "csrf-token",
+  });
   vi.mocked(useAuth).mockReturnValue({ login } as unknown as ReturnType<typeof useAuth>);
 
   render(
@@ -70,12 +79,25 @@ it("continues an invitation after an existing user logs in", async () => {
   await user.click(screen.getByRole("button", { name: "Login" }));
 
   await waitFor(() => expect(screen.getByText("accept invitation")).toBeInTheDocument());
-  expect(login).toHaveBeenCalledWith("leo@example.com", "password123");
+  expect(login).toHaveBeenCalledWith(
+    "leo@example.com",
+    "password123",
+    "/invitations/accept?token=invite-token",
+  );
 });
 
 it("registers, enters the application, and keeps the token in the login link", async () => {
   const user = userEvent.setup();
-  const register = vi.fn().mockResolvedValue(undefined);
+  const register = vi.fn().mockResolvedValue({
+    user: {
+      id: "user-1",
+      email: "leo@example.com",
+      display_name: "Leo",
+      platform_role: "user",
+      email_verified: true,
+    },
+    csrf_token: "csrf-token",
+  });
   vi.mocked(useAuth).mockReturnValue({ register } as unknown as ReturnType<typeof useAuth>);
 
   render(
@@ -105,6 +127,32 @@ it("registers, enters the application, and keeps the token in the login link", a
     invitation_token: "invite-token",
   });
   await waitFor(() => expect(screen.getByText("application")).toBeInTheDocument());
+});
+
+it("continues registration on the email verification page", async () => {
+  const user = userEvent.setup();
+  const register = vi.fn().mockResolvedValue({
+    verification_required: true,
+    email: "leo@example.com",
+  });
+  vi.mocked(useAuth).mockReturnValue({ register } as unknown as ReturnType<typeof useAuth>);
+
+  render(
+    <MemoryRouter initialEntries={["/signup"]}>
+      <Routes>
+        <Route path="/signup" element={<SignupForm />} />
+        <Route path="/verify-email" element={<div>Verify email page</div>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await user.type(screen.getByLabelText("Email"), "leo@example.com");
+  await user.type(screen.getByLabelText("Display name"), "Leo");
+  await user.type(screen.getByLabelText("Password", { selector: "#password" }), "password123");
+  await user.type(screen.getByLabelText("Confirm password"), "password123");
+  await user.click(screen.getByRole("button", { name: "Create account" }));
+
+  expect(await screen.findByText("Verify email page")).toBeInTheDocument();
 });
 
 it("rejects mismatched passwords without registering", async () => {

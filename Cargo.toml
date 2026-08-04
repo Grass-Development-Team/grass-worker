@@ -34,6 +34,7 @@ clap = { version = "4.5.50", features = ["derive", "env"] }
 config = { version = "0.15.19", default-features = false, features = ["toml"] }
 hex = "0.4"
 lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "pool", "sendmail-transport", "smtp-transport", "tokio1", "tokio1-rustls-tls"] }
+jsonwebtoken = "9"
 mime_guess = "2"
 moka = { version = "0.12", features = ["future"] }
 rand = "0.8"
@@ -52,6 +53,7 @@ thiserror = "2.0.17"
 time = { version = "0.3.44", features = ["serde"] }
 tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "signal", "net"] }
 tokio-util = { version = "0.7", features = ["io"] }
+totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
 toml = { version = "0.8" }
 tower-http = { version = "0.6", features = ["cors", "compression-full", "trace"] }
 tracing = "0.1.41"

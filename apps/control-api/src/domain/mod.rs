@@ -1,4 +1,5 @@
 pub mod audits;
+pub mod authentication;
 pub mod cleanup;
 pub mod delivery;
 pub mod deployments;

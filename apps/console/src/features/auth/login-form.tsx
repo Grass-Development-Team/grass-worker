@@ -9,6 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useBranding } from "@/features/branding/branding-context";
 import { useAuth } from "./auth-context";
+import { isAuthResponse } from "./auth.api";
+import { ProviderButtons, useAuthConfiguration } from "./provider-buttons";
 
 export function previewAuthorizationContinuation(
   search: string,
@@ -69,6 +71,7 @@ export function LoginForm({
     ? `/signup?${new URLSearchParams({ invitation_token: invitationToken })}`
     : "/signup";
   const { login } = useAuth();
+  const configuration = useAuthConfiguration();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -85,16 +88,22 @@ export function LoginForm({
 
     setIsSubmitting(true);
     try {
-      await login(email.trim(), password);
-      if (previewContinuation) {
-        documentNavigate(previewContinuation);
-        return;
-      }
       const destination =
         from ??
         (invitationToken
           ? `/invitations/accept?${new URLSearchParams({ token: invitationToken })}`
           : "/");
+      const result = await login(email.trim(), password, previewContinuation ?? destination);
+      if (!isAuthResponse(result)) {
+        navigate(`/mfa#challenge=${encodeURIComponent(result.challenge_token)}`, {
+          replace: true,
+        });
+        return;
+      }
+      if (previewContinuation) {
+        documentNavigate(previewContinuation);
+        return;
+      }
       navigate(destination, { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
@@ -132,7 +141,14 @@ export function LoginForm({
               />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="password">Password</Label>
+              <div className="flex items-center justify-between gap-3">
+                <Label htmlFor="password">Password</Label>
+                {configuration?.password_recovery_available && (
+                  <Link to="/forgot-password" className="text-xs underline underline-offset-4">
+                    Forgot password?
+                  </Link>
+                )}
+              </div>
               <Input
                 id="password"
                 type="password"
@@ -152,6 +168,7 @@ export function LoginForm({
           </form>
         </CardContent>
       </Card>
+      <ProviderButtons returnTo={previewContinuation ?? from} invitationToken={invitationToken} />
     </div>
   );
 }

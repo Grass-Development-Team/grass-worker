@@ -1,6 +1,10 @@
 pub mod csrf_token;
+pub mod email_verification;
 pub mod login;
 pub mod logout;
+pub mod mfa;
+pub mod oidc;
+pub mod password;
 pub mod register;
 
 use axum::{
@@ -15,6 +19,20 @@ pub fn router() -> Router<ControlApiState> {
     Router::new()
         .route("/login", post(login::handler))
         .route("/register", post(register::handler))
+        .route("/email/verify", post(email_verification::verify))
+        .route("/email/resend", post(email_verification::resend))
+        .route("/password/forgot", post(password::forgot))
+        .route("/password/reset", post(password::reset))
+        .route("/mfa/challenge", post(mfa::challenge_status))
+        .route("/mfa/totp/start", post(mfa::challenge_totp_start))
+        .route("/mfa/email/send", post(mfa::challenge_email_send))
+        .route("/mfa/verify", post(mfa::challenge_verify))
+        .route("/providers", get(oidc::providers))
+        .route("/providers/{slug}/start", get(oidc::start))
+        .route(
+            "/providers/{slug}/callback",
+            get(oidc::callback).post(oidc::callback_form),
+        )
         .route("/logout", post(logout::handler))
         .route("/csrf", get(csrf_token::handler))
 }
@@ -25,6 +43,7 @@ pub(crate) fn user_data(user: &user::Model) -> Value {
         "email": user.email,
         "display_name": user.display_name,
         "platform_role": user.platform_role.as_str(),
+        "email_verified": user.email_verified_at.is_some(),
     })
 }
 
@@ -46,6 +65,7 @@ mod tests {
             display_name: Some("Admin".to_owned()),
             status: UserStatus::Active,
             platform_role: PlatformRole::Admin,
+            email_verified_at: Some(now),
             last_login_at: None,
             deleted_at: None,
             created_at: now,

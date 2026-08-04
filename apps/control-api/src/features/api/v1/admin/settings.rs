@@ -6,6 +6,7 @@ use serde_json::json;
 use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
+        authentication::{self, MfaPolicy, PasswordPolicy},
         nodes, retention, settings,
     },
     infra::{
@@ -58,6 +59,15 @@ pub async fn get(State(state): State<ControlApiState>) -> Result<impl IntoRespon
         .await?
         .unwrap_or_else(|| config.storage.root.clone());
     let secret_key = config.secrets.secret_key.trim();
+    let password_policy = authentication::password_policy(db)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let mfa_policy = authentication::mfa_policy(db)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let registration_email_verification = authentication::registration_verification_required(db)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
     Ok(ok_response(json!({
         "site": {
@@ -115,6 +125,11 @@ pub async fn get(State(state): State<ControlApiState>) -> Result<impl IntoRespon
             "smtp_username": config.mail.smtp_username,
             "smtp_password_configured": !config.mail.smtp_password.is_empty(),
         },
+        "authentication": {
+            "password_policy": password_policy,
+            "registration_email_verification": registration_email_verification,
+            "mfa_policy": mfa_policy,
+        },
         "session": config.session,
         "audit": config.audit,
         "node_manager": config.node_manager,
@@ -155,6 +170,9 @@ pub struct UpdateSettingsRequest {
     pub mail_smtp_security: Option<String>,
     pub mail_smtp_username: Option<String>,
     pub mail_smtp_password: Option<String>,
+    pub password_policy: Option<PasswordPolicy>,
+    pub registration_email_verification: Option<bool>,
+    pub mfa_policy: Option<MfaPolicy>,
     pub node_manager_auto_start_local_node: Option<bool>,
     pub node_manager_local_node_binary: Option<String>,
     pub node_manager_local_node_config: Option<String>,
@@ -194,6 +212,9 @@ struct PreparedSettingsUpdate {
     mail_smtp_security: Option<SmtpSecurity>,
     mail_smtp_username: Option<String>,
     mail_smtp_password: Option<String>,
+    password_policy: Option<PasswordPolicy>,
+    registration_email_verification: Option<bool>,
+    mfa_policy: Option<MfaPolicy>,
     node_manager_auto_start_local_node: Option<bool>,
     node_manager_local_node_binary: Option<String>,
     node_manager_local_node_config: Option<String>,
@@ -683,6 +704,22 @@ fn prepare_settings_update(
     let mail_smtp_host = body.mail_smtp_host.map(|value| value.trim().to_owned());
     let mail_smtp_username = body.mail_smtp_username.map(|value| value.trim().to_owned());
     let mail_smtp_password = body.mail_smtp_password;
+    if let Some(policy) = body.password_policy.as_ref() {
+        policy
+            .validate_config()
+            .map_err(|message| AppError::Validation {
+                op,
+                message: message.to_owned(),
+            })?;
+    }
+    if let Some(policy) = body.mfa_policy.as_ref() {
+        policy
+            .validate(true)
+            .map_err(|message| AppError::Validation {
+                op,
+                message: message.to_owned(),
+            })?;
+    }
 
     let node_manager_local_node_binary = body
         .node_manager_local_node_binary
@@ -761,6 +798,9 @@ fn prepare_settings_update(
         mail_smtp_security,
         mail_smtp_username,
         mail_smtp_password,
+        password_policy: body.password_policy,
+        registration_email_verification: body.registration_email_verification,
+        mfa_policy: body.mfa_policy,
         node_manager_auto_start_local_node: body.node_manager_auto_start_local_node,
         node_manager_local_node_binary,
         node_manager_local_node_config,
@@ -798,6 +838,9 @@ fn prepare_settings_update(
         && prepared.mail_smtp_security.is_none()
         && prepared.mail_smtp_username.is_none()
         && prepared.mail_smtp_password.is_none()
+        && prepared.password_policy.is_none()
+        && prepared.registration_email_verification.is_none()
+        && prepared.mfa_policy.is_none()
         && prepared.node_manager_auto_start_local_node.is_none()
         && prepared.node_manager_local_node_binary.is_none()
         && prepared.node_manager_local_node_config.is_none()
@@ -870,6 +913,62 @@ pub async fn update(
     } else {
         None
     };
+    let mail_enabled = config_update
+        .as_ref()
+        .map(|update| update.runtime.mail.enabled())
+        .unwrap_or_else(|| state.config.read().unwrap().mail.enabled());
+    let mail_configuration_changed = body.mail_mode.is_some()
+        || body.mail_from_address.is_some()
+        || body.mail_from_name.is_some()
+        || body.mail_sendmail_command.is_some()
+        || body.mail_smtp_host.is_some()
+        || body.mail_smtp_port.is_some()
+        || body.mail_smtp_security.is_some()
+        || body.mail_smtp_username.is_some()
+        || body.mail_smtp_password.is_some();
+    let registration_email_verification = match body.registration_email_verification {
+        Some(required) => required,
+        None if mail_configuration_changed => {
+            authentication::registration_verification_required(db)
+                .await
+                .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        }
+        None => false,
+    };
+    if registration_email_verification && !mail_enabled {
+        return Err(AppError::Validation {
+            op: OP,
+            message: "registration email verification requires an enabled mail transport"
+                .to_owned(),
+        });
+    }
+    let effective_mfa_policy = match body.mfa_policy.as_ref() {
+        Some(policy) => Some(policy.clone()),
+        None if mail_configuration_changed => Some(
+            authentication::mfa_policy(db)
+                .await
+                .map_err(|source| AppError::Infrastructure { op: OP, source })?,
+        ),
+        None => None,
+    };
+    if let Some(policy) = effective_mfa_policy.as_ref() {
+        policy
+            .validate(mail_enabled)
+            .map_err(|message| AppError::Validation {
+                op: OP,
+                message: message.to_owned(),
+            })?;
+    }
+    if let Some(policy) = body.mfa_policy.as_ref()
+        && !authentication::selected_mfa_users_exist(db, &policy.selected_user_ids)
+            .await
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?
+    {
+        return Err(AppError::Validation {
+            op: OP,
+            message: "selected MFA users must reference existing users".to_owned(),
+        });
+    }
     let transaction = db
         .begin()
         .await
@@ -890,6 +989,70 @@ pub async fn update(
             &mut before,
             &mut after,
         );
+    }
+
+    if let Some(policy) = body.password_policy.as_ref() {
+        before.insert(
+            "password_policy".to_owned(),
+            json!(
+                authentication::password_policy(db)
+                    .await
+                    .map_err(|source| { AppError::Infrastructure { op: OP, source } })?
+            ),
+        );
+        settings::set_setting(
+            &transaction,
+            authentication::PASSWORD_POLICY_KEY,
+            SystemSettingValueKind::Json,
+            json!(policy),
+        )
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+        after.insert("password_policy".to_owned(), json!(policy));
+        changed.push("password_policy");
+    }
+    if let Some(required) = body.registration_email_verification {
+        before.insert(
+            "registration_email_verification".to_owned(),
+            json!(
+                authentication::registration_verification_required(db)
+                    .await
+                    .map_err(|source| AppError::Infrastructure { op: OP, source })?
+            ),
+        );
+        settings::set_setting(
+            &transaction,
+            authentication::REGISTRATION_VERIFICATION_KEY,
+            SystemSettingValueKind::Json,
+            json!(required),
+        )
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+        after.insert(
+            "registration_email_verification".to_owned(),
+            json!(required),
+        );
+        changed.push("registration_email_verification");
+    }
+    if let Some(policy) = body.mfa_policy.as_ref() {
+        before.insert(
+            "mfa_policy".to_owned(),
+            json!(
+                authentication::mfa_policy(db)
+                    .await
+                    .map_err(|source| { AppError::Infrastructure { op: OP, source } })?
+            ),
+        );
+        settings::set_setting(
+            &transaction,
+            authentication::MFA_POLICY_KEY,
+            SystemSettingValueKind::Json,
+            json!(policy),
+        )
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+        after.insert("mfa_policy".to_owned(), json!(policy));
+        changed.push("mfa_policy");
     }
 
     if let Some(name) = body.site_name.as_deref() {
@@ -1173,6 +1336,9 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
             ])
             .into_connection();
         let mut config = ControlApiConfig::default();
@@ -1327,6 +1493,9 @@ mod tests {
             Vec::<crate::infra::database::entity::system_setting::Model>::new(),
             Vec::<crate::infra::database::entity::system_setting::Model>::new(),
             Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
         ]);
         if audit_succeeds {
             mock.append_exec_results([sea_orm::MockExecResult {
@@ -1432,6 +1601,9 @@ mod tests {
         let db = MockDatabase::new(sea_orm::DbBackend::Postgres)
             .append_query_results([
                 Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),

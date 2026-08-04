@@ -44,6 +44,23 @@ const settings = {
     smtp_username: "mailer",
     smtp_password_configured: true,
   },
+  authentication: {
+    password_policy: {
+      min_length: 8,
+      max_length: 1024,
+      require_lowercase: false,
+      require_uppercase: false,
+      require_number: false,
+      require_symbol: false,
+      history_count: 0,
+    },
+    registration_email_verification: false,
+    mfa_policy: {
+      allowed_factors: ["totp"],
+      enforcement: "none",
+      selected_user_ids: [],
+    },
+  },
   session: { cookie_secure: true, idle_ttl_seconds: 900, session_ttl_seconds: 2_592_000 },
   audit: { retention_days: 90 },
   node_manager: {

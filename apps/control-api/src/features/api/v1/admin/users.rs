@@ -13,6 +13,7 @@ use crate::infra::http::timestamps::ts;
 use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
+        authentication,
         teams::{self, CreateTeamParams},
         users::{self, CreateUserParams, UpdateUserParams, UserListFilter},
     },
@@ -31,6 +32,7 @@ fn user_view(user: &user::Model) -> serde_json::Value {
         "display_name": user.display_name,
         "status": user.status.as_str(),
         "platform_role": user.platform_role.as_str(),
+        "email_verified": user.email_verified_at.is_some(),
         "last_login_at": ts(user.last_login_at),
         "created_at": ts(user.created_at),
     })
@@ -230,17 +232,35 @@ pub async fn reset_password(
             message: "user not found".to_owned(),
         })?;
 
+    let policy = authentication::password_policy(db)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     let requested = body.and_then(|Json(body)| body.password);
-    if let Some(password) = requested.as_deref()
-        && !(8..=1024).contains(&password.len())
+    let generated = requested.is_none();
+    let password = match requested {
+        Some(password) => password,
+        None => policy
+            .generate_password()
+            .map_err(|message| AppError::Validation {
+                op: OP,
+                message: message.to_owned(),
+            })?,
+    };
+    policy
+        .validate_password(&password)
+        .map_err(|message| AppError::Validation {
+            op: OP,
+            message: message.to_owned(),
+        })?;
+    if authentication::password_was_used_recently(db, target.id, &password, policy.history_count)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
     {
         return Err(AppError::Validation {
             op: OP,
-            message: "password must contain between 8 and 1024 bytes".to_owned(),
+            message: "password was used recently".to_owned(),
         });
     }
-    let generated = requested.is_none();
-    let password = requested.unwrap_or_else(grass_token::generate_token);
     let password_hash =
         grass_crypto::hash_password(&password).map_err(|error| AppError::Internal {
             op: OP,
@@ -320,16 +340,25 @@ pub async fn create(
             message: format!("unknown platform role: {value}"),
         })?,
     };
-    if let Some(password) = body.password.as_deref()
-        && !(8..=1024).contains(&password.len())
-    {
-        return Err(AppError::Validation {
-            op: OP,
-            message: "password must contain between 8 and 1024 bytes".to_owned(),
-        });
-    }
+    let password_policy = authentication::password_policy(db)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     let generated = body.password.is_none();
-    let password = body.password.unwrap_or_else(grass_token::generate_token);
+    let password = match body.password {
+        Some(password) => password,
+        None => password_policy
+            .generate_password()
+            .map_err(|message| AppError::Validation {
+                op: OP,
+                message: message.to_owned(),
+            })?,
+    };
+    password_policy
+        .validate_password(&password)
+        .map_err(|message| AppError::Validation {
+            op: OP,
+            message: message.to_owned(),
+        })?;
     let password_hash =
         grass_crypto::hash_password(&password).map_err(|error| AppError::Internal {
             op: OP,
@@ -348,8 +377,9 @@ pub async fn create(
         CreateUserParams {
             email: email.clone(),
             display_name: display_name.clone(),
-            password_hash,
+            password_hash: Some(password_hash),
             platform_role,
+            email_verified_at: Some(time::OffsetDateTime::now_utc()),
         },
     )
     .await
@@ -410,4 +440,68 @@ pub async fn create(
         // Present only when generated; shown exactly once.
         "password": generated.then_some(password),
     })))
+}
+
+pub async fn mfa_factors(
+    State(state): State<ControlApiState>,
+    Path(user_id): Path<Uuid>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "admin.users.mfa.list";
+    let db = super::database(&state, OP)?;
+    users::get_user_by_id(db, user_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "user not found".to_owned(),
+        })?;
+    let factors = authentication::mfa_factors(db, user_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    Ok(ok_response(json!({
+        "factors": factors.iter().map(|factor| json!({
+            "id": factor.id,
+            "kind": factor.kind.as_str(),
+            "label": factor.label,
+            "verified": factor.verified_at.is_some(),
+            "verified_at": ts(factor.verified_at),
+            "last_used_at": ts(factor.last_used_at),
+            "created_at": ts(factor.created_at),
+        })).collect::<Vec<_>>(),
+    })))
+}
+
+pub async fn reset_mfa_factor(
+    State(state): State<ControlApiState>,
+    Session { data, .. }: Session,
+    Path((user_id, factor_id)): Path<(Uuid, Uuid)>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "admin.users.mfa.reset";
+    let db = super::database(&state, OP)?;
+    let factor = authentication::mfa_factor(db, user_id, factor_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "MFA factor not found".to_owned(),
+        })?;
+    authentication::delete_mfa_factor(db, user_id, factor_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let _ = audits::create_platform_audit_event(
+        db,
+        CreateAuditEventParams {
+            actor_user_id: Some(data.user_id),
+            actor_node_id: None,
+            team_id: None,
+            action: "user.mfa_factor_reset".to_owned(),
+            target_type: "user".to_owned(),
+            target_id: Some(user_id),
+            result: AuditEventResult::Success,
+            reason: None,
+            metadata: json!({ "factor_id": factor.id, "factor_kind": factor.kind.as_str() }),
+        },
+    )
+    .await;
+    Ok(ok_response(json!({ "deleted": true })))
 }

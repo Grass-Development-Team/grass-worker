@@ -1,5 +1,6 @@
 pub mod announcement;
 pub mod audit_event;
+pub mod auth_identity_provider;
 pub mod deployment;
 pub mod deployment_artifact;
 pub mod deployment_event;
@@ -30,13 +31,19 @@ pub mod team_group;
 pub mod team_invitation;
 pub mod team_member;
 pub mod user;
+pub mod user_auth_token;
+pub mod user_external_identity;
+pub mod user_mfa_factor;
 pub mod user_notification;
 pub mod user_password_credential;
+pub mod user_password_history;
 
 #[allow(unused_imports)]
 pub use announcement::Entity as Announcement;
 #[allow(unused_imports)]
 pub use audit_event::Entity as AuditEvent;
+#[allow(unused_imports)]
+pub use auth_identity_provider::Entity as AuthIdentityProvider;
 #[allow(unused_imports)]
 pub use deployment::Entity as Deployment;
 #[allow(unused_imports)]
@@ -96,6 +103,14 @@ pub use team_member::Entity as TeamMember;
 #[allow(unused_imports)]
 pub use user::Entity as User;
 #[allow(unused_imports)]
+pub use user_auth_token::Entity as UserAuthToken;
+#[allow(unused_imports)]
+pub use user_external_identity::Entity as UserExternalIdentity;
+#[allow(unused_imports)]
+pub use user_mfa_factor::Entity as UserMfaFactor;
+#[allow(unused_imports)]
 pub use user_notification::Entity as UserNotification;
 #[allow(unused_imports)]
 pub use user_password_credential::Entity as UserPasswordCredential;
+#[allow(unused_imports)]
+pub use user_password_history::Entity as UserPasswordHistory;

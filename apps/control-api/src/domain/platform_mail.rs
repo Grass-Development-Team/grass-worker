@@ -123,6 +123,132 @@ pub fn deployment_message(
     }
 }
 
+fn account_link_message(
+    branding: &MailBranding,
+    recipient: &str,
+    subject: &str,
+    introduction: &str,
+    path: &str,
+    token: &str,
+) -> PlatformMessage {
+    let link = format!(
+        "{}{path}?token={}",
+        branding.site_url,
+        url::form_urlencoded::byte_serialize(token.as_bytes()).collect::<String>()
+    );
+    PlatformMessage {
+        recipient_address: recipient.to_owned(),
+        recipient_name: None,
+        subject: subject.to_owned(),
+        text: format!("{introduction}\n\n{link}\n"),
+    }
+}
+
+pub async fn send_email_verification_best_effort(
+    db: &DatabaseConnection,
+    config: MailConfig,
+    recipient: &str,
+    token: &str,
+) {
+    if !config.enabled() {
+        return;
+    }
+    match branding(db).await {
+        Ok(branding) => {
+            let subject = format!("Verify your {} email", branding.site_name);
+            let introduction = format!(
+                "Verify this email address to finish creating your {} account.",
+                branding.site_name
+            );
+            spawn_delivery(
+                config,
+                account_link_message(
+                    &branding,
+                    recipient,
+                    &subject,
+                    &introduction,
+                    "/verify-email",
+                    token,
+                ),
+                "auth.email_verification",
+            );
+        }
+        Err(error) => tracing::warn!(
+            operation = "auth.email_verification",
+            %error,
+            "mail context could not be loaded"
+        ),
+    }
+}
+
+pub async fn send_password_reset_best_effort(
+    db: &DatabaseConnection,
+    config: MailConfig,
+    recipient: &str,
+    token: &str,
+) {
+    if !config.enabled() {
+        return;
+    }
+    match branding(db).await {
+        Ok(branding) => {
+            let subject = format!("Reset your {} password", branding.site_name);
+            let introduction = format!(
+                "A password reset was requested for your {} account. Ignore this message if you did not request it.",
+                branding.site_name
+            );
+            spawn_delivery(
+                config,
+                account_link_message(
+                    &branding,
+                    recipient,
+                    &subject,
+                    &introduction,
+                    "/reset-password",
+                    token,
+                ),
+                "auth.password_reset",
+            );
+        }
+        Err(error) => tracing::warn!(
+            operation = "auth.password_reset",
+            %error,
+            "mail context could not be loaded"
+        ),
+    }
+}
+
+pub async fn send_mfa_code_best_effort(
+    db: &DatabaseConnection,
+    config: MailConfig,
+    recipient: &str,
+    code: &str,
+) {
+    if !config.enabled() {
+        return;
+    }
+    match branding(db).await {
+        Ok(branding) => spawn_delivery(
+            config,
+            PlatformMessage {
+                recipient_address: recipient.to_owned(),
+                recipient_name: None,
+                subject: format!("{} verification code", branding.site_name),
+                text: format!(
+                    "Your {} verification code is:\n\n{code}\n\nThis code expires shortly.",
+                    branding.site_name
+                ),
+            },
+            "auth.mfa_email",
+        ),
+        Err(error) => tracing::warn!(
+            operation = "auth.mfa_email",
+            %error,
+            "mail context could not be loaded"
+        ),
+    }
+}
+
 pub async fn send_deployment_result_best_effort(
     db: &DatabaseConnection,
     config: MailConfig,

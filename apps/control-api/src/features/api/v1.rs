@@ -10,7 +10,10 @@ pub mod setup;
 pub mod site_config;
 pub mod teams;
 
-use axum::{Router, middleware, routing::get};
+use axum::{
+    Router, middleware,
+    routing::{get, post},
+};
 
 use crate::{
     infra::http::extractors::PlatformAdmin,
@@ -59,6 +62,48 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
                     state.clone(),
                     require_ready_mode,
                 )),
+        )
+        .route(
+            "/me/password",
+            post(auth::password::change).layer(middleware::from_fn_with_state(
+                state.clone(),
+                require_ready_mode,
+            )),
+        )
+        .route(
+            "/me/security",
+            get(auth::mfa::security).layer(middleware::from_fn_with_state(
+                state.clone(),
+                require_ready_mode,
+            )),
+        )
+        .route(
+            "/me/mfa/totp/start",
+            post(auth::mfa::account_totp_start).layer(middleware::from_fn_with_state(
+                state.clone(),
+                require_ready_mode,
+            )),
+        )
+        .route(
+            "/me/mfa/email/start",
+            post(auth::mfa::account_email_start).layer(middleware::from_fn_with_state(
+                state.clone(),
+                require_ready_mode,
+            )),
+        )
+        .route(
+            "/me/mfa/{factor_id}/confirm",
+            post(auth::mfa::account_confirm).layer(middleware::from_fn_with_state(
+                state.clone(),
+                require_ready_mode,
+            )),
+        )
+        .route(
+            "/me/mfa/{factor_id}",
+            axum::routing::delete(auth::mfa::account_delete).layer(middleware::from_fn_with_state(
+                state.clone(),
+                require_ready_mode,
+            )),
         )
         .nest("/admin", administration)
         .merge(teams::router().layer(middleware::from_fn_with_state(

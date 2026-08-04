@@ -1,17 +1,22 @@
-use axum::{Json, extract::State, response::IntoResponse};
+use axum::{
+    Json,
+    extract::State,
+    response::{IntoResponse, Response},
+};
 use axum_extra::extract::cookie::CookieJar;
 use sea_orm::{QuerySelect, TransactionTrait, entity::prelude::*};
 use serde::Deserialize;
+use serde_json::json;
 
 use crate::{
     domain::{
-        settings,
+        authentication, platform_mail, settings,
         teams::{self, AcceptInvitationParams, CreateTeamParams, InvitationError},
         users::{self, CreateUserParams},
     },
     infra::{
-        database::entity::{PlatformRole, TeamKind, team_invitation},
-        error::AppError,
+        database::entity::{AuthTokenKind, PlatformRole, TeamKind, team_invitation},
+        error::{AppError, ok_response},
     },
     state::ControlApiState,
 };
@@ -41,7 +46,7 @@ pub async fn handler(
     State(state): State<ControlApiState>,
     jar: CookieJar,
     Json(body): Json<RegisterRequest>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Response, AppError> {
     let db = state.try_database().ok_or_else(|| AppError::Internal {
         op: "auth.register.no_database",
         message: "database not available".to_owned(),
@@ -50,7 +55,19 @@ pub async fn handler(
         op: "auth.register.no_cache",
         message: "cache service not available".to_owned(),
     })?;
-    let input = validate_registration_input(&body.email, &body.password)?;
+    let password_policy = authentication::password_policy(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: "auth.register.password_policy",
+            source,
+        })?;
+    password_policy
+        .validate_password(&body.password)
+        .map_err(|message| AppError::Validation {
+            op: "auth.register.password_policy",
+            message: message.to_owned(),
+        })?;
+    let input = validate_registration_input(&body.email)?;
     let display_name = body
         .display_name
         .map(|name| name.trim().to_owned())
@@ -93,6 +110,19 @@ pub async fn handler(
             message: "a valid invitation is required".to_owned(),
         });
     }
+    let verification_required = authentication::registration_verification_required(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: "auth.register.verification_policy",
+            source,
+        })?;
+    let mail_config = state.config.read().unwrap().mail.clone();
+    if verification_required && !mail_config.enabled() {
+        return Err(AppError::Internal {
+            op: "auth.register.mail_unavailable",
+            message: "registration email verification is unavailable".to_owned(),
+        });
+    }
 
     let password_hash =
         grass_crypto::hash_password(&body.password).map_err(|error| AppError::Internal {
@@ -130,8 +160,9 @@ pub async fn handler(
         CreateUserParams {
             email: input.email.clone(),
             display_name: display_name.clone(),
-            password_hash,
+            password_hash: Some(password_hash),
             platform_role: registration_platform_role(),
+            email_verified_at: (!verification_required).then(time::OffsetDateTime::now_utc),
         },
     )
     .await
@@ -190,6 +221,27 @@ pub async fn handler(
             source: source.into(),
         })?;
 
+    if verification_required {
+        let token = authentication::create_auth_token(
+            db,
+            user.id,
+            AuthTokenKind::EmailVerification,
+            time::Duration::hours(24),
+        )
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: "auth.register.verification_token",
+            source,
+        })?;
+        platform_mail::send_email_verification_best_effort(db, mail_config, &user.email, &token)
+            .await;
+        return Ok(ok_response(json!({
+            "verification_required": true,
+            "email": user.email,
+        }))
+        .into_response());
+    }
+
     super::login::authenticated_response(&state, cache, jar, user).await
 }
 
@@ -219,21 +271,15 @@ mod platform_role_tests {
     }
 }
 
-fn validate_registration_input(email: &str, password: &str) -> Result<RegistrationInput, AppError> {
+fn validate_registration_input(email: &str) -> Result<RegistrationInput, AppError> {
     let email = grass_validator::normalize_email(email).map_err(|error| AppError::Validation {
         op: "auth.register.invalid_email",
         message: error.to_string(),
     })?;
-    if !(8..=1024).contains(&password.len()) {
-        return Err(AppError::Validation {
-            op: "auth.register.invalid_password_length",
-            message: "password must contain between 8 and 1024 bytes".to_owned(),
-        });
-    }
     Ok(RegistrationInput { email })
 }
 
-async fn validate_invitation<C: ConnectionTrait>(
+pub(crate) async fn validate_invitation<C: ConnectionTrait>(
     db: &C,
     token: &str,
     email: &str,
@@ -326,10 +372,9 @@ mod tests {
 
     #[test]
     fn normalizes_and_validates_registration_input() {
-        let input = validate_registration_input("  User@Example.COM ", "password").unwrap();
+        let input = validate_registration_input("  User@Example.COM ").unwrap();
         assert_eq!(input.email, "user@example.com");
-        assert!(validate_registration_input("invalid", "password").is_err());
-        assert!(validate_registration_input("user@example.com", "short").is_err());
+        assert!(validate_registration_input("invalid").is_err());
     }
 
     #[test]

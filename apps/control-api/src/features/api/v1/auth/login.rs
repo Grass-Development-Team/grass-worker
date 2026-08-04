@@ -28,6 +28,7 @@ const LOGIN_IP_CAPACITY: u32 = 30;
 pub struct LoginRequest {
     pub email: String,
     pub password: String,
+    pub return_to: Option<String>,
 }
 
 pub async fn handler(
@@ -35,7 +36,7 @@ pub async fn handler(
     ConnectInfo(peer_address): ConnectInfo<std::net::SocketAddr>,
     jar: CookieJar,
     Json(body): Json<LoginRequest>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Response, AppError> {
     let db = state.try_database().ok_or_else(|| AppError::Internal {
         op: "auth.login.no_database",
         message: "database not available".to_owned(),
@@ -71,6 +72,17 @@ pub async fn handler(
             op: "auth.login.invalid_credentials",
             message: "invalid email or password".to_owned(),
         })?;
+    if user.email_verified_at.is_none() {
+        return Err(AppError::Forbidden {
+            op: "auth.login.email_not_verified",
+            message: "email verification is required".to_owned(),
+        });
+    }
+    if let Some(response) =
+        super::mfa::begin_login(&state, &user, body.return_to.as_deref()).await?
+    {
+        return Ok(response);
+    }
 
     authenticated_response(&state, cache, jar, user).await
 }
@@ -113,6 +125,32 @@ pub(crate) async fn authenticated_response(
     jar: CookieJar,
     user: crate::infra::database::entity::user::Model,
 ) -> Result<Response, AppError> {
+    let (session_jar, csrf_token) = create_authenticated_session(state, cache, jar, &user).await?;
+
+    Ok((
+        session_jar,
+        ok_response(json!({
+            "user": super::user_data(&user),
+            "csrf_token": csrf_token,
+        })),
+    )
+        .into_response())
+}
+
+pub(crate) async fn create_authenticated_session(
+    state: &ControlApiState,
+    cache: &grass_cache::CacheStore,
+    jar: CookieJar,
+    user: &crate::infra::database::entity::user::Model,
+) -> Result<(CookieJar, String), AppError> {
+    if let Some(db) = state.try_database() {
+        users::update_last_login(db, user.id)
+            .await
+            .map_err(|source| AppError::Infrastructure {
+                op: "auth.login.update_last_login",
+                source,
+            })?;
+    }
     let (cookie_secure, session_ttl) = {
         let config = state.config.read().unwrap();
         (
@@ -134,18 +172,10 @@ pub(crate) async fn authenticated_response(
             source,
         })?;
 
-    let cookie = session_cookie(session_id, cookie_secure, session_ttl);
-
-    let session_jar = jar.add(cookie);
-
     Ok((
-        session_jar,
-        ok_response(json!({
-            "user": super::user_data(&user),
-            "csrf_token": csrf_token,
-        })),
-    )
-        .into_response())
+        jar.add(session_cookie(session_id, cookie_secure, session_ttl)),
+        csrf_token,
+    ))
 }
 
 fn session_cookie(

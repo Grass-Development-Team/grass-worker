@@ -52,6 +52,21 @@ describe("authApi.register", () => {
     expect(getCsrfToken()).toBe("csrf-token");
   });
 
+  it("keeps csrf empty while registration is waiting for email verification", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      response({ verification_required: true, email: "leo@example.com" }),
+    );
+
+    const result = await authApi.register({
+      email: "leo@example.com",
+      display_name: "Leo",
+      password: "correct horse battery staple",
+    });
+
+    expect(result).toEqual({ verification_required: true, email: "leo@example.com" });
+    expect(getCsrfToken()).toBeNull();
+  });
+
   it("restores the csrf token before a mutation is sent", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")

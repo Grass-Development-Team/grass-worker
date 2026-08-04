@@ -1,21 +1,15 @@
 use sea_orm::entity::prelude::*;
 
-use super::enums::{PlatformRole, UserStatus};
-
 #[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
-#[sea_orm(table_name = "users")]
+#[sea_orm(table_name = "user_external_identities")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
-    #[sea_orm(unique)]
+    pub user_id: Uuid,
+    pub provider_id: Uuid,
+    pub subject: String,
     pub email: String,
-    pub display_name: Option<String>,
-    pub status: UserStatus,
-    pub platform_role: PlatformRole,
-    pub email_verified_at: Option<TimeDateTimeWithTimeZone>,
-    pub last_login_at: Option<TimeDateTimeWithTimeZone>,
-    pub deleted_at: Option<TimeDateTimeWithTimeZone>,
     pub created_at: TimeDateTimeWithTimeZone,
     pub updated_at: TimeDateTimeWithTimeZone,
 }
