@@ -63,11 +63,6 @@ export function AuthenticationPanel() {
     queryKey: ["admin", "identity-providers"],
     queryFn: adminApi.listIdentityProviders,
   });
-  const users = useQuery({
-    queryKey: ["admin", "users", "mfa-policy"],
-    queryFn: () => adminApi.listUsers(),
-  });
-
   if (settings.isLoading || providers.isLoading) {
     return <Skeleton className="h-72 w-full" aria-busy="true" />;
   }
@@ -88,7 +83,6 @@ export function AuthenticationPanel() {
         }
         initialMfa={settings.data.authentication.mfa_policy}
         mailEnabled={settings.data.mail.mode !== "none"}
-        users={users.data?.users ?? []}
       />
       <IdentityProviders providers={providers.data.providers} />
     </div>
@@ -100,13 +94,11 @@ function AuthenticationPolicyForm({
   initialRegistrationVerification,
   initialMfa,
   mailEnabled,
-  users,
 }: {
   initialPassword: AdminPasswordPolicy;
   initialRegistrationVerification: boolean;
   initialMfa: AdminMfaPolicy;
   mailEnabled: boolean;
-  users: Awaited<ReturnType<typeof adminApi.listUsers>>["users"];
 }) {
   const queryClient = useQueryClient();
   const [password, setPassword] = useState(initialPassword);
@@ -114,6 +106,7 @@ function AuthenticationPolicyForm({
     initialRegistrationVerification,
   );
   const [mfa, setMfa] = useState(initialMfa);
+  const [addingMethod, setAddingMethod] = useState(false);
   const mutation = useMutation({
     mutationFn: () =>
       adminApi.updateSettings({
@@ -128,12 +121,28 @@ function AuthenticationPolicyForm({
     key: K,
     value: AdminPasswordPolicy[K],
   ) => setPassword((current) => ({ ...current, [key]: value }));
-  const toggleFactor = (factor: "totp" | "email", checked: boolean) =>
+  const removeMethod = (factor: "totp" | "email") =>
+    setMfa((current) => {
+      const allowedFactors = current.allowed_factors.filter((item) => item !== factor);
+      return {
+        ...current,
+        allowed_factors: allowedFactors,
+        enforcement: allowedFactors.length === 0 ? "none" : current.enforcement,
+        required_factors: current.required_factors.filter((item) => item !== factor),
+        minimum_factors: Math.min(current.minimum_factors, allowedFactors.length),
+      };
+    });
+  const addMethod = (factor: "totp" | "email") =>
     setMfa((current) => ({
       ...current,
-      allowed_factors: checked
-        ? [...new Set([...current.allowed_factors, factor])]
-        : current.allowed_factors.filter((item) => item !== factor),
+      allowed_factors: [...new Set([...current.allowed_factors, factor])],
+    }));
+  const toggleRequired = (factor: "totp" | "email", checked: boolean) =>
+    setMfa((current) => ({
+      ...current,
+      required_factors: checked
+        ? [...new Set([...current.required_factors, factor])]
+        : current.required_factors.filter((item) => item !== factor),
     }));
 
   return (
@@ -223,36 +232,101 @@ function AuthenticationPolicyForm({
               onCheckedChange={setRegistrationVerification}
             />
           </Field>
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h2 className="text-sm font-medium">MFA methods</h2>
+              <p className="text-xs text-muted-foreground">
+                Add each method once, then configure its platform requirement.
+              </p>
+            </div>
+            <Button type="button" size="sm" variant="outline" onClick={() => setAddingMethod(true)}>
+              <PlusIcon /> Add method
+            </Button>
+          </div>
+          <div className="overflow-x-auto rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Method</TableHead>
+                  <TableHead>Availability</TableHead>
+                  <TableHead>Platform requirement</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {mfa.allowed_factors.length === 0 ? (
+                  <TableRow>
+                    <TableCell
+                      colSpan={4}
+                      className="h-20 text-center text-sm text-muted-foreground"
+                    >
+                      No MFA methods configured.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  mfa.allowed_factors.map((factor) => {
+                    const isEmail = factor === "email";
+                    return (
+                      <TableRow key={factor}>
+                        <TableCell>
+                          <p className="font-medium">
+                            {isEmail ? "Email code" : "Authenticator app"}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {isEmail
+                              ? "Delivered to the verified account email."
+                              : "TOTP-compatible authenticator."}
+                          </p>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={isEmail && !mailEnabled ? "destructive" : "success"}>
+                            {isEmail && !mailEnabled ? "Mail unavailable" : "Available"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <label className="flex items-center gap-2 text-sm">
+                            <Checkbox
+                              checked={mfa.required_factors.includes(factor)}
+                              onCheckedChange={(checked) =>
+                                toggleRequired(factor, checked === true)
+                              }
+                            />
+                            Required for the selected scope
+                          </label>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            type="button"
+                            size="icon-sm"
+                            variant="ghost"
+                            aria-label={`Remove ${isEmail ? "email" : "authenticator app"} method`}
+                            onClick={() => removeMethod(factor)}
+                          >
+                            <Trash2Icon />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
+                )}
+              </TableBody>
+            </Table>
+          </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field>
-              <FieldLabel>Allowed MFA factors</FieldLabel>
-              <div className="flex min-h-9 items-center gap-5">
-                <label className="flex items-center gap-2 text-sm">
-                  <Checkbox
-                    checked={mfa.allowed_factors.includes("totp")}
-                    onCheckedChange={(checked) => toggleFactor("totp", checked === true)}
-                  />
-                  TOTP
-                </label>
-                <label className="flex items-center gap-2 text-sm">
-                  <Checkbox
-                    checked={mfa.allowed_factors.includes("email")}
-                    disabled={!mailEnabled}
-                    onCheckedChange={(checked) => toggleFactor("email", checked === true)}
-                  />
-                  Email
-                </label>
-              </div>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="mfa-enforcement">MFA enforcement</FieldLabel>
+              <FieldLabel htmlFor="mfa-enforcement">Enforcement scope</FieldLabel>
               <Select
                 value={mfa.enforcement}
                 onValueChange={(value) =>
                   setMfa((current) => ({
                     ...current,
                     enforcement: value as AdminMfaPolicy["enforcement"],
-                    ...(value === "selected_users" ? {} : { selected_user_ids: [] }),
+                    minimum_factors:
+                      value !== "none" &&
+                      current.minimum_factors === 0 &&
+                      current.required_factors.length === 0
+                        ? Math.min(1, current.allowed_factors.length)
+                        : current.minimum_factors,
                   }))
                 }
               >
@@ -263,41 +337,29 @@ function AuthenticationPolicyForm({
                   <SelectItem value="none">Optional</SelectItem>
                   <SelectItem value="platform_admins">Platform admins</SelectItem>
                   <SelectItem value="all_users">All users</SelectItem>
-                  <SelectItem value="selected_users">Selected users</SelectItem>
                 </SelectContent>
               </Select>
             </Field>
-          </div>
-          {mfa.enforcement === "selected_users" && (
             <Field>
-              <FieldLabel>Selected users</FieldLabel>
-              <div className="grid max-h-56 gap-1 overflow-y-auto rounded-md border p-2">
-                {users.map((user) => (
-                  <label
-                    key={user.id}
-                    className="flex items-center gap-3 rounded px-2 py-1.5 text-sm hover:bg-muted"
-                  >
-                    <Checkbox
-                      checked={mfa.selected_user_ids.includes(user.id)}
-                      onCheckedChange={(checked) =>
-                        setMfa((current) => ({
-                          ...current,
-                          selected_user_ids:
-                            checked === true
-                              ? [...new Set([...current.selected_user_ids, user.id])]
-                              : current.selected_user_ids.filter((id) => id !== user.id),
-                        }))
-                      }
-                    />
-                    <span className="min-w-0 truncate">{user.display_name ?? user.email}</span>
-                    <span className="ml-auto truncate text-xs text-muted-foreground">
-                      {user.email}
-                    </span>
-                  </label>
-                ))}
-              </div>
+              <FieldLabel htmlFor="mfa-minimum-factors">Minimum enrolled methods</FieldLabel>
+              <Input
+                id="mfa-minimum-factors"
+                type="number"
+                min={0}
+                max={mfa.allowed_factors.length}
+                value={mfa.minimum_factors}
+                onChange={(event) =>
+                  setMfa((current) => ({
+                    ...current,
+                    minimum_factors: Math.max(
+                      0,
+                      Math.min(current.allowed_factors.length, Number(event.target.value)),
+                    ),
+                  }))
+                }
+              />
             </Field>
-          )}
+          </div>
           {mutation.isError && (
             <p role="alert" className="text-sm text-destructive">
               {mutation.error instanceof Error ? mutation.error.message : "Unable to save policy."}
@@ -305,7 +367,87 @@ function AuthenticationPolicyForm({
           )}
         </FieldGroup>
       </SettingsCard>
+      <AddMfaMethodDialog
+        open={addingMethod}
+        mailEnabled={mailEnabled}
+        allowedFactors={mfa.allowed_factors}
+        onClose={() => setAddingMethod(false)}
+        onAdd={(factor) => {
+          addMethod(factor);
+          setAddingMethod(false);
+        }}
+      />
     </form>
+  );
+}
+
+const mfaMethodOptions = [
+  {
+    value: "totp" as const,
+    label: "Authenticator app",
+    description: "Time-based one-time passwords.",
+  },
+  {
+    value: "email" as const,
+    label: "Email code",
+    description: "One-time codes sent to verified email.",
+  },
+];
+
+function AddMfaMethodDialog({
+  open,
+  mailEnabled,
+  allowedFactors,
+  onClose,
+  onAdd,
+}: {
+  open: boolean;
+  mailEnabled: boolean;
+  allowedFactors: Array<"totp" | "email">;
+  onClose: () => void;
+  onAdd: (factor: "totp" | "email") => void;
+}) {
+  const available = mfaMethodOptions.filter(
+    (method) => !allowedFactors.includes(method.value) && (method.value !== "email" || mailEnabled),
+  );
+  return (
+    <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Add MFA method</DialogTitle>
+          <DialogDescription>
+            Each method can be added once to the platform policy.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-2">
+          {available.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              All currently supported methods are configured.
+            </p>
+          ) : (
+            available.map((method) => (
+              <button
+                key={method.value}
+                type="button"
+                className="flex items-start justify-between gap-4 rounded-md border p-3 text-left hover:bg-muted"
+                onClick={() => onAdd(method.value)}
+              >
+                <span>
+                  <span className="block text-sm font-medium">{method.label}</span>
+                  <span className="block text-xs text-muted-foreground">{method.description}</span>
+                </span>
+                <PlusIcon className="mt-0.5 size-4 shrink-0" />
+              </button>
+            ))
+          )}
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose}>
+            Close
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

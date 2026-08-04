@@ -958,16 +958,16 @@ pub async fn update(
                 op: OP,
                 message: message.to_owned(),
             })?;
-    }
-    if let Some(policy) = body.mfa_policy.as_ref()
-        && !authentication::selected_mfa_users_exist(db, &policy.selected_user_ids)
-            .await
-            .map_err(|source| AppError::Infrastructure { op: OP, source })?
-    {
-        return Err(AppError::Validation {
-            op: OP,
-            message: "selected MFA users must reference existing users".to_owned(),
-        });
+        if body.mfa_policy.is_some()
+            && !authentication::user_mfa_policies_are_compatible(db, policy)
+                .await
+                .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        {
+            return Err(AppError::Validation {
+                op: OP,
+                message: "the MFA policy would invalidate one or more user requirements".to_owned(),
+            });
+        }
     }
     let transaction = db
         .begin()

@@ -74,7 +74,10 @@ pub fn router() -> Router<ControlApiState> {
             "/users/{user_id}/reset-password",
             post(users::reset_password),
         )
-        .route("/users/{user_id}/mfa", get(users::mfa_factors))
+        .route(
+            "/users/{user_id}/mfa",
+            get(users::mfa_factors).patch(users::update_mfa_policy),
+        )
         .route(
             "/users/{user_id}/mfa/{factor_id}",
             delete(users::reset_mfa_factor),

@@ -17,6 +17,14 @@ import {
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { authApi, type MfaFactor, type TotpEnrollment } from "@/features/auth/auth.api";
 
 export function SecurityRoute() {
@@ -63,70 +71,137 @@ export function SecurityRoute() {
     );
   }
 
-  const hasTotp = security.data.factors.some((factor) => factor.kind === "totp");
-  const hasEmail = security.data.factors.some((factor) => factor.kind === "email");
+  const formatTimestamp = (value: string | null | undefined, fallback: string) => {
+    if (!value) return fallback;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "Unknown date" : date.toLocaleString();
+  };
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
       <PasswordForm policy={security.data.password_policy} />
       <SettingsCard
         title="Multi-factor authentication"
-        description="Factors used to verify future sign-ins."
+        description="Manage the verification methods used for future sign-ins."
       >
         <div className="grid gap-4">
-          {security.data.factors.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No factors enrolled.</p>
-          ) : (
-            security.data.factors.map((factor) => (
-              <div
-                key={factor.id}
-                className="flex min-h-12 items-center justify-between gap-4 border-b pb-3 last:border-0 last:pb-0"
-              >
-                <div className="flex min-w-0 items-center gap-3">
-                  {factor.kind === "totp" ? (
-                    <SmartphoneIcon className="size-4 shrink-0" />
-                  ) : (
-                    <MailIcon className="size-4 shrink-0" />
-                  )}
-                  <div>
-                    <p className="text-sm font-medium">
-                      {factor.kind === "totp" ? "Authenticator app" : "Email code"}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Added {new Date(factor.created_at).toLocaleDateString()}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  {security.data.mfa_required && <Badge variant="secondary">Required</Badge>}
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    variant="ghost"
-                    aria-label={`Remove ${factor.kind} factor`}
-                    onClick={() => remove.mutate(factor.id)}
-                    disabled={remove.isPending}
-                  >
-                    <Trash2Icon />
-                  </Button>
-                </div>
-              </div>
-            ))
-          )}
-          <div className="flex flex-wrap gap-2">
-            {security.data.allowed_factors.includes("totp") && !hasTotp && (
-              <Button type="button" variant="outline" onClick={() => startTotp.mutate()}>
-                <PlusIcon /> Authenticator app
-              </Button>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/30 px-4 py-3">
+            <div>
+              <p className="text-sm font-medium">
+                {security.data.factors.length} method{security.data.factors.length === 1 ? "" : "s"}{" "}
+                configured
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {security.data.mfa_requirements.minimum_factors > 0
+                  ? `At least ${security.data.mfa_requirements.minimum_factors} method${security.data.mfa_requirements.minimum_factors === 1 ? "" : "s"} required for your account.`
+                  : "Methods are optional unless required by the platform."}
+              </p>
+            </div>
+            {security.data.mfa_requirements.required_factors.length > 0 && (
+              <Badge variant="secondary">Policy enforced</Badge>
             )}
-            {security.data.allowed_factors.includes("email") &&
-              security.data.mail_available &&
-              security.data.email_verified &&
-              !hasEmail && (
-                <Button type="button" variant="outline" onClick={() => startEmail.mutate()}>
-                  <PlusIcon /> Email code
-                </Button>
-              )}
+          </div>
+          <div className="overflow-x-auto rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Method</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Added</TableHead>
+                  <TableHead>Last used</TableHead>
+                  <TableHead>Requirement</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {security.data.allowed_factors.length === 0 ? (
+                  <TableRow>
+                    <TableCell
+                      colSpan={6}
+                      className="h-20 text-center text-sm text-muted-foreground"
+                    >
+                      No MFA methods are available.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  security.data.allowed_factors.map((kind) => {
+                    const factor = security.data.factors.find(
+                      (candidate) => candidate.kind === kind,
+                    );
+                    const required = security.data.mfa_requirements.required_factors.includes(kind);
+                    const emailUnavailable =
+                      kind === "email" &&
+                      (!security.data.mail_available || !security.data.email_verified);
+                    return (
+                      <TableRow key={kind}>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            {kind === "totp" ? (
+                              <SmartphoneIcon className="size-4 shrink-0" />
+                            ) : (
+                              <MailIcon className="size-4 shrink-0" />
+                            )}
+                            <span className="font-medium">
+                              {kind === "totp" ? "Authenticator app" : "Email code"}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {factor ? (
+                            <Badge variant={factor.verified ? "success" : "secondary"}>
+                              {factor.verified ? "Verified" : "Pending"}
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline">Not configured</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {formatTimestamp(factor?.created_at, "Not configured")}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {formatTimestamp(factor?.last_used_at, "Never")}
+                        </TableCell>
+                        <TableCell>
+                          {required ? (
+                            <Badge variant="secondary">Required</Badge>
+                          ) : (
+                            <span className="text-sm text-muted-foreground">Optional</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {factor ? (
+                            <Button
+                              type="button"
+                              size="icon-sm"
+                              variant="ghost"
+                              aria-label={`Remove ${kind} factor`}
+                              onClick={() => remove.mutate(factor.id)}
+                              disabled={remove.isPending}
+                            >
+                              <Trash2Icon />
+                            </Button>
+                          ) : (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() =>
+                                kind === "totp" ? startTotp.mutate() : startEmail.mutate()
+                              }
+                              disabled={
+                                emailUnavailable || startTotp.isPending || startEmail.isPending
+                              }
+                            >
+                              <PlusIcon /> Add
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
+                )}
+              </TableBody>
+            </Table>
           </div>
           {factorError && (
             <p role="alert" className="text-sm text-destructive">

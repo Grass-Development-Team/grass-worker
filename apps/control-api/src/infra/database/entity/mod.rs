@@ -34,6 +34,7 @@ pub mod user;
 pub mod user_auth_token;
 pub mod user_external_identity;
 pub mod user_mfa_factor;
+pub mod user_mfa_policy;
 pub mod user_notification;
 pub mod user_password_credential;
 pub mod user_password_history;
@@ -108,6 +109,8 @@ pub use user_auth_token::Entity as UserAuthToken;
 pub use user_external_identity::Entity as UserExternalIdentity;
 #[allow(unused_imports)]
 pub use user_mfa_factor::Entity as UserMfaFactor;
+#[allow(unused_imports)]
+pub use user_mfa_policy::Entity as UserMfaPolicy;
 #[allow(unused_imports)]
 pub use user_notification::Entity as UserNotification;
 #[allow(unused_imports)]

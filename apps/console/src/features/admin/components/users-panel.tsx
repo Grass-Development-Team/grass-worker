@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MoreHorizontalIcon, PlusIcon, Trash2Icon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -41,7 +42,7 @@ import {
 
 import { useAuth } from "@/features/auth/auth-context";
 
-import { adminApi, type AdminUser } from "../admin.api";
+import { adminApi, type AdminUser, type AdminUserMfaPolicy } from "../admin.api";
 
 function roleBadge(user: AdminUser) {
   return user.platform_role === "admin" ? (
@@ -70,11 +71,16 @@ export function UsersPanel() {
   const [settingPassword, setSettingPassword] = useState<AdminUser | null>(null);
   const [renaming, setRenaming] = useState<AdminUser | null>(null);
   const [managingMfa, setManagingMfa] = useState<AdminUser | null>(null);
+  const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(new Set());
 
   const usersQuery = useQuery({
     queryKey: ["admin", "users", query],
     queryFn: () => adminApi.listUsers(query),
   });
+  const visibleUserIds = usersQuery.data?.users.map((user) => user.id) ?? [];
+  const selectedVisibleCount = visibleUserIds.filter((id) => selectedUserIds.has(id)).length;
+  const allVisibleSelected =
+    visibleUserIds.length > 0 && selectedVisibleCount === visibleUserIds.length;
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
 
@@ -107,21 +113,22 @@ export function UsersPanel() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-muted-foreground">
           Every account on this platform. Disabled users cannot sign in.
         </p>
-        <div className="flex items-center gap-2">
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
           <form
             onSubmit={(event) => {
               event.preventDefault();
               setQuery(search);
+              setSelectedUserIds(new Set());
             }}
           >
             <Input
               aria-label="Search users"
               placeholder="Search email or name…"
-              className="w-64"
+              className="w-full sm:w-64"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
             />
@@ -131,6 +138,20 @@ export function UsersPanel() {
           </Button>
         </div>
       </div>
+
+      {selectedUserIds.size > 0 && (
+        <div className="flex min-h-10 items-center justify-between gap-4 border-y px-1 py-2">
+          <p className="text-sm font-medium">{selectedUserIds.size} users selected</p>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => setSelectedUserIds(new Set())}
+          >
+            Clear selection
+          </Button>
+        </div>
+      )}
 
       {resetResult && (
         <div className="rounded-md border bg-muted/40 p-3 text-sm">
@@ -156,91 +177,129 @@ export function UsersPanel() {
         </p>
       )}
       {usersQuery.data && (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>User</TableHead>
-              <TableHead>Role</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Last login</TableHead>
-              <TableHead>Created</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {usersQuery.data.users.map((user) => {
-              const isSelf = user.id === currentUser?.id;
-              return (
-                <TableRow key={user.id}>
-                  <TableCell>
-                    <span className="font-medium">{user.display_name ?? user.email}</span>
-                    <p className="text-xs text-muted-foreground">{user.email}</p>
-                  </TableCell>
-                  <TableCell>{roleBadge(user)}</TableCell>
-                  <TableCell>{statusBadge(user)}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {user.last_login_at ? new Date(user.last_login_at).toLocaleString() : "Never"}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {new Date(user.created_at).toLocaleDateString()}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button size="sm" variant="ghost" aria-label={`Actions for ${user.email}`}>
-                          <MoreHorizontalIcon />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuLabel>{user.email}</DropdownMenuLabel>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem
-                          disabled={isSelf}
-                          onClick={() =>
-                            updateMutation.mutate({
-                              userId: user.id,
-                              input: {
-                                platform_role: user.platform_role === "admin" ? "user" : "admin",
-                              },
-                            })
-                          }
-                        >
-                          {user.platform_role === "admin"
-                            ? "Remove platform admin"
-                            : "Make platform admin"}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          disabled={isSelf}
-                          onClick={() =>
-                            updateMutation.mutate({
-                              userId: user.id,
-                              input: { status: user.status === "active" ? "disabled" : "active" },
-                            })
-                          }
-                        >
-                          {user.status === "active" ? "Disable account" : "Enable account"}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setRenaming(user)}>
-                          Edit display name
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={() => setSettingPassword(user)}>
-                          Set password…
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => resetMutation.mutate(user)}>
-                          Generate new password
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setManagingMfa(user)}>
-                          Manage MFA
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-10">
+                  <Checkbox
+                    aria-label="Select all visible users"
+                    checked={
+                      allVisibleSelected ? true : selectedVisibleCount > 0 ? "indeterminate" : false
+                    }
+                    onCheckedChange={(checked) =>
+                      setSelectedUserIds((current) => {
+                        const next = new Set(current);
+                        for (const id of visibleUserIds) {
+                          if (checked === true) next.add(id);
+                          else next.delete(id);
+                        }
+                        return next;
+                      })
+                    }
+                  />
+                </TableHead>
+                <TableHead>User</TableHead>
+                <TableHead>Role</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Last login</TableHead>
+                <TableHead>Created</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {usersQuery.data.users.map((user) => {
+                const isSelf = user.id === currentUser?.id;
+                return (
+                  <TableRow key={user.id}>
+                    <TableCell>
+                      <Checkbox
+                        aria-label={`Select ${user.email}`}
+                        checked={selectedUserIds.has(user.id)}
+                        onCheckedChange={(checked) =>
+                          setSelectedUserIds((current) => {
+                            const next = new Set(current);
+                            if (checked === true) next.add(user.id);
+                            else next.delete(user.id);
+                            return next;
+                          })
+                        }
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <span className="font-medium">{user.display_name ?? user.email}</span>
+                      <p className="text-xs text-muted-foreground">{user.email}</p>
+                    </TableCell>
+                    <TableCell>{roleBadge(user)}</TableCell>
+                    <TableCell>{statusBadge(user)}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {user.last_login_at ? new Date(user.last_login_at).toLocaleString() : "Never"}
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {new Date(user.created_at).toLocaleDateString()}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            aria-label={`Actions for ${user.email}`}
+                          >
+                            <MoreHorizontalIcon />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuLabel>{user.email}</DropdownMenuLabel>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            disabled={isSelf}
+                            onClick={() =>
+                              updateMutation.mutate({
+                                userId: user.id,
+                                input: {
+                                  platform_role: user.platform_role === "admin" ? "user" : "admin",
+                                },
+                              })
+                            }
+                          >
+                            {user.platform_role === "admin"
+                              ? "Remove platform admin"
+                              : "Make platform admin"}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={isSelf}
+                            onClick={() =>
+                              updateMutation.mutate({
+                                userId: user.id,
+                                input: { status: user.status === "active" ? "disabled" : "active" },
+                              })
+                            }
+                          >
+                            {user.status === "active" ? "Disable account" : "Enable account"}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setRenaming(user)}>
+                            Edit display name
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onClick={() => setSettingPassword(user)}>
+                            Set password…
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => resetMutation.mutate(user)}>
+                            Generate new password
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setManagingMfa(user)}>
+                            Manage MFA
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
       )}
 
       {creating && (
@@ -277,18 +336,44 @@ export function UsersPanel() {
 
 function MfaFactorsDialog({ user, onClose }: { user: AdminUser; onClose: () => void }) {
   const queryClient = useQueryClient();
+  const [policy, setPolicy] = useState<AdminUserMfaPolicy | null>(null);
   const factors = useQuery({
     queryKey: ["admin", "users", user.id, "mfa"],
     queryFn: () => adminApi.listUserMfa(user.id),
   });
+  useEffect(() => {
+    if (factors.data) setPolicy(factors.data.policy);
+  }, [factors.data]);
   const reset = useMutation({
     mutationFn: (factorId: string) => adminApi.resetUserMfaFactor(user.id, factorId),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ["admin", "users", user.id, "mfa"] }),
   });
+  const updatePolicy = useMutation({
+    mutationFn: (nextPolicy: AdminUserMfaPolicy) =>
+      adminApi.updateUserMfaPolicy(user.id, nextPolicy),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["admin", "users", user.id, "mfa"] }),
+  });
+  const formatTimestamp = (value: string | null | undefined, fallback: string) => {
+    if (!value) return fallback;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "Unknown date" : date.toLocaleString();
+  };
+  const toggleRequired = (factor: "totp" | "email", checked: boolean) =>
+    setPolicy((current) =>
+      current
+        ? {
+            ...current,
+            required_factors: checked
+              ? [...new Set([...current.required_factors, factor])]
+              : current.required_factors.filter((item) => item !== factor),
+          }
+        : current,
+    );
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>Multi-factor authentication</DialogTitle>
           <DialogDescription>{user.email}</DialogDescription>
@@ -299,42 +384,172 @@ function MfaFactorsDialog({ user, onClose }: { user: AdminUser; onClose: () => v
             {factors.error instanceof Error ? factors.error.message : "Unable to load factors."}
           </p>
         )}
-        {factors.data?.factors.length === 0 && (
-          <p className="text-sm text-muted-foreground">No factors enrolled.</p>
-        )}
-        <div className="grid gap-2">
-          {factors.data?.factors.map((factor) => (
-            <div
-              key={factor.id}
-              className="flex items-center justify-between gap-4 rounded-md border p-3"
-            >
+        {factors.data && policy && (
+          <div className="grid gap-6">
+            <section className="grid gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-medium">Enforcement policy</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Custom requirements can strengthen, but cannot weaken, the platform baseline.
+                  </p>
+                </div>
+                <Badge variant="secondary">
+                  Effective minimum: {factors.data.effective_requirements.minimum_factors}
+                </Badge>
+              </div>
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  checked={!policy.inherit_platform}
+                  onCheckedChange={(checked) =>
+                    setPolicy((current) =>
+                      current
+                        ? {
+                            ...current,
+                            inherit_platform: checked !== true,
+                            ...(checked === true
+                              ? {}
+                              : { minimum_factors: 0, required_factors: [] }),
+                          }
+                        : current,
+                    )
+                  }
+                />
+                Use a custom policy for this user
+              </label>
+              {!policy.inherit_platform && (
+                <div className="grid gap-4 rounded-md border p-4 sm:grid-cols-2">
+                  <Field>
+                    <FieldLabel htmlFor={`user-mfa-minimum-${user.id}`}>
+                      Minimum enrolled methods
+                    </FieldLabel>
+                    <Input
+                      id={`user-mfa-minimum-${user.id}`}
+                      type="number"
+                      min={0}
+                      max={factors.data.allowed_factors.length}
+                      value={policy.minimum_factors}
+                      onChange={(event) =>
+                        setPolicy((current) =>
+                          current
+                            ? {
+                                ...current,
+                                minimum_factors: Math.max(
+                                  0,
+                                  Math.min(
+                                    factors.data.allowed_factors.length,
+                                    Number(event.target.value),
+                                  ),
+                                ),
+                              }
+                            : current,
+                        )
+                      }
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel>Required methods</FieldLabel>
+                    <div className="flex min-h-9 flex-wrap items-center gap-4">
+                      {factors.data.allowed_factors.map((factor) => (
+                        <label key={factor} className="flex items-center gap-2 text-sm">
+                          <Checkbox
+                            checked={policy.required_factors.includes(factor)}
+                            onCheckedChange={(checked) => toggleRequired(factor, checked === true)}
+                          />
+                          {factor === "totp" ? "Authenticator app" : "Email code"}
+                        </label>
+                      ))}
+                    </div>
+                  </Field>
+                </div>
+              )}
+              <div className="flex justify-end">
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => updatePolicy.mutate(policy)}
+                  disabled={updatePolicy.isPending}
+                >
+                  {updatePolicy.isPending ? "Saving..." : "Save policy"}
+                </Button>
+              </div>
+            </section>
+            <section className="grid gap-3">
               <div>
-                <p className="text-sm font-medium">
-                  {factor.kind === "totp" ? "Authenticator app" : "Email code"}
-                </p>
+                <h3 className="text-sm font-medium">Enrolled methods</h3>
                 <p className="text-xs text-muted-foreground">
-                  {factor.verified ? "Verified" : "Pending"}
-                  {factor.last_used_at
-                    ? ` · Last used ${new Date(factor.last_used_at).toLocaleString()}`
-                    : ""}
+                  Resetting a method requires the user to enroll it again.
                 </p>
               </div>
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                aria-label={`Reset ${factor.kind} factor`}
-                disabled={reset.isPending}
-                onClick={() => reset.mutate(factor.id)}
-              >
-                <Trash2Icon />
-              </Button>
-            </div>
-          ))}
-        </div>
+              <div className="overflow-x-auto rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Method</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Added</TableHead>
+                      <TableHead>Last used</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {factors.data.factors.length === 0 ? (
+                      <TableRow>
+                        <TableCell
+                          colSpan={5}
+                          className="h-20 text-center text-sm text-muted-foreground"
+                        >
+                          No factors enrolled.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      factors.data.factors.map((factor) => (
+                        <TableRow key={factor.id}>
+                          <TableCell className="font-medium">
+                            {factor.kind === "totp" ? "Authenticator app" : "Email code"}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={factor.verified ? "success" : "secondary"}>
+                              {factor.verified ? "Verified" : "Pending"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {formatTimestamp(factor.created_at, "Unknown date")}
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {formatTimestamp(factor.last_used_at, "Never")}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              type="button"
+                              size="icon-sm"
+                              variant="ghost"
+                              aria-label={`Reset ${factor.kind} factor`}
+                              disabled={reset.isPending}
+                              onClick={() => reset.mutate(factor.id)}
+                            >
+                              <Trash2Icon />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </section>
+          </div>
+        )}
         {reset.isError && (
           <p role="alert" className="text-sm text-destructive">
             {reset.error instanceof Error ? reset.error.message : "Unable to reset the factor."}
+          </p>
+        )}
+        {updatePolicy.isError && (
+          <p role="alert" className="text-sm text-destructive">
+            {updatePolicy.error instanceof Error
+              ? updatePolicy.error.message
+              : "Unable to save the MFA policy."}
           </p>
         )}
       </DialogContent>

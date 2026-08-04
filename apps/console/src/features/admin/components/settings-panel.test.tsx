@@ -58,7 +58,8 @@ const settings = {
     mfa_policy: {
       allowed_factors: ["totp"],
       enforcement: "none",
-      selected_user_ids: [],
+      minimum_factors: 0,
+      required_factors: [],
     },
   },
   session: { cookie_secure: true, idle_ttl_seconds: 900, session_ttl_seconds: 2_592_000 },

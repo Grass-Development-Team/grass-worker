@@ -13,7 +13,7 @@ use crate::infra::http::timestamps::ts;
 use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
-        authentication,
+        authentication::{self, UserMfaPolicy},
         teams::{self, CreateTeamParams},
         users::{self, CreateUserParams, UpdateUserParams, UserListFilter},
     },
@@ -448,7 +448,7 @@ pub async fn mfa_factors(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.users.mfa.list";
     let db = super::database(&state, OP)?;
-    users::get_user_by_id(db, user_id)
+    let user = users::get_user_by_id(db, user_id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?
         .ok_or_else(|| AppError::NotFound {
@@ -458,6 +458,13 @@ pub async fn mfa_factors(
     let factors = authentication::mfa_factors(db, user_id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let platform_policy = authentication::mfa_policy(db)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let user_policy = authentication::user_mfa_policy(db, user_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let requirements = platform_policy.requirements_for(&user_policy, &user.platform_role);
     Ok(ok_response(json!({
         "factors": factors.iter().map(|factor| json!({
             "id": factor.id,
@@ -468,6 +475,68 @@ pub async fn mfa_factors(
             "last_used_at": ts(factor.last_used_at),
             "created_at": ts(factor.created_at),
         })).collect::<Vec<_>>(),
+        "policy": user_policy,
+        "allowed_factors": platform_policy.allowed_factors,
+        "effective_requirements": {
+            "minimum_factors": requirements.minimum_factors,
+            "required_factors": requirements.required_factors.iter().map(|kind| kind.as_str()).collect::<Vec<_>>(),
+        },
+    })))
+}
+
+pub async fn update_mfa_policy(
+    State(state): State<ControlApiState>,
+    Session { data, .. }: Session,
+    Path(user_id): Path<Uuid>,
+    Json(policy): Json<UserMfaPolicy>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "admin.users.mfa.policy.update";
+    let db = super::database(&state, OP)?;
+    let user = users::get_user_by_id(db, user_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "user not found".to_owned(),
+        })?;
+    let platform_policy = authentication::mfa_policy(db)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    policy
+        .validate(&platform_policy)
+        .map_err(|message| AppError::Validation {
+            op: OP,
+            message: message.to_owned(),
+        })?;
+    authentication::set_user_mfa_policy(db, user_id, &policy)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let requirements = platform_policy.requirements_for(&policy, &user.platform_role);
+    let _ = audits::create_platform_audit_event(
+        db,
+        CreateAuditEventParams {
+            actor_user_id: Some(data.user_id),
+            actor_node_id: None,
+            team_id: None,
+            action: "user.mfa_policy_updated".to_owned(),
+            target_type: "user".to_owned(),
+            target_id: Some(user_id),
+            result: AuditEventResult::Success,
+            reason: None,
+            metadata: json!({
+                "inherit_platform": policy.inherit_platform,
+                "minimum_factors": policy.minimum_factors,
+                "required_factors": policy.required_factors,
+            }),
+        },
+    )
+    .await;
+    Ok(ok_response(json!({
+        "policy": policy,
+        "effective_requirements": {
+            "minimum_factors": requirements.minimum_factors,
+            "required_factors": requirements.required_factors.iter().map(|kind| kind.as_str()).collect::<Vec<_>>(),
+        },
     })))
 }
 

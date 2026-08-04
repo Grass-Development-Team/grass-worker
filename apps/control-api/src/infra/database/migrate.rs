@@ -31,6 +31,7 @@ impl MigratorTrait for Migrator {
             Box::new(migration::m20260803_000020_notification_content::Migration),
             Box::new(migration::m20260803_000021_announcements::Migration),
             Box::new(migration::m20260804_000022_authentication::Migration),
+            Box::new(migration::m20260804_000023_mfa_policy::Migration),
         ]
     }
 }
@@ -107,7 +108,7 @@ mod tests {
     fn registers_audit_foundation_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 22);
+        assert_eq!(migrations.len(), 23);
         assert_eq!(
             migrations.get(11).expect("twelfth migration").name(),
             "m20260729_000012_audit_foundation"
@@ -136,7 +137,7 @@ mod tests {
     fn registers_team_group_review_policy_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 22);
+        assert_eq!(migrations.len(), 23);
         assert_eq!(
             migrations.get(12).expect("thirteenth migration").name(),
             "m20260729_000013_team_group_review_policy"
@@ -147,7 +148,7 @@ mod tests {
     fn registers_node_config_sync_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 22);
+        assert_eq!(migrations.len(), 23);
         assert_eq!(
             migrations.get(13).expect("fourteenth migration").name(),
             "m20260729_000014_node_config_sync"
@@ -158,7 +159,7 @@ mod tests {
     fn registers_node_deletion_queue_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 22);
+        assert_eq!(migrations.len(), 23);
         assert_eq!(
             migrations.get(14).expect("fifteenth migration").name(),
             "m20260729_000015_node_deletion_queue"
@@ -169,7 +170,7 @@ mod tests {
     fn registers_domain_review_policy_after_node_deletion_queue() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 22);
+        assert_eq!(migrations.len(), 23);
         assert_eq!(
             migrations.get(14).expect("fifteenth migration").name(),
             "m20260729_000015_node_deletion_queue"
@@ -184,7 +185,7 @@ mod tests {
     fn registers_project_notifications_after_domain_review_policy() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 22);
+        assert_eq!(migrations.len(), 23);
         assert_eq!(
             migrations.get(15).expect("sixteenth migration").name(),
             "m20260730_000016_domain_review_policy"
@@ -199,7 +200,7 @@ mod tests {
         );
         assert_eq!(
             migrations.last().expect("last migration").name(),
-            "m20260804_000022_authentication"
+            "m20260804_000023_mfa_policy"
         );
     }
 
@@ -374,6 +375,191 @@ mod tests {
             (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
             (Ok(()), Ok(())) => Ok(()),
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires GRASS_TEST_DATABASE_URL"]
+    async fn postgres_mfa_policy_schema_migrates_legacy_scope_and_is_reversible()
+    -> anyhow::Result<()> {
+        let _migration_guard = MIGRATION_TEST_LOCK.lock().await;
+        let database_url = std::env::var("GRASS_TEST_DATABASE_URL")
+            .expect("GRASS_TEST_DATABASE_URL must be set to run this ignored migration test");
+        let test_db = PostgresMigrationDatabase::start(&database_url).await?;
+
+        let verification = async {
+            Migrator::up(&test_db.db, Some(22)).await?;
+            assert_migration_tracking(&test_db.db, 22, 1).await?;
+            let user_id = seed_legacy_mfa_policy_fixture(&test_db.db).await?;
+
+            Migrator::up(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 23, 0).await?;
+            assert_mfa_policy_schema(&test_db.db, user_id).await?;
+
+            Migrator::down(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 22, 1).await?;
+            assert_mfa_policy_schema_absent(&test_db.db, user_id).await?;
+
+            Migrator::up(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 23, 0).await?;
+            assert_mfa_policy_schema(&test_db.db, user_id).await
+        }
+        .await;
+        let cleanup = test_db.cleanup().await;
+
+        match (verification, cleanup) {
+            (Err(verification_error), Err(cleanup_error)) => Err(verification_error.context(
+                format!("disposable schema cleanup also failed: {cleanup_error:#}"),
+            )),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Ok(()), Ok(())) => Ok(()),
+        }
+    }
+
+    async fn seed_legacy_mfa_policy_fixture(db: &DatabaseConnection) -> anyhow::Result<Uuid> {
+        let user_id = Uuid::now_v7();
+        let setting_id = Uuid::now_v7();
+        db.execute_unprepared(&format!(
+            r#"
+INSERT INTO users (id, email, display_name, email_verified_at)
+VALUES ('{user_id}'::uuid, 'mfa-policy-migration@example.invalid', 'MFA Policy Migration', NOW());
+
+INSERT INTO system_settings (id, key, value_kind, value, is_secret)
+VALUES (
+    '{setting_id}'::uuid,
+    'auth.mfa_policy',
+    'json',
+    jsonb_build_object(
+        'allowed_factors', jsonb_build_array('totp', 'email'),
+        'enforcement', 'selected_users',
+        'selected_user_ids', jsonb_build_array('{user_id}'::text)
+    ),
+    false
+);
+"#
+        ))
+        .await?;
+        Ok(user_id)
+    }
+
+    async fn assert_mfa_policy_schema(
+        db: &DatabaseConnection,
+        selected_user_id: Uuid,
+    ) -> anyhow::Result<()> {
+        let columns = query_column_shapes(
+            db,
+            r#"
+SELECT column_name, udt_name, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'user_mfa_policies'
+ORDER BY ordinal_position
+"#,
+        )
+        .await?;
+        ensure!(
+            columns
+                == vec![
+                    column("user_id", "uuid", "NO", None),
+                    column("inherit_platform", "bool", "NO", Some("true")),
+                    column("minimum_factors", "int2", "NO", Some("0")),
+                    column("required_factors", "jsonb", "NO", Some("'[]'::jsonb")),
+                    column("created_at", "timestamptz", "NO", None),
+                    column("updated_at", "timestamptz", "NO", None),
+                ],
+            "unexpected user MFA policy columns: {columns:#?}"
+        );
+
+        let constraints = db
+            .query_all_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT conname, pg_get_constraintdef(oid) AS definition
+FROM pg_constraint
+WHERE conrelid = 'user_mfa_policies'::regclass
+ORDER BY conname
+"#,
+            ))
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok((
+                    row.try_get::<String>("", "conname")?,
+                    row.try_get::<String>("", "definition")?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, sea_orm::DbErr>>()?;
+        ensure!(
+            constraints.len() == 4,
+            "missing user MFA policy constraints"
+        );
+        ensure!(
+            constraints["ck_user_mfa_policies_minimum_factors"].contains("minimum_factors <= 2")
+        );
+        ensure!(
+            constraints["ck_user_mfa_policies_required_factors"]
+                .contains("jsonb_typeof(required_factors)")
+                && constraints["ck_user_mfa_policies_required_factors"].contains("'array'")
+        );
+        ensure!(
+            constraints
+                .values()
+                .any(|definition| definition.contains("FOREIGN KEY (user_id)")
+                    && definition.contains("REFERENCES users(id) ON DELETE CASCADE"))
+        );
+
+        let row = db
+            .query_one_raw(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT
+    setting.value AS platform_policy,
+    policy.inherit_platform,
+    policy.minimum_factors,
+    policy.required_factors
+FROM system_settings AS setting
+JOIN user_mfa_policies AS policy ON policy.user_id = $1
+WHERE setting.key = 'auth.mfa_policy'
+"#,
+                [selected_user_id.into()],
+            ))
+            .await?
+            .context("migrated MFA policy row is missing")?;
+        let platform_policy = row.try_get::<serde_json::Value>("", "platform_policy")?;
+        ensure!(platform_policy["enforcement"] == "none");
+        ensure!(platform_policy["minimum_factors"] == 0);
+        ensure!(platform_policy["required_factors"] == serde_json::json!([]));
+        ensure!(platform_policy.get("selected_user_ids").is_none());
+        ensure!(!row.try_get::<bool>("", "inherit_platform")?);
+        ensure!(row.try_get::<i16>("", "minimum_factors")? == 1);
+        ensure!(row.try_get::<serde_json::Value>("", "required_factors")? == serde_json::json!([]));
+        Ok(())
+    }
+
+    async fn assert_mfa_policy_schema_absent(
+        db: &DatabaseConnection,
+        selected_user_id: Uuid,
+    ) -> anyhow::Result<()> {
+        ensure!(
+            object_count(
+                db,
+                "SELECT count(*)::bigint AS count FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'user_mfa_policies'",
+            )
+            .await?
+                == 0
+        );
+        let row = db
+            .query_one_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                "SELECT value FROM system_settings WHERE key = 'auth.mfa_policy'",
+            ))
+            .await?
+            .context("legacy MFA policy row is missing after down migration")?;
+        let policy = row.try_get::<serde_json::Value>("", "value")?;
+        ensure!(policy["enforcement"] == "selected_users");
+        ensure!(policy["selected_user_ids"] == serde_json::json!([selected_user_id]));
+        ensure!(policy.get("minimum_factors").is_none());
+        ensure!(policy.get("required_factors").is_none());
+        Ok(())
     }
 
     async fn seed_authentication_fixture(db: &DatabaseConnection) -> anyhow::Result<Uuid> {

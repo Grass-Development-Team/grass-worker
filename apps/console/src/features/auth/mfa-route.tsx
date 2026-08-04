@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MailIcon, SmartphoneIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { authApi, type MfaFactor, type TotpEnrollment } from "./auth.api";
+import { authApi, isAuthResponse, type MfaFactor, type TotpEnrollment } from "./auth.api";
 import { useAuth } from "./auth-context";
 
 function challengeToken(): string {
@@ -17,6 +17,7 @@ function challengeToken(): string {
 
 export function MfaRoute() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { completeMfa } = useAuth();
   const token = useMemo(challengeToken, []);
   const challenge = useQuery({
@@ -50,9 +51,17 @@ export function MfaRoute() {
   const verify = useMutation({
     mutationFn: async () => {
       if (!factor) throw new Error("Choose an MFA factor.");
-      await completeMfa(token, factor.id, code.trim());
+      return completeMfa(token, factor.id, code.trim());
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (!isAuthResponse(result)) {
+        queryClient.setQueryData(["auth", "mfa", token], result);
+        setFactor(null);
+        setTotpEnrollment(null);
+        setCode("");
+        setError(null);
+        return;
+      }
       const returnTo = challenge.data?.return_to ?? "/";
       if (returnTo.startsWith("/api/")) window.location.assign(returnTo);
       else navigate(returnTo, { replace: true });
@@ -90,7 +99,7 @@ export function MfaRoute() {
           {!factor && (
             <div className="grid gap-3">
               {(enrollment
-                ? allowed.includes("totp")
+                ? allowed.includes("totp") && !factors.some((item) => item.kind === "totp")
                 : factors.some((item) => item.kind === "totp")) && (
                 <Button
                   type="button"
@@ -104,7 +113,7 @@ export function MfaRoute() {
                 </Button>
               )}
               {(enrollment
-                ? allowed.includes("email")
+                ? allowed.includes("email") && !factors.some((item) => item.kind === "email")
                 : factors.some((item) => item.kind === "email")) && (
                 <Button
                   type="button"
