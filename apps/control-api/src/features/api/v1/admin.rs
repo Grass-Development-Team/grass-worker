@@ -4,6 +4,7 @@ pub mod build_logs;
 pub mod deployments;
 pub mod domains;
 pub mod host_sources;
+pub mod identity_providers;
 pub mod nodes;
 pub mod projects;
 pub mod quota_plans;
@@ -73,7 +74,20 @@ pub fn router() -> Router<ControlApiState> {
             "/users/{user_id}/reset-password",
             post(users::reset_password),
         )
+        .route("/users/{user_id}/mfa", get(users::mfa_factors))
+        .route(
+            "/users/{user_id}/mfa/{factor_id}",
+            delete(users::reset_mfa_factor),
+        )
         .route("/settings", get(settings::get).patch(settings::update))
+        .route(
+            "/identity-providers",
+            get(identity_providers::list).post(identity_providers::create),
+        )
+        .route(
+            "/identity-providers/{provider_id}",
+            patch(identity_providers::update).delete(identity_providers::remove),
+        )
         .route(
             "/announcements",
             get(announcements::list).post(announcements::publish),

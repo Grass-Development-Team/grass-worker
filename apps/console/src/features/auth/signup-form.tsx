@@ -9,12 +9,16 @@ import { Label } from "@/components/ui/label";
 import { useBranding } from "@/features/branding/branding-context";
 import { cn } from "@/lib/utils";
 import { useAuth } from "./auth-context";
+import { isAuthResponse } from "./auth.api";
+import { ProviderButtons } from "./provider-buttons";
+import { useAuthConfiguration } from "./provider-buttons";
 
 export function SignupForm({ className, ...props }: React.ComponentPropsWithoutRef<"div">) {
   const { siteName } = useBranding();
   const navigate = useNavigate();
   const location = useLocation();
   const { register } = useAuth();
+  const configuration = useAuthConfiguration();
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
@@ -41,12 +45,18 @@ export function SignupForm({ className, ...props }: React.ComponentPropsWithoutR
 
     setIsSubmitting(true);
     try {
-      await register({
+      const result = await register({
         email: email.trim(),
         display_name: displayName.trim(),
         password,
         ...(invitationToken ? { invitation_token: invitationToken } : {}),
       });
+      if (!isAuthResponse(result)) {
+        navigate(`/verify-email?${new URLSearchParams({ email: result.email })}`, {
+          replace: true,
+        });
+        return;
+      }
       navigate("/", { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed");
@@ -100,6 +110,8 @@ export function SignupForm({ className, ...props }: React.ComponentPropsWithoutR
                 id="password"
                 type="password"
                 autoComplete="new-password"
+                minLength={configuration?.password_policy.min_length ?? 8}
+                maxLength={configuration?.password_policy.max_length ?? 1024}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 required
@@ -127,6 +139,7 @@ export function SignupForm({ className, ...props }: React.ComponentPropsWithoutR
           </form>
         </CardContent>
       </Card>
+      <ProviderButtons invitationToken={invitationToken} />
     </div>
   );
 }

@@ -6,9 +6,11 @@ use serde_json::json;
 use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
+        authentication::{self, MfaPolicy, PasswordPolicy},
         nodes, retention, settings,
     },
     infra::{
+        config::mail::{MailMode, SmtpSecurity},
         database::entity::{AuditEventResult, SystemSettingValueKind},
         error::{AppError, ok_response},
         http::extractors::Session,
@@ -57,6 +59,15 @@ pub async fn get(State(state): State<ControlApiState>) -> Result<impl IntoRespon
         .await?
         .unwrap_or_else(|| config.storage.root.clone());
     let secret_key = config.secrets.secret_key.trim();
+    let password_policy = authentication::password_policy(db)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let mfa_policy = authentication::mfa_policy(db)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let registration_email_verification = authentication::registration_verification_required(db)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
     Ok(ok_response(json!({
         "site": {
@@ -103,6 +114,22 @@ pub async fn get(State(state): State<ControlApiState>) -> Result<impl IntoRespon
                 && secret_key.len() >= 32,
             "git_credentials_configured": config.secrets.git_credentials.active_key().is_ok(),
         },
+        "mail": {
+            "mode": config.mail.mode.as_str(),
+            "from_address": config.mail.from_address,
+            "from_name": config.mail.from_name,
+            "sendmail_command": config.mail.sendmail_command,
+            "smtp_host": config.mail.smtp_host,
+            "smtp_port": config.mail.smtp_port,
+            "smtp_security": config.mail.smtp_security.as_str(),
+            "smtp_username": config.mail.smtp_username,
+            "smtp_password_configured": !config.mail.smtp_password.is_empty(),
+        },
+        "authentication": {
+            "password_policy": password_policy,
+            "registration_email_verification": registration_email_verification,
+            "mfa_policy": mfa_policy,
+        },
         "session": config.session,
         "audit": config.audit,
         "node_manager": config.node_manager,
@@ -134,6 +161,18 @@ pub struct UpdateSettingsRequest {
     pub session_idle_ttl_seconds: Option<u64>,
     pub session_ttl_seconds: Option<u64>,
     pub audit_retention_days: Option<u64>,
+    pub mail_mode: Option<String>,
+    pub mail_from_address: Option<String>,
+    pub mail_from_name: Option<String>,
+    pub mail_sendmail_command: Option<String>,
+    pub mail_smtp_host: Option<String>,
+    pub mail_smtp_port: Option<u16>,
+    pub mail_smtp_security: Option<String>,
+    pub mail_smtp_username: Option<String>,
+    pub mail_smtp_password: Option<String>,
+    pub password_policy: Option<PasswordPolicy>,
+    pub registration_email_verification: Option<bool>,
+    pub mfa_policy: Option<MfaPolicy>,
     pub node_manager_auto_start_local_node: Option<bool>,
     pub node_manager_local_node_binary: Option<String>,
     pub node_manager_local_node_config: Option<String>,
@@ -164,6 +203,18 @@ struct PreparedSettingsUpdate {
     session_idle_ttl_seconds: Option<u64>,
     session_ttl_seconds: Option<u64>,
     audit_retention_days: Option<u64>,
+    mail_mode: Option<MailMode>,
+    mail_from_address: Option<String>,
+    mail_from_name: Option<String>,
+    mail_sendmail_command: Option<String>,
+    mail_smtp_host: Option<String>,
+    mail_smtp_port: Option<u16>,
+    mail_smtp_security: Option<SmtpSecurity>,
+    mail_smtp_username: Option<String>,
+    mail_smtp_password: Option<String>,
+    password_policy: Option<PasswordPolicy>,
+    registration_email_verification: Option<bool>,
+    mfa_policy: Option<MfaPolicy>,
     node_manager_auto_start_local_node: Option<bool>,
     node_manager_local_node_binary: Option<String>,
     node_manager_local_node_config: Option<String>,
@@ -190,6 +241,15 @@ impl PreparedSettingsUpdate {
             || self.session_idle_ttl_seconds.is_some()
             || self.session_ttl_seconds.is_some()
             || self.audit_retention_days.is_some()
+            || self.mail_mode.is_some()
+            || self.mail_from_address.is_some()
+            || self.mail_from_name.is_some()
+            || self.mail_sendmail_command.is_some()
+            || self.mail_smtp_host.is_some()
+            || self.mail_smtp_port.is_some()
+            || self.mail_smtp_security.is_some()
+            || self.mail_smtp_username.is_some()
+            || self.mail_smtp_password.is_some()
             || self.node_manager_auto_start_local_node.is_some()
             || self.node_manager_local_node_binary.is_some()
             || self.node_manager_local_node_config.is_some()
@@ -234,6 +294,40 @@ impl PreparedSettingsUpdate {
         if let Some(days) = self.audit_retention_days {
             config.audit.retention_days = days;
         }
+        if let Some(mode) = self.mail_mode {
+            config.mail.mode = mode;
+        }
+        if let Some(value) = self.mail_from_address.as_deref() {
+            config.mail.from_address = value.to_owned();
+        }
+        if let Some(value) = self.mail_from_name.as_deref() {
+            config.mail.from_name = value.to_owned();
+        }
+        if let Some(value) = self.mail_sendmail_command.as_deref() {
+            config.mail.sendmail_command = value.to_owned();
+        }
+        if let Some(value) = self.mail_smtp_host.as_deref() {
+            config.mail.smtp_host = value.to_owned();
+        }
+        if let Some(value) = self.mail_smtp_port {
+            config.mail.smtp_port = value;
+        }
+        if let Some(value) = self.mail_smtp_security {
+            config.mail.smtp_security = value;
+        }
+        if let Some(value) = self.mail_smtp_username.as_deref() {
+            config.mail.smtp_username = value.to_owned();
+        }
+        if let Some(value) = self.mail_smtp_password.as_deref() {
+            config.mail.smtp_password = value.to_owned();
+        }
+        config
+            .mail
+            .validate()
+            .map_err(|message| AppError::Validation {
+                op,
+                message: message.to_owned(),
+            })?;
         if let Some(auto_start) = self.node_manager_auto_start_local_node {
             config.node_manager.auto_start_local_node = auto_start;
         }
@@ -317,6 +411,60 @@ impl PreparedSettingsUpdate {
             "audit_retention_days",
             original.audit.retention_days,
             updated.audit.retention_days
+        );
+        record!(
+            self.mail_mode.is_some(),
+            "mail_mode",
+            original.mail.mode.as_str(),
+            updated.mail.mode.as_str()
+        );
+        record!(
+            self.mail_from_address.is_some(),
+            "mail_from_address",
+            original.mail.from_address,
+            updated.mail.from_address
+        );
+        record!(
+            self.mail_from_name.is_some(),
+            "mail_from_name",
+            original.mail.from_name,
+            updated.mail.from_name
+        );
+        record!(
+            self.mail_sendmail_command.is_some(),
+            "mail_sendmail_command",
+            original.mail.sendmail_command,
+            updated.mail.sendmail_command
+        );
+        record!(
+            self.mail_smtp_host.is_some(),
+            "mail_smtp_host",
+            original.mail.smtp_host,
+            updated.mail.smtp_host
+        );
+        record!(
+            self.mail_smtp_port.is_some(),
+            "mail_smtp_port",
+            original.mail.smtp_port,
+            updated.mail.smtp_port
+        );
+        record!(
+            self.mail_smtp_security.is_some(),
+            "mail_smtp_security",
+            original.mail.smtp_security.as_str(),
+            updated.mail.smtp_security.as_str()
+        );
+        record!(
+            self.mail_smtp_username.is_some(),
+            "mail_smtp_username",
+            original.mail.smtp_username,
+            updated.mail.smtp_username
+        );
+        record!(
+            self.mail_smtp_password.is_some(),
+            "mail_smtp_password_configured",
+            !original.mail.smtp_password.is_empty(),
+            !updated.mail.smtp_password.is_empty()
         );
         record!(
             self.node_manager_auto_start_local_node.is_some(),
@@ -522,6 +670,57 @@ fn prepare_settings_update(
         });
     }
 
+    let mail_mode = body
+        .mail_mode
+        .as_deref()
+        .map(|value| {
+            MailMode::parse(value).ok_or_else(|| AppError::Validation {
+                op,
+                message: "mail mode must be none, local or smtp".to_owned(),
+            })
+        })
+        .transpose()?;
+    let mail_smtp_security = body
+        .mail_smtp_security
+        .as_deref()
+        .map(|value| {
+            SmtpSecurity::parse(value).ok_or_else(|| AppError::Validation {
+                op,
+                message: "SMTP security must be none, starttls or tls".to_owned(),
+            })
+        })
+        .transpose()?;
+    if body.mail_smtp_port == Some(0) {
+        return Err(AppError::Validation {
+            op,
+            message: "SMTP port must be greater than zero".to_owned(),
+        });
+    }
+    let mail_from_address = body.mail_from_address.map(|value| value.trim().to_owned());
+    let mail_from_name = body.mail_from_name.map(|value| value.trim().to_owned());
+    let mail_sendmail_command = body
+        .mail_sendmail_command
+        .map(|value| value.trim().to_owned());
+    let mail_smtp_host = body.mail_smtp_host.map(|value| value.trim().to_owned());
+    let mail_smtp_username = body.mail_smtp_username.map(|value| value.trim().to_owned());
+    let mail_smtp_password = body.mail_smtp_password;
+    if let Some(policy) = body.password_policy.as_ref() {
+        policy
+            .validate_config()
+            .map_err(|message| AppError::Validation {
+                op,
+                message: message.to_owned(),
+            })?;
+    }
+    if let Some(policy) = body.mfa_policy.as_ref() {
+        policy
+            .validate(true)
+            .map_err(|message| AppError::Validation {
+                op,
+                message: message.to_owned(),
+            })?;
+    }
+
     let node_manager_local_node_binary = body
         .node_manager_local_node_binary
         .map(|value| value.trim().to_owned());
@@ -590,6 +789,18 @@ fn prepare_settings_update(
         session_idle_ttl_seconds: body.session_idle_ttl_seconds,
         session_ttl_seconds: body.session_ttl_seconds,
         audit_retention_days: body.audit_retention_days,
+        mail_mode,
+        mail_from_address,
+        mail_from_name,
+        mail_sendmail_command,
+        mail_smtp_host,
+        mail_smtp_port: body.mail_smtp_port,
+        mail_smtp_security,
+        mail_smtp_username,
+        mail_smtp_password,
+        password_policy: body.password_policy,
+        registration_email_verification: body.registration_email_verification,
+        mfa_policy: body.mfa_policy,
         node_manager_auto_start_local_node: body.node_manager_auto_start_local_node,
         node_manager_local_node_binary,
         node_manager_local_node_config,
@@ -618,6 +829,18 @@ fn prepare_settings_update(
         && prepared.session_idle_ttl_seconds.is_none()
         && prepared.session_ttl_seconds.is_none()
         && prepared.audit_retention_days.is_none()
+        && prepared.mail_mode.is_none()
+        && prepared.mail_from_address.is_none()
+        && prepared.mail_from_name.is_none()
+        && prepared.mail_sendmail_command.is_none()
+        && prepared.mail_smtp_host.is_none()
+        && prepared.mail_smtp_port.is_none()
+        && prepared.mail_smtp_security.is_none()
+        && prepared.mail_smtp_username.is_none()
+        && prepared.mail_smtp_password.is_none()
+        && prepared.password_policy.is_none()
+        && prepared.registration_email_verification.is_none()
+        && prepared.mfa_policy.is_none()
         && prepared.node_manager_auto_start_local_node.is_none()
         && prepared.node_manager_local_node_binary.is_none()
         && prepared.node_manager_local_node_config.is_none()
@@ -690,6 +913,62 @@ pub async fn update(
     } else {
         None
     };
+    let mail_enabled = config_update
+        .as_ref()
+        .map(|update| update.runtime.mail.enabled())
+        .unwrap_or_else(|| state.config.read().unwrap().mail.enabled());
+    let mail_configuration_changed = body.mail_mode.is_some()
+        || body.mail_from_address.is_some()
+        || body.mail_from_name.is_some()
+        || body.mail_sendmail_command.is_some()
+        || body.mail_smtp_host.is_some()
+        || body.mail_smtp_port.is_some()
+        || body.mail_smtp_security.is_some()
+        || body.mail_smtp_username.is_some()
+        || body.mail_smtp_password.is_some();
+    let registration_email_verification = match body.registration_email_verification {
+        Some(required) => required,
+        None if mail_configuration_changed => {
+            authentication::registration_verification_required(db)
+                .await
+                .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        }
+        None => false,
+    };
+    if registration_email_verification && !mail_enabled {
+        return Err(AppError::Validation {
+            op: OP,
+            message: "registration email verification requires an enabled mail transport"
+                .to_owned(),
+        });
+    }
+    let effective_mfa_policy = match body.mfa_policy.as_ref() {
+        Some(policy) => Some(policy.clone()),
+        None if mail_configuration_changed => Some(
+            authentication::mfa_policy(db)
+                .await
+                .map_err(|source| AppError::Infrastructure { op: OP, source })?,
+        ),
+        None => None,
+    };
+    if let Some(policy) = effective_mfa_policy.as_ref() {
+        policy
+            .validate(mail_enabled)
+            .map_err(|message| AppError::Validation {
+                op: OP,
+                message: message.to_owned(),
+            })?;
+    }
+    if let Some(policy) = body.mfa_policy.as_ref()
+        && !authentication::selected_mfa_users_exist(db, &policy.selected_user_ids)
+            .await
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?
+    {
+        return Err(AppError::Validation {
+            op: OP,
+            message: "selected MFA users must reference existing users".to_owned(),
+        });
+    }
     let transaction = db
         .begin()
         .await
@@ -710,6 +989,70 @@ pub async fn update(
             &mut before,
             &mut after,
         );
+    }
+
+    if let Some(policy) = body.password_policy.as_ref() {
+        before.insert(
+            "password_policy".to_owned(),
+            json!(
+                authentication::password_policy(db)
+                    .await
+                    .map_err(|source| { AppError::Infrastructure { op: OP, source } })?
+            ),
+        );
+        settings::set_setting(
+            &transaction,
+            authentication::PASSWORD_POLICY_KEY,
+            SystemSettingValueKind::Json,
+            json!(policy),
+        )
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+        after.insert("password_policy".to_owned(), json!(policy));
+        changed.push("password_policy");
+    }
+    if let Some(required) = body.registration_email_verification {
+        before.insert(
+            "registration_email_verification".to_owned(),
+            json!(
+                authentication::registration_verification_required(db)
+                    .await
+                    .map_err(|source| AppError::Infrastructure { op: OP, source })?
+            ),
+        );
+        settings::set_setting(
+            &transaction,
+            authentication::REGISTRATION_VERIFICATION_KEY,
+            SystemSettingValueKind::Json,
+            json!(required),
+        )
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+        after.insert(
+            "registration_email_verification".to_owned(),
+            json!(required),
+        );
+        changed.push("registration_email_verification");
+    }
+    if let Some(policy) = body.mfa_policy.as_ref() {
+        before.insert(
+            "mfa_policy".to_owned(),
+            json!(
+                authentication::mfa_policy(db)
+                    .await
+                    .map_err(|source| { AppError::Infrastructure { op: OP, source } })?
+            ),
+        );
+        settings::set_setting(
+            &transaction,
+            authentication::MFA_POLICY_KEY,
+            SystemSettingValueKind::Json,
+            json!(policy),
+        )
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+        after.insert("mfa_policy".to_owned(), json!(policy));
+        changed.push("mfa_policy");
     }
 
     if let Some(name) = body.site_name.as_deref() {
@@ -993,6 +1336,9 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
             ])
             .into_connection();
         let mut config = ControlApiConfig::default();
@@ -1007,6 +1353,11 @@ mod tests {
         config.session.idle_ttl_seconds = 1_200;
         config.session.session_ttl_seconds = 86_400;
         config.audit.retention_days = 120;
+        config.mail.mode = super::MailMode::Smtp;
+        config.mail.from_address = "noreply@example.com".to_owned();
+        config.mail.smtp_host = "smtp.example.com".to_owned();
+        config.mail.smtp_username = "mailer".to_owned();
+        config.mail.smtp_password = "smtp-secret-value-that-must-not-leak".to_owned();
         config.node_manager.auto_start_local_node = true;
         config.node_manager.local_node_binary = "/usr/local/bin/grass-node".to_owned();
         config.node_manager.local_node_config = "/etc/grass/node.toml".to_owned();
@@ -1044,6 +1395,20 @@ mod tests {
         );
         assert_eq!(data["audit"], serde_json::json!({ "retention_days": 120 }));
         assert_eq!(
+            data["mail"],
+            serde_json::json!({
+                "mode": "smtp",
+                "from_address": "noreply@example.com",
+                "from_name": "Grass Worker",
+                "sendmail_command": "/usr/sbin/sendmail",
+                "smtp_host": "smtp.example.com",
+                "smtp_port": 587,
+                "smtp_security": "starttls",
+                "smtp_username": "mailer",
+                "smtp_password_configured": true,
+            })
+        );
+        assert_eq!(
             data["node_manager"],
             serde_json::json!({
                 "auto_start_local_node": true,
@@ -1080,6 +1445,7 @@ mod tests {
         assert!(!serialized.contains("database-secret"));
         assert!(!serialized.contains("redis-secret"));
         assert!(!serialized.contains("control-api-secret-value"));
+        assert!(!serialized.contains("smtp-secret-value"));
     }
 
     fn session() -> Session {
@@ -1117,6 +1483,9 @@ mod tests {
             vec![updated.clone()],
             Vec::<crate::infra::database::entity::system_setting::Model>::new(),
             vec![updated],
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
             Vec::<crate::infra::database::entity::system_setting::Model>::new(),
             Vec::<crate::infra::database::entity::system_setting::Model>::new(),
             Vec::<crate::infra::database::entity::system_setting::Model>::new(),
@@ -1232,6 +1601,9 @@ mod tests {
         let db = MockDatabase::new(sea_orm::DbBackend::Postgres)
             .append_query_results([
                 Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),

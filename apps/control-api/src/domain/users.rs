@@ -7,13 +7,16 @@ use sea_orm::{
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::infra::database::entity::{PlatformRole, UserStatus, user, user_password_credential};
+use crate::infra::database::entity::{
+    PlatformRole, UserStatus, user, user_password_credential, user_password_history,
+};
 
 pub struct CreateUserParams {
     pub email: String,
     pub display_name: Option<String>,
-    pub password_hash: String,
+    pub password_hash: Option<String>,
     pub platform_role: PlatformRole,
+    pub email_verified_at: Option<OffsetDateTime>,
 }
 
 static DUMMY_PASSWORD_HASH: LazyLock<String> = LazyLock::new(|| {
@@ -34,6 +37,7 @@ pub async fn create_user<C: ConnectionTrait>(
         display_name: Set(params.display_name),
         status: Set(UserStatus::Active),
         platform_role: Set(params.platform_role),
+        email_verified_at: Set(params.email_verified_at),
         last_login_at: Set(None),
         deleted_at: Set(None),
         created_at: Set(now),
@@ -42,16 +46,19 @@ pub async fn create_user<C: ConnectionTrait>(
     .insert(db)
     .await?;
 
-    user_password_credential::ActiveModel {
-        id: Set(Uuid::now_v7()),
-        user_id: Set(user_id),
-        password_hash: Set(params.password_hash),
-        must_change_password: Set(false),
-        created_at: Set(now),
-        updated_at: Set(now),
+    if let Some(password_hash) = params.password_hash {
+        user_password_credential::ActiveModel {
+            id: Set(Uuid::now_v7()),
+            user_id: Set(user_id),
+            password_hash: Set(password_hash.clone()),
+            must_change_password: Set(false),
+            created_at: Set(now),
+            updated_at: Set(now),
+        }
+        .insert(db)
+        .await?;
+        insert_password_history(db, user_id, password_hash, now).await?;
     }
-    .insert(db)
-    .await?;
 
     Ok(user_model)
 }
@@ -195,7 +202,7 @@ pub async fn set_password<C: ConnectionTrait>(
     match existing {
         Some(credential) => {
             let mut active: user_password_credential::ActiveModel = credential.into();
-            active.password_hash = Set(password_hash);
+            active.password_hash = Set(password_hash.clone());
             active.update(db).await?;
         }
         None => {
@@ -203,7 +210,7 @@ pub async fn set_password<C: ConnectionTrait>(
             user_password_credential::ActiveModel {
                 id: Set(Uuid::now_v7()),
                 user_id: Set(user_id),
-                password_hash: Set(password_hash),
+                password_hash: Set(password_hash.clone()),
                 must_change_password: Set(false),
                 created_at: Set(now),
                 updated_at: Set(now),
@@ -212,6 +219,24 @@ pub async fn set_password<C: ConnectionTrait>(
             .await?;
         }
     }
+    insert_password_history(db, user_id, password_hash, OffsetDateTime::now_utc()).await?;
+    Ok(())
+}
+
+async fn insert_password_history<C: ConnectionTrait>(
+    db: &C,
+    user_id: Uuid,
+    password_hash: String,
+    created_at: OffsetDateTime,
+) -> anyhow::Result<()> {
+    user_password_history::ActiveModel {
+        id: Set(Uuid::now_v7()),
+        user_id: Set(user_id),
+        password_hash: Set(password_hash),
+        created_at: Set(created_at),
+    }
+    .insert(db)
+    .await?;
     Ok(())
 }
 
@@ -241,7 +266,6 @@ pub async fn verify_user_password(
     }
 
     let user_model = user_model.expect("valid credentials require an existing user");
-    update_last_login(db, user_model.id).await?;
     Ok(Some(user_model))
 }
 

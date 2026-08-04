@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { MoreHorizontalIcon, PlusIcon } from "lucide-react";
+import { MoreHorizontalIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -69,6 +69,7 @@ export function UsersPanel() {
   const [creating, setCreating] = useState(false);
   const [settingPassword, setSettingPassword] = useState<AdminUser | null>(null);
   const [renaming, setRenaming] = useState<AdminUser | null>(null);
+  const [managingMfa, setManagingMfa] = useState<AdminUser | null>(null);
 
   const usersQuery = useQuery({
     queryKey: ["admin", "users", query],
@@ -229,6 +230,9 @@ export function UsersPanel() {
                         <DropdownMenuItem onClick={() => resetMutation.mutate(user)}>
                           Generate new password
                         </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setManagingMfa(user)}>
+                          Manage MFA
+                        </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </TableCell>
@@ -266,7 +270,75 @@ export function UsersPanel() {
           }}
         />
       )}
+      {managingMfa && <MfaFactorsDialog user={managingMfa} onClose={() => setManagingMfa(null)} />}
     </div>
+  );
+}
+
+function MfaFactorsDialog({ user, onClose }: { user: AdminUser; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const factors = useQuery({
+    queryKey: ["admin", "users", user.id, "mfa"],
+    queryFn: () => adminApi.listUserMfa(user.id),
+  });
+  const reset = useMutation({
+    mutationFn: (factorId: string) => adminApi.resetUserMfaFactor(user.id, factorId),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["admin", "users", user.id, "mfa"] }),
+  });
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Multi-factor authentication</DialogTitle>
+          <DialogDescription>{user.email}</DialogDescription>
+        </DialogHeader>
+        {factors.isLoading && <Skeleton className="h-24 w-full" aria-busy="true" />}
+        {factors.isError && (
+          <p role="alert" className="text-sm text-destructive">
+            {factors.error instanceof Error ? factors.error.message : "Unable to load factors."}
+          </p>
+        )}
+        {factors.data?.factors.length === 0 && (
+          <p className="text-sm text-muted-foreground">No factors enrolled.</p>
+        )}
+        <div className="grid gap-2">
+          {factors.data?.factors.map((factor) => (
+            <div
+              key={factor.id}
+              className="flex items-center justify-between gap-4 rounded-md border p-3"
+            >
+              <div>
+                <p className="text-sm font-medium">
+                  {factor.kind === "totp" ? "Authenticator app" : "Email code"}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {factor.verified ? "Verified" : "Pending"}
+                  {factor.last_used_at
+                    ? ` · Last used ${new Date(factor.last_used_at).toLocaleString()}`
+                    : ""}
+                </p>
+              </div>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                aria-label={`Reset ${factor.kind} factor`}
+                disabled={reset.isPending}
+                onClick={() => reset.mutate(factor.id)}
+              >
+                <Trash2Icon />
+              </Button>
+            </div>
+          ))}
+        </div>
+        {reset.isError && (
+          <p role="alert" className="text-sm text-destructive">
+            {reset.error instanceof Error ? reset.error.message : "Unable to reset the factor."}
+          </p>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -629,6 +629,7 @@ mod tests {
             display_name: Set(Some("Delivery Tester".to_owned())),
             status: Set(UserStatus::Active),
             platform_role: Set(PlatformRole::Admin),
+            email_verified_at: Set(Some(now)),
             last_login_at: Set(None),
             deleted_at: Set(None),
             created_at: Set(now),

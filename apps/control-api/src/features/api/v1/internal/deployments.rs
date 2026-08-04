@@ -25,6 +25,7 @@ use crate::{
         audits::{self, CreateAuditEventParams},
         delivery,
         deployments::{self, BuildTransition, ReadyReleaseAction},
+        platform_mail,
         quotas::QuotaDimension,
         scheduler::{self, NodeUsage},
         source_credentials, ssh_host_keys, teams,
@@ -623,6 +624,9 @@ pub async fn stage(
                 {
                     let _ = record_build_log_artifact(db, &updated).await;
                 }
+
+                let mail_config = state.config.read().unwrap().mail.clone();
+                platform_mail::send_deployment_result_best_effort(db, mail_config, &updated).await;
             }
 
             if matches!(ready_action, ReadyReleaseAction::RequestReview) {

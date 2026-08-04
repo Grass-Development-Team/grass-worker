@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 
 import { LoginForm, previewAuthorizationContinuation } from "./login-form";
@@ -33,7 +33,16 @@ it("accepts only the Preview authorization API continuation", () => {
 
 it("uses a full-page navigation after Preview login", async () => {
   const user = userEvent.setup();
-  const login = vi.fn().mockResolvedValue(undefined);
+  const login = vi.fn().mockResolvedValue({
+    user: {
+      id: "user-1",
+      email: "leo@example.com",
+      display_name: "Leo",
+      platform_role: "user",
+      email_verified: true,
+    },
+    csrf_token: "csrf-token",
+  });
   const documentNavigate = vi.fn();
   vi.mocked(useAuth).mockReturnValue({ login } as unknown as ReturnType<typeof useAuth>);
 
@@ -52,5 +61,37 @@ it("uses a full-page navigation after Preview login", async () => {
   await waitFor(() =>
     expect(documentNavigate).toHaveBeenCalledWith("/api/v1/preview/authorize?state=opaque"),
   );
-  expect(login).toHaveBeenCalledWith("leo@example.com", "password123");
+  expect(login).toHaveBeenCalledWith(
+    "leo@example.com",
+    "password123",
+    "/api/v1/preview/authorize?state=opaque",
+  );
+});
+
+it("continues a password login on the MFA route", async () => {
+  const user = userEvent.setup();
+  const login = vi.fn().mockResolvedValue({
+    mfa_required: true,
+    mfa_enrollment_required: false,
+    challenge_token: "challenge-token",
+    factors: [],
+    allowed_factors: ["totp"],
+    return_to: "/",
+  });
+  vi.mocked(useAuth).mockReturnValue({ login } as unknown as ReturnType<typeof useAuth>);
+
+  render(
+    <MemoryRouter initialEntries={["/login"]}>
+      <Routes>
+        <Route path="/login" element={<LoginForm />} />
+        <Route path="/mfa" element={<div>MFA page</div>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await user.type(screen.getByLabelText("Email"), "leo@example.com");
+  await user.type(screen.getByLabelText("Password"), "password123");
+  await user.click(screen.getByRole("button", { name: "Login" }));
+
+  expect(await screen.findByText("MFA page")).toBeInTheDocument();
 });

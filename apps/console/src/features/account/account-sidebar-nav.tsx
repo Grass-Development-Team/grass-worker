@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, UserRoundIcon } from "lucide-react";
+import { ArrowLeftIcon, ShieldCheckIcon, UserRoundIcon } from "lucide-react";
 import { NavLink, useLocation } from "react-router";
 
 import {
@@ -10,7 +10,10 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 
-const sections = [{ to: "/account/profile", label: "Profile", icon: UserRoundIcon }];
+const sections = [
+  { to: "/account/profile", label: "Profile", icon: UserRoundIcon },
+  { to: "/account/security", label: "Security", icon: ShieldCheckIcon },
+];
 
 export function AccountSidebarNav() {
   const location = useLocation();

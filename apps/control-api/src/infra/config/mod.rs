@@ -2,6 +2,7 @@ pub mod audit;
 pub mod cache;
 pub mod database;
 pub mod log;
+pub mod mail;
 pub mod migration;
 pub mod node_manager;
 pub mod secrets;
@@ -20,8 +21,8 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 use self::{
     audit::AuditConfig, cache::CacheConfig, database::DatabaseConfig, log::LogConfig,
-    migration::MigrationConfig, node_manager::NodeManagerConfig, secrets::SecretsConfig,
-    server::ServerConfig, session::SessionConfig, storage::StorageConfig,
+    mail::MailConfig, migration::MigrationConfig, node_manager::NodeManagerConfig,
+    secrets::SecretsConfig, server::ServerConfig, session::SessionConfig, storage::StorageConfig,
 };
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -40,6 +41,8 @@ pub struct ControlApiConfig {
     pub session: SessionConfig,
     #[serde(default)]
     pub audit: AuditConfig,
+    #[serde(default)]
+    pub mail: MailConfig,
     #[serde(default)]
     pub node_manager: NodeManagerConfig,
     #[serde(default)]
@@ -143,6 +146,7 @@ fn apply_env(config: &mut ControlApiConfig) -> Result<(), ConfigError> {
         "GWAPI_AUDIT_RETENTION_DAYS",
         &mut config.audit.retention_days,
     )?;
+    mail::apply_env(&mut config.mail)?;
     Ok(())
 }
 

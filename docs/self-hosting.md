@@ -84,6 +84,32 @@ remain write-only: the Console reports whether each value is configured but
 never returns it. File and environment configuration still provide the
 startup values for settings that cannot be changed before the API is running.
 
+### Authentication and email
+
+Outbound email is optional and is configured under **Administration → Settings
+→ Email**. The `none` mode disables delivery, `local` invokes the configured
+absolute `sendmail`/MTA command on the Control API host, and `smtp` connects to
+the configured SMTP server. SMTP passwords are write-only in the API and can
+also be supplied with `GWAPI_MAIL_SMTP_PASSWORD`.
+
+The **Administration → Settings → Authentication** page controls password
+length and character requirements, password history, and the independent
+registration email-verification switch. Enabling registration verification
+requires an enabled email transport; it is not an MFA setting. Password reset
+mail, invitations, MFA email codes, and deployment result notifications use
+the same transport. Deployment notifications go to the triggering user and
+active members of the project team.
+
+Identity providers are configured on the same Authentication page. Google,
+Apple, GitHub, and custom OIDC templates are available; custom endpoints must
+use HTTPS. OAuth callbacks use state, nonce, and PKCE validation and only
+accept local return paths.
+
+MFA is disabled by default. Administrators can allow TOTP and/or email codes
+and enforce MFA for platform administrators, all users, or a selected set of
+users. Users manage their own enrolled factors under **Account → Security**;
+administrators can inspect or reset a user's factors.
+
 With an empty database the service starts in **setup mode**. Open the
 Console (`just run console` during development, or the embedded Console on
 the Control API port in release builds) and finish the setup flow:

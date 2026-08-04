@@ -16,8 +16,7 @@
 ## P1：产品能力
 
 - P1.4 Custom Grass Output：允许用户提供 `.grass/output/output.toml`，并定义 manifest 安全校验策略；
-- P1.5 认证增强：OAuth、MFA、密码策略和密码找回；
-- P1.6 消息外发：SMTP、邀请邮件、部署结果通知和 Webhook；
+- P1.6 消息外发：Webhook；
 - P1.7 更多 DNS Provider：增加 DNSPod、Route53 等实现；
 - P1.8 独立 Host Source：允许 Preview 与 Production 使用独立的默认 Host Source；
 

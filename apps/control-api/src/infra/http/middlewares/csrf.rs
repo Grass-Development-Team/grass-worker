@@ -111,7 +111,17 @@ pub async fn csrf_middleware(
 }
 
 fn csrf_exempt_path(path: &str) -> bool {
-    matches!(path, "/auth/login" | "/auth/register") || path.starts_with("/setup/")
+    matches!(
+        path,
+        "/auth/login"
+            | "/auth/register"
+            | "/auth/email/verify"
+            | "/auth/email/resend"
+            | "/auth/password/forgot"
+            | "/auth/password/reset"
+    ) || path.starts_with("/auth/mfa/")
+        || path.starts_with("/auth/providers/")
+        || path.starts_with("/setup/")
 }
 
 fn requires_csrf(method: &Method) -> bool {
@@ -147,6 +157,7 @@ mod tests {
     fn only_pre_auth_and_setup_paths_are_exempt() {
         assert!(csrf_exempt_path("/auth/login"));
         assert!(csrf_exempt_path("/auth/register"));
+        assert!(csrf_exempt_path("/auth/password/reset"));
         assert!(csrf_exempt_path("/setup/database"));
         assert!(!csrf_exempt_path("/auth/logout"));
         assert!(!csrf_exempt_path("/teams"));

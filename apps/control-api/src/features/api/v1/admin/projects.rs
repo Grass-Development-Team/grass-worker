@@ -708,6 +708,7 @@ mod tests {
                 display_name: Some("Team Owner".to_owned()),
                 status: UserStatus::Active,
                 platform_role: PlatformRole::Admin,
+                email_verified_at: Some(now),
                 last_login_at: None,
                 deleted_at: None,
                 created_at: now,

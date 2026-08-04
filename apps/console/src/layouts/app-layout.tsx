@@ -86,6 +86,7 @@ function pageTitle(pathname: string, inProject: boolean): string {
   if (pathname === "/quota") return "Usage";
   if (pathname === "/notifications") return "Notifications";
   if (pathname.startsWith("/account/profile")) return "Personal Settings";
+  if (pathname.startsWith("/account/security")) return "Security";
   if (pathname.startsWith("/settings/team")) return "Team Settings";
   if (pathname.startsWith("/settings/members")) return "Members";
   if (pathname.startsWith("/settings/audit")) return "Audit";

@@ -194,8 +194,55 @@ export interface AdminUser {
   display_name: string | null;
   status: "active" | "disabled";
   platform_role: "user" | "admin";
+  email_verified: boolean;
   last_login_at: string | null;
   created_at: string;
+}
+
+export type AdminMfaEnforcement = "none" | "platform_admins" | "all_users" | "selected_users";
+
+export interface AdminMfaPolicy {
+  allowed_factors: Array<"totp" | "email">;
+  enforcement: AdminMfaEnforcement;
+  selected_user_ids: string[];
+}
+
+export interface AdminPasswordPolicy {
+  min_length: number;
+  max_length: number;
+  require_lowercase: boolean;
+  require_uppercase: boolean;
+  require_number: boolean;
+  require_symbol: boolean;
+  history_count: number;
+}
+
+export interface AdminMfaFactor {
+  id: string;
+  kind: "totp" | "email";
+  label: string | null;
+  verified: boolean;
+  verified_at: string | null;
+  last_used_at: string | null;
+  created_at: string;
+}
+
+export interface AdminIdentityProvider {
+  id: string;
+  slug: string;
+  kind: "oidc" | "github";
+  name: string;
+  enabled: boolean;
+  client_id: string;
+  client_secret_configured: boolean;
+  issuer_url: string | null;
+  authorization_url: string;
+  token_url: string;
+  userinfo_url: string | null;
+  jwks_url: string | null;
+  scopes: string[];
+  created_at: string;
+  updated_at: string;
 }
 
 export interface AdminTeamGroupRef {
@@ -398,6 +445,22 @@ export interface AdminSettings {
   database: { url_configured: boolean };
   redis: { backend: "moka" | "redis"; url_configured: boolean };
   secrets: { secret_key_configured: boolean; git_credentials_configured: boolean };
+  mail: {
+    mode: "none" | "local" | "smtp";
+    from_address: string;
+    from_name: string;
+    sendmail_command: string;
+    smtp_host: string;
+    smtp_port: number;
+    smtp_security: "none" | "starttls" | "tls";
+    smtp_username: string;
+    smtp_password_configured: boolean;
+  };
+  authentication: {
+    password_policy: AdminPasswordPolicy;
+    registration_email_verification: boolean;
+    mfa_policy: AdminMfaPolicy;
+  };
   session: {
     cookie_secure: boolean;
     idle_ttl_seconds: number;
@@ -548,6 +611,14 @@ export const adminApi = {
         body: JSON.stringify(password ? { password } : {}),
       },
     ),
+
+  listUserMfa: (userId: string) =>
+    request<{ factors: AdminMfaFactor[] }>(`/api/v1/admin/users/${userId}/mfa`),
+
+  resetUserMfaFactor: (userId: string, factorId: string) =>
+    request<{ deleted: true }>(`/api/v1/admin/users/${userId}/mfa/${factorId}`, {
+      method: "DELETE",
+    }),
 
   listTeams: (q?: string) =>
     request<{ teams: AdminTeam[] }>(
@@ -748,6 +819,55 @@ export const adminApi = {
 
   getSettings: () => request<AdminSettings>("/api/v1/admin/settings"),
 
+  listIdentityProviders: () =>
+    request<{ providers: AdminIdentityProvider[] }>("/api/v1/admin/identity-providers"),
+
+  createIdentityProvider: (input: {
+    slug: string;
+    template: "google" | "apple" | "github" | "custom";
+    name: string;
+    client_id: string;
+    client_secret: string;
+    issuer_url?: string;
+    authorization_url?: string;
+    token_url?: string;
+    userinfo_url?: string;
+    jwks_url?: string;
+    scopes?: string[];
+    enabled?: boolean;
+  }) =>
+    request<{ provider: AdminIdentityProvider }>("/api/v1/admin/identity-providers", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  updateIdentityProvider: (
+    providerId: string,
+    input: Partial<
+      Pick<
+        AdminIdentityProvider,
+        | "name"
+        | "enabled"
+        | "client_id"
+        | "issuer_url"
+        | "authorization_url"
+        | "token_url"
+        | "userinfo_url"
+        | "jwks_url"
+        | "scopes"
+      >
+    > & { client_secret?: string },
+  ) =>
+    request<{ provider: AdminIdentityProvider }>(`/api/v1/admin/identity-providers/${providerId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+
+  deleteIdentityProvider: (providerId: string) =>
+    request<{ deleted: true }>(`/api/v1/admin/identity-providers/${providerId}`, {
+      method: "DELETE",
+    }),
+
   listAnnouncements: (page = 1, perPage = 20) =>
     request<AdminAnnouncementsPage>(`/api/v1/admin/announcements?page=${page}&per_page=${perPage}`),
 
@@ -782,6 +902,18 @@ export const adminApi = {
     session_idle_ttl_seconds?: number;
     session_ttl_seconds?: number;
     audit_retention_days?: number;
+    mail_mode?: "none" | "local" | "smtp";
+    mail_from_address?: string;
+    mail_from_name?: string;
+    mail_sendmail_command?: string;
+    mail_smtp_host?: string;
+    mail_smtp_port?: number;
+    mail_smtp_security?: "none" | "starttls" | "tls";
+    mail_smtp_username?: string;
+    mail_smtp_password?: string;
+    password_policy?: AdminPasswordPolicy;
+    registration_email_verification?: boolean;
+    mfa_policy?: AdminMfaPolicy;
     node_manager_auto_start_local_node?: boolean;
     node_manager_local_node_binary?: string;
     node_manager_local_node_config?: string;
