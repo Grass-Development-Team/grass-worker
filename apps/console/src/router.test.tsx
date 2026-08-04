@@ -35,6 +35,9 @@ vi.mock("@/features/admin/components/settings-panel", () => ({
 vi.mock("@/features/admin/components/announcements-panel", () => ({
   AnnouncementsPanel: () => <div>Announcements settings</div>,
 }));
+vi.mock("@/features/admin/components/cleanup-panel", () => ({
+  CleanupPanel: () => <div>Cleanup settings</div>,
+}));
 vi.mock("@/features/account/profile-route", () => ({
   ProfileRoute: () => <div>Profile settings</div>,
 }));
@@ -128,6 +131,18 @@ describe("Administration routing", () => {
     );
 
     expect(await screen.findByText("Announcements settings")).toBeInTheDocument();
+  });
+
+  it("opens cleanup controls as a nested administration page", async () => {
+    setUser("admin");
+
+    render(
+      <MemoryRouter initialEntries={["/admin/cleanup"]}>
+        <Router />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Cleanup settings")).toBeInTheDocument();
   });
 });
 

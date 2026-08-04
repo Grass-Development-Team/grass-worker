@@ -123,7 +123,7 @@ export function ProjectSettingsRoute() {
             variant="outline"
             size="icon"
             onClick={copyId}
-            aria-label={copied ? "Project ID copied" : "Copy project ID"}
+            aria-label={copied ? "Project ID copied" : "Copy Project ID"}
           >
             {copied ? <CheckIcon /> : <CopyIcon />}
           </Button>
@@ -188,7 +188,7 @@ export function ProjectSettingsRoute() {
                     className={buttonVariants({ variant: "destructive" })}
                     onClick={() => deleteMutation.mutate()}
                   >
-                    Delete project
+                    Delete Project
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>

@@ -125,7 +125,7 @@ export function DeploymentDetailRoute() {
           </p>
         </div>
         <Button variant="outline" asChild>
-          <Link to={`/projects/${projectId}`}>Back to project</Link>
+          <Link to={`/projects/${projectId}`}>Back to Project</Link>
         </Button>
       </div>
 

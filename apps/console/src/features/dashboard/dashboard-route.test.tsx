@@ -85,4 +85,35 @@ describe("Dashboard administration shortcut", () => {
 
     expect(await screen.findByRole("button", { name: /Maintenance window/i })).toBeInTheDocument();
   });
+
+  it("hides the announcement section when there is no announcement history", async () => {
+    renderDashboard("user", {
+      announcements: [],
+      pagination: { page: 1, per_page: 5, total: 0, total_pages: 0 },
+    });
+
+    await screen.findByText("Workspace controls");
+    expect(screen.queryByRole("heading", { name: "Announcements" })).not.toBeInTheDocument();
+  });
+
+  it("keeps announcements below the workspace controls", async () => {
+    renderDashboard("user", {
+      announcements: [
+        {
+          id: "announcement-1",
+          title: "Maintenance window",
+          content: "The service will restart shortly.",
+          auto_popup: false,
+          published_at: "2026-08-03T02:00:00Z",
+        },
+      ],
+      pagination: { page: 1, per_page: 5, total: 1, total_pages: 1 },
+    });
+
+    const controls = await screen.findByText("Workspace controls");
+    const announcements = await screen.findByRole("heading", { name: "Announcements" });
+    expect(
+      controls.compareDocumentPosition(announcements) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
 });

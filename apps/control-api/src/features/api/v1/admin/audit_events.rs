@@ -1,4 +1,5 @@
 use axum::{
+    Json,
     extract::{Query, State},
     response::IntoResponse,
 };
@@ -7,7 +8,7 @@ use serde_json::json;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::infra::http::timestamps::ts;
+use crate::infra::http::{extractors::Session, timestamps::ts};
 use crate::{
     domain::audits::{self, AuditEventFilter},
     infra::{
@@ -78,7 +79,7 @@ fn parse_result(
         .transpose()
 }
 
-fn timestamp_from_millis(
+pub(crate) fn timestamp_from_millis(
     value: Option<i64>,
     field: &'static str,
     op: &'static str,
@@ -188,6 +189,60 @@ pub async fn list(
             "total": page.total,
             "total_pages": page.total_pages,
         },
+    })))
+}
+
+/// GET /api/v1/admin/cleanup/audit-events
+pub async fn cleanup_preview(
+    State(state): State<ControlApiState>,
+    Query(query): Query<AuditQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "admin.cleanup.audit_events.preview";
+    let db = super::database(&state, OP)?;
+    let matched = audits::count_events(db, event_filter(query, None, None, false, OP)?)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+
+    Ok(ok_response(json!({
+        "matched": matched,
+        "deletable": matched,
+        "skipped": 0,
+    })))
+}
+
+/// DELETE /api/v1/admin/cleanup/audit-events
+pub async fn cleanup(
+    State(state): State<ControlApiState>,
+    session: Session,
+    Json(query): Json<AuditQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "admin.cleanup.audit_events.delete";
+    let db = super::database(&state, OP)?;
+    let filter = event_filter(query, None, None, false, OP)?;
+    let deleted = audits::delete_events(db, filter)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+
+    audits::create_platform_audit_event(
+        db,
+        audits::CreateAuditEventParams {
+            actor_user_id: Some(session.data.user_id),
+            actor_node_id: None,
+            team_id: None,
+            action: "admin.cleanup.audit_events".to_owned(),
+            target_type: "audit_event".to_owned(),
+            target_id: None,
+            result: AuditEventResult::Success,
+            reason: None,
+            metadata: json!({ "deleted": deleted }),
+        },
+    )
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+
+    Ok(ok_response(json!({
+        "deleted": deleted,
+        "skipped": 0,
     })))
 }
 

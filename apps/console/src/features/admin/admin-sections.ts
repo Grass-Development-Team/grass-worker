@@ -4,6 +4,7 @@ import {
   GlobeIcon,
   InboxIcon,
   LayersIcon,
+  EraserIcon,
   ScrollTextIcon,
   ServerIcon,
   SettingsIcon,
@@ -29,4 +30,5 @@ export const adminSections: AdminSection[] = [
   { to: "/admin/teams", label: "Teams", icon: UsersIcon },
   { to: "/admin/settings", label: "Settings", icon: SettingsIcon },
   { to: "/admin/audit", label: "Audit", icon: ScrollTextIcon },
+  { to: "/admin/cleanup", label: "Cleanup", icon: EraserIcon },
 ];

@@ -113,6 +113,11 @@ const AuditEventsTable = lazy(() =>
     default: AuditEventsTable,
   })),
 );
+const CleanupPanel = lazy(() =>
+  import("@/features/admin/components/cleanup-panel").then(({ CleanupPanel }) => ({
+    default: CleanupPanel,
+  })),
+);
 const QuotaRoute = lazy(() =>
   import("@/features/quota/quota-route").then(({ QuotaRoute }) => ({ default: QuotaRoute })),
 );
@@ -301,6 +306,7 @@ export function Router() {
               <Route path="runtime" element={<SettingsPanel section="runtime" />} />
             </Route>
             <Route path="audit" element={<AuditEventsTable />} />
+            <Route path="cleanup" element={<CleanupPanel />} />
           </Route>
           <Route element={<TeamSettingsGuard />}>
             <Route path="/settings/team" element={<TeamSettingsRoute />} />
