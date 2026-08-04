@@ -1,4 +1,9 @@
 [advisories]
-# SQLx records its optional MySQL macro driver in Cargo.lock even though this
-# PostgreSQL-only workspace does not enable or compile that dependency.
-ignore = ["RUSTSEC-2023-0071"]
+ignore = [
+  # SQLx records its optional MySQL macro driver in Cargo.lock even though this
+  # PostgreSQL-only workspace does not enable or compile that dependency.
+  "RUSTSEC-2023-0071",
+  # rust_decimal records its optional rkyv integration in Cargo.lock, but the
+  # workspace feature graph does not enable or compile rkyv.
+  "RUSTSEC-2026-0235",
+]
