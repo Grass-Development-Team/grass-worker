@@ -21,3 +21,4 @@ pub mod m20260803_000020_notification_content;
 pub mod m20260803_000021_announcements;
 pub mod m20260804_000022_authentication;
 pub mod m20260804_000023_mfa_policy;
+pub mod m20260806_000024_scoped_codes;

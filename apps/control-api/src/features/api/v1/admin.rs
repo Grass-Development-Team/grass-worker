@@ -1,6 +1,7 @@
 pub mod announcements;
 pub mod audit_events;
 pub mod build_logs;
+pub mod codes;
 pub mod deployments;
 pub mod domains;
 pub mod host_sources;
@@ -29,6 +30,8 @@ use crate::{
 pub fn router() -> Router<ControlApiState> {
     Router::new()
         .route("/status", get(status))
+        .route("/codes", get(codes::list).post(codes::generate))
+        .route("/codes/{code_id}/revoke", post(codes::revoke))
         .route(
             "/quota-plans",
             get(quota_plans::list).post(quota_plans::create),

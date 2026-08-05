@@ -111,6 +111,11 @@ const TeamsPanel = lazy(() =>
     default: TeamsPanel,
   })),
 );
+const CodePanel = lazy(() =>
+  import("@/features/admin/components/code-panel").then(({ CodePanel }) => ({
+    default: CodePanel,
+  })),
+);
 const SettingsPanel = lazy(() =>
   import("@/features/admin/components/settings-panel").then(({ SettingsPanel }) => ({
     default: SettingsPanel,
@@ -330,6 +335,7 @@ export function Router() {
             <Route path="team-groups" element={<TeamGroupsPanel />} />
             <Route path="users" element={<UsersPanel />} />
             <Route path="teams" element={<TeamsPanel />} />
+            <Route path="code" element={<CodePanel />} />
             <Route path="settings" element={<SettingsLayout />}>
               <Route index element={<Navigate to="/admin/settings/basic" replace />} />
               <Route path="basic" element={<SettingsPanel section="basic" />} />

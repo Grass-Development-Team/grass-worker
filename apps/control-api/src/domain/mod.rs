@@ -1,6 +1,7 @@
 pub mod audits;
 pub mod authentication;
 pub mod cleanup;
+pub mod codes;
 pub mod delivery;
 pub mod deployments;
 pub mod hosts;

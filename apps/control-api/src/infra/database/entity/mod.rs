@@ -1,6 +1,7 @@
 pub mod announcement;
 pub mod audit_event;
 pub mod auth_identity_provider;
+pub mod code;
 pub mod deployment;
 pub mod deployment_artifact;
 pub mod deployment_event;
@@ -45,6 +46,8 @@ pub use announcement::Entity as Announcement;
 pub use audit_event::Entity as AuditEvent;
 #[allow(unused_imports)]
 pub use auth_identity_provider::Entity as AuthIdentityProvider;
+#[allow(unused_imports)]
+pub use code::Entity as Code;
 #[allow(unused_imports)]
 pub use deployment::Entity as Deployment;
 #[allow(unused_imports)]
