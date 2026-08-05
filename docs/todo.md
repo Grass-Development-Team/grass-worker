@@ -19,6 +19,9 @@
 - P1.6 消息外发：Webhook；
 - P1.7 更多 DNS Provider：增加 DNSPod、Route53 等实现；
 - P1.8 独立 Host Source：允许 Preview 与 Production 使用独立的默认 Host Source；
+- P1.9 可复用 Scope Code 系统：支持按已注册 scope 批量生成、撤销、过期与使用追踪；
+- P1.10 平台注册授权：Invite only 使用 registration scope Code 或指定邮箱白名单授权注册；
+- P1.11 团队邀请用户发现与注册解耦：搜索平台用户，并禁止 Team invitation 充当平台注册凭证；
 
 ## P2：平台扩展
 
