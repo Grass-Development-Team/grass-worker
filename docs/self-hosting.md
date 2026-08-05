@@ -100,6 +100,14 @@ mail, invitations, MFA email codes, and deployment result notifications use
 the same transport. Deployment notifications go to the triggering user and
 active members of the project team.
 
+The signup policy on that page can be `Open`, `Invite only`, or `Closed`.
+Invite-only registration accepts either a single-use `registration` scope Code
+from **Administration → Code** or an exact email entry from **Administration →
+Registration**. Email entries are removed after successful registration. The
+same authorization applies to password, OIDC, and GitHub registration, while
+the independent email-verification switch continues to control whether a new
+password account must verify its email.
+
 Identity providers are configured on the same Authentication page. Google,
 Apple, GitHub, and custom OIDC templates are available; custom endpoints must
 use HTTPS. OAuth callbacks use state, nonce, and PKCE validation and only

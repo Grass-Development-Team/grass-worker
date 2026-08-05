@@ -11,6 +11,7 @@ pub mod notifications;
 pub mod platform_mail;
 pub mod projects;
 pub mod quotas;
+pub mod registration;
 pub mod retention;
 pub mod scheduler;
 pub mod settings;

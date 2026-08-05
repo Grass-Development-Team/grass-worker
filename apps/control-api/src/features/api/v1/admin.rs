@@ -9,6 +9,7 @@ pub mod identity_providers;
 pub mod nodes;
 pub mod projects;
 pub mod quota_plans;
+pub mod registration;
 pub mod reviews;
 pub mod settings;
 pub mod team_groups;
@@ -32,6 +33,14 @@ pub fn router() -> Router<ControlApiState> {
         .route("/status", get(status))
         .route("/codes", get(codes::list).post(codes::generate))
         .route("/codes/{code_id}/revoke", post(codes::revoke))
+        .route(
+            "/registration/emails",
+            get(registration::list).post(registration::add),
+        )
+        .route(
+            "/registration/emails/{entry_id}",
+            delete(registration::remove),
+        )
         .route(
             "/quota-plans",
             get(quota_plans::list).post(quota_plans::create),

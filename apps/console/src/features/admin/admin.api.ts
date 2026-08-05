@@ -238,6 +238,19 @@ export interface AdminCodesPage {
   };
 }
 
+export interface AdminRegistrationEmailCreator {
+  id: string;
+  email?: string | null;
+  display_name?: string | null;
+}
+
+export interface AdminRegistrationEmail {
+  id: string;
+  email: string;
+  created_at: string;
+  created_by: AdminRegistrationEmailCreator | null;
+}
+
 export type AdminMfaEnforcement = "none" | "platform_admins" | "all_users";
 
 export interface AdminMfaPolicy {
@@ -571,6 +584,20 @@ export const adminApi = {
 
   revokeCode: (codeId: string) =>
     request<{ code: AdminCode }>(`/api/v1/admin/codes/${codeId}/revoke`, { method: "POST" }),
+
+  listRegistrationEmails: () =>
+    request<{ emails: AdminRegistrationEmail[] }>("/api/v1/admin/registration/emails"),
+
+  addRegistrationEmail: (input: { email: string }) =>
+    request<{ email: AdminRegistrationEmail }>("/api/v1/admin/registration/emails", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  removeRegistrationEmail: (entryId: string) =>
+    request<{ deleted: boolean }>(`/api/v1/admin/registration/emails/${entryId}`, {
+      method: "DELETE",
+    }),
 
   listQuotaPlans: () => request<{ plans: AdminQuotaPlan[] }>("/api/v1/admin/quota-plans"),
 

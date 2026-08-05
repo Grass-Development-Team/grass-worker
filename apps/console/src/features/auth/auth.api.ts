@@ -44,6 +44,7 @@ export interface AuthConfiguration {
   providers: Array<{ slug: string; name: string; kind: "oidc" | "github" }>;
   password_recovery_available: boolean;
   registration_email_verification: boolean;
+  signup_policy: "open" | "invite_only" | "closed";
   password_policy: PasswordPolicy;
 }
 
@@ -65,6 +66,7 @@ export interface RegisterInput {
   display_name: string;
   password: string;
   invitation_token?: string;
+  registration_code?: string;
 }
 
 interface MeResponse {

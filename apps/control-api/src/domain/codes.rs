@@ -205,12 +205,10 @@ pub async fn generate_codes<C: ConnectionTrait>(
     Ok(generated)
 }
 
-#[allow(dead_code)]
-pub async fn redeem_code<C: ConnectionTrait>(
+pub async fn lock_code_for_redemption<C: ConnectionTrait>(
     db: &C,
     value: &str,
     expected_scope: CodeScope,
-    user_id: Uuid,
 ) -> Result<code::Model, CodeUseError> {
     let token_hash = grass_token::hash_token(value.trim());
     let code = code::Entity::find()
@@ -222,7 +220,15 @@ pub async fn redeem_code<C: ConnectionTrait>(
         .ok_or(CodeUseError::NotFound)?;
     let now = OffsetDateTime::now_utc();
     validate_redemption(&code, expected_scope, now)?;
+    Ok(code)
+}
 
+pub async fn consume_locked_code<C: ConnectionTrait>(
+    db: &C,
+    code: code::Model,
+    user_id: Uuid,
+) -> Result<code::Model, CodeUseError> {
+    let now = OffsetDateTime::now_utc();
     let mut active: code::ActiveModel = code.into();
     active.used_at = Set(Some(now));
     active.used_by_user_id = Set(Some(user_id));
@@ -416,14 +422,10 @@ mod tests {
             .append_query_results([[generated.model], [redeemed.clone()]])
             .into_connection();
 
-        let result = redeem_code(
-            &database,
-            &generated.value,
-            CodeScope::Registration,
-            user_id,
-        )
-        .await
-        .unwrap();
+        let code = lock_code_for_redemption(&database, &generated.value, CodeScope::Registration)
+            .await
+            .unwrap();
+        let result = consume_locked_code(&database, code, user_id).await.unwrap();
         let statements = format!("{:?}", database.into_transaction_log());
 
         assert_eq!(result.used_by_user_id, Some(user_id));

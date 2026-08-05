@@ -20,6 +20,7 @@ pub mod quota_event;
 pub mod quota_limit;
 pub mod quota_plan;
 pub mod quota_usage_counter;
+pub mod registration_email_allowlist;
 pub mod release;
 pub mod source_credential;
 pub mod source_credential_lease;
@@ -84,6 +85,8 @@ pub use quota_limit::Entity as QuotaLimit;
 pub use quota_plan::Entity as QuotaPlan;
 #[allow(unused_imports)]
 pub use quota_usage_counter::Entity as QuotaUsageCounter;
+#[allow(unused_imports)]
+pub use registration_email_allowlist::Entity as RegistrationEmailAllowlist;
 #[allow(unused_imports)]
 pub use release::Entity as Release;
 #[allow(unused_imports)]

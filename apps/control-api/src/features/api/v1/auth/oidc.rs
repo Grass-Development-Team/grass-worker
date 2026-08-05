@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
-    domain::{authentication, settings, teams, users},
+    domain::{authentication, registration, settings, teams, users},
     infra::{
         database::entity::{
             IdentityProviderKind, PlatformRole, TeamKind, UserStatus, auth_identity_provider, user,
@@ -39,6 +39,7 @@ struct AuthorizationFlow {
     pkce_verifier: String,
     return_to: String,
     invitation_token: Option<String>,
+    registration_code: Option<String>,
     redirect_uri: String,
 }
 
@@ -46,6 +47,7 @@ struct AuthorizationFlow {
 pub struct StartQuery {
     pub return_to: Option<String>,
     pub invitation_token: Option<String>,
+    pub registration_code: Option<String>,
 }
 
 pub async fn providers(
@@ -64,6 +66,18 @@ pub async fn providers(
             op: OP,
             source: source.into(),
         })?;
+    let signup_policy = settings::get_setting(db, "signup.policy")
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let signup_policy = registration::SignupPolicy::parse(
+        signup_policy
+            .as_ref()
+            .and_then(|setting| setting.value.as_str()),
+    )
+    .map_err(|error| AppError::Internal {
+        op: OP,
+        message: error.to_string(),
+    })?;
     Ok(ok_response(json!({
         "providers": providers.iter().map(|provider| json!({
             "slug": provider.slug,
@@ -71,6 +85,7 @@ pub async fn providers(
             "kind": provider.kind.as_str(),
         })).collect::<Vec<_>>(),
         "password_recovery_available": state.config.read().unwrap().mail.enabled(),
+        "signup_policy": signup_policy.as_str(),
         "registration_email_verification": authentication::registration_verification_required(db)
             .await
             .map_err(|source| AppError::Infrastructure { op: OP, source })?,
@@ -118,6 +133,9 @@ pub async fn start(
                 invitation_token: query
                     .invitation_token
                     .filter(|token| !token.trim().is_empty()),
+                registration_code: query
+                    .registration_code
+                    .filter(|code| !code.trim().is_empty()),
                 redirect_uri: redirect_uri.clone(),
             })
             .map_err(|error| AppError::Internal {
@@ -261,6 +279,7 @@ async fn callback_core(
         &provider,
         identity,
         flow.invitation_token.as_deref(),
+        flow.registration_code.as_deref(),
         OP,
     )
     .await?;
@@ -561,6 +580,7 @@ async fn resolve_user(
     provider: &auth_identity_provider::Model,
     identity: ExternalIdentity,
     invitation_token: Option<&str>,
+    registration_code: Option<&str>,
     op: &'static str,
 ) -> Result<user::Model, AppError> {
     if identity.subject.trim().is_empty() {
@@ -626,16 +646,17 @@ async fn resolve_user(
         let signup_policy = settings::get_setting(&transaction, "signup.policy")
             .await
             .map_err(|source| AppError::Infrastructure { op, source })?
-            .and_then(|setting| setting.value.as_str().map(str::to_owned))
-            .unwrap_or_else(|| "open".to_owned());
-        if signup_policy == "closed"
-            || (signup_policy == "invite_only" && invitation_token.is_none())
-        {
-            return Err(AppError::Forbidden {
-                op,
-                message: "new account registration is not available".to_owned(),
-            });
-        }
+            .and_then(|setting| setting.value.as_str().map(str::to_owned));
+        let signup_policy = registration::SignupPolicy::parse(signup_policy.as_deref())
+            .map_err(|error| super::register::map_registration_access_error(error, op))?;
+        let registration_grant = registration::authorize_registration(
+            &transaction,
+            signup_policy,
+            &email,
+            registration_code,
+        )
+        .await
+        .map_err(|error| super::register::map_registration_access_error(error, op))?;
         if let Some(token) = invitation_token {
             super::register::validate_invitation(&transaction, token, &email).await?;
         }
@@ -685,6 +706,9 @@ async fn resolve_user(
                 message: source.to_string(),
             })?;
         }
+        registration::consume_registration_grant(&transaction, registration_grant, user.id)
+            .await
+            .map_err(|error| super::register::map_registration_access_error(error, op))?;
         user
     };
     let now = time::OffsetDateTime::now_utc();
@@ -808,6 +832,27 @@ pub(crate) fn safe_return_to(value: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oauth_flow_keeps_the_registration_code() {
+        let flow = AuthorizationFlow {
+            provider_id: Uuid::nil(),
+            nonce: "nonce".to_owned(),
+            pkce_verifier: "verifier".to_owned(),
+            return_to: "/".to_owned(),
+            invitation_token: None,
+            registration_code: Some("registration-code".to_owned()),
+            redirect_uri: "https://example.com/callback".to_owned(),
+        };
+
+        let serialized = serde_json::to_string(&flow).unwrap();
+        let restored: AuthorizationFlow = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(
+            restored.registration_code.as_deref(),
+            Some("registration-code")
+        );
+    }
 
     #[test]
     fn return_destinations_must_remain_local() {

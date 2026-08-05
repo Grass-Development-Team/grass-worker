@@ -10,7 +10,7 @@ use serde_json::json;
 
 use crate::{
     domain::{
-        authentication, platform_mail, settings,
+        authentication, platform_mail, registration, settings,
         teams::{self, AcceptInvitationParams, CreateTeamParams, InvitationError},
         users::{self, CreateUserParams},
     },
@@ -20,15 +20,6 @@ use crate::{
     },
     state::ControlApiState,
 };
-
-const SIGNUP_POLICY_KEY: &str = "signup.policy";
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SignupPolicy {
-    Open,
-    InviteOnly,
-    Closed,
-}
 
 struct RegistrationInput {
     email: String,
@@ -40,6 +31,7 @@ pub struct RegisterRequest {
     pub password: String,
     pub display_name: Option<String>,
     pub invitation_token: Option<String>,
+    pub registration_code: Option<String>,
 }
 
 pub async fn handler(
@@ -82,7 +74,7 @@ pub async fn handler(
             message: "display name must not exceed 120 characters".to_owned(),
         });
     }
-    let policy_setting = settings::get_setting(db, SIGNUP_POLICY_KEY)
+    let policy_setting = settings::get_setting(db, "signup.policy")
         .await
         .map_err(|source| AppError::Infrastructure {
             op: "auth.register.read_policy",
@@ -91,25 +83,19 @@ pub async fn handler(
     let policy_value = policy_setting
         .as_ref()
         .and_then(|setting| setting.value.as_str());
-    let policy = signup_policy(policy_value)?;
-    if policy == SignupPolicy::Closed {
-        return Err(AppError::Forbidden {
-            op: "auth.register.closed",
-            message: "user registration is closed".to_owned(),
-        });
-    }
+    let policy = registration::SignupPolicy::parse(policy_value)
+        .map_err(|error| map_registration_access_error(error, "auth.register.invalid_policy"))?;
 
     let invitation_token = body
         .invitation_token
         .as_deref()
         .map(str::trim)
         .filter(|token| !token.is_empty());
-    if policy == SignupPolicy::InviteOnly && invitation_token.is_none() {
-        return Err(AppError::Forbidden {
-            op: "auth.register.invitation_required",
-            message: "a valid invitation is required".to_owned(),
-        });
-    }
+    let registration_code = body
+        .registration_code
+        .as_deref()
+        .map(str::trim)
+        .filter(|code| !code.is_empty());
     let verification_required = authentication::registration_verification_required(db)
         .await
         .map_err(|source| AppError::Infrastructure {
@@ -136,6 +122,11 @@ pub async fn handler(
             op: "auth.register.begin_transaction",
             source: source.into(),
         })?;
+
+    let registration_grant =
+        registration::authorize_registration(&transaction, policy, &input.email, registration_code)
+            .await
+            .map_err(|error| map_registration_access_error(error, "auth.register.access"))?;
 
     if users::get_user_by_email(&transaction, &input.email)
         .await
@@ -213,6 +204,10 @@ pub async fn handler(
         .map_err(map_invitation_error)?;
     }
 
+    registration::consume_registration_grant(&transaction, registration_grant, user.id)
+        .await
+        .map_err(|error| map_registration_access_error(error, "auth.register.consume_access"))?;
+
     transaction
         .commit()
         .await
@@ -249,15 +244,44 @@ fn registration_platform_role() -> PlatformRole {
     PlatformRole::User
 }
 
-fn signup_policy(value: Option<&str>) -> Result<SignupPolicy, AppError> {
-    match value.unwrap_or("open") {
-        "open" => Ok(SignupPolicy::Open),
-        "invite_only" => Ok(SignupPolicy::InviteOnly),
-        "closed" => Ok(SignupPolicy::Closed),
-        _ => Err(AppError::Internal {
-            op: "auth.register.invalid_policy",
-            message: "signup policy setting is invalid".to_owned(),
-        }),
+pub(crate) fn map_registration_access_error(
+    error: registration::RegistrationAccessError,
+    op: &'static str,
+) -> AppError {
+    use crate::domain::codes::CodeUseError;
+    use registration::RegistrationAccessError;
+
+    match error {
+        RegistrationAccessError::InvalidPolicy => AppError::Internal {
+            op,
+            message: error.to_string(),
+        },
+        RegistrationAccessError::Closed | RegistrationAccessError::CredentialRequired => {
+            AppError::Forbidden {
+                op,
+                message: error.to_string(),
+            }
+        }
+        RegistrationAccessError::Code(CodeUseError::NotFound | CodeUseError::WrongScope) => {
+            AppError::Forbidden {
+                op,
+                message: "registration code is invalid".to_owned(),
+            }
+        }
+        RegistrationAccessError::Code(CodeUseError::Used) => AppError::Conflict {
+            op,
+            message: error.to_string(),
+        },
+        RegistrationAccessError::Code(CodeUseError::Expired) => AppError::Gone {
+            op,
+            message: error.to_string(),
+        },
+        RegistrationAccessError::Code(CodeUseError::Revoked) => AppError::Forbidden {
+            op,
+            message: error.to_string(),
+        },
+        RegistrationAccessError::Code(CodeUseError::Database(source))
+        | RegistrationAccessError::Database(source) => AppError::Infrastructure { op, source },
     }
 }
 
@@ -355,19 +379,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn missing_signup_policy_defaults_to_open() {
-        assert_eq!(signup_policy(None).unwrap(), SignupPolicy::Open);
+    fn registration_request_accepts_a_dedicated_registration_code() {
+        let request: RegisterRequest = serde_json::from_value(serde_json::json!({
+            "email": "user@example.com",
+            "password": "correct horse battery staple",
+            "registration_code": "registration-code"
+        }))
+        .unwrap();
+
+        assert_eq!(
+            request.registration_code.as_deref(),
+            Some("registration-code")
+        );
     }
 
     #[test]
-    fn parses_supported_signup_policies() {
-        assert_eq!(signup_policy(Some("open")).unwrap(), SignupPolicy::Open);
-        assert_eq!(
-            signup_policy(Some("invite_only")).unwrap(),
-            SignupPolicy::InviteOnly
-        );
-        assert_eq!(signup_policy(Some("closed")).unwrap(), SignupPolicy::Closed);
-        assert!(signup_policy(Some("unexpected")).is_err());
+    fn registration_access_failures_have_stable_http_meaning() {
+        assert!(matches!(
+            map_registration_access_error(
+                registration::RegistrationAccessError::Closed,
+                "auth.register.access",
+            ),
+            AppError::Forbidden { .. }
+        ));
+        assert!(matches!(
+            map_registration_access_error(
+                registration::RegistrationAccessError::CredentialRequired,
+                "auth.register.access",
+            ),
+            AppError::Forbidden { .. }
+        ));
+        assert!(matches!(
+            map_registration_access_error(
+                registration::RegistrationAccessError::Code(
+                    crate::domain::codes::CodeUseError::Used,
+                ),
+                "auth.register.access",
+            ),
+            AppError::Conflict { .. }
+        ));
     }
 
     #[test]
