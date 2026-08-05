@@ -4,18 +4,18 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use axum_extra::extract::cookie::CookieJar;
-use sea_orm::{QuerySelect, TransactionTrait, entity::prelude::*};
+use sea_orm::TransactionTrait;
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::{
     domain::{
         authentication, platform_mail, registration, settings,
-        teams::{self, AcceptInvitationParams, CreateTeamParams, InvitationError},
+        teams::{self, CreateTeamParams},
         users::{self, CreateUserParams},
     },
     infra::{
-        database::entity::{AuthTokenKind, PlatformRole, TeamKind, team_invitation},
+        database::entity::{AuthTokenKind, PlatformRole, TeamKind},
         error::{AppError, ok_response},
     },
     state::ControlApiState,
@@ -30,7 +30,7 @@ pub struct RegisterRequest {
     pub email: String,
     pub password: String,
     pub display_name: Option<String>,
-    pub invitation_token: Option<String>,
+    pub return_to: Option<String>,
     pub registration_code: Option<String>,
 }
 
@@ -86,11 +86,7 @@ pub async fn handler(
     let policy = registration::SignupPolicy::parse(policy_value)
         .map_err(|error| map_registration_access_error(error, "auth.register.invalid_policy"))?;
 
-    let invitation_token = body
-        .invitation_token
-        .as_deref()
-        .map(str::trim)
-        .filter(|token| !token.is_empty());
+    let return_to = super::oidc::safe_return_to(body.return_to.as_deref());
     let registration_code = body
         .registration_code
         .as_deref()
@@ -142,10 +138,6 @@ pub async fn handler(
         });
     }
 
-    if let Some(token) = invitation_token {
-        validate_invitation(&transaction, token, &input.email).await?;
-    }
-
     let user = users::create_user(
         &transaction,
         CreateUserParams {
@@ -192,18 +184,6 @@ pub async fn handler(
         source,
     })?;
 
-    if let Some(token) = invitation_token {
-        teams::accept_invitation_with_connection(
-            &transaction,
-            AcceptInvitationParams {
-                token_hash: teams::invitation_token_hash(token),
-                user_id: user.id,
-            },
-        )
-        .await
-        .map_err(map_invitation_error)?;
-    }
-
     registration::consume_registration_grant(&transaction, registration_grant, user.id)
         .await
         .map_err(|error| map_registration_access_error(error, "auth.register.consume_access"))?;
@@ -228,8 +208,14 @@ pub async fn handler(
             op: "auth.register.verification_token",
             source,
         })?;
-        platform_mail::send_email_verification_best_effort(db, mail_config, &user.email, &token)
-            .await;
+        platform_mail::send_email_verification_best_effort(
+            db,
+            mail_config,
+            &user.email,
+            &token,
+            Some(&return_to),
+        )
+        .await;
         return Ok(ok_response(json!({
             "verification_required": true,
             "email": user.email,
@@ -303,60 +289,6 @@ fn validate_registration_input(email: &str) -> Result<RegistrationInput, AppErro
     Ok(RegistrationInput { email })
 }
 
-pub(crate) async fn validate_invitation<C: ConnectionTrait>(
-    db: &C,
-    token: &str,
-    email: &str,
-) -> Result<(), AppError> {
-    let invitation = team_invitation::Entity::find()
-        .filter(team_invitation::Column::TokenHash.eq(teams::invitation_token_hash(token)))
-        .lock_exclusive()
-        .one(db)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: "auth.register.read_invitation",
-            source: source.into(),
-        })?
-        .ok_or_else(|| map_invitation_error(InvitationError::NotFound))?;
-    teams::validate_invitation_acceptance(
-        &invitation.status,
-        invitation.expires_at,
-        &invitation.email,
-        email,
-        time::OffsetDateTime::now_utc(),
-    )
-    .map_err(map_invitation_error)
-}
-
-fn map_invitation_error(error: InvitationError) -> AppError {
-    match error {
-        InvitationError::NotFound => AppError::Forbidden {
-            op: "auth.register.invitation_not_found",
-            message: "invitation is invalid".to_owned(),
-        },
-        InvitationError::NotPending => AppError::Conflict {
-            op: "auth.register.invitation_not_pending",
-            message: error.to_string(),
-        },
-        InvitationError::Expired => AppError::Gone {
-            op: "auth.register.invitation_expired",
-            message: error.to_string(),
-        },
-        InvitationError::EmailMismatch => AppError::Forbidden {
-            op: "auth.register.invitation_email_mismatch",
-            message: error.to_string(),
-        },
-        InvitationError::OwnerRole | InvitationError::AlreadyMember => AppError::Conflict {
-            op: "auth.register.invitation_conflict",
-            message: error.to_string(),
-        },
-        InvitationError::Database(source) => AppError::Infrastructure {
-            op: "auth.register.accept_invitation",
-            source: source.into(),
-        },
-    }
-}
-
 pub(crate) fn personal_team_slug(email: &str) -> String {
     let slug = email
         .split('@')
@@ -376,20 +308,92 @@ pub(crate) fn personal_team_slug(email: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use grass_cache::{CacheBackend, CacheStore};
+    use sea_orm::{DbBackend, MockDatabase};
+    use time::OffsetDateTime;
+    use tower::ServiceExt;
+    use uuid::Uuid;
+
     use super::*;
+    use crate::infra::{
+        config::ControlApiConfig,
+        database::entity::{SystemSettingValueKind, registration_email_allowlist, system_setting},
+    };
+
+    fn signup_policy(value: &str) -> system_setting::Model {
+        let now = OffsetDateTime::now_utc();
+        system_setting::Model {
+            id: Uuid::now_v7(),
+            key: "signup.policy".to_owned(),
+            value_kind: SystemSettingValueKind::String,
+            value: serde_json::json!(value),
+            is_secret: false,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_team_invitation_token_cannot_authorize_restricted_registration() {
+        for policy in ["invite_only", "closed"] {
+            let database = MockDatabase::new(DbBackend::Postgres)
+                .append_query_results([Vec::<system_setting::Model>::new()])
+                .append_query_results([[signup_policy(policy)]])
+                .append_query_results([Vec::<system_setting::Model>::new()])
+                .append_query_results([Vec::<registration_email_allowlist::Model>::new()])
+                .into_connection();
+            let cache = CacheStore::connect_cache(CacheBackend::Moka, "")
+                .await
+                .unwrap();
+            let state = ControlApiState::new(ControlApiConfig::default(), "unused.toml");
+            assert!(state.database.set(database).is_ok());
+            assert!(state.cache.set(cache).is_ok());
+
+            let request = Request::builder()
+                .method("POST")
+                .uri("/register")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "email": "new-user@example.com",
+                        "password": "correct horse battery staple",
+                        "display_name": "New User",
+                        "invitation_token": "legacy-team-invitation"
+                    })
+                    .to_string(),
+                ))
+                .unwrap();
+            let response = super::super::router()
+                .with_state(state)
+                .oneshot(request)
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "policy {policy}");
+        }
+    }
 
     #[test]
-    fn registration_request_accepts_a_dedicated_registration_code() {
+    fn registration_request_accepts_a_code_and_local_return_destination() {
         let request: RegisterRequest = serde_json::from_value(serde_json::json!({
             "email": "user@example.com",
             "password": "correct horse battery staple",
-            "registration_code": "registration-code"
+            "registration_code": "registration-code",
+            "return_to": "/invitations/accept?token=invite-token"
         }))
         .unwrap();
 
         assert_eq!(
             request.registration_code.as_deref(),
             Some("registration-code")
+        );
+        assert_eq!(
+            request.return_to.as_deref(),
+            Some("/invitations/accept?token=invite-token")
         );
     }
 

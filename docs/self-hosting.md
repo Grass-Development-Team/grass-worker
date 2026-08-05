@@ -108,6 +108,15 @@ same authorization applies to password, OIDC, and GitHub registration, while
 the independent email-verification switch continues to control whether a new
 password account must verify its email.
 
+Team invitations are separate from platform registration authorization. Team
+administrators select an active platform user from the member dialog. With an
+`Open` signup policy, an exact unregistered email can also be selected and the
+recipient may register through the normal open-registration flow. Under
+`Invite only` or `Closed`, the email must already belong to an active platform
+user. A Team invitation never acts as a registration credential and is never
+accepted automatically during signup; after authentication, the recipient
+returns to the invitation page and explicitly accepts it.
+
 Identity providers are configured on the same Authentication page. Google,
 Apple, GitHub, and custom OIDC templates are available; custom endpoints must
 use HTTPS. OAuth callbacks use state, nonce, and PKCE validation and only

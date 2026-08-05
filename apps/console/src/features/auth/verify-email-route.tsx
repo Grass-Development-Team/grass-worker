@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { authApi } from "./auth.api";
+import { authHref, safeLocalReturnTo } from "./auth-continuation";
 import { useAuth } from "./auth-context";
 
 export function VerifyEmailRoute() {
@@ -14,6 +15,7 @@ export function VerifyEmailRoute() {
   const { verifyEmail } = useAuth();
   const query = new URLSearchParams(location.search);
   const token = query.get("token") ?? "";
+  const returnTo = safeLocalReturnTo(query.get("return_to"));
   const [email, setEmail] = useState(query.get("email") ?? "");
   const [pending, setPending] = useState(false);
   const [sent, setSent] = useState(false);
@@ -25,18 +27,18 @@ export function VerifyEmailRoute() {
     started.current = true;
     setPending(true);
     verifyEmail(token)
-      .then(() => navigate("/", { replace: true }))
+      .then(() => navigate(returnTo ?? "/", { replace: true }))
       .catch((cause) =>
         setError(cause instanceof Error ? cause.message : "Unable to verify this email."),
       )
       .finally(() => setPending(false));
-  }, [navigate, token, verifyEmail]);
+  }, [navigate, returnTo, token, verifyEmail]);
 
   return (
     <div className="flex w-full max-w-sm flex-col gap-6">
       <div className="space-y-2 text-center">
         <h1 className="text-xl font-semibold">Verify your email</h1>
-        <Link to="/login" className="text-sm underline underline-offset-4">
+        <Link to={authHref("/login", returnTo)} className="text-sm underline underline-offset-4">
           Back to login
         </Link>
       </div>
@@ -54,7 +56,7 @@ export function VerifyEmailRoute() {
                 setPending(true);
                 setError(null);
                 try {
-                  await authApi.resendVerification(email.trim());
+                  await authApi.resendVerification(email.trim(), returnTo ?? undefined);
                   setSent(true);
                 } catch (cause) {
                   setError(

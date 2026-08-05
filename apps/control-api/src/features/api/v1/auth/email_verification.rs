@@ -67,6 +67,7 @@ pub async fn verify(
 #[derive(Deserialize)]
 pub struct ResendEmailRequest {
     pub email: String,
+    pub return_to: Option<String>,
 }
 
 pub async fn resend(
@@ -78,6 +79,7 @@ pub async fn resend(
         op: OP,
         message: "database not available".to_owned(),
     })?;
+    let return_to = super::oidc::safe_return_to(body.return_to.as_deref());
     let mail_config = state.config.read().unwrap().mail.clone();
     let allowed = state
         .try_cache()
@@ -111,8 +113,33 @@ pub async fn resend(
         )
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-        platform_mail::send_email_verification_best_effort(db, mail_config, &user.email, &token)
-            .await;
+        platform_mail::send_email_verification_best_effort(
+            db,
+            mail_config,
+            &user.email,
+            &token,
+            Some(&return_to),
+        )
+        .await;
     }
     Ok(ok_response(json!({ "accepted": true })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resend_request_accepts_a_local_return_destination() {
+        let request: ResendEmailRequest = serde_json::from_value(serde_json::json!({
+            "email": "user@example.com",
+            "return_to": "/invitations/accept?token=invite-token"
+        }))
+        .unwrap();
+
+        assert_eq!(
+            request.return_to.as_deref(),
+            Some("/invitations/accept?token=invite-token")
+        );
+    }
 }

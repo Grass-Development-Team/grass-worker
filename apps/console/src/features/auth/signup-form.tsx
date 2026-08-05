@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { useBranding } from "@/features/branding/branding-context";
 import { cn } from "@/lib/utils";
 import { useAuth } from "./auth-context";
+import { authHref, safeLocalReturnTo } from "./auth-continuation";
 import { isAuthResponse } from "./auth.api";
 import { ProviderButtons } from "./provider-buttons";
 import { useAuthConfiguration } from "./provider-buttons";
@@ -27,11 +28,9 @@ export function SignupForm({ className, ...props }: React.ComponentPropsWithoutR
   const [registrationCode, setRegistrationCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const invitationToken = new URLSearchParams(location.search).get("invitation_token") ?? undefined;
+  const returnTo = safeLocalReturnTo(new URLSearchParams(location.search).get("return_to"));
   const signupPolicy = configuration?.signup_policy ?? "open";
-  const loginHref = invitationToken
-    ? `/login?${new URLSearchParams({ invitation_token: invitationToken })}`
-    : "/login";
+  const loginHref = authHref("/login", returnTo);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -52,18 +51,24 @@ export function SignupForm({ className, ...props }: React.ComponentPropsWithoutR
         email: email.trim(),
         display_name: displayName.trim(),
         password,
-        ...(invitationToken ? { invitation_token: invitationToken } : {}),
+        ...(returnTo ? { return_to: returnTo } : {}),
         ...(signupPolicy === "invite_only" && registrationCode.trim()
           ? { registration_code: registrationCode.trim() }
           : {}),
       });
       if (!isAuthResponse(result)) {
-        navigate(`/verify-email?${new URLSearchParams({ email: result.email })}`, {
-          replace: true,
-        });
+        navigate(
+          `/verify-email?${new URLSearchParams({
+            email: result.email,
+            ...(returnTo ? { return_to: returnTo } : {}),
+          })}`,
+          {
+            replace: true,
+          },
+        );
         return;
       }
-      navigate("/", { replace: true });
+      navigate(returnTo ?? "/", { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed");
       setIsSubmitting(false);
@@ -168,7 +173,7 @@ export function SignupForm({ className, ...props }: React.ComponentPropsWithoutR
               </form>
             </CardContent>
           </Card>
-          <ProviderButtons invitationToken={invitationToken} registrationCode={registrationCode} />
+          <ProviderButtons returnTo={returnTo ?? undefined} registrationCode={registrationCode} />
         </>
       )}
     </div>

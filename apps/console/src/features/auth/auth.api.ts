@@ -65,7 +65,7 @@ export interface RegisterInput {
   email: string;
   display_name: string;
   password: string;
-  invitation_token?: string;
+  return_to?: string;
   registration_code?: string;
 }
 
@@ -163,10 +163,10 @@ export const authApi = {
         credentials: "include" as RequestCredentials,
       }),
     ),
-  resendVerification: (email: string) =>
+  resendVerification: (email: string, returnTo?: string) =>
     request<{ accepted: true }>("/api/v1/auth/email/resend", {
       method: "POST",
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ email, ...(returnTo ? { return_to: returnTo } : {}) }),
     }),
   mfaChallenge: (challengeToken: string) =>
     request<MfaChallenge>("/api/v1/auth/mfa/challenge", {

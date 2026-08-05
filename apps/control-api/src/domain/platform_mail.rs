@@ -130,12 +130,14 @@ fn account_link_message(
     introduction: &str,
     path: &str,
     token: &str,
+    return_to: Option<&str>,
 ) -> PlatformMessage {
-    let link = format!(
-        "{}{path}?token={}",
-        branding.site_url,
-        url::form_urlencoded::byte_serialize(token.as_bytes()).collect::<String>()
-    );
+    let mut query = url::form_urlencoded::Serializer::new(String::new());
+    query.append_pair("token", token);
+    if let Some(return_to) = return_to {
+        query.append_pair("return_to", return_to);
+    }
+    let link = format!("{}{path}?{}", branding.site_url, query.finish());
     PlatformMessage {
         recipient_address: recipient.to_owned(),
         recipient_name: None,
@@ -149,6 +151,7 @@ pub async fn send_email_verification_best_effort(
     config: MailConfig,
     recipient: &str,
     token: &str,
+    return_to: Option<&str>,
 ) {
     if !config.enabled() {
         return;
@@ -169,6 +172,7 @@ pub async fn send_email_verification_best_effort(
                     &introduction,
                     "/verify-email",
                     token,
+                    return_to,
                 ),
                 "auth.email_verification",
             );
@@ -206,6 +210,7 @@ pub async fn send_password_reset_best_effort(
                     &introduction,
                     "/reset-password",
                     token,
+                    None,
                 ),
                 "auth.password_reset",
             );
@@ -327,5 +332,28 @@ mod tests {
         );
         assert!(message.text.contains("token=secret%2Fvalue"));
         assert!(!message.text.contains("token=secret/value"));
+    }
+
+    #[test]
+    fn verification_links_preserve_a_local_return_destination() {
+        let message = account_link_message(
+            &MailBranding {
+                site_name: "Acme".to_owned(),
+                site_url: "https://console.example.com".to_owned(),
+            },
+            "user@example.com",
+            "Verify email",
+            "Verify this address.",
+            "/verify-email",
+            "secret/value",
+            Some("/invitations/accept?token=invite-token"),
+        );
+
+        assert!(message.text.contains("token=secret%2Fvalue"));
+        assert!(
+            message
+                .text
+                .contains("return_to=%2Finvitations%2Faccept%3Ftoken%3Dinvite-token")
+        );
     }
 }

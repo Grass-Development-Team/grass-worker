@@ -28,11 +28,9 @@ export function useAuthConfiguration() {
 
 export function ProviderButtons({
   returnTo,
-  invitationToken,
   registrationCode,
 }: {
   returnTo?: string;
-  invitationToken?: string | null;
   registrationCode?: string | null;
 }) {
   const configuration = useAuthConfiguration();
@@ -55,7 +53,6 @@ export function ProviderButtons({
           onClick={() => {
             const query = new URLSearchParams();
             if (returnTo) query.set("return_to", returnTo);
-            if (invitationToken) query.set("invitation_token", invitationToken);
             if (registrationCode?.trim()) query.set("registration_code", registrationCode.trim());
             const suffix = query.size ? `?${query}` : "";
             window.location.assign(

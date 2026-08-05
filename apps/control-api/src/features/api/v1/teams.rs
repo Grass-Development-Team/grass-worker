@@ -55,6 +55,10 @@ pub fn router() -> Router<ControlApiState> {
         )
         .route("/team-invitations/preflight", get(invitations::preflight))
         .route("/team-invitations/accept", post(invitations::accept))
+        .route(
+            "/teams/{team_id}/invitation-candidates",
+            get(invitations::candidates),
+        )
         .route("/teams/{team_id}/invitations", post(invitations::create))
 }
 

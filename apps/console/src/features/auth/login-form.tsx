@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useBranding } from "@/features/branding/branding-context";
 import { useAuth } from "./auth-context";
+import { authHref, safeLocalReturnTo } from "./auth-continuation";
 import { isAuthResponse } from "./auth.api";
 import { ProviderButtons, useAuthConfiguration } from "./provider-buttons";
 
@@ -57,19 +58,10 @@ export function LoginForm({
   const navigate = useNavigate();
   const location = useLocation();
   const previewContinuation = previewAuthorizationContinuation(location.search);
-  const from = (location.state as { from?: string } | null)?.from;
-  const redirectedInvitationToken = (() => {
-    if (!from?.startsWith("/")) return null;
-    const redirectUrl = new URL(from, window.location.origin);
-    return redirectUrl.pathname === "/invitations/accept"
-      ? redirectUrl.searchParams.get("token")
-      : null;
-  })();
-  const invitationToken =
-    new URLSearchParams(location.search).get("invitation_token") ?? redirectedInvitationToken;
-  const signupHref = invitationToken
-    ? `/signup?${new URLSearchParams({ invitation_token: invitationToken })}`
-    : "/signup";
+  const queryReturnTo = safeLocalReturnTo(new URLSearchParams(location.search).get("return_to"));
+  const redirectedReturnTo = safeLocalReturnTo((location.state as { from?: string } | null)?.from);
+  const returnTo = queryReturnTo ?? redirectedReturnTo;
+  const signupHref = authHref("/signup", returnTo);
   const { login } = useAuth();
   const configuration = useAuthConfiguration();
   const [email, setEmail] = useState("");
@@ -88,11 +80,7 @@ export function LoginForm({
 
     setIsSubmitting(true);
     try {
-      const destination =
-        from ??
-        (invitationToken
-          ? `/invitations/accept?${new URLSearchParams({ token: invitationToken })}`
-          : "/");
+      const destination = returnTo ?? "/";
       const result = await login(email.trim(), password, previewContinuation ?? destination);
       if (!isAuthResponse(result)) {
         navigate(`/mfa#challenge=${encodeURIComponent(result.challenge_token)}`, {
@@ -168,7 +156,7 @@ export function LoginForm({
           </form>
         </CardContent>
       </Card>
-      <ProviderButtons returnTo={previewContinuation ?? from} invitationToken={invitationToken} />
+      <ProviderButtons returnTo={previewContinuation ?? returnTo ?? undefined} />
     </div>
   );
 }

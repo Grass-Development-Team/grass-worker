@@ -1,10 +1,14 @@
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
-    EntityTrait, QueryFilter, QuerySelect, TransactionTrait,
+    ActiveModelTrait,
+    ActiveValue::Set,
+    ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect,
+    TransactionTrait,
+    sea_query::{Expr, extension::postgres::PgExpr},
 };
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
+use crate::domain::registration::SignupPolicy;
 use crate::infra::database::entity::{
     TeamInvitationStatus, TeamKind, TeamMemberRole, team, team_group, team_invitation, team_member,
     user,
@@ -29,11 +33,18 @@ pub struct CreateInvitationParams {
     pub role: TeamMemberRole,
     pub invited_by_user_id: Uuid,
     pub token_hash: String,
+    pub signup_policy: SignupPolicy,
 }
 
 pub struct AcceptInvitationParams {
     pub token_hash: String,
     pub user_id: Uuid,
+}
+
+pub struct InvitationCandidate {
+    pub user_id: Option<Uuid>,
+    pub email: String,
+    pub display_name: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -50,6 +61,8 @@ pub enum InvitationError {
     OwnerRole,
     #[error("user is already a team member")]
     AlreadyMember,
+    #[error("user does not exist")]
+    UserNotFound,
     #[error(transparent)]
     Database(#[from] sea_orm::DbErr),
 }
@@ -323,6 +336,86 @@ pub fn invitation_token_hash(token: &str) -> String {
     grass_token::hash_token(token)
 }
 
+pub async fn invitation_candidates<C: ConnectionTrait>(
+    db: &C,
+    policy: SignupPolicy,
+    query: &str,
+    limit: u64,
+) -> anyhow::Result<Vec<InvitationCandidate>> {
+    use sea_orm::{QueryOrder, QuerySelect};
+
+    let query = query.trim();
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let limit = limit.clamp(1, 20);
+
+    let pattern = format!(
+        "%{}%",
+        query
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    );
+    let users = user::Entity::find()
+        .filter(user::Column::DeletedAt.is_null())
+        .filter(user::Column::Status.eq(crate::infra::database::entity::UserStatus::Active))
+        .filter(
+            sea_orm::Condition::any()
+                .add(Expr::col(user::Column::Email).ilike(pattern.clone()))
+                .add(Expr::col(user::Column::DisplayName).ilike(pattern)),
+        )
+        .order_by_asc(user::Column::Email)
+        .limit(limit)
+        .all(db)
+        .await?;
+
+    let mut candidates = users
+        .into_iter()
+        .map(|user| InvitationCandidate {
+            user_id: Some(user.id),
+            email: user.email,
+            display_name: user.display_name,
+        })
+        .collect::<Vec<_>>();
+
+    if let Ok(email) = grass_validator::normalize_email(query) {
+        let existing = user::Entity::find()
+            .filter(user::Column::Email.eq(&email))
+            .filter(user::Column::DeletedAt.is_null())
+            .one(db)
+            .await?;
+
+        match existing {
+            Some(user) if user.status == crate::infra::database::entity::UserStatus::Active => {
+                candidates.retain(|candidate| candidate.user_id != Some(user.id));
+                candidates.insert(
+                    0,
+                    InvitationCandidate {
+                        user_id: Some(user.id),
+                        email: user.email,
+                        display_name: user.display_name,
+                    },
+                );
+            }
+            None if policy == SignupPolicy::Open => {
+                candidates.insert(
+                    0,
+                    InvitationCandidate {
+                        user_id: None,
+                        email,
+                        display_name: None,
+                    },
+                );
+            }
+            _ => {}
+        }
+        candidates.truncate(limit as usize);
+    }
+
+    Ok(candidates)
+}
+
 pub async fn invitation_team_by_token_hash(
     db: &DatabaseConnection,
     token_hash: &str,
@@ -429,6 +522,14 @@ pub async fn create_invitation(
         .filter(user::Column::DeletedAt.is_null())
         .one(&transaction)
         .await?;
+
+    if invited_user
+        .as_ref()
+        .is_some_and(|user| user.status != crate::infra::database::entity::UserStatus::Active)
+        || (invited_user.is_none() && params.signup_policy != SignupPolicy::Open)
+    {
+        return Err(InvitationError::UserNotFound);
+    }
 
     if let Some(invited_user) = invited_user
         && team_member::Entity::find()
@@ -576,7 +677,34 @@ async fn get_default_team_group_id<C: ConnectionTrait>(db: &C) -> anyhow::Result
 
 #[cfg(test)]
 mod tests {
+    use sea_orm::{DbBackend, MockDatabase};
+
     use super::*;
+
+    #[tokio::test]
+    async fn unregistered_invitation_target_is_rejected_by_each_restricted_policy() {
+        for signup_policy in [SignupPolicy::InviteOnly, SignupPolicy::Closed] {
+            let database = MockDatabase::new(DbBackend::Postgres)
+                .append_query_results([Vec::<user::Model>::new()])
+                .into_connection();
+
+            let error = create_invitation(
+                &database,
+                CreateInvitationParams {
+                    team_id: Uuid::now_v7(),
+                    email: "missing@example.com".to_owned(),
+                    role: TeamMemberRole::Member,
+                    invited_by_user_id: Uuid::now_v7(),
+                    token_hash: invitation_token_hash("secret"),
+                    signup_policy,
+                },
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(error, InvitationError::UserNotFound));
+        }
+    }
 
     #[test]
     fn invitation_role_rejects_owner() {

@@ -16,7 +16,7 @@ describe("authApi.register", () => {
     vi.restoreAllMocks();
   });
 
-  it("registers with an invitation token and stores the returned csrf token", async () => {
+  it("registers with a local return destination and stores the returned csrf token", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       response({
         user: {
@@ -33,7 +33,7 @@ describe("authApi.register", () => {
       email: "leo@example.com",
       display_name: "Leo",
       password: "correct horse battery staple",
-      invitation_token: "invite-token",
+      return_to: "/invitations/accept?token=invite-token",
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -45,7 +45,7 @@ describe("authApi.register", () => {
           email: "leo@example.com",
           display_name: "Leo",
           password: "correct horse battery staple",
-          invitation_token: "invite-token",
+          return_to: "/invitations/accept?token=invite-token",
         }),
       }),
     );

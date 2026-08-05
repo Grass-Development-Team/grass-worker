@@ -83,6 +83,28 @@ describe("teamsApi", () => {
     );
   });
 
+  it("searches invitation candidates through the scoped team endpoint", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      response({
+        candidates: [
+          {
+            kind: "user",
+            user_id: "user-2",
+            email: "alice@example.com",
+            display_name: "Alice",
+          },
+        ],
+      }),
+    );
+
+    await teamsApi.invitationCandidates("team-1", "Alice + email@example.com");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/teams/team-1/invitation-candidates?q=Alice+%2B+email%40example.com",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
   it("creates private source credentials through the team-scoped endpoint", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       response({

@@ -38,7 +38,6 @@ struct AuthorizationFlow {
     nonce: String,
     pkce_verifier: String,
     return_to: String,
-    invitation_token: Option<String>,
     registration_code: Option<String>,
     redirect_uri: String,
 }
@@ -46,7 +45,6 @@ struct AuthorizationFlow {
 #[derive(Deserialize)]
 pub struct StartQuery {
     pub return_to: Option<String>,
-    pub invitation_token: Option<String>,
     pub registration_code: Option<String>,
 }
 
@@ -130,9 +128,6 @@ pub async fn start(
                 nonce: nonce.clone(),
                 pkce_verifier,
                 return_to,
-                invitation_token: query
-                    .invitation_token
-                    .filter(|token| !token.trim().is_empty()),
                 registration_code: query
                     .registration_code
                     .filter(|code| !code.trim().is_empty()),
@@ -278,7 +273,6 @@ async fn callback_core(
         db,
         &provider,
         identity,
-        flow.invitation_token.as_deref(),
         flow.registration_code.as_deref(),
         OP,
     )
@@ -579,7 +573,6 @@ async fn resolve_user(
     db: &sea_orm::DatabaseConnection,
     provider: &auth_identity_provider::Model,
     identity: ExternalIdentity,
-    invitation_token: Option<&str>,
     registration_code: Option<&str>,
     op: &'static str,
 ) -> Result<user::Model, AppError> {
@@ -657,9 +650,6 @@ async fn resolve_user(
         )
         .await
         .map_err(|error| super::register::map_registration_access_error(error, op))?;
-        if let Some(token) = invitation_token {
-            super::register::validate_invitation(&transaction, token, &email).await?;
-        }
         let user = users::create_user(
             &transaction,
             users::CreateUserParams {
@@ -692,20 +682,6 @@ async fn resolve_user(
         )
         .await
         .map_err(|source| AppError::Infrastructure { op, source })?;
-        if let Some(token) = invitation_token {
-            teams::accept_invitation_with_connection(
-                &transaction,
-                teams::AcceptInvitationParams {
-                    token_hash: teams::invitation_token_hash(token),
-                    user_id: user.id,
-                },
-            )
-            .await
-            .map_err(|source| AppError::Conflict {
-                op,
-                message: source.to_string(),
-            })?;
-        }
         registration::consume_registration_grant(&transaction, registration_grant, user.id)
             .await
             .map_err(|error| super::register::map_registration_access_error(error, op))?;
@@ -824,6 +800,7 @@ pub(crate) fn safe_return_to(value: Option<&str>) -> String {
                 && !value.starts_with("//")
                 && !value.contains('\\')
                 && value.len() <= 4096
+                && !value.chars().any(char::is_control)
         })
         .unwrap_or("/")
         .to_owned()
@@ -840,7 +817,6 @@ mod tests {
             nonce: "nonce".to_owned(),
             pkce_verifier: "verifier".to_owned(),
             return_to: "/".to_owned(),
-            invitation_token: None,
             registration_code: Some("registration-code".to_owned()),
             redirect_uri: "https://example.com/callback".to_owned(),
         };
@@ -857,8 +833,13 @@ mod tests {
     #[test]
     fn return_destinations_must_remain_local() {
         assert_eq!(safe_return_to(Some("/projects")), "/projects");
+        assert_eq!(
+            safe_return_to(Some("/invitations/accept?token=invite-token")),
+            "/invitations/accept?token=invite-token"
+        );
         assert_eq!(safe_return_to(Some("//example.com")), "/");
         assert_eq!(safe_return_to(Some("https://example.com")), "/");
+        assert_eq!(safe_return_to(Some("/projects\nnext")), "/");
     }
 
     #[test]
