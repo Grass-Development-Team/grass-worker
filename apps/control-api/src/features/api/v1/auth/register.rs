@@ -313,15 +313,19 @@ mod tests {
         http::{Request, StatusCode},
     };
     use grass_cache::{CacheBackend, CacheStore};
-    use sea_orm::{DbBackend, MockDatabase};
-    use time::OffsetDateTime;
+    use sea_orm::{ColumnTrait, DbBackend, EntityTrait, MockDatabase, QueryFilter};
+    use time::{Duration, OffsetDateTime};
     use tower::ServiceExt;
     use uuid::Uuid;
 
     use super::*;
     use crate::infra::{
         config::ControlApiConfig,
-        database::entity::{SystemSettingValueKind, registration_email_allowlist, system_setting},
+        database::entity::{
+            PlatformRole, SystemSettingValueKind, TeamInvitationStatus, TeamKind, TeamMemberRole,
+            UserStatus, registration_email_allowlist, system_setting, team, team_group,
+            team_invitation, team_member, user, user_password_credential, user_password_history,
+        },
     };
 
     fn signup_policy(value: &str) -> system_setting::Model {
@@ -375,6 +379,157 @@ mod tests {
 
             assert_eq!(response.status(), StatusCode::FORBIDDEN, "policy {policy}");
         }
+    }
+
+    #[tokio::test]
+    async fn open_registration_leaves_team_invitation_pending_until_explicit_acceptance() {
+        let now = OffsetDateTime::now_utc();
+        let user_id = Uuid::now_v7();
+        let personal_team_id = Uuid::now_v7();
+        let invited_team_id = Uuid::now_v7();
+        let invitation_token = "legacy-team-invitation";
+        let invitation_token_hash = teams::invitation_token_hash(invitation_token);
+        let user = user::Model {
+            id: user_id,
+            email: "new-user@example.com".to_owned(),
+            display_name: Some("New User".to_owned()),
+            status: UserStatus::Active,
+            platform_role: PlatformRole::User,
+            email_verified_at: Some(now),
+            last_login_at: None,
+            deleted_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let password_credential = user_password_credential::Model {
+            id: Uuid::now_v7(),
+            user_id,
+            password_hash: "hash".to_owned(),
+            must_change_password: false,
+            created_at: now,
+            updated_at: now,
+        };
+        let password_history = user_password_history::Model {
+            id: Uuid::now_v7(),
+            user_id,
+            password_hash: "hash".to_owned(),
+            created_at: now,
+        };
+        let personal_team = team::Model {
+            id: personal_team_id,
+            slug: "newuser-personal".to_owned(),
+            name: "New User's Team".to_owned(),
+            kind: TeamKind::Personal,
+            group_id: None,
+            explicit_quota_plan_id: None,
+            owner_user_id: Some(user_id),
+            deleted_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let personal_membership = team_member::Model {
+            id: Uuid::now_v7(),
+            team_id: personal_team_id,
+            user_id,
+            role: TeamMemberRole::Owner,
+            invited_by_user_id: None,
+            joined_at: now,
+            deleted_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let mut logged_in_user = user.clone();
+        logged_in_user.last_login_at = Some(now);
+        let pending_invitation = team_invitation::Model {
+            id: Uuid::now_v7(),
+            team_id: invited_team_id,
+            email: "new-user@example.com".to_owned(),
+            role: TeamMemberRole::Member,
+            status: TeamInvitationStatus::Pending,
+            invited_by_user_id: Some(Uuid::now_v7()),
+            token_hash: Some(invitation_token_hash.clone()),
+            expires_at: now + Duration::days(7),
+            accepted_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let database = MockDatabase::new(DbBackend::Postgres)
+            .append_query_results([Vec::<system_setting::Model>::new()])
+            .append_query_results([[signup_policy("open")]])
+            .append_query_results([Vec::<system_setting::Model>::new()])
+            .append_query_results([Vec::<user::Model>::new()])
+            .append_query_results([[user]])
+            .append_query_results([[password_credential]])
+            .append_query_results([[password_history]])
+            .append_query_results([Vec::<team_group::Model>::new()])
+            .append_query_results([[personal_team]])
+            .append_query_results([[personal_membership]])
+            .append_query_results([[logged_in_user]])
+            .append_query_results([[pending_invitation]])
+            .append_query_results([Vec::<team_member::Model>::new()])
+            .into_connection();
+        let cache = CacheStore::connect_cache(CacheBackend::Moka, "")
+            .await
+            .unwrap();
+        let state = ControlApiState::new(ControlApiConfig::default(), "unused.toml");
+        assert!(state.database.set(database.clone()).is_ok());
+        assert!(state.cache.set(cache).is_ok());
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/register")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "email": "new-user@example.com",
+                    "password": "correct horse battery staple",
+                    "display_name": "New User",
+                    "invitation_token": invitation_token
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let response = super::super::router()
+            .with_state(state)
+            .oneshot(request)
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let invitation = teams::invitation_by_token_hash(&database, &invitation_token_hash)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(invitation.status, TeamInvitationStatus::Pending);
+        let invited_membership = team_member::Entity::find()
+            .filter(team_member::Column::TeamId.eq(invited_team_id))
+            .filter(team_member::Column::UserId.eq(user_id))
+            .one(&database)
+            .await
+            .unwrap();
+        assert!(invited_membership.is_none());
+
+        let transaction_log = database.into_transaction_log();
+        let statements = format!("{transaction_log:?}");
+        assert!(
+            !statements.contains("INSERT INTO \\\"team_invitations\\\""),
+            "{statements}"
+        );
+        assert!(
+            !statements.contains("UPDATE \\\"team_invitations\\\""),
+            "{statements}"
+        );
+        assert_eq!(
+            statements
+                .matches("INSERT INTO \\\"team_members\\\"")
+                .count(),
+            1,
+            "{statements}"
+        );
+        assert!(
+            statements.contains("String(Some(\"owner\"))"),
+            "{statements}"
+        );
     }
 
     #[test]

@@ -48,6 +48,14 @@ pub struct StartQuery {
     pub registration_code: Option<String>,
 }
 
+impl StartQuery {
+    fn registration_code(&self) -> Option<&str> {
+        self.registration_code
+            .as_deref()
+            .filter(|code| !code.trim().is_empty())
+    }
+}
+
 pub async fn providers(
     State(state): State<ControlApiState>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -128,9 +136,7 @@ pub async fn start(
                 nonce: nonce.clone(),
                 pkce_verifier,
                 return_to,
-                registration_code: query
-                    .registration_code
-                    .filter(|code| !code.trim().is_empty()),
+                registration_code: query.registration_code().map(str::to_owned),
                 redirect_uri: redirect_uri.clone(),
             })
             .map_err(|error| AppError::Internal {
@@ -808,7 +814,85 @@ pub(crate) fn safe_return_to(value: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use axum::{extract::Query, http::Uri};
+    use sea_orm::{DbBackend, MockDatabase};
+    use time::OffsetDateTime;
+
     use super::*;
+    use crate::infra::database::entity::{
+        SystemSettingValueKind, registration_email_allowlist, system_setting,
+    };
+
+    fn identity_provider() -> auth_identity_provider::Model {
+        let now = OffsetDateTime::now_utc();
+        auth_identity_provider::Model {
+            id: Uuid::now_v7(),
+            slug: "example".to_owned(),
+            kind: IdentityProviderKind::Oidc,
+            name: "Example".to_owned(),
+            enabled: true,
+            client_id: "client".to_owned(),
+            client_secret_envelope: serde_json::json!({}),
+            issuer_url: Some("https://id.example.com".to_owned()),
+            authorization_url: "https://id.example.com/authorize".to_owned(),
+            token_url: "https://id.example.com/token".to_owned(),
+            userinfo_url: None,
+            jwks_url: Some("https://id.example.com/jwks".to_owned()),
+            scopes: serde_json::json!(["openid", "email"]),
+            created_by_user_id: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn signup_policy(value: &str) -> system_setting::Model {
+        let now = OffsetDateTime::now_utc();
+        system_setting::Model {
+            id: Uuid::now_v7(),
+            key: "signup.policy".to_owned(),
+            value_kind: SystemSettingValueKind::String,
+            value: serde_json::json!(value),
+            is_secret: false,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_team_invitation_token_cannot_authorize_oidc_registration() {
+        let uri: Uri = "/api/v1/auth/providers/example/start?return_to=%2Finvitations%2Faccept&invitation_token=legacy-team-invitation"
+            .parse()
+            .unwrap();
+        let Query(query) = Query::<StartQuery>::try_from_uri(&uri).unwrap();
+        let registration_code = query.registration_code();
+        assert!(registration_code.is_none());
+
+        let database = MockDatabase::new(DbBackend::Postgres)
+            .append_query_results([Vec::<user_external_identity::Model>::new()])
+            .append_query_results([Vec::<user::Model>::new()])
+            .append_query_results([[signup_policy("invite_only")]])
+            .append_query_results([Vec::<registration_email_allowlist::Model>::new()])
+            .into_connection();
+        let error = resolve_user(
+            &database,
+            &identity_provider(),
+            ExternalIdentity {
+                subject: "subject-1".to_owned(),
+                email: Some("new-user@example.com".to_owned()),
+                email_verified: true,
+                display_name: Some("New User".to_owned()),
+            },
+            registration_code,
+            "auth.providers.callback",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, AppError::Forbidden { .. }));
+        let statements = format!("{:?}", database.into_transaction_log());
+        assert!(!statements.contains("INSERT INTO"), "{statements}");
+        assert!(!statements.contains("team_invitations"), "{statements}");
+    }
 
     #[test]
     fn oauth_flow_keeps_the_registration_code() {
