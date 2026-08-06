@@ -17,7 +17,8 @@ use crate::{
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let config = init::config(cli.config_path())?;
+    let mut config = init::config(cli.config_path())?;
+    apply_cli(&mut config, &cli);
     config.init_tracing()?;
 
     let state = ControlApiState::new(config, cli.config_path());
@@ -53,6 +54,12 @@ async fn main() -> anyhow::Result<()> {
     info!(operation = "control_api.stop", "Control API stopped");
 
     Ok(())
+}
+
+fn apply_cli(config: &mut infra::config::ControlApiConfig, cli: &Cli) {
+    if cli.dev {
+        config.development.enabled = true;
+    }
 }
 
 /// Starts the managed local Node on boot when the platform is ready and the
@@ -280,5 +287,20 @@ async fn shutdown_signal() {
 
     if let Err(error) = signal.await {
         tracing::warn!(operation = "control_api.shutdown_signal", %error, "failed to listen for shutdown signal");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_dev_flag_is_applied_after_configuration_load() {
+        let mut config = infra::config::ControlApiConfig::default();
+        let cli = Cli::try_parse_from(["grass-control-api", "--dev"]).unwrap();
+
+        apply_cli(&mut config, &cli);
+
+        assert!(config.development_enabled());
     }
 }

@@ -27,6 +27,12 @@ cookie_secure = false
 idle_ttl_seconds = 900
 session_ttl_seconds = 2592000
 
+# Development mode permits trusted local HTTP by omitting Secure from auth
+# cookies and bypassing CSRF checks for authenticated mutations. Never enable
+# it on a publicly reachable deployment.
+[development]
+enabled = false
+
 [audit]
 # Audit events are retained for 90 days by default. Set to 0 to keep them
 # permanently.

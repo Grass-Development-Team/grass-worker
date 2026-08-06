@@ -86,6 +86,10 @@ pub async fn csrf_middleware(
         return next.run(request).await;
     }
 
+    if state.config.read().unwrap().development_enabled() {
+        return next.run(request).await;
+    }
+
     match (csrf_token, session_id, state.try_cache()) {
         (Some(token), Some(sid), Some(cache)) => {
             match validate_csrf_token(cache, &sid, &token).await {
@@ -175,7 +179,7 @@ mod tests {
         assert_eq!(first, second);
     }
 
-    async fn authenticated_app() -> (Router, CacheStore, String) {
+    async fn authenticated_app(development_enabled: bool) -> (Router, CacheStore, String) {
         let cache = CacheStore::connect_cache(CacheBackend::Moka, "")
             .await
             .unwrap();
@@ -183,7 +187,9 @@ mod tests {
             grass_session::create_session(&cache, Uuid::now_v7(), Duration::from_secs(300))
                 .await
                 .unwrap();
-        let state = ControlApiState::new(ControlApiConfig::default(), "unused.toml");
+        let mut config = ControlApiConfig::default();
+        config.development.enabled = development_enabled;
+        let state = ControlApiState::new(config, "unused.toml");
         assert!(state.cache.set(cache.clone()).is_ok());
 
         async fn protected(_session: Session) -> &'static str {
@@ -208,7 +214,7 @@ mod tests {
 
     #[tokio::test]
     async fn unauthenticated_mutation_reaches_session_guard() {
-        let (app, _, _) = authenticated_app().await;
+        let (app, _, _) = authenticated_app(true).await;
         let response = app
             .oneshot(
                 Request::builder()
@@ -225,7 +231,7 @@ mod tests {
 
     #[tokio::test]
     async fn authenticated_logout_requires_csrf_token() {
-        let (app, _, session_id) = authenticated_app().await;
+        let (app, _, session_id) = authenticated_app(false).await;
         let response = app
             .oneshot(
                 Request::builder()
@@ -242,8 +248,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn authenticated_mutation_bypasses_csrf_in_development_mode() {
+        let (app, _, session_id) = authenticated_app(true).await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/teams")
+                    .header("cookie", format!("session_id={session_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn csrf_protected_logout_revokes_session() {
-        let (app, cache, session_id) = authenticated_app().await;
+        let (app, cache, session_id) = authenticated_app(false).await;
         let token = generate_csrf_token(&cache, &session_id).await.unwrap();
         let response = app
             .oneshot(

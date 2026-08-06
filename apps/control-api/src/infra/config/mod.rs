@@ -1,6 +1,7 @@
 pub mod audit;
 pub mod cache;
 pub mod database;
+pub mod development;
 pub mod log;
 pub mod mail;
 pub mod migration;
@@ -20,13 +21,16 @@ use serde::{Deserialize, Serialize};
 use tracing_subscriber::{EnvFilter, fmt};
 
 use self::{
-    audit::AuditConfig, cache::CacheConfig, database::DatabaseConfig, log::LogConfig,
-    mail::MailConfig, migration::MigrationConfig, node_manager::NodeManagerConfig,
-    secrets::SecretsConfig, server::ServerConfig, session::SessionConfig, storage::StorageConfig,
+    audit::AuditConfig, cache::CacheConfig, database::DatabaseConfig,
+    development::DevelopmentConfig, log::LogConfig, mail::MailConfig, migration::MigrationConfig,
+    node_manager::NodeManagerConfig, secrets::SecretsConfig, server::ServerConfig,
+    session::SessionConfig, storage::StorageConfig,
 };
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ControlApiConfig {
+    #[serde(default)]
+    pub development: DevelopmentConfig,
     #[serde(default)]
     pub server: ServerConfig,
     #[serde(default)]
@@ -82,6 +86,10 @@ impl ControlApiConfig {
         save_toml(path, self)
     }
 
+    pub fn development_enabled(&self) -> bool {
+        self.development.enabled
+    }
+
     pub fn init_tracing(&self) -> anyhow::Result<()> {
         let filter = EnvFilter::try_new(&self.log.level).context("invalid tracing filter")?;
         let subscriber = fmt().with_env_filter(filter);
@@ -106,6 +114,8 @@ fn secret_key_is_strong(value: &str) -> bool {
 }
 
 fn apply_env(config: &mut ControlApiConfig) -> Result<(), ConfigError> {
+    let development = env::var("GWAPI_DEV_MODE").ok();
+    development::apply_env_value(&mut config.development, development.as_deref())?;
     if let Ok(value) = env::var("GWAPI_SERVER_LISTEN") {
         let listen = parse_listen("GWAPI_SERVER_LISTEN", &value)?;
         config.server.host = listen.ip();
@@ -167,6 +177,14 @@ mod tests {
     fn default_database_url_is_empty_for_setup() {
         let cfg = ControlApiConfig::default();
         assert!(cfg.database.url.is_empty());
+    }
+
+    #[test]
+    fn development_section_enables_explicit_development_mode() {
+        let config: ControlApiConfig = toml::from_str("[development]\nenabled = true\n").unwrap();
+
+        assert!(config.development.enabled);
+        assert!(config.development_enabled());
     }
 
     #[test]
