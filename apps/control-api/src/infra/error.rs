@@ -94,7 +94,7 @@ impl AppError {
         self.to_string()
     }
 
-    fn error_code(&self) -> u16 {
+    pub(crate) fn error_code(&self) -> u16 {
         match self {
             Self::Validation { .. } => 40001,
             Self::Unauthorized { .. } => 40101,

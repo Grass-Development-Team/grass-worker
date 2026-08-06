@@ -357,7 +357,7 @@ pub async fn remove(
             .await
             .map_err(|source| AppError::Infrastructure { op: OP, source })?
     {
-        HostBindingService::new(db, cache)
+        let _ = HostBindingService::new(db, cache)
             .deprovision(OP, &binding, &source)
             .await?;
     }

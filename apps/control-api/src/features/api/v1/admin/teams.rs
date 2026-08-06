@@ -64,6 +64,97 @@ async fn load_groups(
 pub struct ListTeamsQuery {
     pub q: Option<String>,
     pub limit: Option<u64>,
+    pub kind: Option<String>,
+    pub group_id: Option<Uuid>,
+    pub quota_plan_id: Option<Uuid>,
+}
+
+fn parse_team_kind_filter(
+    value: Option<&str>,
+    op: &'static str,
+) -> Result<Option<TeamKind>, AppError> {
+    value
+        .map(|value| match value {
+            "personal" => Ok(TeamKind::Personal),
+            "team" => Ok(TeamKind::Team),
+            _ => Err(AppError::Validation {
+                op,
+                message: "kind must be personal or team".to_owned(),
+            }),
+        })
+        .transpose()
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum TeamBatchRequest {
+    Delete {
+        ids: Vec<Uuid>,
+    },
+    AssignGroup {
+        ids: Vec<Uuid>,
+        group_id: Uuid,
+    },
+    AssignQuotaPlan {
+        ids: Vec<Uuid>,
+        plan_id: Option<Uuid>,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum TeamBatchAction {
+    Delete,
+    AssignGroup(Uuid),
+    AssignQuotaPlan(Option<Uuid>),
+}
+
+/// POST /api/v1/admin/teams/batch
+pub async fn batch(
+    State(state): State<ControlApiState>,
+    session: Session,
+    Json(body): Json<TeamBatchRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "admin.teams.batch";
+    let (ids, action) = match body {
+        TeamBatchRequest::Delete { ids } => (ids, TeamBatchAction::Delete),
+        TeamBatchRequest::AssignGroup { ids, group_id } => {
+            (ids, TeamBatchAction::AssignGroup(group_id))
+        }
+        TeamBatchRequest::AssignQuotaPlan { ids, plan_id } => {
+            (ids, TeamBatchAction::AssignQuotaPlan(plan_id))
+        }
+    };
+    let ids = super::batch::normalize_ids(ids, OP)?;
+    let results = super::batch::run(ids, |team_id| {
+        let state = state.clone();
+        let session = session.clone();
+        async move {
+            match action {
+                TeamBatchAction::Delete => remove(State(state), session, Path(team_id))
+                    .await
+                    .map(|_| ()),
+                TeamBatchAction::AssignGroup(group_id) => super::team_groups::assign(
+                    State(state),
+                    session,
+                    Path(team_id),
+                    Json(super::team_groups::AssignGroupRequest { group_id }),
+                )
+                .await
+                .map(|_| ()),
+                TeamBatchAction::AssignQuotaPlan(plan_id) => set_quota_plan(
+                    State(state),
+                    session,
+                    Path(team_id),
+                    Json(SetQuotaPlanRequest { plan_id }),
+                )
+                .await
+                .map(|_| ()),
+            }
+        }
+    })
+    .await;
+
+    Ok(ok_response(json!({ "results": results })))
 }
 
 /// GET /api/v1/admin/teams
@@ -73,11 +164,15 @@ pub async fn list(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.teams.list";
     let db = super::database(&state, OP)?;
+    let kind = parse_team_kind_filter(query.kind.as_deref(), OP)?;
 
     let teams = teams::list_all(
         db,
         TeamListFilter {
             query: query.q,
+            kind,
+            group_id: query.group_id,
+            quota_plan_id: query.quota_plan_id,
             limit: query.limit.unwrap_or(100),
         },
     )
@@ -472,4 +567,38 @@ pub async fn create(
     .await;
 
     Ok(ok_response(json!({ "team": team_view(&team, None, 1) })))
+}
+
+#[cfg(test)]
+mod batch_and_filter_tests {
+    use super::*;
+
+    #[test]
+    fn team_kind_filter_is_typed() {
+        assert_eq!(
+            parse_team_kind_filter(Some("team"), "test.teams").unwrap(),
+            Some(TeamKind::Team)
+        );
+        assert!(parse_team_kind_filter(Some("enterprise"), "test.teams").is_err());
+    }
+
+    #[test]
+    fn team_batch_actions_require_their_payloads() {
+        let id = Uuid::now_v7();
+        let group_id = Uuid::now_v7();
+        let request: TeamBatchRequest = serde_json::from_value(json!({
+            "action": "assign_group",
+            "ids": [id],
+            "group_id": group_id,
+        }))
+        .unwrap();
+        assert!(matches!(request, TeamBatchRequest::AssignGroup { .. }));
+        assert!(
+            serde_json::from_value::<TeamBatchRequest>(json!({
+                "action": "assign_group",
+                "ids": [id],
+            }))
+            .is_err()
+        );
+    }
 }

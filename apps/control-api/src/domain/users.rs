@@ -110,6 +110,8 @@ pub async fn update_last_login(db: &DatabaseConnection, user_id: Uuid) -> anyhow
 
 pub struct UserListFilter {
     pub query: Option<String>,
+    pub status: Option<UserStatus>,
+    pub platform_role: Option<PlatformRole>,
     pub limit: u64,
 }
 
@@ -122,6 +124,12 @@ pub async fn list_users<C: ConnectionTrait>(
     use sea_orm::{QueryOrder, QuerySelect};
 
     let mut query = user::Entity::find().filter(user::Column::DeletedAt.is_null());
+    if let Some(status) = filter.status {
+        query = query.filter(user::Column::Status.eq(status));
+    }
+    if let Some(platform_role) = filter.platform_role {
+        query = query.filter(user::Column::PlatformRole.eq(platform_role));
+    }
     if let Some(term) = filter
         .query
         .as_deref()
@@ -283,5 +291,29 @@ mod tests {
         assert!(!credentials_are_valid(Some(&UserStatus::Active), false));
         assert!(!credentials_are_valid(Some(&UserStatus::Disabled), true));
         assert!(!credentials_are_valid(None, true));
+    }
+
+    #[tokio::test]
+    async fn administrator_user_list_applies_status_and_role_filters() {
+        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([Vec::<user::Model>::new()])
+            .into_connection();
+        let log = db.clone();
+
+        list_users(
+            &db,
+            UserListFilter {
+                query: None,
+                status: Some(UserStatus::Disabled),
+                platform_role: Some(PlatformRole::Admin),
+                limit: 25,
+            },
+        )
+        .await
+        .unwrap();
+
+        let statements = format!("{:?}", log.into_transaction_log());
+        assert!(statements.contains("status\\\" ="), "{statements}");
+        assert!(statements.contains("platform_role\\\" ="), "{statements}");
     }
 }

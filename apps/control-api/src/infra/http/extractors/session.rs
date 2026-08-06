@@ -2,6 +2,7 @@ use axum::{extract::FromRequestParts, http::request::Parts};
 
 use crate::infra::error::AppError;
 
+#[derive(Clone)]
 pub struct Session {
     pub data: grass_session::SessionData,
     pub session_id: String,

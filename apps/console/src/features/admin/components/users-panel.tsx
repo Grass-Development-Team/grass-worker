@@ -1,5 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { MoreHorizontalIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  MoreHorizontalIcon,
+  PlusIcon,
+  Trash2Icon,
+  UserRoundCheckIcon,
+  UserRoundXIcon,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -17,6 +24,7 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -41,8 +49,10 @@ import {
 } from "@/components/ui/table";
 
 import { useAuth } from "@/features/auth/auth-context";
+import { showErrorToast } from "@/lib/toast";
 
 import { adminApi, type AdminUser, type AdminUserMfaPolicy } from "../admin.api";
+import { showBatchResultToast } from "../batch-result-toast";
 
 function roleBadge(user: AdminUser) {
   return user.platform_role === "admin" ? (
@@ -65,7 +75,8 @@ export function UsersPanel() {
   const { user: currentUser } = useAuth();
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<AdminUser["status"] | undefined>();
+  const [role, setRole] = useState<AdminUser["platform_role"] | undefined>();
   const [resetResult, setResetResult] = useState<{ email: string; password: string } | null>(null);
   const [creating, setCreating] = useState(false);
   const [settingPassword, setSettingPassword] = useState<AdminUser | null>(null);
@@ -73,9 +84,15 @@ export function UsersPanel() {
   const [managingMfa, setManagingMfa] = useState<AdminUser | null>(null);
   const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(new Set());
 
+  const filters = {
+    ...(query ? { q: query } : {}),
+    ...(status ? { status } : {}),
+    ...(role ? { role } : {}),
+  };
+
   const usersQuery = useQuery({
-    queryKey: ["admin", "users", query],
-    queryFn: () => adminApi.listUsers(query),
+    queryKey: ["admin", "users", filters],
+    queryFn: () => adminApi.listUsers(filters),
   });
   const visibleUserIds = usersQuery.data?.users.map((user) => user.id) ?? [];
   const selectedVisibleCount = visibleUserIds.filter((id) => selectedUserIds.has(id)).length;
@@ -92,23 +109,29 @@ export function UsersPanel() {
       userId: string;
       input: Parameters<typeof adminApi.updateUser>[1];
     }) => adminApi.updateUser(userId, input),
-    onSuccess: () => {
-      setError(null);
-      invalidate();
-    },
-    onError: (cause) =>
-      setError(cause instanceof Error ? cause.message : "Unable to update the user."),
+    onSuccess: invalidate,
   });
 
   const resetMutation = useMutation({
     mutationFn: (user: AdminUser) =>
       adminApi.resetUserPassword(user.id).then((result) => ({ user, result })),
     onSuccess: ({ user, result }) => {
-      setError(null);
       if (result.password) setResetResult({ email: user.email, password: result.password });
     },
-    onError: (cause) =>
-      setError(cause instanceof Error ? cause.message : "Unable to reset the password."),
+  });
+
+  const batchMutation = useMutation({
+    mutationFn: (action: "enable" | "disable") =>
+      adminApi.batchUsers({ action, ids: [...selectedUserIds] }),
+    onSuccess: ({ results }, action) => {
+      showBatchResultToast(
+        results,
+        results.length === 1 ? "user" : "users",
+        action === "enable" ? "enabled" : "disabled",
+      );
+      setSelectedUserIds(new Set());
+      invalidate();
+    },
   });
 
   return (
@@ -117,7 +140,7 @@ export function UsersPanel() {
         <p className="text-sm text-muted-foreground">
           Every account on this platform. Disabled users cannot sign in.
         </p>
-        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+        <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto">
           <form
             onSubmit={(event) => {
               event.preventDefault();
@@ -133,6 +156,42 @@ export function UsersPanel() {
               onChange={(event) => setSearch(event.target.value)}
             />
           </form>
+          <Select
+            value={status ?? "all"}
+            onValueChange={(value) => {
+              setStatus(value === "all" ? undefined : (value as AdminUser["status"]));
+              setSelectedUserIds(new Set());
+            }}
+          >
+            <SelectTrigger aria-label="User status" size="sm">
+              <SelectValue placeholder="All statuses" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="all">All statuses</SelectItem>
+                <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="disabled">Disabled</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <Select
+            value={role ?? "all"}
+            onValueChange={(value) => {
+              setRole(value === "all" ? undefined : (value as AdminUser["platform_role"]));
+              setSelectedUserIds(new Set());
+            }}
+          >
+            <SelectTrigger aria-label="User role" size="sm">
+              <SelectValue placeholder="All roles" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="all">All roles</SelectItem>
+                <SelectItem value="admin">Admin</SelectItem>
+                <SelectItem value="user">User</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
           <Button onClick={() => setCreating(true)}>
             <PlusIcon /> New user
           </Button>
@@ -142,14 +201,37 @@ export function UsersPanel() {
       {selectedUserIds.size > 0 && (
         <div className="flex min-h-10 items-center justify-between gap-4 border-y px-1 py-2">
           <p className="text-sm font-medium">{selectedUserIds.size} users selected</p>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            onClick={() => setSelectedUserIds(new Set())}
-          >
-            Clear selection
-          </Button>
+          <div className="flex items-center gap-2">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  aria-label="Bulk actions"
+                  disabled={batchMutation.isPending}
+                >
+                  Bulk actions <ChevronDownIcon />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => batchMutation.mutate("enable")}>
+                  <UserRoundCheckIcon data-icon="inline-start" /> Enable selected
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => batchMutation.mutate("disable")}>
+                  <UserRoundXIcon data-icon="inline-start" /> Disable selected
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => setSelectedUserIds(new Set())}
+            >
+              Clear selection
+            </Button>
+          </div>
         </div>
       )}
 
@@ -164,18 +246,7 @@ export function UsersPanel() {
           </code>
         </div>
       )}
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-
       {usersQuery.isLoading && <Skeleton className="h-40 w-full" aria-busy="true" />}
-      {usersQuery.isError && (
-        <p role="alert" className="text-sm text-destructive">
-          {usersQuery.error instanceof Error ? usersQuery.error.message : "Unable to load users."}
-        </p>
-      )}
       {usersQuery.data && (
         <div className="overflow-x-auto">
           <Table>
@@ -379,11 +450,6 @@ function MfaFactorsDialog({ user, onClose }: { user: AdminUser; onClose: () => v
           <DialogDescription>{user.email}</DialogDescription>
         </DialogHeader>
         {factors.isLoading && <Skeleton className="h-24 w-full" aria-busy="true" />}
-        {factors.isError && (
-          <p role="alert" className="text-sm text-destructive">
-            {factors.error instanceof Error ? factors.error.message : "Unable to load factors."}
-          </p>
-        )}
         {factors.data && policy && (
           <div className="grid gap-6">
             <section className="grid gap-3">
@@ -540,18 +606,6 @@ function MfaFactorsDialog({ user, onClose }: { user: AdminUser; onClose: () => v
             </section>
           </div>
         )}
-        {reset.isError && (
-          <p role="alert" className="text-sm text-destructive">
-            {reset.error instanceof Error ? reset.error.message : "Unable to reset the factor."}
-          </p>
-        )}
-        {updatePolicy.isError && (
-          <p role="alert" className="text-sm text-destructive">
-            {updatePolicy.error instanceof Error
-              ? updatePolicy.error.message
-              : "Unable to save the MFA policy."}
-          </p>
-        )}
       </DialogContent>
     </Dialog>
   );
@@ -638,11 +692,6 @@ function CreateUserDialog({
               />
             </Field>
           </div>
-          {mutation.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              {mutation.error instanceof Error ? mutation.error.message : "Unable to create."}
-            </p>
-          )}
           <DialogFooter>
             <Button type="submit" disabled={mutation.isPending}>
               {mutation.isPending ? "Creating…" : "Create user"}
@@ -665,7 +714,6 @@ function SetPasswordDialog({
 }) {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
-  const [mismatch, setMismatch] = useState(false);
 
   const mutation = useMutation({
     mutationFn: () => adminApi.resetUserPassword(user.id, password),
@@ -684,10 +732,9 @@ function SetPasswordDialog({
           onSubmit={(event) => {
             event.preventDefault();
             if (password !== confirm) {
-              setMismatch(true);
+              showErrorToast(new Error("Passwords do not match."));
               return;
             }
-            setMismatch(false);
             mutation.mutate();
           }}
         >
@@ -712,16 +759,6 @@ function SetPasswordDialog({
               required
             />
           </Field>
-          {mismatch && (
-            <p role="alert" className="text-sm text-destructive">
-              Passwords do not match.
-            </p>
-          )}
-          {mutation.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              {mutation.error instanceof Error ? mutation.error.message : "Unable to save."}
-            </p>
-          )}
           <DialogFooter>
             <Button type="submit" disabled={mutation.isPending}>
               {mutation.isPending ? "Saving…" : "Set password"}
@@ -772,11 +809,6 @@ function RenameUserDialog({
               placeholder="Empty clears the name"
             />
           </Field>
-          {mutation.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              {mutation.error instanceof Error ? mutation.error.message : "Unable to save."}
-            </p>
-          )}
           <DialogFooter>
             <Button type="submit" disabled={mutation.isPending}>
               {mutation.isPending ? "Saving…" : "Save"}
