@@ -5,13 +5,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { showErrorToast } from "@/lib/toast";
 import { authApi } from "./auth.api";
 
 export function ForgotPasswordRoute() {
   const [email, setEmail] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   return (
     <div className="flex w-full max-w-sm flex-col gap-6">
@@ -33,12 +33,11 @@ export function ForgotPasswordRoute() {
               onSubmit={async (event) => {
                 event.preventDefault();
                 setPending(true);
-                setError(null);
                 try {
                   await authApi.forgotPassword(email.trim());
                   setSubmitted(true);
                 } catch (cause) {
-                  setError(cause instanceof Error ? cause.message : "Unable to request a reset.");
+                  showErrorToast(cause);
                 } finally {
                   setPending(false);
                 }
@@ -55,11 +54,6 @@ export function ForgotPasswordRoute() {
                   required
                 />
               </div>
-              {error && (
-                <p role="alert" className="text-sm text-destructive">
-                  {error}
-                </p>
-              )}
               <Button type="submit" disabled={pending}>
                 {pending ? "Sending..." : "Send reset link"}
               </Button>

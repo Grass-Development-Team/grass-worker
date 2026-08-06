@@ -5,24 +5,23 @@ import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/features/auth/auth-context";
+import { showErrorToast } from "@/lib/toast";
 
 export function ProfileRoute() {
   const { user, updateProfile } = useAuth();
   const [displayName, setDisplayName] = useState(user?.display_name ?? "");
   const [pending, setPending] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setPending(true);
     setSaved(false);
-    setError(null);
     try {
       await updateProfile(displayName.trim() || null);
       setSaved(true);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to update profile.");
+      showErrorToast(cause);
     } finally {
       setPending(false);
     }
@@ -67,11 +66,6 @@ export function ProfileRoute() {
               <FieldDescription>The account email cannot be changed here.</FieldDescription>
             </Field>
           </FieldGroup>
-          {error && (
-            <p role="alert" className="mt-3 text-sm text-destructive">
-              {error}
-            </p>
-          )}
         </SettingsCard>
       </form>
     </div>

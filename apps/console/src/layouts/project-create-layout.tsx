@@ -1,6 +1,5 @@
 import { ArrowLeftIcon, LogOutIcon, MoonIcon, SunIcon, UserRoundIcon } from "lucide-react";
 import { useTheme } from "next-themes";
-import { useState } from "react";
 import { Link, Outlet, useNavigate } from "react-router";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -15,6 +14,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/features/auth/auth-context";
 import { NotificationBell } from "@/features/notifications/notification-bell";
+import { showErrorToast } from "@/lib/toast";
 
 const initials = (value: string) => value.slice(0, 2).toUpperCase();
 
@@ -45,15 +45,13 @@ function ThemeToggle() {
 export function ProjectCreateLayout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const [actionError, setActionError] = useState<string | null>(null);
 
   const signOut = async () => {
-    setActionError(null);
     try {
       await logout();
       navigate("/login", { replace: true });
     } catch (cause) {
-      setActionError(cause instanceof Error ? cause.message : "Unable to log out.");
+      showErrorToast(cause);
     }
   };
 
@@ -102,14 +100,6 @@ export function ProjectCreateLayout() {
           </DropdownMenu>
         </div>
       </header>
-      {actionError && (
-        <p
-          role="alert"
-          className="border-b border-destructive/30 px-4 py-2 text-sm text-destructive"
-        >
-          {actionError}
-        </p>
-      )}
       <main className="flex min-h-0 flex-1 flex-col">
         <Outlet />
       </main>

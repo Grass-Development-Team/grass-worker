@@ -19,9 +19,6 @@ import { canManageMembers } from "./team-permissions";
 import { useTeam } from "./team-context";
 import { teamsApi, type SourceCredential } from "./teams.api";
 
-const errorMessage = (error: unknown, fallback: string) =>
-  error instanceof Error ? error.message : fallback;
-
 export function SourceAccessSettings() {
   const { activeTeam, activeRole } = useTeam();
   const queryClient = useQueryClient();
@@ -233,11 +230,6 @@ export function SourceAccessSettings() {
               </>
             )}
           </div>
-          {saveCredential.error && (
-            <p role="alert" className="mt-3 text-sm text-destructive">
-              {errorMessage(saveCredential.error, "Unable to save credential.")}
-            </p>
-          )}
 
           <div className="mt-6 space-y-2 border-t pt-4">
             {credentials.data?.credentials.map((credential) => (
@@ -347,14 +339,6 @@ export function SourceAccessSettings() {
           {hostKeys.data?.host_keys.length === 0 && (
             <p className="text-sm text-muted-foreground">
               No SSH fingerprints have been observed yet.
-            </p>
-          )}
-          {(hostKeys.error || changeHostKey.error) && (
-            <p role="alert" className="text-sm text-destructive">
-              {errorMessage(
-                hostKeys.error ?? changeHostKey.error,
-                "Unable to update SSH host keys.",
-              )}
             </p>
           )}
         </div>

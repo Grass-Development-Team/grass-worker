@@ -26,50 +26,30 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { authApi, type MfaFactor, type TotpEnrollment } from "@/features/auth/auth.api";
+import { showErrorToast } from "@/lib/toast";
 
 export function SecurityRoute() {
   const queryClient = useQueryClient();
   const security = useQuery({ queryKey: ["account", "security"], queryFn: authApi.security });
   const [totp, setTotp] = useState<TotpEnrollment | null>(null);
   const [emailFactor, setEmailFactor] = useState<MfaFactor | null>(null);
-  const [factorError, setFactorError] = useState<string | null>(null);
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["account", "security"] });
   const startTotp = useMutation({
     mutationFn: authApi.accountTotpStart,
-    onSuccess: (result) => {
-      setTotp(result);
-      setFactorError(null);
-    },
-    onError: (cause) =>
-      setFactorError(cause instanceof Error ? cause.message : "Unable to start TOTP enrollment."),
+    onSuccess: setTotp,
   });
   const startEmail = useMutation({
     mutationFn: authApi.accountEmailStart,
-    onSuccess: ({ factor }) => {
-      setEmailFactor(factor);
-      setFactorError(null);
-    },
-    onError: (cause) =>
-      setFactorError(cause instanceof Error ? cause.message : "Unable to send the email code."),
+    onSuccess: ({ factor }) => setEmailFactor(factor),
   });
   const remove = useMutation({
     mutationFn: authApi.accountMfaDelete,
     onSuccess: refresh,
-    onError: (cause) =>
-      setFactorError(cause instanceof Error ? cause.message : "Unable to remove the factor."),
   });
 
   if (security.isLoading) return <Skeleton className="h-64 w-full" aria-busy="true" />;
-  if (security.isError || !security.data) {
-    return (
-      <p role="alert" className="text-sm text-destructive">
-        {security.error instanceof Error
-          ? security.error.message
-          : "Unable to load security settings."}
-      </p>
-    );
-  }
+  if (security.isError || !security.data) return null;
 
   const formatTimestamp = (value: string | null | undefined, fallback: string) => {
     if (!value) return fallback;
@@ -203,11 +183,6 @@ export function SecurityRoute() {
               </TableBody>
             </Table>
           </div>
-          {factorError && (
-            <p role="alert" className="text-sm text-destructive">
-              {factorError}
-            </p>
-          )}
         </div>
       </SettingsCard>
 
@@ -256,7 +231,6 @@ function PasswordForm({
   const [currentPassword, setCurrentPassword] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const mutation = useMutation({
     mutationFn: () => authApi.changePassword(currentPassword, password),
@@ -265,10 +239,7 @@ function PasswordForm({
       setPassword("");
       setConfirm("");
       setSaved(true);
-      setError(null);
     },
-    onError: (cause) =>
-      setError(cause instanceof Error ? cause.message : "Unable to change the password."),
   });
 
   return (
@@ -277,7 +248,7 @@ function PasswordForm({
         event.preventDefault();
         setSaved(false);
         if (password !== confirm) {
-          setError("Passwords do not match.");
+          showErrorToast(new Error("Passwords do not match."));
           return;
         }
         mutation.mutate();
@@ -331,11 +302,6 @@ function PasswordForm({
             </Field>
           </div>
           {saved && <p className="text-sm text-muted-foreground">Password updated.</p>}
-          {error && (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          )}
         </FieldGroup>
       </SettingsCard>
     </form>
@@ -388,11 +354,6 @@ function FactorConfirmationDialog({
               required
             />
           </Field>
-          {mutation.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              {mutation.error instanceof Error ? mutation.error.message : "Unable to verify code."}
-            </p>
-          )}
           <DialogFooter>
             <Button type="submit" disabled={mutation.isPending}>
               {mutation.isPending ? "Verifying..." : "Add factor"}

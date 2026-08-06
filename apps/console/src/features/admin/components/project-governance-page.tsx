@@ -62,10 +62,6 @@ function optionalReason(reason: string): string | undefined {
   return reason.trim() || undefined;
 }
 
-function errorMessage(cause: unknown, fallback: string): string {
-  return cause instanceof Error ? cause.message : fallback;
-}
-
 function domainStatusBadge(status: AdminProjectDomain["status"]) {
   switch (status) {
     case "active":
@@ -138,14 +134,6 @@ function LoadingTable() {
   return <Skeleton className="h-48 w-full" aria-busy="true" />;
 }
 
-function QueryError({ error, fallback }: { error: unknown; fallback: string }) {
-  return (
-    <p role="alert" className="text-sm text-destructive">
-      {errorMessage(error, fallback)}
-    </p>
-  );
-}
-
 export function ProjectGovernancePage() {
   const { projectId = "" } = useParams<{ projectId: string }>();
   const queryClient = useQueryClient();
@@ -156,7 +144,6 @@ export function ProjectGovernancePage() {
   const [action, setAction] = useState<GovernanceAction | null>(null);
   const [actionReason, setActionReason] = useState("");
   const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   const projectQuery = useQuery({
     queryKey: ["admin", "project", projectId],
@@ -187,17 +174,12 @@ export function ProjectGovernancePage() {
     mutationFn: () =>
       adminApi.updateProjectSlug(projectId, slug.trim(), optionalReason(slugReason)),
     onSuccess: async () => {
-      setError(null);
       setMessage("Public slug updated.");
       setSlugReason("");
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["admin", "project", projectId] }),
         queryClient.invalidateQueries({ queryKey: ["admin", "projects"] }),
       ]);
-    },
-    onError: (cause) => {
-      setMessage(null);
-      setError(errorMessage(cause, "Unable to update the public slug."));
     },
   });
 
@@ -219,7 +201,6 @@ export function ProjectGovernancePage() {
     onSuccess: async (_result, variables) => {
       const isDeployment =
         variables.selected.kind === "withdraw" || variables.selected.kind === "republish";
-      setError(null);
       setMessage("Governance action completed.");
       setAction(null);
       setActionReason("");
@@ -233,18 +214,10 @@ export function ProjectGovernancePage() {
         queryClient.invalidateQueries({ queryKey: ["admin", "projects"] }),
       ]);
     },
-    onError: (cause) => {
-      setMessage(null);
-      setError(errorMessage(cause, "Unable to complete the governance action."));
-    },
   });
 
   if (projectQuery.isLoading) {
     return <Skeleton className="h-96 w-full" aria-busy="true" />;
-  }
-
-  if (projectQuery.isError) {
-    return <QueryError error={projectQuery.error} fallback="Unable to load the project." />;
   }
 
   if (!projectQuery.data) return null;
@@ -291,12 +264,6 @@ export function ProjectGovernancePage() {
           {message}
         </p>
       )}
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="max-w-full overflow-x-auto">
           <TabsTrigger value="overview">Overview</TabsTrigger>
@@ -318,7 +285,6 @@ export function ProjectGovernancePage() {
               onSubmit={(event) => {
                 event.preventDefault();
                 setMessage(null);
-                setError(null);
                 slugMutation.mutate();
               }}
             >
@@ -387,12 +353,6 @@ export function ProjectGovernancePage() {
 
         <TabsContent value="deployments" className="pt-4">
           {deploymentsQuery.isLoading && <LoadingTable />}
-          {deploymentsQuery.isError && (
-            <QueryError
-              error={deploymentsQuery.error}
-              fallback="Unable to load project deployments."
-            />
-          )}
           {deploymentsQuery.data &&
             (deploymentsQuery.data.deployments.length === 0 ? (
               <Empty>
@@ -478,9 +438,6 @@ export function ProjectGovernancePage() {
 
         <TabsContent value="domains" className="pt-4">
           {domainsQuery.isLoading && <LoadingTable />}
-          {domainsQuery.isError && (
-            <QueryError error={domainsQuery.error} fallback="Unable to load project domains." />
-          )}
           {domainsQuery.data &&
             (domainsQuery.data.domains.length === 0 ? (
               <Empty>
@@ -564,9 +521,6 @@ export function ProjectGovernancePage() {
 
         <TabsContent value="activity" className="flex flex-col gap-4 pt-4">
           {activityQuery.isLoading && <LoadingTable />}
-          {activityQuery.isError && (
-            <QueryError error={activityQuery.error} fallback="Unable to load project activity." />
-          )}
           {activityQuery.data &&
             (activityQuery.data.events.length === 0 ? (
               <Empty>
@@ -694,7 +648,6 @@ export function ProjectGovernancePage() {
               onClick={() => {
                 if (!action) return;
                 setMessage(null);
-                setError(null);
                 governanceMutation.mutate({
                   selected: action,
                   reason: optionalReason(actionReason),

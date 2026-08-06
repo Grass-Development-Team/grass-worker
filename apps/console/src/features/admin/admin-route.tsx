@@ -16,11 +16,7 @@ export function AdminRoute() {
         <h1 className="text-2xl font-semibold">Administration</h1>
         <p className="text-sm text-muted-foreground">System-level configuration and operations.</p>
       </div>
-      {status.isError ? (
-        <p role="alert" className="border-l-2 border-destructive pl-3 text-sm text-destructive">
-          {status.error.message}
-        </p>
-      ) : (
+      {!status.isError && (
         <div className="flex min-h-24 items-center gap-4 border-y py-6">
           <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted">
             <ShieldCheckIcon className="size-5" />

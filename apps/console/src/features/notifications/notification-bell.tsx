@@ -88,24 +88,22 @@ export function NotificationBell() {
               <div className="flex min-h-32 items-center justify-center">
                 <Spinner className="size-5" />
               </div>
-            ) : inboxQuery.isError ? (
-              <p role="alert" className="px-4 py-8 text-center text-sm text-destructive">
-                {inboxQuery.error.message}
-              </p>
-            ) : inboxQuery.data.notifications.length === 0 ? (
-              <p className="px-4 py-10 text-center text-sm text-muted-foreground">
-                No notifications.
-              </p>
-            ) : (
-              <NotificationItems
-                notifications={inboxQuery.data.notifications}
-                onAnnouncement={setAnnouncement}
-                onOpen={(item) => {
-                  if (!item.read_at) markRead.mutate(item.id);
-                  setOpen(false);
-                }}
-              />
-            )}
+            ) : inboxQuery.data ? (
+              inboxQuery.data.notifications.length === 0 ? (
+                <p className="px-4 py-10 text-center text-sm text-muted-foreground">
+                  No notifications.
+                </p>
+              ) : (
+                <NotificationItems
+                  notifications={inboxQuery.data.notifications}
+                  onAnnouncement={setAnnouncement}
+                  onOpen={(item) => {
+                    if (!item.read_at) markRead.mutate(item.id);
+                    setOpen(false);
+                  }}
+                />
+              )
+            ) : null}
           </div>
 
           <footer className="grid grid-cols-2 gap-2 p-3">

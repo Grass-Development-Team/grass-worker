@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -63,7 +63,7 @@ describe("TeamMembersRoute", () => {
 
   afterEach(() => vi.clearAllMocks());
 
-  it("shows a role update failure", async () => {
+  it("keeps the member visible when a role update failure is handled by Toast", async () => {
     const user = userEvent.setup();
     vi.mocked(teamsApi.updateMemberRole).mockRejectedValue(new Error("Role update failed"));
     renderRoute();
@@ -71,7 +71,9 @@ describe("TeamMembersRoute", () => {
     await user.click(await screen.findByRole("combobox", { name: "Role for member@example.com" }));
     await user.click(screen.getByRole("option", { name: "admin" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Role update failed");
+    await waitFor(() => expect(teamsApi.updateMemberRole).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText("member@example.com")).toBeInTheDocument();
   });
 
   it("clears a failed invitation before reopening the dialog", async () => {
@@ -93,12 +95,12 @@ describe("TeamMembersRoute", () => {
     await user.type(screen.getByLabelText("Email"), "new@example.com");
     await user.click(await screen.findByRole("option", { name: /New User/ }));
     await user.click(screen.getByRole("button", { name: "Create invitation" }));
-    expect(await screen.findByText("Invitation failed")).toBeInTheDocument();
+    await waitFor(() => expect(teamsApi.inviteMember).toHaveBeenCalledTimes(1));
 
     await user.click(screen.getByRole("button", { name: "Close" }));
     await user.click(screen.getByRole("button", { name: "Invite member" }));
 
-    expect(screen.queryByText("Invitation failed")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Email")).toHaveValue("");
   });
 

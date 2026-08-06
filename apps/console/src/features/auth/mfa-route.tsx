@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MailIcon, SmartphoneIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { QRCodeSVG } from "qrcode.react";
 
@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { showErrorToast } from "@/lib/toast";
 import { authApi, isAuthResponse, type MfaFactor, type TotpEnrollment } from "./auth.api";
 import { useAuth } from "./auth-context";
 
@@ -28,25 +29,24 @@ export function MfaRoute() {
   const [factor, setFactor] = useState<MfaFactor | null>(null);
   const [totpEnrollment, setTotpEnrollment] = useState<TotpEnrollment | null>(null);
   const [code, setCode] = useState("");
-  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!token) showErrorToast(new Error("The MFA challenge is missing."), "mfa-missing");
+  }, [token]);
 
   const startTotp = useMutation({
     mutationFn: () => authApi.mfaTotpStart(token),
     onSuccess: (enrollment) => {
       setTotpEnrollment(enrollment);
       setFactor(enrollment.factor);
-      setError(null);
     },
-    onError: (cause) => setError(cause instanceof Error ? cause.message : "Unable to add TOTP."),
   });
   const sendEmail = useMutation({
     mutationFn: (selected?: MfaFactor) => authApi.mfaEmailSend(token, selected?.id),
     onSuccess: ({ factor: selected }) => {
       setFactor(selected);
       setTotpEnrollment(null);
-      setError(null);
     },
-    onError: (cause) => setError(cause instanceof Error ? cause.message : "Unable to send code."),
   });
   const verify = useMutation({
     mutationFn: async () => {
@@ -59,29 +59,17 @@ export function MfaRoute() {
         setFactor(null);
         setTotpEnrollment(null);
         setCode("");
-        setError(null);
         return;
       }
       const returnTo = challenge.data?.return_to ?? "/";
       if (returnTo.startsWith("/api/")) window.location.assign(returnTo);
       else navigate(returnTo, { replace: true });
     },
-    onError: (cause) => setError(cause instanceof Error ? cause.message : "Verification failed."),
   });
 
-  if (!token) return <MfaMessage message="The MFA challenge is missing." />;
+  if (!token) return null;
   if (challenge.isLoading) return <MfaMessage message="Loading verification..." />;
-  if (challenge.isError || !challenge.data) {
-    return (
-      <MfaMessage
-        message={
-          challenge.error instanceof Error
-            ? challenge.error.message
-            : "The MFA challenge is unavailable."
-        }
-      />
-    );
-  }
+  if (challenge.isError || !challenge.data) return null;
 
   const enrollment = challenge.data.mfa_enrollment_required;
   const factors = challenge.data.factors;
@@ -169,12 +157,6 @@ export function MfaRoute() {
                 </Button>
               </div>
             </form>
-          )}
-
-          {error && (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
           )}
         </CardContent>
       </Card>

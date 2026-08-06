@@ -5,8 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { Team } from "./teams.api";
 import { TeamSwitcher } from "./team-switcher";
 import { useTeam } from "./team-context";
+import { showErrorToast } from "@/lib/toast";
 
 vi.mock("./team-context", () => ({ useTeam: vi.fn() }));
+vi.mock("@/lib/toast", () => ({ showErrorToast: vi.fn() }));
 
 const personal: Team = {
   id: "personal",
@@ -84,13 +86,17 @@ describe("TeamSwitcher", () => {
     await user.type(screen.getByLabelText("Team name"), "Acme");
     await user.type(screen.getByLabelText("Team slug"), "acme");
     await user.click(screen.getByRole("button", { name: "Create team" }));
-    expect(await screen.findByText("Slug already exists")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(showErrorToast).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Slug already exists" }),
+      ),
+    );
 
     await user.click(screen.getByRole("button", { name: "Close" }));
     await user.click(screen.getByRole("button", { name: /personal/i }));
     await user.click(screen.getByRole("menuitem", { name: /create team/i }));
 
-    expect(screen.queryByText("Slug already exists")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Team name")).toHaveValue("");
     expect(screen.getByLabelText("Team slug")).toHaveValue("");
   });

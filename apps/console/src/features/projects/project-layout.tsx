@@ -29,15 +29,7 @@ export function ProjectLayout() {
   if (projectQuery.isLoading) {
     return <Skeleton className="h-96 w-full" aria-busy="true" />;
   }
-  if (projectQuery.isError || !projectQuery.data) {
-    return (
-      <p role="alert" className="text-sm text-destructive">
-        {projectQuery.error instanceof Error
-          ? projectQuery.error.message
-          : "Unable to load this project."}
-      </p>
-    );
-  }
+  if (projectQuery.isError || !projectQuery.data) return null;
 
   const { project, role } = projectQuery.data;
 

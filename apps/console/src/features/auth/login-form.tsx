@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 
 import { SiteLogo } from "@/components/site-logo";
+import { showErrorToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -66,15 +67,12 @@ export function LoginForm({
   const configuration = useAuthConfiguration();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
-
     if (!email.trim() || !password.trim()) {
-      setError("Please enter your email and password.");
+      showErrorToast(new Error("Please enter your email and password."));
       return;
     }
 
@@ -94,7 +92,7 @@ export function LoginForm({
       }
       navigate(destination, { replace: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed");
+      showErrorToast(err);
       setIsSubmitting(false);
     }
   };
@@ -145,11 +143,6 @@ export function LoginForm({
                 required
               />
             </div>
-            {error && (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-            )}
             <Button type="submit" className="w-full" disabled={isSubmitting}>
               {isSubmitting ? "Signing in..." : "Login"}
             </Button>

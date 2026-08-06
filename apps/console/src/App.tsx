@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { AlertCircleIcon, RefreshCwIcon } from "lucide-react";
+import { RefreshCwIcon } from "lucide-react";
 import { useEffect } from "react";
 import { useNavigate, useLocation } from "react-router";
 import { Button } from "@/components/ui/button";
@@ -57,19 +57,10 @@ export function App() {
   if (isError) {
     return (
       <main className="flex min-h-svh items-center justify-center p-6">
-        <div role="alert" className="flex max-w-sm flex-col items-center gap-4 text-center">
-          <AlertCircleIcon className="size-8 text-destructive" />
-          <div>
-            <h1 className="font-semibold">Control API unavailable</h1>
-            <p className="text-sm text-muted-foreground">
-              The Console could not load the service health state.
-            </p>
-          </div>
-          <Button variant="outline" onClick={() => refetch()}>
-            <RefreshCwIcon data-icon="inline-start" />
-            Retry
-          </Button>
-        </div>
+        <Button variant="outline" onClick={() => refetch()}>
+          <RefreshCwIcon data-icon="inline-start" />
+          Retry
+        </Button>
       </main>
     );
   }

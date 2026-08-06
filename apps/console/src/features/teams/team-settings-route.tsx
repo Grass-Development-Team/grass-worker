@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { SettingsCard } from "@/components/settings-card";
 import { Spinner } from "@/components/ui/spinner";
@@ -87,7 +87,6 @@ export function TeamSettingsRoute() {
               />
               <FieldDescription>Used as the stable workspace identifier.</FieldDescription>
             </Field>
-            {mutation.error && <FieldError>{mutation.error.message}</FieldError>}
           </FieldGroup>
         </SettingsCard>
       </form>

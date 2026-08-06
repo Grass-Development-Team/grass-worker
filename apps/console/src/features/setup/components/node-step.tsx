@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
-import { AlertCircle, ArrowRight, Check, Copy, Server } from "lucide-react";
+import { ArrowRight, Check, Copy, Server } from "lucide-react";
 
 import { setupApi } from "@/features/setup/setup.api";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { showErrorToast } from "@/lib/toast";
 
 export function NodeStep({
   onCreated,
@@ -25,15 +26,12 @@ export function NodeStep({
   token: string | null;
 }) {
   const [name, setName] = useState("local-node");
-  const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [copyError, setCopyError] = useState<string | null>(null);
   const mutation = useMutation({
     mutationFn: () => setupApi.createNode(name || undefined),
     onSuccess: (data) => {
       onCreated(data.token);
     },
-    onError: (err: Error) => setError(err.message),
   });
 
   if (token) {
@@ -60,9 +58,8 @@ export function NodeStep({
                     try {
                       await navigator.clipboard.writeText(token);
                       setCopied(true);
-                      setCopyError(null);
-                    } catch {
-                      setCopyError("Unable to copy the node token.");
+                    } catch (cause) {
+                      showErrorToast(cause);
                     }
                   }}
                 >
@@ -70,11 +67,6 @@ export function NodeStep({
                 </Button>
               </div>
             </div>
-            {copyError && (
-              <p role="alert" className="text-sm text-destructive">
-                {copyError}
-              </p>
-            )}
             <p className="text-sm text-muted-foreground">
               Copy this token and set it as <code>node_token</code> in your node configuration.
             </p>
@@ -100,7 +92,6 @@ export function NodeStep({
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          setError(null);
           mutation.mutate();
         }}
       >
@@ -114,12 +105,6 @@ export function NodeStep({
               placeholder="local-node"
               required
             />
-            {error && (
-              <div className="flex items-center gap-2 text-sm text-destructive">
-                <AlertCircle className="size-4" />
-                {error}
-              </div>
-            )}
           </div>
         </CardContent>
         <CardFooter>

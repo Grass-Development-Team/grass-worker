@@ -57,13 +57,7 @@ export function SettingsPanel({ section = "all" }: { section?: SettingsSection }
   if (settingsQuery.isLoading) {
     return <Skeleton className="h-64 w-full" aria-busy="true" />;
   }
-  if (settingsQuery.isError || !settingsQuery.data) {
-    return (
-      <p role="alert" className="text-sm text-destructive">
-        Unable to load platform settings.
-      </p>
-    );
-  }
+  if (settingsQuery.isError || !settingsQuery.data) return null;
   return <SettingsForm initial={settingsQuery.data} section={section} />;
 }
 
@@ -89,15 +83,6 @@ function SaveAction({ pending, saved }: { pending: boolean; saved: boolean }) {
         {pending ? "Saving…" : "Save"}
       </Button>
     </>
-  );
-}
-
-function MutationError({ mutation }: { mutation: { isError: boolean; error: unknown } }) {
-  if (!mutation.isError) return null;
-  return (
-    <p role="alert" className="mt-3 text-sm text-destructive">
-      {mutation.error instanceof Error ? mutation.error.message : "Unable to save settings."}
-    </p>
   );
 }
 
@@ -246,7 +231,6 @@ function SettingsForm({ initial, section }: { initial: AdminSettings; section: S
                 />
               </Field>
             </FieldGroup>
-            <MutationError mutation={site.mutation} />
           </SettingsCard>
         </form>
       </SettingsSectionView>
@@ -395,7 +379,6 @@ function SettingsForm({ initial, section }: { initial: AdminSettings; section: S
                 </>
               )}
             </FieldGroup>
-            <MutationError mutation={mail.mutation} />
           </SettingsCard>
         </form>
       </SettingsSectionView>
@@ -461,7 +444,6 @@ function SettingsForm({ initial, section }: { initial: AdminSettings; section: S
                 </Select>
               </Field>
             </FieldGroup>
-            <MutationError mutation={server.mutation} />
           </SettingsCard>
         </form>
       </SettingsSectionView>
@@ -559,7 +541,6 @@ function SettingsForm({ initial, section }: { initial: AdminSettings; section: S
                 />
               </Field>
             </FieldGroup>
-            <MutationError mutation={sessions.mutation} />
           </SettingsCard>
         </form>
       </SettingsSectionView>
@@ -623,7 +604,6 @@ function SettingsForm({ initial, section }: { initial: AdminSettings; section: S
                 }}
               />
             </FieldGroup>
-            <MutationError mutation={nodeManager.mutation} />
           </SettingsCard>
         </form>
       </SettingsSectionView>
@@ -687,7 +667,6 @@ function SettingsForm({ initial, section }: { initial: AdminSettings; section: S
                 </Select>
               </Field>
             </FieldGroup>
-            <MutationError mutation={startup.mutation} />
           </SettingsCard>
         </form>
       </SettingsSectionView>
@@ -719,7 +698,6 @@ function SettingsForm({ initial, section }: { initial: AdminSettings; section: S
                 config is updated automatically.
               </FieldDescription>
             </Field>
-            <MutationError mutation={storage.mutation} />
           </SettingsCard>
         </form>
       </SettingsSectionView>
@@ -819,7 +797,6 @@ function SettingsForm({ initial, section }: { initial: AdminSettings; section: S
                 </Field>
               </div>
             </FieldGroup>
-            <MutationError mutation={policies.mutation} />
           </SettingsCard>
         </form>
       </SettingsSectionView>

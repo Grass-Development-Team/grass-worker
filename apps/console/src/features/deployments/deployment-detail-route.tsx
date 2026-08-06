@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BanIcon, ExternalLinkIcon, RotateCcwIcon, RocketIcon, UndoIcon } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 import { Link, useParams } from "react-router";
 
 import { Badge } from "@/components/ui/badge";
@@ -25,7 +25,6 @@ export function DeploymentDetailRoute() {
   const { projectId, deploymentId } = useParams<{ projectId: string; deploymentId: string }>();
   const { activeRole } = useTeam();
   const queryClient = useQueryClient();
-  const [actionError, setActionError] = useState<string | null>(null);
 
   const detailQuery = useQuery({
     queryKey: ["deployment", projectId, deploymentId],
@@ -41,13 +40,8 @@ export function DeploymentDetailRoute() {
 
   const act = (action: () => Promise<unknown>) =>
     action()
-      .then(() => {
-        setActionError(null);
-        return invalidate();
-      })
-      .catch((cause) =>
-        setActionError(cause instanceof Error ? cause.message : "The action failed."),
-      );
+      .then(invalidate)
+      .catch(() => undefined);
 
   const cancelMutation = useMutation({
     mutationFn: () => deploymentsApi.cancel(projectId as string, deploymentId as string),
@@ -68,15 +62,7 @@ export function DeploymentDetailRoute() {
   if (detailQuery.isLoading) {
     return <Skeleton className="h-96 w-full" aria-busy="true" />;
   }
-  if (detailQuery.isError || !detailQuery.data) {
-    return (
-      <p role="alert" className="text-sm text-destructive">
-        {detailQuery.error instanceof Error
-          ? detailQuery.error.message
-          : "Unable to load this deployment."}
-      </p>
-    );
-  }
+  if (detailQuery.isError || !detailQuery.data) return null;
 
   const detail = detailQuery.data;
   const { deployment } = detail;
@@ -128,12 +114,6 @@ export function DeploymentDetailRoute() {
           <Link to={`/projects/${projectId}`}>Back to Project</Link>
         </Button>
       </div>
-
-      {actionError && (
-        <p role="alert" className="text-sm text-destructive">
-          {actionError}
-        </p>
-      )}
 
       {deployment.release_pending && (
         <p role="status" className="text-sm text-muted-foreground">

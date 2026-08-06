@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
-import { AlertCircle, ArrowRight, User } from "lucide-react";
+import { ArrowRight, User } from "lucide-react";
 
 import { setupApi } from "@/features/setup/setup.api";
 import { Button } from "@/components/ui/button";
@@ -19,11 +19,9 @@ export function AdminStep({ onSuccess }: { onSuccess: () => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const mutation = useMutation({
     mutationFn: () => setupApi.createAdmin(email, password, displayName || undefined),
     onSuccess,
-    onError: (err: Error) => setError(err.message),
   });
   return (
     <Card>
@@ -36,7 +34,6 @@ export function AdminStep({ onSuccess }: { onSuccess: () => void }) {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          setError(null);
           mutation.mutate();
         }}
       >
@@ -74,12 +71,6 @@ export function AdminStep({ onSuccess }: { onSuccess: () => void }) {
                 required
               />
             </div>
-            {error && (
-              <div className="flex items-center gap-2 text-sm text-destructive">
-                <AlertCircle className="size-4" />
-                {error}
-              </div>
-            )}
           </div>
         </CardContent>
         <CardFooter>

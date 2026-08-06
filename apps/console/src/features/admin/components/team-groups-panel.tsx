@@ -47,7 +47,6 @@ export function TeamGroupsPanel() {
   const [editing, setEditing] = useState<AdminTeamGroup | null>(null);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<AdminTeamGroup | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   const groupsQuery = useQuery({
     queryKey: ["admin", "team-groups"],
@@ -65,12 +64,7 @@ export function TeamGroupsPanel() {
 
   const defaultMutation = useMutation({
     mutationFn: (groupId: string) => adminApi.updateTeamGroup(groupId, { is_default: true }),
-    onSuccess: () => {
-      setError(null);
-      invalidate();
-    },
-    onError: (cause) =>
-      setError(cause instanceof Error ? cause.message : "Unable to change the default group."),
+    onSuccess: invalidate,
   });
 
   return (
@@ -84,18 +78,7 @@ export function TeamGroupsPanel() {
         </Button>
       </div>
 
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-
       {groupsQuery.isLoading && <Skeleton className="h-40 w-full" aria-busy="true" />}
-      {groupsQuery.isError && (
-        <p role="alert" className="text-sm text-destructive">
-          Unable to load team groups.
-        </p>
-      )}
       {groupsQuery.data && (
         <Table>
           <TableHeader>
@@ -348,11 +331,6 @@ function GroupFormDialog({
               </SelectContent>
             </Select>
           </Field>
-          {mutation.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              {mutation.error instanceof Error ? mutation.error.message : "Unable to save."}
-            </p>
-          )}
           <DialogFooter>
             <Button type="submit" disabled={mutation.isPending}>
               {mutation.isPending ? "Saving…" : group ? "Save group" : "Create group"}
@@ -387,11 +365,6 @@ function DeleteGroupDialog({
             Deletes “{group.name}”. Groups with assigned teams are refused.
           </DialogDescription>
         </DialogHeader>
-        {mutation.isError && (
-          <p role="alert" className="text-sm text-destructive">
-            {mutation.error instanceof Error ? mutation.error.message : "Unable to delete."}
-          </p>
-        )}
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
             Cancel

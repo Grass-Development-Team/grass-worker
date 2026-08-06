@@ -36,7 +36,6 @@ import {
   Field,
   FieldContent,
   FieldDescription,
-  FieldError,
   FieldGroup,
   FieldLabel,
   FieldLegend,
@@ -65,6 +64,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { showErrorToast } from "@/lib/toast";
 
 import {
   adminApi,
@@ -133,16 +133,12 @@ function deletionBadge(deletion: AdminNodeDeletionJob) {
 
 function LocalProcessCard({ info }: { info: AdminLocalProcessInfo }) {
   const queryClient = useQueryClient();
-  const [error, setError] = useState<string | null>(null);
 
   const actionMutation = useMutation({
     mutationFn: (action: "start" | "stop" | "restart") => adminApi.localNodeProcess(action),
     onSuccess: () => {
-      setError(null);
       queryClient.invalidateQueries({ queryKey: ["admin", "nodes"] });
     },
-    onError: (cause) =>
-      setError(cause instanceof Error ? cause.message : "Unable to control the local process."),
   });
 
   const running = info.process.state === "running" || info.process.state === "backoff";
@@ -201,11 +197,6 @@ function LocalProcessCard({ info }: { info: AdminLocalProcessInfo }) {
             "The Control API supervises this grass-node process and restarts it on unexpected exits.")
           : "No generated node config yet. Create a node with “Start local process” to generate one."}
       </p>
-      {error && (
-        <p role="alert" className="mt-1 text-xs text-destructive">
-          {error}
-        </p>
-      )}
     </div>
   );
 }
@@ -214,7 +205,6 @@ export function NodesPanel() {
   const queryClient = useQueryClient();
   const [revealedToken, setRevealedToken] = useState<{ label: string; token: string } | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
-  const [error, setError] = useState<string | null>(null);
   const [deletingNode, setDeletingNode] = useState<AdminNode | null>(null);
   const [deletionPlan, setDeletionPlan] = useState<AdminNodeDeletionPlan | null>(null);
   const [targetNodeId, setTargetNodeId] = useState("");
@@ -234,18 +224,22 @@ export function NodesPanel() {
     mutationFn: (nodeId: string) => adminApi.rotateNodeToken(nodeId),
     onSuccess: (result) => {
       setRevealedToken({ label: "Rotated node token", token: result.token });
-      setError(null);
       queryClient.invalidateQueries({ queryKey: ["admin", "nodes"] });
     },
-    onError: (cause) =>
-      setError(cause instanceof Error ? cause.message : "Unable to rotate the token."),
   });
 
   const planMutation = useMutation({
     mutationFn: (node: AdminNode) => adminApi.nodeDeletionPlan(node.id),
     onSuccess: (plan) => {
-      setError(null);
       if (plan.requires_target) {
+        if (plan.eligible_targets.length === 0) {
+          setDeletingNode(null);
+          showErrorToast(
+            new Error("No healthy Serve Node has enough capacity for this migration."),
+            "admin-node-delete-no-target",
+          );
+          return;
+        }
         setDeletionPlan(plan);
         setTargetNodeId("");
         return;
@@ -254,9 +248,8 @@ export function NodesPanel() {
         queueMutation.mutate({ node: deletingNode, targetNodeId: null });
       }
     },
-    onError: (cause) => {
+    onError: () => {
       setDeletingNode(null);
-      setError(cause instanceof Error ? cause.message : "Unable to prepare node deletion.");
     },
   });
 
@@ -264,17 +257,15 @@ export function NodesPanel() {
     mutationFn: ({ node, targetNodeId }: { node: AdminNode; targetNodeId: string | null }) =>
       adminApi.queueNodeDeletion(node.id, { target_node_id: targetNodeId }),
     onSuccess: () => {
-      setError(null);
       setDeletingNode(null);
       setDeletionPlan(null);
       setTargetNodeId("");
       queryClient.invalidateQueries({ queryKey: ["admin", "nodes"] });
     },
-    onError: (cause) => {
+    onError: () => {
       setDeletionPlan(null);
       setDeletingNode(null);
       setTargetNodeId("");
-      setError(cause instanceof Error ? cause.message : "Unable to queue node deletion.");
     },
   });
 
@@ -313,7 +304,7 @@ export function NodesPanel() {
 
       {warnings.length > 0 && (
         <div
-          role="alert"
+          role="status"
           className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm"
         >
           {warnings.map((warning) => (
@@ -333,18 +324,7 @@ export function NodesPanel() {
           </code>
         </div>
       )}
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-
       {nodesQuery.isLoading && <Skeleton className="h-40 w-full" aria-busy="true" />}
-      {nodesQuery.isError && (
-        <p role="alert" className="text-sm text-destructive">
-          {nodesQuery.error instanceof Error ? nodesQuery.error.message : "Unable to load nodes."}
-        </p>
-      )}
       {nodesQuery.data &&
         (nodesQuery.data.nodes.length === 0 ? (
           <p className="text-sm text-muted-foreground">
@@ -427,11 +407,6 @@ export function NodesPanel() {
                   <TableCell>
                     <div className="flex flex-col items-start gap-1">
                       {configurationBadge(node.configuration)}
-                      {node.configuration.error && (
-                        <span className="max-w-48 truncate text-xs text-destructive">
-                          {node.configuration.error}
-                        </span>
-                      )}
                     </div>
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
@@ -540,29 +515,23 @@ export function NodesPanel() {
               assigned services. Traffic stays on {deletingNode?.name} until every copy is ready.
             </DialogDescription>
           </DialogHeader>
-          {deletionPlan?.eligible_targets.length === 0 ? (
-            <p role="alert" className="text-sm text-destructive">
-              No healthy Serve Node has enough capacity for this migration.
-            </p>
-          ) : (
-            <Field>
-              <FieldLabel htmlFor="node-deletion-target">Replacement Serve Node</FieldLabel>
-              <Select value={targetNodeId} onValueChange={setTargetNodeId}>
-                <SelectTrigger id="node-deletion-target" aria-label="Replacement Serve Node">
-                  <SelectValue placeholder="Select a Serve Node" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {deletionPlan?.eligible_targets.map((target) => (
-                      <SelectItem key={target.id} value={target.id}>
-                        {target.name} · {target.available_deployments} deployment slots available
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </Field>
-          )}
+          <Field>
+            <FieldLabel htmlFor="node-deletion-target">Replacement Serve Node</FieldLabel>
+            <Select value={targetNodeId} onValueChange={setTargetNodeId}>
+              <SelectTrigger id="node-deletion-target" aria-label="Replacement Serve Node">
+                <SelectValue placeholder="Select a Serve Node" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {deletionPlan?.eligible_targets.map((target) => (
+                    <SelectItem key={target.id} value={target.id}>
+                      {target.name} · {target.available_deployments} deployment slots available
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
           <DialogFooter>
             <Button variant="outline" onClick={closeDeletion} disabled={queueMutation.isPending}>
               Cancel
@@ -679,13 +648,11 @@ function EditConfigurationDialog({ node }: { node: AdminNode }) {
   const [configuration, setConfiguration] = useState<NodeConfiguration | null>(() =>
     source ? cloneConfiguration(source) : null,
   );
-  const [validationError, setValidationError] = useState<string | null>(null);
 
   const updateMutation = useMutation({
     mutationFn: (input: NodeConfiguration) => adminApi.updateNodeConfiguration(node.id, input),
     onSuccess: () => {
       setOpen(false);
-      setValidationError(null);
       queryClient.invalidateQueries({ queryKey: ["admin", "nodes"] });
     },
   });
@@ -693,22 +660,29 @@ function EditConfigurationDialog({ node }: { node: AdminNode }) {
   const openDialog = () => {
     if (!source) return;
     setConfiguration(cloneConfiguration(source));
-    setValidationError(null);
     updateMutation.reset();
+    if (node.configuration.error) {
+      showErrorToast(new Error(node.configuration.error), `admin-node-config-${node.id}`);
+    }
     setOpen(true);
   };
 
   const submit = () => {
     if (!configuration) return;
     if (!configuration.node.capabilities.build && !configuration.node.capabilities.serve) {
-      setValidationError("Enable at least one Node capability.");
+      showErrorToast(
+        new Error("Enable at least one Node capability."),
+        `admin-node-config-validation-${node.id}`,
+      );
       return;
     }
     if (configuration.node.capabilities.build && configuration.build.concurrency < 1) {
-      setValidationError("Build concurrency must be positive when Build is enabled.");
+      showErrorToast(
+        new Error("Build concurrency must be positive when Build is enabled."),
+        `admin-node-config-validation-${node.id}`,
+      );
       return;
     }
-    setValidationError(null);
     updateMutation.mutate(configuration);
   };
 
@@ -1441,14 +1415,6 @@ function EditConfigurationDialog({ node }: { node: AdminNode }) {
               </TabsContent>
             </Tabs>
 
-            <FieldError>
-              {validationError ??
-                (updateMutation.isError
-                  ? updateMutation.error instanceof Error
-                    ? updateMutation.error.message
-                    : "Unable to update Node configuration."
-                  : node.configuration.error)}
-            </FieldError>
             <DialogFooter>
               <Button type="submit" disabled={updateMutation.isPending}>
                 {updateMutation.isPending && <Spinner data-icon="inline-start" />}
@@ -1523,13 +1489,6 @@ function CreateNodeDialog({
             Start local process — generate node.toml with this token and run grass-node on this
             machine
           </label>
-          {createMutation.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              {createMutation.error instanceof Error
-                ? createMutation.error.message
-                : "Unable to create the node."}
-            </p>
-          )}
           <DialogFooter>
             <Button type="submit" disabled={createMutation.isPending}>
               {createMutation.isPending ? "Creating…" : "Create node"}

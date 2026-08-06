@@ -51,7 +51,6 @@ function serveBadge(status: AdminReview["deployment"]["serve_status"]) {
 
 export function ReviewsPanel() {
   const queryClient = useQueryClient();
-  const [error, setError] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<AdminReview | null>(null);
 
   const reviewsQuery = useQuery({
@@ -67,12 +66,7 @@ export function ReviewsPanel() {
 
   const approveMutation = useMutation({
     mutationFn: (deploymentId: string) => adminApi.approveReview(deploymentId),
-    onSuccess: () => {
-      setError(null);
-      invalidate();
-    },
-    onError: (cause) =>
-      setError(cause instanceof Error ? cause.message : "Unable to approve the deployment."),
+    onSuccess: invalidate,
   });
 
   return (
@@ -82,20 +76,7 @@ export function ReviewsPanel() {
         queues Serve synchronization when the artifact needs to be restored.
       </p>
 
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-
       {reviewsQuery.isLoading && <Skeleton className="h-40 w-full" aria-busy="true" />}
-      {reviewsQuery.isError && (
-        <p role="alert" className="text-sm text-destructive">
-          {reviewsQuery.error instanceof Error
-            ? reviewsQuery.error.message
-            : "Unable to load pending reviews."}
-        </p>
-      )}
 
       {reviewsQuery.data &&
         (reviewsQuery.data.reviews.length === 0 ? (
@@ -195,7 +176,6 @@ export function ReviewsPanel() {
         onClose={() => setRejecting(null)}
         onRejected={() => {
           setRejecting(null);
-          setError(null);
           invalidate();
         }}
       />
@@ -250,13 +230,6 @@ function RejectDialog({
               onChange={(event) => setReason(event.target.value)}
             />
           </Field>
-          {rejectMutation.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              {rejectMutation.error instanceof Error
-                ? rejectMutation.error.message
-                : "Unable to reject the deployment."}
-            </p>
-          )}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel

@@ -28,8 +28,6 @@ export function ProjectSettingsBuildRoute() {
   const [installCommand, setInstallCommand] = useState(project.install_command ?? "");
   const [buildCommand, setBuildCommand] = useState(project.build_command ?? "");
   const [outputDirectory, setOutputDirectory] = useState(project.output_directory ?? "");
-  const [gitError, setGitError] = useState<string | null>(null);
-  const [buildError, setBuildError] = useState<string | null>(null);
   const [selectedCredentialId, setSelectedCredentialId] = useState("none");
   const canEdit = canContributeToProjects(role);
   const canManageCredentials = canManageMembers(role);
@@ -55,12 +53,7 @@ export function ProjectSettingsBuildRoute() {
         repository_url: repositoryUrl,
         default_branch: defaultBranch,
       } satisfies UpdateProjectInput),
-    onSuccess: () => {
-      setGitError(null);
-      invalidate();
-    },
-    onError: (cause) =>
-      setGitError(cause instanceof Error ? cause.message : "Unable to save Git settings."),
+    onSuccess: invalidate,
   });
 
   const buildMutation = useMutation({
@@ -71,12 +64,7 @@ export function ProjectSettingsBuildRoute() {
         build_command: buildCommand,
         output_directory: outputDirectory,
       } satisfies UpdateProjectInput),
-    onSuccess: () => {
-      setBuildError(null);
-      invalidate();
-    },
-    onError: (cause) =>
-      setBuildError(cause instanceof Error ? cause.message : "Unable to save build settings."),
+    onSuccess: invalidate,
   });
 
   const credentialMutation = useMutation({
@@ -140,11 +128,6 @@ export function ProjectSettingsBuildRoute() {
               />
             </Field>
           </div>
-          {gitError && (
-            <p role="alert" className="mt-2 text-sm text-destructive">
-              {gitError}
-            </p>
-          )}
           <div className="mt-6 border-t pt-4">
             <Field>
               <FieldLabel>Private repository credential</FieldLabel>
@@ -184,13 +167,6 @@ export function ProjectSettingsBuildRoute() {
                 Only active credentials matching this repository&apos;s scheme, host, and port are
                 available. Save URL changes before updating the binding.
               </p>
-              {credentialMutation.error && (
-                <p role="alert" className="text-sm text-destructive">
-                  {credentialMutation.error instanceof Error
-                    ? credentialMutation.error.message
-                    : "Unable to update credential binding."}
-                </p>
-              )}
             </Field>
           </div>
         </SettingsCard>
@@ -256,11 +232,6 @@ export function ProjectSettingsBuildRoute() {
               />
             </Field>
           </div>
-          {buildError && (
-            <p role="alert" className="mt-2 text-sm text-destructive">
-              {buildError}
-            </p>
-          )}
         </SettingsCard>
       </form>
     </div>
