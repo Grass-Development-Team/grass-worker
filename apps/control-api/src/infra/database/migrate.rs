@@ -28,6 +28,12 @@ impl MigratorTrait for Migrator {
             Box::new(migration::m20260731_000017_project_notifications::Migration),
             Box::new(migration::m20260801_000018_artifact_retention::Migration),
             Box::new(migration::m20260801_000019_ssr_process_leases::Migration),
+            Box::new(migration::m20260803_000020_notification_content::Migration),
+            Box::new(migration::m20260803_000021_announcements::Migration),
+            Box::new(migration::m20260804_000022_authentication::Migration),
+            Box::new(migration::m20260804_000023_mfa_policy::Migration),
+            Box::new(migration::m20260806_000024_scoped_codes::Migration),
+            Box::new(migration::m20260806_000025_registration_allowlist::Migration),
         ]
     }
 }
@@ -104,7 +110,7 @@ mod tests {
     fn registers_audit_foundation_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 19);
+        assert_eq!(migrations.len(), 25);
         assert_eq!(
             migrations.get(11).expect("twelfth migration").name(),
             "m20260729_000012_audit_foundation"
@@ -133,7 +139,7 @@ mod tests {
     fn registers_team_group_review_policy_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 19);
+        assert_eq!(migrations.len(), 25);
         assert_eq!(
             migrations.get(12).expect("thirteenth migration").name(),
             "m20260729_000013_team_group_review_policy"
@@ -144,7 +150,7 @@ mod tests {
     fn registers_node_config_sync_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 19);
+        assert_eq!(migrations.len(), 25);
         assert_eq!(
             migrations.get(13).expect("fourteenth migration").name(),
             "m20260729_000014_node_config_sync"
@@ -155,7 +161,7 @@ mod tests {
     fn registers_node_deletion_queue_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 19);
+        assert_eq!(migrations.len(), 25);
         assert_eq!(
             migrations.get(14).expect("fifteenth migration").name(),
             "m20260729_000015_node_deletion_queue"
@@ -166,7 +172,7 @@ mod tests {
     fn registers_domain_review_policy_after_node_deletion_queue() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 19);
+        assert_eq!(migrations.len(), 25);
         assert_eq!(
             migrations.get(14).expect("fifteenth migration").name(),
             "m20260729_000015_node_deletion_queue"
@@ -181,7 +187,7 @@ mod tests {
     fn registers_project_notifications_after_domain_review_policy() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 19);
+        assert_eq!(migrations.len(), 25);
         assert_eq!(
             migrations.get(15).expect("sixteenth migration").name(),
             "m20260730_000016_domain_review_policy"
@@ -195,9 +201,107 @@ mod tests {
             "m20260801_000018_artifact_retention"
         );
         assert_eq!(
-            migrations.last().expect("last migration").name(),
-            "m20260801_000019_ssr_process_leases"
+            migrations.get(22).expect("twenty-third migration").name(),
+            "m20260804_000023_mfa_policy"
         );
+    }
+
+    #[test]
+    fn registers_scoped_codes_after_authentication_migrations() {
+        let migrations = Migrator::migrations();
+
+        assert_eq!(migrations.len(), 25);
+        assert_eq!(
+            migrations.get(23).expect("twenty-fourth migration").name(),
+            "m20260806_000024_scoped_codes"
+        );
+    }
+
+    #[test]
+    fn registers_registration_allowlist_after_scoped_codes() {
+        let migrations = Migrator::migrations();
+
+        assert_eq!(migrations.len(), 25);
+        assert_eq!(
+            migrations.last().expect("last migration").name(),
+            "m20260806_000025_registration_allowlist"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires GRASS_TEST_DATABASE_URL"]
+    async fn postgres_registration_allowlist_schema_matches_domain_and_is_reversible()
+    -> anyhow::Result<()> {
+        let _migration_guard = MIGRATION_TEST_LOCK.lock().await;
+        let database_url = std::env::var("GRASS_TEST_DATABASE_URL")
+            .expect("GRASS_TEST_DATABASE_URL must be set to run this ignored migration test");
+        let test_db = PostgresMigrationDatabase::start(&database_url).await?;
+
+        let verification = async {
+            Migrator::up(&test_db.db, Some(25)).await?;
+            assert_migration_tracking(&test_db.db, 25, 0).await?;
+            assert_registration_allowlist_schema(&test_db.db).await?;
+
+            Migrator::down(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 24, 1).await?;
+            assert_registration_allowlist_schema_absent(&test_db.db).await?;
+
+            Migrator::up(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 25, 0).await?;
+            assert_registration_allowlist_schema(&test_db.db).await
+        }
+        .await;
+        let cleanup = test_db.cleanup().await;
+
+        match (verification, cleanup) {
+            (Err(verification_error), Err(cleanup_error)) => Err(verification_error.context(
+                format!("disposable schema cleanup also failed: {cleanup_error:#}"),
+            )),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Ok(()), Ok(())) => Ok(()),
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires GRASS_TEST_DATABASE_URL"]
+    async fn postgres_notification_and_announcement_schema_matches_the_domain_model_and_is_reversible()
+    -> anyhow::Result<()> {
+        let _migration_guard = MIGRATION_TEST_LOCK.lock().await;
+        let database_url = std::env::var("GRASS_TEST_DATABASE_URL")
+            .expect("GRASS_TEST_DATABASE_URL must be set to run this ignored migration test");
+        let test_db = PostgresMigrationDatabase::start(&database_url).await?;
+
+        let verification = async {
+            Migrator::up(&test_db.db, Some(19)).await?;
+            assert_migration_tracking(&test_db.db, 19, 2).await?;
+
+            Migrator::up(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 20, 1).await?;
+            assert_notification_content_schema(&test_db.db).await?;
+
+            Migrator::up(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 21, 0).await?;
+            assert_announcement_schema(&test_db.db).await?;
+
+            Migrator::down(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 20, 1).await?;
+            assert_announcement_schema_absent(&test_db.db).await?;
+            assert_notification_content_schema(&test_db.db).await?;
+
+            Migrator::up(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 21, 0).await?;
+            assert_announcement_schema(&test_db.db).await
+        }
+        .await;
+        let cleanup = test_db.cleanup().await;
+
+        match (verification, cleanup) {
+            (Err(verification_error), Err(cleanup_error)) => Err(verification_error.context(
+                format!("disposable schema cleanup also failed: {cleanup_error:#}"),
+            )),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Ok(()), Ok(())) => Ok(()),
+        }
     }
 
     #[tokio::test]
@@ -291,6 +395,439 @@ mod tests {
             (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
             (Ok(()), Ok(())) => Ok(()),
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires GRASS_TEST_DATABASE_URL"]
+    async fn postgres_authentication_schema_matches_domain_and_is_reversible() -> anyhow::Result<()>
+    {
+        let _migration_guard = MIGRATION_TEST_LOCK.lock().await;
+        let database_url = std::env::var("GRASS_TEST_DATABASE_URL")
+            .expect("GRASS_TEST_DATABASE_URL must be set to run this ignored migration test");
+        let test_db = PostgresMigrationDatabase::start(&database_url).await?;
+
+        let verification = async {
+            Migrator::up(&test_db.db, Some(21)).await?;
+            assert_migration_tracking(&test_db.db, 21, 1).await?;
+            let user_id = seed_authentication_fixture(&test_db.db).await?;
+
+            Migrator::up(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 22, 0).await?;
+            assert_authentication_schema(&test_db.db, user_id).await?;
+
+            Migrator::down(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 21, 1).await?;
+            assert_authentication_schema_absent(&test_db.db).await?;
+
+            Migrator::up(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 22, 0).await?;
+            assert_authentication_schema(&test_db.db, user_id).await
+        }
+        .await;
+        let cleanup = test_db.cleanup().await;
+
+        match (verification, cleanup) {
+            (Err(verification_error), Err(cleanup_error)) => Err(verification_error.context(
+                format!("disposable schema cleanup also failed: {cleanup_error:#}"),
+            )),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Ok(()), Ok(())) => Ok(()),
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires GRASS_TEST_DATABASE_URL"]
+    async fn postgres_mfa_policy_schema_migrates_legacy_scope_and_is_reversible()
+    -> anyhow::Result<()> {
+        let _migration_guard = MIGRATION_TEST_LOCK.lock().await;
+        let database_url = std::env::var("GRASS_TEST_DATABASE_URL")
+            .expect("GRASS_TEST_DATABASE_URL must be set to run this ignored migration test");
+        let test_db = PostgresMigrationDatabase::start(&database_url).await?;
+
+        let verification = async {
+            Migrator::up(&test_db.db, Some(22)).await?;
+            assert_migration_tracking(&test_db.db, 22, 1).await?;
+            let user_id = seed_legacy_mfa_policy_fixture(&test_db.db).await?;
+
+            Migrator::up(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 23, 0).await?;
+            assert_mfa_policy_schema(&test_db.db, user_id).await?;
+
+            Migrator::down(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 22, 1).await?;
+            assert_mfa_policy_schema_absent(&test_db.db, user_id).await?;
+
+            Migrator::up(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 23, 0).await?;
+            assert_mfa_policy_schema(&test_db.db, user_id).await
+        }
+        .await;
+        let cleanup = test_db.cleanup().await;
+
+        match (verification, cleanup) {
+            (Err(verification_error), Err(cleanup_error)) => Err(verification_error.context(
+                format!("disposable schema cleanup also failed: {cleanup_error:#}"),
+            )),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Ok(()), Ok(())) => Ok(()),
+        }
+    }
+
+    async fn seed_legacy_mfa_policy_fixture(db: &DatabaseConnection) -> anyhow::Result<Uuid> {
+        let user_id = Uuid::now_v7();
+        let setting_id = Uuid::now_v7();
+        db.execute_unprepared(&format!(
+            r#"
+INSERT INTO users (id, email, display_name, email_verified_at)
+VALUES ('{user_id}'::uuid, 'mfa-policy-migration@example.invalid', 'MFA Policy Migration', NOW());
+
+INSERT INTO system_settings (id, key, value_kind, value, is_secret)
+VALUES (
+    '{setting_id}'::uuid,
+    'auth.mfa_policy',
+    'json',
+    jsonb_build_object(
+        'allowed_factors', jsonb_build_array('totp', 'email'),
+        'enforcement', 'selected_users',
+        'selected_user_ids', jsonb_build_array('{user_id}'::text)
+    ),
+    false
+);
+"#
+        ))
+        .await?;
+        Ok(user_id)
+    }
+
+    async fn assert_mfa_policy_schema(
+        db: &DatabaseConnection,
+        selected_user_id: Uuid,
+    ) -> anyhow::Result<()> {
+        let columns = query_column_shapes(
+            db,
+            r#"
+SELECT column_name, udt_name, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'user_mfa_policies'
+ORDER BY ordinal_position
+"#,
+        )
+        .await?;
+        ensure!(
+            columns
+                == vec![
+                    column("user_id", "uuid", "NO", None),
+                    column("inherit_platform", "bool", "NO", Some("true")),
+                    column("minimum_factors", "int2", "NO", Some("0")),
+                    column("required_factors", "jsonb", "NO", Some("'[]'::jsonb")),
+                    column("created_at", "timestamptz", "NO", None),
+                    column("updated_at", "timestamptz", "NO", None),
+                ],
+            "unexpected user MFA policy columns: {columns:#?}"
+        );
+
+        let constraints = db
+            .query_all_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT conname, pg_get_constraintdef(oid) AS definition
+FROM pg_constraint
+WHERE conrelid = 'user_mfa_policies'::regclass
+ORDER BY conname
+"#,
+            ))
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok((
+                    row.try_get::<String>("", "conname")?,
+                    row.try_get::<String>("", "definition")?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, sea_orm::DbErr>>()?;
+        ensure!(
+            constraints.len() == 4,
+            "missing user MFA policy constraints"
+        );
+        ensure!(
+            constraints["ck_user_mfa_policies_minimum_factors"].contains("minimum_factors <= 2")
+        );
+        ensure!(
+            constraints["ck_user_mfa_policies_required_factors"]
+                .contains("jsonb_typeof(required_factors)")
+                && constraints["ck_user_mfa_policies_required_factors"].contains("'array'")
+        );
+        ensure!(
+            constraints
+                .values()
+                .any(|definition| definition.contains("FOREIGN KEY (user_id)")
+                    && definition.contains("REFERENCES users(id) ON DELETE CASCADE"))
+        );
+
+        let row = db
+            .query_one_raw(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT
+    setting.value AS platform_policy,
+    policy.inherit_platform,
+    policy.minimum_factors,
+    policy.required_factors
+FROM system_settings AS setting
+JOIN user_mfa_policies AS policy ON policy.user_id = $1
+WHERE setting.key = 'auth.mfa_policy'
+"#,
+                [selected_user_id.into()],
+            ))
+            .await?
+            .context("migrated MFA policy row is missing")?;
+        let platform_policy = row.try_get::<serde_json::Value>("", "platform_policy")?;
+        ensure!(platform_policy["enforcement"] == "none");
+        ensure!(platform_policy["minimum_factors"] == 0);
+        ensure!(platform_policy["required_factors"] == serde_json::json!([]));
+        ensure!(platform_policy.get("selected_user_ids").is_none());
+        ensure!(!row.try_get::<bool>("", "inherit_platform")?);
+        ensure!(row.try_get::<i16>("", "minimum_factors")? == 1);
+        ensure!(row.try_get::<serde_json::Value>("", "required_factors")? == serde_json::json!([]));
+        Ok(())
+    }
+
+    async fn assert_mfa_policy_schema_absent(
+        db: &DatabaseConnection,
+        selected_user_id: Uuid,
+    ) -> anyhow::Result<()> {
+        ensure!(
+            object_count(
+                db,
+                "SELECT count(*)::bigint AS count FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'user_mfa_policies'",
+            )
+            .await?
+                == 0
+        );
+        let row = db
+            .query_one_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                "SELECT value FROM system_settings WHERE key = 'auth.mfa_policy'",
+            ))
+            .await?
+            .context("legacy MFA policy row is missing after down migration")?;
+        let policy = row.try_get::<serde_json::Value>("", "value")?;
+        ensure!(policy["enforcement"] == "selected_users");
+        ensure!(policy["selected_user_ids"] == serde_json::json!([selected_user_id]));
+        ensure!(policy.get("minimum_factors").is_none());
+        ensure!(policy.get("required_factors").is_none());
+        Ok(())
+    }
+
+    async fn seed_authentication_fixture(db: &DatabaseConnection) -> anyhow::Result<Uuid> {
+        let user_id = Uuid::now_v7();
+        let credential_id = Uuid::now_v7();
+        db.execute_unprepared(&format!(
+            r#"
+INSERT INTO users (id, email, display_name)
+VALUES ('{user_id}'::uuid, 'authentication-migration@example.invalid', 'Authentication Migration');
+
+INSERT INTO user_password_credentials (id, user_id, password_hash)
+VALUES ('{credential_id}'::uuid, '{user_id}'::uuid, 'migration-password-hash');
+"#
+        ))
+        .await?;
+        Ok(user_id)
+    }
+
+    async fn assert_authentication_schema(
+        db: &DatabaseConnection,
+        seeded_user_id: Uuid,
+    ) -> anyhow::Result<()> {
+        let columns = query_column_shapes(
+            db,
+            r#"
+SELECT column_name, udt_name, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND (
+    (table_name = 'users' AND column_name = 'email_verified_at') OR
+    (table_name = 'user_auth_tokens' AND column_name = 'used_at') OR
+    (table_name = 'user_mfa_factors' AND column_name IN ('verified_at', 'last_used_at'))
+  )
+ORDER BY table_name, ordinal_position
+"#,
+        )
+        .await?;
+        ensure!(
+            columns.len() == 4,
+            "missing authentication lifecycle columns"
+        );
+        for column in columns {
+            ensure!(
+                column.udt_name == "timestamptz",
+                "unexpected column type: {column:?}"
+            );
+            ensure!(
+                column.nullable == "YES",
+                "lifecycle column is not nullable: {column:?}"
+            );
+            ensure!(
+                column.default.is_none(),
+                "lifecycle column has a default: {column:?}"
+            );
+        }
+
+        let enum_rows = db
+            .query_all_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT t.typname, string_agg(e.enumlabel, ',' ORDER BY e.enumsortorder) AS labels
+FROM pg_type t
+JOIN pg_enum e ON e.enumtypid = t.oid
+WHERE t.typname IN ('identity_provider_kind', 'auth_token_kind', 'mfa_factor_kind')
+GROUP BY t.typname
+ORDER BY t.typname
+"#,
+            ))
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok((
+                    row.try_get::<String>("", "typname")?,
+                    row.try_get::<String>("", "labels")?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, sea_orm::DbErr>>()?;
+        ensure!(enum_rows.get("identity_provider_kind") == Some(&"oidc,github".to_owned()));
+        ensure!(
+            enum_rows.get("auth_token_kind")
+                == Some(&"email_verification,password_reset".to_owned())
+        );
+        ensure!(enum_rows.get("mfa_factor_kind") == Some(&"totp,email".to_owned()));
+
+        let indexes = db
+            .query_all_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT indexname, indexdef
+FROM pg_indexes
+WHERE schemaname = current_schema()
+  AND indexname IN (
+    'ix_user_external_identities_user_id',
+    'ix_user_auth_tokens_live',
+    'ix_user_mfa_factors_verified',
+    'ix_user_password_history_recent'
+  )
+ORDER BY indexname
+"#,
+            ))
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok((
+                    row.try_get::<String>("", "indexname")?,
+                    row.try_get::<String>("", "indexdef")?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, sea_orm::DbErr>>()?;
+        ensure!(indexes.len() == 4, "missing authentication indexes");
+        ensure!(indexes["ix_user_auth_tokens_live"].contains("WHERE (used_at IS NULL)"));
+        ensure!(
+            indexes["ix_user_mfa_factors_verified"].contains("WHERE (verified_at IS NOT NULL)")
+        );
+
+        let constraints = db
+            .query_all_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT conname, pg_get_constraintdef(oid) AS definition
+FROM pg_constraint
+WHERE conrelid IN (
+    'auth_identity_providers'::regclass,
+    'user_external_identities'::regclass,
+    'user_auth_tokens'::regclass,
+    'user_mfa_factors'::regclass,
+    'user_password_history'::regclass
+)
+  AND contype = 'f'
+ORDER BY conname
+"#,
+            ))
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok((
+                    row.try_get::<String>("", "conname")?,
+                    row.try_get::<String>("", "definition")?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, sea_orm::DbErr>>()?;
+        ensure!(
+            constraints.len() == 6,
+            "missing authentication foreign keys"
+        );
+        ensure!(
+            constraints
+                .values()
+                .filter(|definition| definition.contains("ON DELETE CASCADE"))
+                .count()
+                == 5
+        );
+        ensure!(
+            constraints
+                .values()
+                .filter(|definition| definition.contains("ON DELETE SET NULL"))
+                .count()
+                == 1
+        );
+
+        let backfill = db
+            .query_one_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                format!(
+                    r#"
+SELECT
+    u.email_verified_at = u.created_at AS email_backfilled,
+    h.password_hash
+FROM users u
+JOIN user_password_history h ON h.user_id = u.id
+WHERE u.id = '{seeded_user_id}'::uuid
+"#
+                ),
+            ))
+            .await?
+            .context("authentication backfill row is missing")?;
+        ensure!(backfill.try_get::<bool>("", "email_backfilled")?);
+        ensure!(backfill.try_get::<String>("", "password_hash")? == "migration-password-hash");
+        Ok(())
+    }
+
+    async fn assert_authentication_schema_absent(db: &DatabaseConnection) -> anyhow::Result<()> {
+        let row = db
+            .query_one_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT
+    to_regclass('auth_identity_providers') IS NULL AND
+    to_regclass('user_external_identities') IS NULL AND
+    to_regclass('user_auth_tokens') IS NULL AND
+    to_regclass('user_mfa_factors') IS NULL AND
+    to_regclass('user_password_history') IS NULL AS tables_absent,
+    NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'users'
+          AND column_name = 'email_verified_at'
+    ) AS column_absent,
+    NOT EXISTS (
+        SELECT 1 FROM pg_type
+        WHERE typname IN ('identity_provider_kind', 'auth_token_kind', 'mfa_factor_kind')
+    ) AS types_absent
+"#,
+            ))
+            .await?
+            .context("authentication absence query returned no row")?;
+        ensure!(row.try_get::<bool>("", "tables_absent")?);
+        ensure!(row.try_get::<bool>("", "column_absent")?);
+        ensure!(row.try_get::<bool>("", "types_absent")?);
+        Ok(())
     }
 
     async fn seed_project_notification_fixture(
@@ -512,6 +1049,213 @@ SELECT
             .context("notification absence query returned no row")?;
         ensure!(row.try_get::<bool>("", "notifications_absent")?);
         ensure!(row.try_get::<bool>("", "creator_absent")?);
+        Ok(())
+    }
+
+    async fn assert_notification_content_schema(db: &DatabaseConnection) -> anyhow::Result<()> {
+        let columns = query_column_shapes(
+            db,
+            r#"
+SELECT column_name, udt_name, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'user_notifications'
+  AND column_name IN ('project_name', 'project_slug', 'title', 'content')
+ORDER BY ordinal_position
+"#,
+        )
+        .await?;
+        ensure!(
+            columns
+                == vec![
+                    ColumnShape {
+                        name: "project_name".to_owned(),
+                        udt_name: "text".to_owned(),
+                        nullable: "YES".to_owned(),
+                        default: None,
+                    },
+                    ColumnShape {
+                        name: "project_slug".to_owned(),
+                        udt_name: "text".to_owned(),
+                        nullable: "YES".to_owned(),
+                        default: None,
+                    },
+                    ColumnShape {
+                        name: "title".to_owned(),
+                        udt_name: "text".to_owned(),
+                        nullable: "YES".to_owned(),
+                        default: None,
+                    },
+                    ColumnShape {
+                        name: "content".to_owned(),
+                        udt_name: "text".to_owned(),
+                        nullable: "YES".to_owned(),
+                        default: None,
+                    },
+                ],
+            "unexpected notification content columns: {columns:?}"
+        );
+
+        let row = db
+            .query_one_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT pg_get_constraintdef(oid) AS definition
+FROM pg_constraint
+WHERE conname = 'ck_user_notifications_announcement_content'
+"#,
+            ))
+            .await?
+            .context("announcement content constraint was not created")?;
+        let definition = row.try_get::<String>("", "definition")?;
+        ensure!(definition.contains("site.announcement"));
+        ensure!(definition.contains("team_id IS NULL"));
+        ensure!(definition.contains("project_id IS NULL"));
+        Ok(())
+    }
+
+    async fn assert_announcement_schema(db: &DatabaseConnection) -> anyhow::Result<()> {
+        let columns = query_column_shapes(
+            db,
+            r#"
+SELECT column_name, udt_name, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'announcements'
+ORDER BY ordinal_position
+"#,
+        )
+        .await?;
+        ensure!(
+            columns
+                == vec![
+                    column("id", "uuid", "NO", None),
+                    column("title", "text", "NO", None),
+                    column("content", "text", "NO", None),
+                    column("auto_popup", "bool", "NO", Some("false")),
+                    column("created_by_user_id", "uuid", "YES", None),
+                    column("published_at", "timestamptz", "NO", None),
+                ],
+            "unexpected announcement columns: {columns:#?}"
+        );
+
+        let notification_columns = query_column_shapes(
+            db,
+            r#"
+SELECT column_name, udt_name, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'user_notifications'
+  AND column_name = 'announcement_id'
+"#,
+        )
+        .await?;
+        ensure!(
+            notification_columns == vec![column("announcement_id", "uuid", "YES", None)],
+            "unexpected notification announcement column: {notification_columns:#?}"
+        );
+
+        let constraints = db
+            .query_all_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT conname, pg_get_constraintdef(oid) AS definition
+FROM pg_constraint
+WHERE conname IN (
+    'ck_announcements_title_length',
+    'ck_announcements_content_length',
+    'ck_user_notifications_announcement_content'
+)
+ORDER BY conname
+"#,
+            ))
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok((
+                    row.try_get::<String>("", "conname")?,
+                    row.try_get::<String>("", "definition")?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, sea_orm::DbErr>>()?;
+        ensure!(constraints.len() == 3, "missing announcement constraints");
+        ensure!(constraints["ck_announcements_title_length"].contains("120"));
+        ensure!(constraints["ck_announcements_content_length"].contains("10000"));
+        ensure!(
+            constraints["ck_user_notifications_announcement_content"]
+                .contains("announcement_id IS NOT NULL")
+        );
+
+        let foreign_keys = db
+            .query_all_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT pg_get_constraintdef(oid) AS definition
+FROM pg_constraint
+WHERE contype = 'f'
+  AND conrelid IN ('announcements'::regclass, 'user_notifications'::regclass)
+"#,
+            ))
+            .await?
+            .into_iter()
+            .map(|row| row.try_get::<String>("", "definition"))
+            .collect::<Result<Vec<_>, sea_orm::DbErr>>()?;
+        ensure!(
+            foreign_keys
+                .iter()
+                .any(|definition| definition.contains("REFERENCES announcements")
+                    && definition.contains("ON DELETE CASCADE")),
+            "notification announcement foreign key is not cascading"
+        );
+        ensure!(
+            foreign_keys
+                .iter()
+                .any(|definition| definition.contains("REFERENCES users")
+                    && definition.contains("ON DELETE SET NULL")),
+            "announcement creator foreign key is not nullable"
+        );
+
+        let indexes = db
+            .query_all_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT indexname
+FROM pg_indexes
+WHERE schemaname = current_schema()
+  AND indexname = 'ix_announcements_published_at'
+"#,
+            ))
+            .await?;
+        ensure!(indexes.len() == 1, "announcement history index is missing");
+        Ok(())
+    }
+
+    async fn assert_announcement_schema_absent(db: &DatabaseConnection) -> anyhow::Result<()> {
+        let row = db
+            .query_one_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT
+  to_regclass('announcements') IS NULL AS table_absent,
+  NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'user_notifications'
+      AND column_name = 'announcement_id'
+  ) AS notification_column_absent,
+  EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'ck_user_notifications_announcement_content'
+  ) AS legacy_constraint_present
+"#,
+            ))
+            .await?
+            .context("announcement absence query returned no row")?;
+        ensure!(row.try_get::<bool>("", "table_absent")?);
+        ensure!(row.try_get::<bool>("", "notification_column_absent")?);
+        ensure!(row.try_get::<bool>("", "legacy_constraint_present")?);
         Ok(())
     }
 
@@ -831,6 +1575,101 @@ VALUES (
             );
         }
 
+        Ok(())
+    }
+
+    async fn assert_registration_allowlist_schema(db: &DatabaseConnection) -> anyhow::Result<()> {
+        let columns = query_column_shapes(
+            db,
+            r#"
+SELECT column_name, udt_name, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'registration_email_allowlist'
+ORDER BY ordinal_position
+"#,
+        )
+        .await?;
+        ensure!(
+            columns
+                == vec![
+                    column("id", "uuid", "NO", None),
+                    column("email", "text", "NO", None),
+                    column("created_by_user_id", "uuid", "YES", None),
+                    column("created_at", "timestamptz", "NO", None),
+                ],
+            "unexpected registration allowlist columns: {columns:#?}"
+        );
+
+        let definitions = db
+            .query_all_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT conname, pg_get_constraintdef(oid) AS definition
+FROM pg_constraint
+WHERE conrelid = 'registration_email_allowlist'::regclass
+ORDER BY conname
+"#,
+            ))
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok((
+                    row.try_get::<String>("", "conname")?,
+                    row.try_get::<String>("", "definition")?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, sea_orm::DbErr>>()?;
+        ensure!(
+            definitions
+                .get("registration_email_allowlist_email_key")
+                .is_some_and(|definition| definition.starts_with("UNIQUE (email)")),
+            "registration allowlist email unique constraint is missing"
+        );
+        ensure!(
+            definitions
+                .get("registration_email_allowlist_created_by_user_id_fkey")
+                .is_some_and(|definition| definition.contains("ON DELETE SET NULL")),
+            "registration allowlist creator foreign key is missing"
+        );
+        ensure!(
+            definitions
+                .get("ck_registration_email_allowlist_email")
+                .is_some_and(|definition| definition.contains("email = lower(email)")),
+            "registration allowlist normalization check is missing"
+        );
+
+        let index = db
+            .query_one_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT indexdef
+FROM pg_indexes
+WHERE schemaname = current_schema()
+  AND indexname = 'ix_registration_email_allowlist_created'
+"#,
+            ))
+            .await?
+            .context("registration allowlist creation index is missing")?;
+        let index_definition = index.try_get::<String>("", "indexdef")?;
+        ensure!(
+            index_definition.contains("created_at DESC, id DESC"),
+            "unexpected registration allowlist index: {index_definition}"
+        );
+        Ok(())
+    }
+
+    async fn assert_registration_allowlist_schema_absent(
+        db: &DatabaseConnection,
+    ) -> anyhow::Result<()> {
+        let row = db
+            .query_one_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                "SELECT to_regclass('registration_email_allowlist') IS NULL AS absent",
+            ))
+            .await?
+            .context("registration allowlist absence query returned no row")?;
+        ensure!(row.try_get::<bool>("", "absent")?);
         Ok(())
     }
 

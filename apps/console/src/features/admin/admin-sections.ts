@@ -4,10 +4,13 @@ import {
   GlobeIcon,
   InboxIcon,
   LayersIcon,
+  EraserIcon,
   ScrollTextIcon,
   ServerIcon,
   SettingsIcon,
+  TicketCheckIcon,
   UserIcon,
+  UserRoundPlusIcon,
   UsersIcon,
   type LucideIcon,
 } from "lucide-react";
@@ -27,6 +30,9 @@ export const adminSections: AdminSection[] = [
   { to: "/admin/team-groups", label: "Team groups", icon: LayersIcon },
   { to: "/admin/users", label: "Users", icon: UserIcon },
   { to: "/admin/teams", label: "Teams", icon: UsersIcon },
+  { to: "/admin/registration", label: "Registration", icon: UserRoundPlusIcon },
+  { to: "/admin/code", label: "Code", icon: TicketCheckIcon },
   { to: "/admin/settings", label: "Settings", icon: SettingsIcon },
   { to: "/admin/audit", label: "Audit", icon: ScrollTextIcon },
+  { to: "/admin/cleanup", label: "Cleanup", icon: EraserIcon },
 ];

@@ -1,5 +1,4 @@
 import {
-  ActivityIcon,
   FolderGitIcon,
   GaugeIcon,
   HomeIcon,
@@ -10,6 +9,7 @@ import {
   SettingsIcon,
   ShieldCheckIcon,
   SunIcon,
+  UserRoundIcon,
   UsersIcon,
 } from "lucide-react";
 import { useTheme } from "next-themes";
@@ -17,6 +17,7 @@ import { useEffect, useState } from "react";
 import { matchPath, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { SiteLogo } from "@/components/site-logo";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -27,6 +28,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Sidebar,
   SidebarContent,
@@ -44,7 +46,9 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { AdminSidebarNav } from "@/features/admin/components/admin-sidebar-nav";
+import { SettingsSidebarNav } from "@/features/admin/components/settings-sidebar-nav";
 import { adminSections } from "@/features/admin/admin-sections";
+import { AccountSidebarNav } from "@/features/account/account-sidebar-nav";
 import { useAuth } from "@/features/auth/auth-context";
 import { useBranding, usePageTitle } from "@/features/branding/branding-context";
 import {
@@ -61,11 +65,6 @@ const primaryNavigation = [
   { title: "Projects", url: "/projects", icon: FolderGitIcon },
   { title: "Usage", url: "/quota", icon: GaugeIcon },
 ];
-const administrationNavigation = {
-  title: "Administration",
-  url: "/admin",
-  icon: ShieldCheckIcon,
-};
 const settingsNavigation = [
   { title: "General", url: "/settings/team", icon: SettingsIcon },
   { title: "Members", url: "/settings/members", icon: UsersIcon },
@@ -86,6 +85,8 @@ function pageTitle(pathname: string, inProject: boolean): string {
   }
   if (pathname === "/quota") return "Usage";
   if (pathname === "/notifications") return "Notifications";
+  if (pathname.startsWith("/account/profile")) return "Personal Settings";
+  if (pathname.startsWith("/account/security")) return "Security";
   if (pathname.startsWith("/settings/team")) return "Team Settings";
   if (pathname.startsWith("/settings/members")) return "Members";
   if (pathname.startsWith("/settings/audit")) return "Audit";
@@ -204,17 +205,14 @@ function TeamSidebarNav({
 function AppLayoutContent() {
   const { user, logout } = useAuth();
   const { siteName, version } = useBranding();
-  const { activeTeam, activeRole, error, refreshTeams } = useTeam();
+  const { activeTeam, activeRole, error, isLoading, refreshTeams } = useTeam();
   const location = useLocation();
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
   const [actionError, setActionError] = useState<string | null>(null);
   const showSettings = activeRole ? canViewTeamSettings(activeRole) : false;
   const showAudit = activeRole ? canViewTeamAudit(activeRole) : false;
-  const navigation =
-    user?.platform_role === "admin"
-      ? [...primaryNavigation, administrationNavigation]
-      : primaryNavigation;
+  const navigation = primaryNavigation;
 
   const projectMatch = matchPath("/projects/:projectId/*", location.pathname);
   const projectId =
@@ -222,6 +220,8 @@ function AppLayoutContent() {
       ? projectMatch.params.projectId
       : null;
   const inAdmin = location.pathname === "/admin" || location.pathname.startsWith("/admin/");
+  const inAdminSettings = location.pathname.startsWith("/admin/settings");
+  const inAccountSettings = location.pathname.startsWith("/account/");
   const title = pageTitle(location.pathname, Boolean(projectId));
   usePageTitle(title || null);
 
@@ -247,7 +247,7 @@ function AppLayoutContent() {
             <SidebarMenuItem>
               <SidebarMenuButton asChild>
                 <NavLink to="/" aria-label={`${siteName} Console`}>
-                  <ActivityIcon />
+                  <SiteLogo className="size-4" />
                   <span className="font-semibold">{siteName}</span>
                 </NavLink>
               </SidebarMenuButton>
@@ -258,8 +258,12 @@ function AppLayoutContent() {
         <SidebarContent>
           {projectId ? (
             <ProjectSidebarNav projectId={projectId} />
+          ) : inAdminSettings ? (
+            <SettingsSidebarNav />
           ) : inAdmin ? (
             <AdminSidebarNav />
+          ) : inAccountSettings ? (
+            <AccountSidebarNav />
           ) : (
             <TeamSidebarNav
               navigation={navigation}
@@ -292,6 +296,19 @@ function AppLayoutContent() {
                     <p className="truncate text-xs text-muted-foreground">{user?.email}</p>
                   </DropdownMenuLabel>
                   <DropdownMenuSeparator />
+                  <DropdownMenuItem asChild>
+                    <NavLink to="/account/profile">
+                      <UserRoundIcon /> Personal settings
+                    </NavLink>
+                  </DropdownMenuItem>
+                  {user?.platform_role === "admin" && (
+                    <DropdownMenuItem asChild>
+                      <NavLink to="/admin">
+                        <ShieldCheckIcon /> Administration
+                      </NavLink>
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={signOut}>
                     <LogOutIcon /> Log out
                   </DropdownMenuItem>
@@ -313,7 +330,7 @@ function AppLayoutContent() {
               to="/"
               className="truncate font-medium text-foreground/90 hover:text-foreground"
             >
-              {activeTeam?.name ?? "No team"}
+              {activeTeam?.name ?? (isLoading ? "Loading workspace" : "No team")}
             </NavLink>
             {projectId && (
               <>
@@ -360,6 +377,11 @@ function AppLayoutContent() {
                 <Button variant="outline" onClick={() => refreshTeams()}>
                   Retry
                 </Button>
+              </div>
+            ) : isLoading ? (
+              <div className="space-y-4" aria-busy="true" role="status">
+                <Skeleton className="h-8 w-56" />
+                <Skeleton className="h-40 w-full" />
               </div>
             ) : (
               <Outlet key={activeTeam?.id ?? "no-team"} />

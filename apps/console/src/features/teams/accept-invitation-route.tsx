@@ -32,7 +32,7 @@ const invitationStateMessage = (status: string) => {
 };
 
 const invitationHref = (path: "/login" | "/signup", token: string) =>
-  `${path}?${new URLSearchParams({ invitation_token: token })}`;
+  `${path}?${new URLSearchParams({ return_to: `/invitations/accept?token=${token}` })}`;
 
 const roleLabel = (role: string) => `${role.charAt(0).toUpperCase()}${role.slice(1)}`;
 

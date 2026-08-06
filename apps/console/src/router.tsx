@@ -25,6 +25,24 @@ const LoginRoute = lazy(() =>
 const SignupRoute = lazy(() =>
   import("@/features/auth/signup-route").then(({ SignupRoute }) => ({ default: SignupRoute })),
 );
+const ForgotPasswordRoute = lazy(() =>
+  import("@/features/auth/forgot-password-route").then(({ ForgotPasswordRoute }) => ({
+    default: ForgotPasswordRoute,
+  })),
+);
+const ResetPasswordRoute = lazy(() =>
+  import("@/features/auth/reset-password-route").then(({ ResetPasswordRoute }) => ({
+    default: ResetPasswordRoute,
+  })),
+);
+const VerifyEmailRoute = lazy(() =>
+  import("@/features/auth/verify-email-route").then(({ VerifyEmailRoute }) => ({
+    default: VerifyEmailRoute,
+  })),
+);
+const MfaRoute = lazy(() =>
+  import("@/features/auth/mfa-route").then(({ MfaRoute }) => ({ default: MfaRoute })),
+);
 const DashboardRoute = lazy(() =>
   import("@/features/dashboard/dashboard-route").then(({ DashboardRoute }) => ({
     default: DashboardRoute,
@@ -93,14 +111,44 @@ const TeamsPanel = lazy(() =>
     default: TeamsPanel,
   })),
 );
+const CodePanel = lazy(() =>
+  import("@/features/admin/components/code-panel").then(({ CodePanel }) => ({
+    default: CodePanel,
+  })),
+);
+const RegistrationPanel = lazy(() =>
+  import("@/features/admin/components/registration-panel").then(({ RegistrationPanel }) => ({
+    default: RegistrationPanel,
+  })),
+);
 const SettingsPanel = lazy(() =>
   import("@/features/admin/components/settings-panel").then(({ SettingsPanel }) => ({
     default: SettingsPanel,
   })),
 );
+const SettingsLayout = lazy(() =>
+  import("@/features/admin/components/settings-layout").then(({ SettingsLayout }) => ({
+    default: SettingsLayout,
+  })),
+);
+const AuthenticationPanel = lazy(() =>
+  import("@/features/admin/components/authentication-panel").then(({ AuthenticationPanel }) => ({
+    default: AuthenticationPanel,
+  })),
+);
+const AnnouncementsPanel = lazy(() =>
+  import("@/features/admin/components/announcements-panel").then(({ AnnouncementsPanel }) => ({
+    default: AnnouncementsPanel,
+  })),
+);
 const AuditEventsTable = lazy(() =>
   import("@/features/audit/audit-events-table").then(({ AuditEventsTable }) => ({
     default: AuditEventsTable,
+  })),
+);
+const CleanupPanel = lazy(() =>
+  import("@/features/admin/components/cleanup-panel").then(({ CleanupPanel }) => ({
+    default: CleanupPanel,
   })),
 );
 const QuotaRoute = lazy(() =>
@@ -161,6 +209,16 @@ const NotificationsRoute = lazy(() =>
     default: NotificationsRoute,
   })),
 );
+const ProfileRoute = lazy(() =>
+  import("@/features/account/profile-route").then(({ ProfileRoute }) => ({
+    default: ProfileRoute,
+  })),
+);
+const SecurityRoute = lazy(() =>
+  import("@/features/account/security-route").then(({ SecurityRoute }) => ({
+    default: SecurityRoute,
+  })),
+);
 
 function RouteLoadingFallback() {
   return (
@@ -208,6 +266,10 @@ export function Router() {
         <Route element={<AuthLayout />}>
           <Route path="/setup" element={<SetupRoute />} />
           <Route path="/invitations/accept" element={<AcceptInvitationRoute />} />
+          <Route path="/forgot-password" element={<ForgotPasswordRoute />} />
+          <Route path="/reset-password" element={<ResetPasswordRoute />} />
+          <Route path="/verify-email" element={<VerifyEmailRoute />} />
+          <Route path="/mfa" element={<MfaRoute />} />
           <Route
             path="/login"
             element={
@@ -249,6 +311,8 @@ export function Router() {
           <Route path="/dashboard" element={<Navigate to="/" replace />} />
           <Route path="/quota" element={<QuotaRoute />} />
           <Route path="/notifications" element={<NotificationsRoute />} />
+          <Route path="/account/profile" element={<ProfileRoute />} />
+          <Route path="/account/security" element={<SecurityRoute />} />
           <Route path="/projects" element={<ProjectsRoute />} />
           <Route path="/projects/:projectId" element={<ProjectLayout />}>
             <Route index element={<ProjectOverviewRoute />} />
@@ -276,8 +340,20 @@ export function Router() {
             <Route path="team-groups" element={<TeamGroupsPanel />} />
             <Route path="users" element={<UsersPanel />} />
             <Route path="teams" element={<TeamsPanel />} />
-            <Route path="settings" element={<SettingsPanel />} />
+            <Route path="registration" element={<RegistrationPanel />} />
+            <Route path="code" element={<CodePanel />} />
+            <Route path="settings" element={<SettingsLayout />}>
+              <Route index element={<Navigate to="/admin/settings/basic" replace />} />
+              <Route path="basic" element={<SettingsPanel section="basic" />} />
+              <Route path="announcements" element={<AnnouncementsPanel />} />
+              <Route path="email" element={<SettingsPanel section="email" />} />
+              <Route path="authentication" element={<AuthenticationPanel />} />
+              <Route path="governance" element={<SettingsPanel section="governance" />} />
+              <Route path="infrastructure" element={<SettingsPanel section="infrastructure" />} />
+              <Route path="runtime" element={<SettingsPanel section="runtime" />} />
+            </Route>
             <Route path="audit" element={<AuditEventsTable />} />
+            <Route path="cleanup" element={<CleanupPanel />} />
           </Route>
           <Route element={<TeamSettingsGuard />}>
             <Route path="/settings/team" element={<TeamSettingsRoute />} />

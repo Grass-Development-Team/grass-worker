@@ -9,10 +9,13 @@ pub struct Model {
     pub actor_user_id: Option<Uuid>,
     pub team_id: Option<Uuid>,
     pub project_id: Option<Uuid>,
+    pub announcement_id: Option<Uuid>,
     pub action: String,
-    pub project_name: String,
-    pub project_slug: String,
+    pub project_name: Option<String>,
+    pub project_slug: Option<String>,
     pub actor_label: String,
+    pub title: Option<String>,
+    pub content: Option<String>,
     pub reason: Option<String>,
     pub target_url: String,
     pub read_at: Option<TimeDateTimeWithTimeZone>,
@@ -20,6 +23,21 @@ pub struct Model {
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {}
+pub enum Relation {
+    #[sea_orm(
+        belongs_to = "super::announcement::Entity",
+        from = "Column::AnnouncementId",
+        to = "super::announcement::Column::Id",
+        on_update = "NoAction",
+        on_delete = "Cascade"
+    )]
+    Announcement,
+}
+
+impl Related<super::announcement::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Announcement.def()
+    }
+}
 
 impl ActiveModelBehavior for ActiveModel {}

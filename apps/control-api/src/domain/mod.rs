@@ -1,12 +1,17 @@
 pub mod audits;
+pub mod authentication;
+pub mod cleanup;
+pub mod codes;
 pub mod delivery;
 pub mod deployments;
 pub mod hosts;
 pub mod node_deletions;
 pub mod nodes;
 pub mod notifications;
+pub mod platform_mail;
 pub mod projects;
 pub mod quotas;
+pub mod registration;
 pub mod retention;
 pub mod scheduler;
 pub mod settings;

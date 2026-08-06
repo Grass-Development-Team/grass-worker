@@ -14,7 +14,11 @@ export function ProjectDeploymentsRoute() {
           Every build of {project.name}, newest first.
         </p>
       </div>
-      <DeploymentsTab projectId={project.id} canDeploy={canContributeToProjects(role)} />
+      <DeploymentsTab
+        projectId={project.id}
+        canDeploy={canContributeToProjects(role) && Boolean(project.repository_url)}
+        hasRepository={Boolean(project.repository_url)}
+      />
     </div>
   );
 }

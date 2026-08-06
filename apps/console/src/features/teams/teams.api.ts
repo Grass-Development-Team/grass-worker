@@ -36,6 +36,13 @@ export interface TeamInvitation {
   token: string;
 }
 
+export interface InvitationCandidate {
+  kind: "user" | "email";
+  user_id: string | null;
+  email: string;
+  display_name: string | null;
+}
+
 export interface InvitationPreflight {
   team: Pick<Team, "id" | "name">;
   role: ManagedTeamRole;
@@ -107,6 +114,12 @@ export const teamsApi = {
 
   listMembers: (teamId: string) =>
     request<{ members: TeamMember[] }>(`/api/v1/teams/${teamId}/members`, withCredentials()),
+
+  invitationCandidates: (teamId: string, query: string) =>
+    request<{ candidates: InvitationCandidate[] }>(
+      `/api/v1/teams/${teamId}/invitation-candidates?${new URLSearchParams({ q: query })}`,
+      withCredentials(),
+    ),
 
   inviteMember: (teamId: string, input: { email: string; role: ManagedTeamRole }) =>
     request<{ invitation: TeamInvitation }>(

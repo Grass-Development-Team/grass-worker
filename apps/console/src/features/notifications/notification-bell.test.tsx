@@ -10,6 +10,7 @@ import { NotificationBell } from "./notification-bell";
 vi.mock("./notifications.api", () => ({
   notificationsApi: {
     unreadCount: vi.fn(),
+    autoPopup: vi.fn(),
     list: vi.fn(),
     markRead: vi.fn(),
     markAllRead: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock("./notifications.api", () => ({
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(notificationsApi.unreadCount).mockResolvedValue({ count: 3 });
+  vi.mocked(notificationsApi.autoPopup).mockResolvedValue({ notification: null });
   vi.mocked(notificationsApi.list).mockResolvedValue({
     notifications: [
       {
@@ -26,6 +28,7 @@ beforeEach(() => {
         action: "project.slug_updated",
         title: "Project slug changed",
         project: { id: "project-1", name: "Demo", slug: "demo-site" },
+        content: null,
         reason: "Reserved wording",
         target_url: "/projects/project-1",
         read_at: null,
@@ -36,6 +39,42 @@ beforeEach(() => {
   });
   vi.mocked(notificationsApi.markRead).mockResolvedValue({ ok: true });
   vi.mocked(notificationsApi.markAllRead).mockResolvedValue({ updated: 1 });
+});
+
+it("opens announcement content in a dialog and marks it as read", async () => {
+  vi.mocked(notificationsApi.list).mockResolvedValue({
+    notifications: [
+      {
+        id: "announcement-1",
+        action: "site.announcement",
+        title: "Maintenance window",
+        project: null,
+        content: "The service will restart at 10:00 UTC.",
+        reason: null,
+        target_url: "/notifications",
+        read_at: null,
+        created_at: "2026-08-03T02:00:00Z",
+      },
+    ],
+    pagination: { page: 1, per_page: 8, total: 1, total_pages: 1 },
+  });
+  const user = userEvent.setup();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter>
+        <NotificationBell />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "Notifications, 3 unread" }));
+  await user.click(await screen.findByRole("button", { name: /Maintenance window/i }));
+
+  expect(await screen.findByRole("dialog")).toHaveTextContent(
+    "The service will restart at 10:00 UTC.",
+  );
+  expect(notificationsApi.markRead.mock.calls[0]?.[0]).toBe("announcement-1");
 });
 
 it("opens a compact inbox from the notification bell", async () => {
@@ -63,6 +102,37 @@ it("opens a compact inbox from the notification bell", async () => {
     "href",
     "/notifications",
   );
+});
+
+it("marks an automatically opened announcement as read when it closes", async () => {
+  vi.mocked(notificationsApi.autoPopup).mockResolvedValue({
+    notification: {
+      id: "announcement-auto",
+      action: "site.announcement",
+      announcement_id: "announcement-auto",
+      title: "Important update",
+      project: null,
+      content: "Please read this update.",
+      reason: null,
+      target_url: "/notifications",
+      read_at: null,
+      created_at: "2026-08-03T03:00:00Z",
+    },
+  });
+  const user = userEvent.setup();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter>
+        <NotificationBell />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+
+  expect(await screen.findByRole("dialog")).toHaveTextContent("Please read this update.");
+  await user.click(screen.getByRole("button", { name: "Close" }));
+
+  expect(notificationsApi.markRead.mock.calls[0]?.[0]).toBe("announcement-auto");
 });
 
 it("marks every message as read from the inbox footer", async () => {

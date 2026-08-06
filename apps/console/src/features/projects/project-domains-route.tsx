@@ -132,6 +132,7 @@ export function ProjectDomainsRoute() {
                 <TableHead>Kind</TableHead>
                 <TableHead>Environment</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Serving</TableHead>
                 {canEdit && <TableHead className="text-right">Actions</TableHead>}
               </TableRow>
             </TableHeader>
@@ -153,6 +154,15 @@ export function ProjectDomainsRoute() {
                   <TableCell className="capitalize">{host.environment}</TableCell>
                   <TableCell>
                     <Badge variant={hostStatusVariant(host.status)}>{host.status}</Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={host.serving ? "success" : "secondary"}>
+                      {host.serving
+                        ? "Serving"
+                        : host.status === "active"
+                          ? "Bound · no deployment"
+                          : "Not serving"}
+                    </Badge>
                   </TableCell>
                   {canEdit && (
                     <TableCell className="space-x-1 text-right">

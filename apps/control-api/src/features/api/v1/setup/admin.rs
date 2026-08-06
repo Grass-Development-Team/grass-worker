@@ -97,8 +97,9 @@ pub async fn handler(
         CreateUserParams {
             email: email.clone(),
             display_name: display_name.or_else(|| email.split('@').next().map(str::to_owned)),
-            password_hash,
+            password_hash: Some(password_hash),
             platform_role: initial_platform_role(),
+            email_verified_at: Some(time::OffsetDateTime::now_utc()),
         },
     )
     .await

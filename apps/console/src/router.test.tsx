@@ -19,7 +19,27 @@ vi.mock("@/features/dashboard/dashboard-route", () => ({
   DashboardRoute: () => <div>Overview page</div>,
 }));
 vi.mock("@/features/admin/admin-route", () => ({
-  AdminRoute: () => <div>Administration page</div>,
+  AdminRoute: () => (
+    <>
+      <div>Administration page</div>
+      <Outlet />
+    </>
+  ),
+}));
+vi.mock("@/features/admin/components/settings-layout", () => ({
+  SettingsLayout: () => <Outlet />,
+}));
+vi.mock("@/features/admin/components/settings-panel", () => ({
+  SettingsPanel: ({ section }: { section?: string }) => <div>Settings {section}</div>,
+}));
+vi.mock("@/features/admin/components/announcements-panel", () => ({
+  AnnouncementsPanel: () => <div>Announcements settings</div>,
+}));
+vi.mock("@/features/admin/components/cleanup-panel", () => ({
+  CleanupPanel: () => <div>Cleanup settings</div>,
+}));
+vi.mock("@/features/account/profile-route", () => ({
+  ProfileRoute: () => <div>Profile settings</div>,
 }));
 vi.mock("@/features/teams/team-settings-guard", () => ({
   TeamSettingsGuard: () => <Outlet />,
@@ -45,6 +65,7 @@ function setUser(platformRole: "admin" | "user") {
     isLoading: false,
     login: vi.fn(),
     register: vi.fn(),
+    updateProfile: vi.fn(),
     logout: vi.fn(),
   } as ReturnType<typeof useAuth>);
 }
@@ -55,6 +76,7 @@ function setGuest() {
     isLoading: false,
     login: vi.fn(),
     register: vi.fn(),
+    updateProfile: vi.fn(),
     logout: vi.fn(),
   } as ReturnType<typeof useAuth>);
 }
@@ -86,6 +108,42 @@ describe("Administration routing", () => {
 
     expect(await screen.findByText("Administration page")).toBeInTheDocument();
   });
+
+  it("redirects the settings index to the basic settings page", async () => {
+    setUser("admin");
+
+    render(
+      <MemoryRouter initialEntries={["/admin/settings"]}>
+        <Router />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Settings basic")).toBeInTheDocument();
+  });
+
+  it("opens announcement settings as a nested administration page", async () => {
+    setUser("admin");
+
+    render(
+      <MemoryRouter initialEntries={["/admin/settings/announcements"]}>
+        <Router />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Announcements settings")).toBeInTheDocument();
+  });
+
+  it("opens cleanup controls as a nested administration page", async () => {
+    setUser("admin");
+
+    render(
+      <MemoryRouter initialEntries={["/admin/cleanup"]}>
+        <Router />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Cleanup settings")).toBeInTheDocument();
+  });
 });
 
 it("allows unauthenticated visitors to inspect an invitation link", async () => {
@@ -110,6 +168,18 @@ it("allows authenticated users to open notifications", async () => {
   );
 
   expect(await screen.findByText("Notifications page")).toBeInTheDocument();
+});
+
+it("allows authenticated users to open personal settings", async () => {
+  setUser("user");
+
+  render(
+    <MemoryRouter initialEntries={["/account/profile"]}>
+      <Router />
+    </MemoryRouter>,
+  );
+
+  expect(await screen.findByText("Profile settings")).toBeInTheDocument();
 });
 
 it("allows authenticated users to open the full-screen project creation route", async () => {

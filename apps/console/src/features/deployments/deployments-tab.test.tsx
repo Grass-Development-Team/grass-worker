@@ -14,12 +14,12 @@ function jsonResponse(data: unknown): Response {
   });
 }
 
-function renderDeployments(canDeploy = true) {
+function renderDeployments(canDeploy = true, hasRepository = true) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>
-        <DeploymentsTab projectId="project-1" canDeploy={canDeploy} />
+        <DeploymentsTab projectId="project-1" canDeploy={canDeploy} hasRepository={hasRepository} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -33,6 +33,19 @@ it("keeps deployments read-only when creation is not allowed", async () => {
   await screen.findByText("No deployments yet.");
   expect(screen.queryByRole("button", { name: "Deploy preview" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Deploy production" })).not.toBeInTheDocument();
+});
+
+it("explains how to connect a repository when deployment is unavailable", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ deployments: [] }));
+
+  renderDeployments(false, false);
+
+  expect(await screen.findByText(/Connect a repository/)).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Build and Deployment settings" })).toHaveAttribute(
+    "href",
+    "/projects/project-1/settings/build-and-deployment",
+  );
+  expect(await screen.findByText(/Connect a repository to enable deployments/)).toBeInTheDocument();
 });
 
 afterEach(() => vi.restoreAllMocks());

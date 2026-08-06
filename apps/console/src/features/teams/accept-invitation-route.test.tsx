@@ -113,10 +113,10 @@ it("shows invitation details and authentication actions before login", async () 
   expect(await screen.findByText("Acme Team")).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "Log in" })).toHaveAttribute(
     "href",
-    "/login?invitation_token=secret",
+    "/login?return_to=%2Finvitations%2Faccept%3Ftoken%3Dsecret",
   );
   expect(screen.getByRole("link", { name: "Create account" })).toHaveAttribute(
     "href",
-    "/signup?invitation_token=secret",
+    "/signup?return_to=%2Finvitations%2Faccept%3Ftoken%3Dsecret",
   );
 });

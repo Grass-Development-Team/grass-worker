@@ -9,7 +9,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::infra::database::entity::{
-    TeamMemberRole, UserStatus, project, team_member, user, user_notification,
+    TeamMemberRole, UserStatus, announcement, project, team_member, user, user_notification,
 };
 
 pub struct CreateProjectNotification<'a> {
@@ -18,6 +18,13 @@ pub struct CreateProjectNotification<'a> {
     pub action: &'a str,
     pub reason: Option<String>,
     pub target_url: String,
+}
+
+pub struct CreateAnnouncementNotification {
+    pub announcement_id: Uuid,
+    pub actor_user_id: Uuid,
+    pub title: String,
+    pub content: String,
 }
 
 pub struct NotificationPage {
@@ -41,6 +48,7 @@ pub fn notification_title(action: &str) -> &'static str {
         "project.unarchived" => "Project unarchived",
         "project.deleted" => "Project deleted",
         "project.restored" => "Project restored",
+        "site.announcement" => "Announcement",
         _ => "Project updated",
     }
 }
@@ -129,12 +137,67 @@ pub async fn create_project_notification<C: ConnectionTrait>(
             actor_user_id: Set(Some(params.actor_user_id)),
             team_id: Set(Some(params.project.team_id)),
             project_id: Set(Some(params.project.id)),
+            announcement_id: Set(None),
             action: Set(params.action.to_owned()),
-            project_name: Set(params.project.name.clone()),
-            project_slug: Set(params.project.slug.clone()),
+            project_name: Set(Some(params.project.name.clone())),
+            project_slug: Set(Some(params.project.slug.clone())),
             actor_label: Set(actor_label.clone()),
+            title: Set(None),
+            content: Set(None),
             reason: Set(params.reason.clone()),
             target_url: Set(params.target_url.clone()),
+            read_at: Set(None),
+            created_at: Set(now),
+        }
+    }))
+    .exec_without_returning(db)
+    .await?;
+
+    Ok(count)
+}
+
+pub async fn create_announcement_notifications<C: ConnectionTrait>(
+    db: &C,
+    params: CreateAnnouncementNotification,
+) -> anyhow::Result<usize> {
+    let recipients = user::Entity::find()
+        .filter(user::Column::Status.eq(UserStatus::Active))
+        .filter(user::Column::DeletedAt.is_null())
+        .all(db)
+        .await?;
+    if recipients.is_empty() {
+        return Ok(0);
+    }
+
+    let actor_label = user::Entity::find_by_id(params.actor_user_id)
+        .one(db)
+        .await?
+        .map(|actor| {
+            actor
+                .display_name
+                .filter(|label| !label.trim().is_empty())
+                .unwrap_or(actor.email)
+        })
+        .unwrap_or_else(|| "Platform administrator".to_owned());
+    let count = recipients.len();
+    let now = OffsetDateTime::now_utc();
+
+    user_notification::Entity::insert_many(recipients.into_iter().map(|recipient| {
+        user_notification::ActiveModel {
+            id: Set(Uuid::now_v7()),
+            recipient_user_id: Set(recipient.id),
+            actor_user_id: Set(Some(params.actor_user_id)),
+            team_id: Set(None),
+            project_id: Set(None),
+            announcement_id: Set(Some(params.announcement_id)),
+            action: Set("site.announcement".to_owned()),
+            project_name: Set(None),
+            project_slug: Set(None),
+            actor_label: Set(actor_label.clone()),
+            title: Set(Some(params.title.clone())),
+            content: Set(Some(params.content.clone())),
+            reason: Set(None),
+            target_url: Set("/notifications".to_owned()),
             read_at: Set(None),
             created_at: Set(now),
         }
@@ -186,6 +249,24 @@ pub async fn unread_count<C: ConnectionTrait>(
         .count(db)
         .await
         .map_err(Into::into)
+}
+
+pub async fn latest_auto_popup<C: ConnectionTrait>(
+    db: &C,
+    recipient_user_id: Uuid,
+) -> anyhow::Result<Option<user_notification::Model>> {
+    Ok(user_notification::Entity::find()
+        .find_also_related(announcement::Entity)
+        .filter(user_notification::Column::RecipientUserId.eq(recipient_user_id))
+        .filter(user_notification::Column::Action.eq("site.announcement"))
+        .filter(user_notification::Column::ReadAt.is_null())
+        .filter(announcement::Column::AutoPopup.eq(true))
+        .order_by_desc(user_notification::Column::CreatedAt)
+        .order_by_desc(user_notification::Column::Id)
+        .all(db)
+        .await?
+        .into_iter()
+        .find_map(|(notification, announcement)| announcement.map(|_| notification)))
 }
 
 pub async fn mark_read<C: ConnectionTrait>(
@@ -345,6 +426,11 @@ mod tests {
         assert_eq!(notification_title("project.restored"), "Project restored");
     }
 
+    #[test]
+    fn announcements_use_a_stable_action_for_content_notifications() {
+        assert_eq!(notification_title("site.announcement"), "Announcement");
+    }
+
     #[tokio::test]
     async fn marking_one_notification_read_is_scoped_to_the_recipient() {
         let notification_id = Uuid::now_v7();
@@ -393,6 +479,7 @@ mod tests {
             display_name: Some("Platform Admin".to_owned()),
             status: UserStatus::Active,
             platform_role: PlatformRole::Admin,
+            email_verified_at: Some(now),
             last_login_at: None,
             deleted_at: None,
             created_at: now,
@@ -406,6 +493,7 @@ mod tests {
                 display_name: None,
                 status: UserStatus::Active,
                 platform_role: PlatformRole::User,
+                email_verified_at: Some(now),
                 last_login_at: None,
                 deleted_at: None,
                 created_at: now,

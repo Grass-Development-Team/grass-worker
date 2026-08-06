@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod announcements;
 pub mod auth;
 pub mod internal;
 pub mod me;
@@ -9,7 +10,10 @@ pub mod setup;
 pub mod site_config;
 pub mod teams;
 
-use axum::{Router, middleware, routing::get};
+use axum::{
+    Router, middleware,
+    routing::{get, post},
+};
 
 use crate::{
     infra::http::extractors::PlatformAdmin,
@@ -52,7 +56,51 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
         )
         .route(
             "/me",
-            get(me::handler).layer(middleware::from_fn_with_state(
+            get(me::handler)
+                .patch(me::update)
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    require_ready_mode,
+                )),
+        )
+        .route(
+            "/me/password",
+            post(auth::password::change).layer(middleware::from_fn_with_state(
+                state.clone(),
+                require_ready_mode,
+            )),
+        )
+        .route(
+            "/me/security",
+            get(auth::mfa::security).layer(middleware::from_fn_with_state(
+                state.clone(),
+                require_ready_mode,
+            )),
+        )
+        .route(
+            "/me/mfa/totp/start",
+            post(auth::mfa::account_totp_start).layer(middleware::from_fn_with_state(
+                state.clone(),
+                require_ready_mode,
+            )),
+        )
+        .route(
+            "/me/mfa/email/start",
+            post(auth::mfa::account_email_start).layer(middleware::from_fn_with_state(
+                state.clone(),
+                require_ready_mode,
+            )),
+        )
+        .route(
+            "/me/mfa/{factor_id}/confirm",
+            post(auth::mfa::account_confirm).layer(middleware::from_fn_with_state(
+                state.clone(),
+                require_ready_mode,
+            )),
+        )
+        .route(
+            "/me/mfa/{factor_id}",
+            axum::routing::delete(auth::mfa::account_delete).layer(middleware::from_fn_with_state(
                 state.clone(),
                 require_ready_mode,
             )),
@@ -66,6 +114,12 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
             state.clone(),
             require_ready_mode,
         )))
+        .merge(
+            announcements::router().layer(middleware::from_fn_with_state(
+                state.clone(),
+                require_ready_mode,
+            )),
+        )
         .merge(
             notifications::router().layer(middleware::from_fn_with_state(
                 state.clone(),
@@ -131,6 +185,46 @@ mod tests {
             created_at: OffsetDateTime::UNIX_EPOCH,
             updated_at: OffsetDateTime::UNIX_EPOCH,
         };
+        let logo_setting = system_setting::Model {
+            id: Uuid::now_v7(),
+            key: "site.logo_url".to_owned(),
+            value_kind: SystemSettingValueKind::String,
+            value: serde_json::json!("/assets/acme-logo.svg"),
+            is_secret: false,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+        };
+        let database = MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([[setting]])
+            .append_query_results([[logo_setting]])
+            .into_connection();
+        let state = ControlApiState::new(ControlApiConfig::default(), "config.toml");
+        assert!(state.database.set(database).is_ok());
+        let response = router(state.clone())
+            .with_state(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/notifications")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn announcement_routes_require_authentication() {
+        let setting = system_setting::Model {
+            id: Uuid::now_v7(),
+            key: "setup.finished".to_owned(),
+            value_kind: SystemSettingValueKind::Boolean,
+            value: serde_json::json!(true),
+            is_secret: false,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+        };
         let database = MockDatabase::new(sea_orm::DbBackend::Postgres)
             .append_query_results([[setting]])
             .into_connection();
@@ -140,7 +234,7 @@ mod tests {
             .with_state(state)
             .oneshot(
                 Request::builder()
-                    .uri("/notifications")
+                    .uri("/announcements")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -161,8 +255,18 @@ mod tests {
             created_at: OffsetDateTime::UNIX_EPOCH,
             updated_at: OffsetDateTime::UNIX_EPOCH,
         };
+        let logo_setting = system_setting::Model {
+            id: Uuid::now_v7(),
+            key: "site.logo_url".to_owned(),
+            value_kind: SystemSettingValueKind::String,
+            value: serde_json::json!("/assets/acme-logo.svg"),
+            is_secret: false,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+        };
         let database = MockDatabase::new(sea_orm::DbBackend::Postgres)
             .append_query_results([[setting]])
+            .append_query_results([[logo_setting]])
             .into_connection();
         let state = ControlApiState::new(ControlApiConfig::default(), "config.toml");
         assert!(state.database.set(database).is_ok());
@@ -182,6 +286,7 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["data"]["site_name"], "Acme Deploy");
+        assert_eq!(body["data"]["logo_url"], "/assets/acme-logo.svg");
         assert_eq!(body["data"]["version"], env!("CARGO_PKG_VERSION"));
     }
 
@@ -258,6 +363,8 @@ mod tests {
 
         for uri in [
             "/admin/audit-events",
+            "/admin/cleanup/audit-events",
+            "/admin/cleanup/build-logs",
             "/admin/team-groups",
             "/admin/quota-plans",
             "/admin/host-sources",

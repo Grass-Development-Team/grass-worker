@@ -37,13 +37,13 @@ describe("ProjectsRoute role capabilities", () => {
   it("hides project creation from viewers", async () => {
     renderProjects("viewer");
     await screen.findByText("No projects yet");
-    expect(screen.queryByRole("button", { name: "New project" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New Project" })).not.toBeInTheDocument();
   });
 
   it("keeps project creation available to members", async () => {
     renderProjects("member");
     await screen.findByText("No projects yet");
-    expect(screen.getByRole("link", { name: "New project" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "New Project" })).toHaveAttribute(
       "href",
       "/projects/new",
     );

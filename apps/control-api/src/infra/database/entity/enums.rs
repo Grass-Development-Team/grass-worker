@@ -21,6 +21,47 @@ string_active_enum!(PlatformRole, "platform_role", {
     Admin => "admin",
 });
 
+string_active_enum!(IdentityProviderKind, "identity_provider_kind", {
+    Oidc => "oidc",
+    Github => "github",
+});
+
+impl IdentityProviderKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Oidc => "oidc",
+            Self::Github => "github",
+        }
+    }
+}
+
+string_active_enum!(AuthTokenKind, "auth_token_kind", {
+    EmailVerification => "email_verification",
+    PasswordReset => "password_reset",
+});
+
+string_active_enum!(MfaFactorKind, "mfa_factor_kind", {
+    Totp => "totp",
+    Email => "email",
+});
+
+impl MfaFactorKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Totp => "totp",
+            Self::Email => "email",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "totp" => Some(Self::Totp),
+            "email" => Some(Self::Email),
+            _ => None,
+        }
+    }
+}
+
 impl PlatformRole {
     pub fn as_str(&self) -> &'static str {
         match self {

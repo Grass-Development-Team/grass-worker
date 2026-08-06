@@ -24,7 +24,7 @@ it("uses the public site configuration on the login page and document title", as
       return Response.json({
         code: 200,
         message: "OK",
-        data: { site_name: "Acme Deploy", version: "0.1.0" },
+        data: { site_name: "Acme Deploy", logo_url: "/brand.svg", version: "0.1.0" },
       });
     }
     throw new Error(`unexpected request: ${input}`);
@@ -43,4 +43,11 @@ it("uses the public site configuration on the login page and document title", as
     await screen.findByRole("heading", { name: "Welcome to Acme Deploy" }),
   ).toBeInTheDocument();
   expect(document.title).toBe("Acme Deploy");
+  const logo = document.querySelector('img[src="/brand.svg"]');
+  expect(logo).toBeInTheDocument();
+  expect(logo?.parentElement).not.toHaveClass("bg-primary");
+  expect(document.querySelector('link[data-branding-favicon="true"]')).toHaveAttribute(
+    "href",
+    "/brand.svg",
+  );
 });

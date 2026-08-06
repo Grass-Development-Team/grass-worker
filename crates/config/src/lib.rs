@@ -21,6 +21,8 @@ pub enum ConfigError {
         name: &'static str,
         source: Box<dyn std::error::Error + Send + Sync>,
     },
+    #[error("invalid configuration: {0}")]
+    Invalid(String),
     #[error("failed to serialize configuration: {0}")]
     Serialize(#[from] toml::ser::Error),
     #[error("failed to write configuration: {0}")]

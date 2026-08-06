@@ -10,11 +10,12 @@ use uuid::Uuid;
 
 use crate::infra::http::timestamps::ts;
 use crate::{
+    domain::deployments,
     domain::hosts::{self, DomainReviewMode},
     infra::{
         database::entity::{
-            HostBindingEnvironment, HostBindingKind, HostBindingStatus, HostReviewStatus,
-            host_policy, project_host_binding,
+            DeploymentEnvironment, HostBindingEnvironment, HostBindingKind, HostBindingStatus,
+            HostReviewStatus, host_policy, project_host_binding,
         },
         error::{AppError, ok_response},
         host_provision::service::{BindHostRequest, HostBindingService},
@@ -92,6 +93,14 @@ pub async fn list(
     let bindings = hosts::list_bindings_for_project(db, access.project.id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let production_deployment =
+        deployments::find_active(db, access.project.id, DeploymentEnvironment::Production)
+            .await
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let preview_deployment =
+        deployments::find_active(db, access.project.id, DeploymentEnvironment::Preview)
+            .await
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
     let mut views = Vec::with_capacity(bindings.len());
     for binding in &bindings {
@@ -99,6 +108,16 @@ pub async fn list(
             .await
             .map_err(|source| AppError::Infrastructure { op: OP, source })?;
         let mut view = binding_view(binding);
+        view["serving"] = json!(
+            matches!(binding.status, HostBindingStatus::Active)
+                && match binding.environment {
+                    HostBindingEnvironment::Production => production_deployment.is_some(),
+                    HostBindingEnvironment::Preview => preview_deployment.is_some(),
+                    HostBindingEnvironment::All => {
+                        production_deployment.is_some() || preview_deployment.is_some()
+                    }
+                }
+        );
         view["provision_events"] = json!(
             events
                 .iter()

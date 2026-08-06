@@ -1,10 +1,15 @@
+pub mod announcements;
 pub mod audit_events;
+pub mod build_logs;
+pub mod codes;
 pub mod deployments;
 pub mod domains;
 pub mod host_sources;
+pub mod identity_providers;
 pub mod nodes;
 pub mod projects;
 pub mod quota_plans;
+pub mod registration;
 pub mod reviews;
 pub mod settings;
 pub mod team_groups;
@@ -14,7 +19,7 @@ pub mod users;
 use axum::{
     Router,
     response::IntoResponse,
-    routing::{get, patch, post},
+    routing::{delete, get, patch, post},
 };
 use serde_json::json;
 
@@ -26,6 +31,16 @@ use crate::{
 pub fn router() -> Router<ControlApiState> {
     Router::new()
         .route("/status", get(status))
+        .route("/codes", get(codes::list).post(codes::generate))
+        .route("/codes/{code_id}/revoke", post(codes::revoke))
+        .route(
+            "/registration/emails",
+            get(registration::list).post(registration::add),
+        )
+        .route(
+            "/registration/emails/{entry_id}",
+            delete(registration::remove),
+        )
         .route(
             "/quota-plans",
             get(quota_plans::list).post(quota_plans::create),
@@ -40,6 +55,14 @@ pub fn router() -> Router<ControlApiState> {
             patch(host_sources::update).delete(host_sources::remove),
         )
         .route("/audit-events", get(audit_events::list))
+        .route(
+            "/cleanup/audit-events",
+            get(audit_events::cleanup_preview).delete(audit_events::cleanup),
+        )
+        .route(
+            "/cleanup/build-logs",
+            get(build_logs::cleanup_preview).delete(build_logs::cleanup),
+        )
         .route(
             "/team-groups",
             get(team_groups::list).post(team_groups::create),
@@ -63,7 +86,31 @@ pub fn router() -> Router<ControlApiState> {
             "/users/{user_id}/reset-password",
             post(users::reset_password),
         )
+        .route(
+            "/users/{user_id}/mfa",
+            get(users::mfa_factors).patch(users::update_mfa_policy),
+        )
+        .route(
+            "/users/{user_id}/mfa/{factor_id}",
+            delete(users::reset_mfa_factor),
+        )
         .route("/settings", get(settings::get).patch(settings::update))
+        .route(
+            "/identity-providers",
+            get(identity_providers::list).post(identity_providers::create),
+        )
+        .route(
+            "/identity-providers/{provider_id}",
+            patch(identity_providers::update).delete(identity_providers::remove),
+        )
+        .route(
+            "/announcements",
+            get(announcements::list).post(announcements::publish),
+        )
+        .route(
+            "/announcements/{announcement_id}",
+            delete(announcements::remove),
+        )
         .route("/projects", get(projects::list))
         .route("/projects/{project_id}", get(projects::detail))
         .route(

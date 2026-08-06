@@ -16,7 +16,7 @@ describe("authApi.register", () => {
     vi.restoreAllMocks();
   });
 
-  it("registers with an invitation token and stores the returned csrf token", async () => {
+  it("registers with a local return destination and stores the returned csrf token", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       response({
         user: {
@@ -33,7 +33,7 @@ describe("authApi.register", () => {
       email: "leo@example.com",
       display_name: "Leo",
       password: "correct horse battery staple",
-      invitation_token: "invite-token",
+      return_to: "/invitations/accept?token=invite-token",
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -45,11 +45,26 @@ describe("authApi.register", () => {
           email: "leo@example.com",
           display_name: "Leo",
           password: "correct horse battery staple",
-          invitation_token: "invite-token",
+          return_to: "/invitations/accept?token=invite-token",
         }),
       }),
     );
     expect(getCsrfToken()).toBe("csrf-token");
+  });
+
+  it("keeps csrf empty while registration is waiting for email verification", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      response({ verification_required: true, email: "leo@example.com" }),
+    );
+
+    const result = await authApi.register({
+      email: "leo@example.com",
+      display_name: "Leo",
+      password: "correct horse battery staple",
+    });
+
+    expect(result).toEqual({ verification_required: true, email: "leo@example.com" });
+    expect(getCsrfToken()).toBeNull();
   });
 
   it("restores the csrf token before a mutation is sent", async () => {
@@ -119,5 +134,28 @@ describe("authApi.register", () => {
     expect(first).toEqual(second);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(getCsrfToken()).toBe("restored-token");
+  });
+
+  it("updates the current display name", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      response({
+        user: {
+          id: "user-1",
+          email: "leo@example.com",
+          display_name: "Leonard",
+          platform_role: "user",
+        },
+      }),
+    );
+
+    await authApi.updateMe({ display_name: "Leonard" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/me",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ display_name: "Leonard" }),
+      }),
+    );
   });
 });

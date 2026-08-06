@@ -52,7 +52,7 @@ export function ProjectsRoute() {
         {showCreateProject && (
           <Button asChild>
             <Link to="/projects/new">
-              <PlusIcon /> New project
+              <PlusIcon /> New Project
             </Link>
           </Button>
         )}

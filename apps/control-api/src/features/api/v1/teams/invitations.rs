@@ -5,7 +5,10 @@ use serde_json::json;
 use crate::infra::http::timestamps::ts;
 use crate::{
     domain::{
+        platform_mail,
         quotas::QuotaDimension,
+        registration::SignupPolicy,
+        settings,
         teams::{self, AcceptInvitationParams, CreateInvitationParams, InvitationError},
         users,
     },
@@ -31,6 +34,46 @@ pub struct AcceptInvitationRequest {
 #[derive(Deserialize)]
 pub struct PreflightInvitationQuery {
     pub token: String,
+}
+
+#[derive(Deserialize)]
+pub struct InvitationCandidatesQuery {
+    pub q: String,
+}
+
+pub async fn candidates(
+    axum::extract::State(state): axum::extract::State<ControlApiState>,
+    team_role: TeamRole,
+    Query(query): Query<InvitationCandidatesQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    team_role.require_admin("teams.invitations.candidates.admin_required")?;
+    let db = super::database(&state, "teams.invitations.candidates.no_database")?;
+    let policy = settings::get_setting(db, "signup.policy")
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: "teams.invitations.candidates.read_policy",
+            source,
+        })?
+        .and_then(|setting| setting.value.as_str().map(str::to_owned));
+    let policy = SignupPolicy::parse(policy.as_deref()).map_err(|error| AppError::Internal {
+        op: "teams.invitations.candidates.invalid_policy",
+        message: error.to_string(),
+    })?;
+    let candidates = teams::invitation_candidates(db, policy, &query.q, 10)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: "teams.invitations.candidates.search",
+            source,
+        })?;
+
+    Ok(ok_response(json!({
+        "candidates": candidates.into_iter().map(|candidate| json!({
+            "kind": if candidate.user_id.is_some() { "user" } else { "email" },
+            "user_id": candidate.user_id,
+            "email": candidate.email,
+            "display_name": candidate.display_name,
+        })).collect::<Vec<_>>()
+    })))
 }
 
 pub async fn preflight(
@@ -142,6 +185,17 @@ pub async fn create(
 
     let db = super::database(&state, "teams.invitations.create.no_database")?;
     let cache = super::cache(&state, "teams.invitations.create.no_cache")?;
+    let policy = settings::get_setting(db, "signup.policy")
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: "teams.invitations.create.read_policy",
+            source,
+        })?
+        .and_then(|setting| setting.value.as_str().map(str::to_owned));
+    let policy = SignupPolicy::parse(policy.as_deref()).map_err(|error| AppError::Internal {
+        op: "teams.invitations.create.invalid_policy",
+        message: error.to_string(),
+    })?;
 
     // Member quota is consumed when an invitation is accepted; inviting only
     // pre-checks the limit so teams cannot fan out invitations they can never
@@ -176,17 +230,29 @@ pub async fn create(
             role,
             invited_by_user_id: team_role.user_id,
             token_hash: teams::invitation_token_hash(&token),
+            signup_policy: policy,
         },
     )
     .await
     .map_err(map_invitation_error)?;
+    let invitation_role = super::role_value(&invitation.role);
+    let mail_config = state.config.read().unwrap().mail.clone();
+    platform_mail::send_invitation_best_effort(
+        db,
+        mail_config,
+        &invitation.email,
+        &team,
+        invitation_role,
+        &token,
+    )
+    .await;
 
     Ok(ok_response(json!({
         "invitation": {
             "id": invitation.id,
             "team_id": invitation.team_id,
             "email": invitation.email,
-            "role": super::role_value(&invitation.role),
+            "role": invitation_role,
             "status": "pending",
             "expires_at": ts(invitation.expires_at),
             "token": token,
@@ -303,6 +369,10 @@ fn map_invitation_error(error: InvitationError) -> AppError {
             op: "teams.invitations.already_member",
             message: error.to_string(),
         },
+        InvitationError::UserNotFound => AppError::NotFound {
+            op: "teams.invitations.user_not_found",
+            message: error.to_string(),
+        },
         InvitationError::Database(source) => AppError::Infrastructure {
             op: "teams.invitations.database",
             source: source.into(),
@@ -325,11 +395,227 @@ mod tests {
         infra::{
             config::ControlApiConfig,
             database::entity::{
-                TeamInvitationStatus, TeamKind, TeamMemberRole, team, team_invitation,
+                PlatformRole, SystemSettingValueKind, TeamInvitationStatus, TeamKind,
+                TeamMemberRole, UserStatus, system_setting, team, team_invitation, team_member,
+                user,
             },
         },
         state::ControlApiState,
     };
+
+    fn authenticated_request(uri: String, user_id: Uuid) -> Request<Body> {
+        let now = OffsetDateTime::now_utc();
+        let mut request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        request.extensions_mut().insert(Some((
+            "test-session".to_owned(),
+            grass_session::SessionData {
+                user_id,
+                created_at: now,
+                last_accessed_at: now,
+            },
+        )));
+        request
+    }
+
+    fn admin_membership(team_id: Uuid, user_id: Uuid) -> team_member::Model {
+        let now = OffsetDateTime::now_utc();
+        team_member::Model {
+            id: Uuid::now_v7(),
+            team_id,
+            user_id,
+            role: TeamMemberRole::Admin,
+            invited_by_user_id: None,
+            joined_at: now,
+            deleted_at: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn signup_policy(value: &str) -> system_setting::Model {
+        let now = OffsetDateTime::now_utc();
+        system_setting::Model {
+            id: Uuid::now_v7(),
+            key: "signup.policy".to_owned(),
+            value_kind: SystemSettingValueKind::String,
+            value: serde_json::json!(value),
+            is_secret: false,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn active_user(email: &str, display_name: Option<&str>) -> user::Model {
+        let now = OffsetDateTime::now_utc();
+        user::Model {
+            id: Uuid::now_v7(),
+            email: email.to_owned(),
+            display_name: display_name.map(str::to_owned),
+            status: UserStatus::Active,
+            platform_role: PlatformRole::User,
+            email_verified_at: Some(now),
+            last_login_at: None,
+            deleted_at: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[tokio::test]
+    async fn candidates_find_registered_users_even_when_registration_is_closed() {
+        let team_id = Uuid::now_v7();
+        let admin_id = Uuid::now_v7();
+        let candidate = active_user("alice@example.com", Some("Alice"));
+        let candidate_id = candidate.id;
+        let database = MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([[admin_membership(team_id, admin_id)]])
+            .append_query_results([[signup_policy("closed")]])
+            .append_query_results([[candidate]])
+            .into_connection();
+        let state = ControlApiState::new(ControlApiConfig::default(), "unused.toml");
+        assert!(state.database.set(database).is_ok());
+
+        let response = super::super::router()
+            .with_state(state)
+            .oneshot(authenticated_request(
+                format!("/teams/{team_id}/invitation-candidates?q=Ali"),
+                admin_id,
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["data"]["candidates"][0]["kind"], "user");
+        assert_eq!(
+            body["data"]["candidates"][0]["user_id"],
+            candidate_id.to_string()
+        );
+        assert_eq!(body["data"]["candidates"][0]["email"], "alice@example.com");
+        assert_eq!(body["data"]["candidates"][0]["display_name"], "Alice");
+    }
+
+    #[tokio::test]
+    async fn candidates_offer_an_exact_unregistered_email_only_for_open_registration() {
+        for (policy, expected_count) in [("open", 1), ("invite_only", 0)] {
+            let team_id = Uuid::now_v7();
+            let admin_id = Uuid::now_v7();
+            let database = MockDatabase::new(sea_orm::DbBackend::Postgres)
+                .append_query_results([[admin_membership(team_id, admin_id)]])
+                .append_query_results([[signup_policy(policy)]])
+                .append_query_results([Vec::<user::Model>::new()])
+                .append_query_results([Vec::<user::Model>::new()])
+                .into_connection();
+            let state = ControlApiState::new(ControlApiConfig::default(), "unused.toml");
+            assert!(state.database.set(database).is_ok());
+
+            let response = super::super::router()
+                .with_state(state)
+                .oneshot(authenticated_request(
+                    format!("/teams/{team_id}/invitation-candidates?q=new-user%40example.com"),
+                    admin_id,
+                ))
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(
+                body["data"]["candidates"].as_array().unwrap().len(),
+                expected_count,
+                "policy {policy}"
+            );
+            if policy == "open" {
+                assert_eq!(body["data"]["candidates"][0]["kind"], "email");
+                assert_eq!(
+                    body["data"]["candidates"][0]["user_id"],
+                    serde_json::Value::Null
+                );
+                assert_eq!(
+                    body["data"]["candidates"][0]["email"],
+                    "new-user@example.com"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn candidates_include_an_exact_registered_email_beyond_the_fuzzy_limit() {
+        let team_id = Uuid::now_v7();
+        let admin_id = Uuid::now_v7();
+        let exact_candidate = active_user("target@example.com", Some("Target"));
+        let exact_candidate_id = exact_candidate.id;
+        let fuzzy_candidates = (0..10)
+            .map(|index| {
+                active_user(
+                    &format!("match-{index}@example.com"),
+                    Some("target@example.com"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let database = MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([[admin_membership(team_id, admin_id)]])
+            .append_query_results([[signup_policy("closed")]])
+            .append_query_results([fuzzy_candidates])
+            .append_query_results([[exact_candidate]])
+            .into_connection();
+        let state = ControlApiState::new(ControlApiConfig::default(), "unused.toml");
+        assert!(state.database.set(database).is_ok());
+
+        let response = super::super::router()
+            .with_state(state)
+            .oneshot(authenticated_request(
+                format!("/teams/{team_id}/invitation-candidates?q=target%40example.com"),
+                admin_id,
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let candidates = body["data"]["candidates"].as_array().unwrap();
+        assert_eq!(candidates.len(), 10);
+        assert_eq!(
+            candidates
+                .iter()
+                .filter(|candidate| candidate["user_id"] == exact_candidate_id.to_string())
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn candidates_do_not_offer_a_disabled_exact_user_as_an_open_email() {
+        let team_id = Uuid::now_v7();
+        let admin_id = Uuid::now_v7();
+        let mut disabled_candidate = active_user("disabled@example.com", Some("Disabled"));
+        disabled_candidate.status = UserStatus::Disabled;
+        let database = MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([[admin_membership(team_id, admin_id)]])
+            .append_query_results([[signup_policy("open")]])
+            .append_query_results([Vec::<user::Model>::new()])
+            .append_query_results([[disabled_candidate]])
+            .into_connection();
+        let state = ControlApiState::new(ControlApiConfig::default(), "unused.toml");
+        assert!(state.database.set(database).is_ok());
+
+        let response = super::super::router()
+            .with_state(state)
+            .oneshot(authenticated_request(
+                format!("/teams/{team_id}/invitation-candidates?q=disabled%40example.com"),
+                admin_id,
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(body["data"]["candidates"].as_array().unwrap().is_empty());
+    }
 
     #[tokio::test]
     async fn preflight_is_public_and_describes_the_invitation() {

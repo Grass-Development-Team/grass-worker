@@ -55,7 +55,7 @@ export function ProjectSidebarNav({ projectId }: { projectId: string }) {
         <SidebarGroupContent>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton asChild tooltip="Back to projects">
+              <SidebarMenuButton asChild tooltip="Back to Projects">
                 <NavLink to="/projects">
                   <ArrowLeftIcon />
                   <span>Projects</span>

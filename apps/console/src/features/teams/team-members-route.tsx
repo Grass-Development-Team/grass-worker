@@ -1,7 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckIcon, CopyIcon, MoreHorizontalIcon, PlusIcon } from "lucide-react";
-import { useState } from "react";
+import {
+  CheckIcon,
+  CopyIcon,
+  MoreHorizontalIcon,
+  PlusIcon,
+  UserIcon,
+  UserPlusIcon,
+} from "lucide-react";
+import { useDeferredValue, useState } from "react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -22,6 +30,14 @@ import {
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
   Select,
   SelectContent,
   SelectGroup,
@@ -40,7 +56,13 @@ import {
 } from "@/components/ui/table";
 import { teamKeys, useTeam } from "./team-context";
 import { canManageMembers } from "./team-permissions";
-import { teamsApi, type ManagedTeamRole, type TeamInvitation, type TeamMember } from "./teams.api";
+import {
+  teamsApi,
+  type InvitationCandidate,
+  type ManagedTeamRole,
+  type TeamInvitation,
+  type TeamMember,
+} from "./teams.api";
 
 const roles: ManagedTeamRole[] = ["admin", "member", "viewer"];
 
@@ -49,6 +71,7 @@ export function TeamMembersRoute() {
   const queryClient = useQueryClient();
   const [inviteOpen, setInviteOpen] = useState(false);
   const [email, setEmail] = useState("");
+  const [selectedCandidate, setSelectedCandidate] = useState<InvitationCandidate | null>(null);
   const [role, setRole] = useState<ManagedTeamRole>("member");
   const [invitation, setInvitation] = useState<TeamInvitation | null>(null);
   const [removeTarget, setRemoveTarget] = useState<TeamMember | null>(null);
@@ -60,10 +83,19 @@ export function TeamMembersRoute() {
     queryFn: () => teamsApi.listMembers(activeTeam!.id),
     enabled: Boolean(activeTeam),
   });
+  const candidateQuery = useDeferredValue(email.trim());
+  const candidates = useQuery({
+    queryKey: activeTeam
+      ? ["teams", activeTeam.id, "invitation-candidates", candidateQuery]
+      : ["teams", "none", "invitation-candidates", candidateQuery],
+    queryFn: () => teamsApi.invitationCandidates(activeTeam!.id, candidateQuery),
+    enabled: Boolean(activeTeam && inviteOpen && !invitation && candidateQuery),
+  });
   const refresh = () =>
     queryClient.invalidateQueries({ queryKey: teamKeys.members(activeTeam!.id) });
   const invite = useMutation({
-    mutationFn: () => teamsApi.inviteMember(activeTeam!.id, { email: email.trim(), role }),
+    mutationFn: () =>
+      teamsApi.inviteMember(activeTeam!.id, { email: selectedCandidate!.email, role }),
     onSuccess: ({ invitation }) => {
       setInvitation(invitation);
       setCopyError(null);
@@ -90,6 +122,7 @@ export function TeamMembersRoute() {
     setInviteOpen(open);
     if (!open) {
       setEmail("");
+      setSelectedCandidate(null);
       setRole("member");
       setInvitation(null);
       setCopyError(null);
@@ -101,6 +134,7 @@ export function TeamMembersRoute() {
   const openInviteDialog = () => {
     invite.reset();
     setEmail("");
+    setSelectedCandidate(null);
     setRole("member");
     setInvitation(null);
     setCopyError(null);
@@ -286,19 +320,69 @@ export function TeamMembersRoute() {
               className="flex flex-col gap-6"
               onSubmit={(event) => {
                 event.preventDefault();
-                invite.mutate();
+                if (selectedCandidate) invite.mutate();
               }}
             >
               <FieldGroup>
                 <Field>
                   <FieldLabel htmlFor="invite-email">Email</FieldLabel>
-                  <Input
-                    id="invite-email"
-                    type="email"
-                    required
-                    value={email}
-                    onChange={(event) => setEmail(event.target.value)}
-                  />
+                  <Command shouldFilter={false} className="border">
+                    <CommandInput
+                      id="invite-email"
+                      aria-label="Email"
+                      placeholder="Search by email or name"
+                      value={email}
+                      onValueChange={(value) => {
+                        setEmail(value);
+                        setSelectedCandidate(null);
+                      }}
+                    />
+                    {candidateQuery && (
+                      <CommandList>
+                        {candidates.isFetching ? (
+                          <CommandGroup>
+                            <CommandItem disabled value="searching">
+                              <Spinner /> Searching...
+                            </CommandItem>
+                          </CommandGroup>
+                        ) : candidates.error ? null : (
+                          <>
+                            <CommandEmpty>User does not exist.</CommandEmpty>
+                            {candidates.data?.candidates.length ? (
+                              <CommandGroup>
+                                {candidates.data.candidates.map((candidate) => (
+                                  <CommandItem
+                                    key={`${candidate.kind}:${candidate.user_id ?? candidate.email}`}
+                                    value={`${candidate.kind}:${candidate.user_id ?? candidate.email}`}
+                                    onSelect={() => {
+                                      setEmail(candidate.email);
+                                      setSelectedCandidate(candidate);
+                                    }}
+                                  >
+                                    {candidate.kind === "user" ? <UserIcon /> : <UserPlusIcon />}
+                                    <span className="flex min-w-0 flex-1 flex-col">
+                                      <span className="truncate font-medium">
+                                        {candidate.display_name ?? candidate.email}
+                                      </span>
+                                      {candidate.display_name && (
+                                        <span className="truncate text-xs text-muted-foreground">
+                                          {candidate.email}
+                                        </span>
+                                      )}
+                                    </span>
+                                    {candidate.kind === "email" && (
+                                      <Badge variant="secondary">Invite User</Badge>
+                                    )}
+                                  </CommandItem>
+                                ))}
+                              </CommandGroup>
+                            ) : null}
+                          </>
+                        )}
+                      </CommandList>
+                    )}
+                  </Command>
+                  {candidates.error && <FieldError>{candidates.error.message}</FieldError>}
                 </Field>
                 <Field>
                   <FieldLabel>Role</FieldLabel>
@@ -320,7 +404,7 @@ export function TeamMembersRoute() {
                 {invite.error && <FieldError>{invite.error.message}</FieldError>}
               </FieldGroup>
               <DialogFooter>
-                <Button type="submit" disabled={invite.isPending}>
+                <Button type="submit" disabled={invite.isPending || !selectedCandidate}>
                   {invite.isPending && <Spinner data-icon="inline-start" />}Create invitation
                 </Button>
               </DialogFooter>

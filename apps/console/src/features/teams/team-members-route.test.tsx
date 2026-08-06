@@ -18,6 +18,7 @@ vi.mock("./teams.api", async (load) => {
     teamsApi: {
       ...original.teamsApi,
       listMembers: vi.fn(),
+      invitationCandidates: vi.fn(),
       inviteMember: vi.fn(),
       updateMemberRole: vi.fn(),
       removeMember: vi.fn(),
@@ -57,6 +58,7 @@ describe("TeamMembersRoute", () => {
       activeRole: "owner",
     } as ReturnType<typeof useTeam>);
     vi.mocked(teamsApi.listMembers).mockResolvedValue({ members: [member] });
+    vi.mocked(teamsApi.invitationCandidates).mockResolvedValue({ candidates: [] });
   });
 
   afterEach(() => vi.clearAllMocks());
@@ -74,11 +76,22 @@ describe("TeamMembersRoute", () => {
 
   it("clears a failed invitation before reopening the dialog", async () => {
     const user = userEvent.setup();
+    vi.mocked(teamsApi.invitationCandidates).mockResolvedValue({
+      candidates: [
+        {
+          kind: "user",
+          user_id: "user-3",
+          email: "new@example.com",
+          display_name: "New User",
+        },
+      ],
+    });
     vi.mocked(teamsApi.inviteMember).mockRejectedValue(new Error("Invitation failed"));
     renderRoute();
 
     await user.click(screen.getByRole("button", { name: "Invite member" }));
     await user.type(screen.getByLabelText("Email"), "new@example.com");
+    await user.click(await screen.findByRole("option", { name: /New User/ }));
     await user.click(screen.getByRole("button", { name: "Create invitation" }));
     expect(await screen.findByText("Invitation failed")).toBeInTheDocument();
 
@@ -87,5 +100,74 @@ describe("TeamMembersRoute", () => {
 
     expect(screen.queryByText("Invitation failed")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Email")).toHaveValue("");
+  });
+
+  it("searches and selects a registered user before creating an invitation", async () => {
+    const user = userEvent.setup();
+    vi.mocked(teamsApi.invitationCandidates).mockResolvedValue({
+      candidates: [
+        {
+          kind: "user",
+          user_id: "user-3",
+          email: "alice@example.com",
+          display_name: "Alice",
+        },
+      ],
+    });
+    vi.mocked(teamsApi.inviteMember).mockResolvedValue({
+      invitation: {
+        id: "invitation-1",
+        team_id: "team-1",
+        email: "alice@example.com",
+        role: "member",
+        status: "pending",
+        expires_at: "2026-08-13T08:00:00Z",
+        token: "secret",
+      },
+    });
+    renderRoute();
+
+    await user.click(screen.getByRole("button", { name: "Invite member" }));
+    await user.type(screen.getByLabelText("Email"), "ali");
+    await user.click(await screen.findByRole("option", { name: /Alice.*alice@example.com/ }));
+    await user.click(screen.getByRole("button", { name: "Create invitation" }));
+
+    expect(teamsApi.invitationCandidates).toHaveBeenCalledWith("team-1", "ali");
+    expect(teamsApi.inviteMember).toHaveBeenCalledWith("team-1", {
+      email: "alice@example.com",
+      role: "member",
+    });
+  });
+
+  it("offers an open-registration email candidate as Invite User", async () => {
+    const user = userEvent.setup();
+    vi.mocked(teamsApi.invitationCandidates).mockResolvedValue({
+      candidates: [
+        {
+          kind: "email",
+          user_id: null,
+          email: "new-user@example.com",
+          display_name: null,
+        },
+      ],
+    });
+    renderRoute();
+
+    await user.click(screen.getByRole("button", { name: "Invite member" }));
+    await user.type(screen.getByLabelText("Email"), "new-user@example.com");
+
+    expect(await screen.findByText("Invite User")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /new-user@example.com.*Invite User/ })).toBeVisible();
+  });
+
+  it("reports a missing user and disables submission when no candidate is available", async () => {
+    const user = userEvent.setup();
+    renderRoute();
+
+    await user.click(screen.getByRole("button", { name: "Invite member" }));
+    await user.type(screen.getByLabelText("Email"), "missing@example.com");
+
+    expect(await screen.findByText("User does not exist.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create invitation" })).toBeDisabled();
   });
 });

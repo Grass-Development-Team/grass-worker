@@ -5,6 +5,7 @@ import type {
 } from "@/features/deployments/deployments.api";
 import type { AuditPage } from "@/features/audit/audit.api";
 import { request } from "@/lib/api";
+import type { Announcement } from "@/features/announcements/announcements.api";
 
 export interface AdministrationStatus {
   service: string;
@@ -193,8 +194,124 @@ export interface AdminUser {
   display_name: string | null;
   status: "active" | "disabled";
   platform_role: "user" | "admin";
+  email_verified: boolean;
   last_login_at: string | null;
   created_at: string;
+}
+
+export type AdminCodeStatus = "available" | "used" | "expired" | "revoked";
+
+export interface AdminCodeUser {
+  id: string;
+  email: string;
+  display_name: string | null;
+}
+
+export interface AdminCode {
+  id: string;
+  code: string;
+  scope: string;
+  status: AdminCodeStatus;
+  expires_at: string | null;
+  used_at: string | null;
+  used_by: AdminCodeUser | null;
+  revoked_at: string | null;
+  created_at: string;
+}
+
+export interface AdminGeneratedCode {
+  id: string;
+  code: string;
+  scope: string;
+  expires_at: string | null;
+  created_at: string;
+}
+
+export interface AdminCodesPage {
+  scopes: string[];
+  codes: AdminCode[];
+  pagination: {
+    page: number;
+    per_page: number;
+    total: number;
+    total_pages: number;
+  };
+}
+
+export interface AdminRegistrationEmailCreator {
+  id: string;
+  email?: string | null;
+  display_name?: string | null;
+}
+
+export interface AdminRegistrationEmail {
+  id: string;
+  email: string;
+  created_at: string;
+  created_by: AdminRegistrationEmailCreator | null;
+}
+
+export type AdminMfaEnforcement = "none" | "platform_admins" | "all_users";
+
+export interface AdminMfaPolicy {
+  allowed_factors: Array<"totp" | "email">;
+  enforcement: AdminMfaEnforcement;
+  minimum_factors: number;
+  required_factors: Array<"totp" | "email">;
+}
+
+export interface AdminUserMfaPolicy {
+  inherit_platform: boolean;
+  minimum_factors: number;
+  required_factors: Array<"totp" | "email">;
+}
+
+export interface AdminUserMfaResponse {
+  factors: AdminMfaFactor[];
+  policy: AdminUserMfaPolicy;
+  allowed_factors: Array<"totp" | "email">;
+  effective_requirements: {
+    minimum_factors: number;
+    required_factors: Array<"totp" | "email">;
+  };
+}
+
+export interface AdminPasswordPolicy {
+  min_length: number;
+  max_length: number;
+  require_lowercase: boolean;
+  require_uppercase: boolean;
+  require_number: boolean;
+  require_symbol: boolean;
+  history_count: number;
+}
+
+export interface AdminMfaFactor {
+  id: string;
+  kind: "totp" | "email";
+  label: string | null;
+  verified: boolean;
+  verified_at: string | null;
+  last_used_at: string | null;
+  created_at: string;
+}
+
+export interface AdminIdentityProvider {
+  id: string;
+  slug: string;
+  kind: "oidc" | "github";
+  name: string;
+  enabled: boolean;
+  client_id: string;
+  client_secret_configured: boolean;
+  issuer_url: string | null;
+  authorization_url: string;
+  token_url: string;
+  userinfo_url: string | null;
+  jwks_url: string | null;
+  scopes: string[];
+  created_at: string;
+  updated_at: string;
 }
 
 export interface AdminTeamGroupRef {
@@ -383,7 +500,12 @@ export interface AdminReview {
 }
 
 export interface AdminSettings {
-  site: { name: string | null; url: string | null; public_base_url: string | null };
+  site: {
+    name: string | null;
+    logo_url: string | null;
+    url: string | null;
+    public_base_url: string | null;
+  };
   storage: { root: string };
   signup: { policy: "open" | "invite_only" | "closed" };
   review: { production: "auto" | "manual"; preview: "auto" | "manual" };
@@ -392,6 +514,22 @@ export interface AdminSettings {
   database: { url_configured: boolean };
   redis: { backend: "moka" | "redis"; url_configured: boolean };
   secrets: { secret_key_configured: boolean; git_credentials_configured: boolean };
+  mail: {
+    mode: "none" | "local" | "smtp";
+    from_address: string;
+    from_name: string;
+    sendmail_command: string;
+    smtp_host: string;
+    smtp_port: number;
+    smtp_security: "none" | "starttls" | "tls";
+    smtp_username: string;
+    smtp_password_configured: boolean;
+  };
+  authentication: {
+    password_policy: AdminPasswordPolicy;
+    registration_email_verification: boolean;
+    mfa_policy: AdminMfaPolicy;
+  };
   session: {
     cookie_secure: boolean;
     idle_ttl_seconds: number;
@@ -409,8 +547,57 @@ export interface AdminSettings {
   restart_required_sections: Array<"server" | "redis" | "node_manager" | "migration" | "log">;
 }
 
+export type AdminAnnouncement = Announcement;
+
+export interface AdminAnnouncementsPage {
+  announcements: AdminAnnouncement[];
+  pagination: {
+    page: number;
+    per_page: number;
+    total: number;
+    total_pages: number;
+  };
+}
+
 export const adminApi = {
   status: () => request<AdministrationStatus>("/api/v1/admin/status"),
+
+  listCodes: (filters?: { scope?: string; status?: AdminCodeStatus; page?: number }) => {
+    const query = new URLSearchParams();
+    if (filters?.scope) query.set("scope", filters.scope);
+    if (filters?.status) query.set("status", filters.status);
+    if (filters?.page) query.set("page", String(filters.page));
+    const suffix = query.size ? `?${query}` : "";
+    return request<AdminCodesPage>(`/api/v1/admin/codes${suffix}`);
+  },
+
+  generateCodes: (input: {
+    scope: string;
+    count: number;
+    expires_in_days: number | null;
+    never_expires: boolean;
+  }) =>
+    request<{ codes: AdminGeneratedCode[] }>("/api/v1/admin/codes", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  revokeCode: (codeId: string) =>
+    request<{ code: AdminCode }>(`/api/v1/admin/codes/${codeId}/revoke`, { method: "POST" }),
+
+  listRegistrationEmails: () =>
+    request<{ emails: AdminRegistrationEmail[] }>("/api/v1/admin/registration/emails"),
+
+  addRegistrationEmail: (input: { email: string }) =>
+    request<{ email: AdminRegistrationEmail }>("/api/v1/admin/registration/emails", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  removeRegistrationEmail: (entryId: string) =>
+    request<{ deleted: boolean }>(`/api/v1/admin/registration/emails/${entryId}`, {
+      method: "DELETE",
+    }),
 
   listQuotaPlans: () => request<{ plans: AdminQuotaPlan[] }>("/api/v1/admin/quota-plans"),
 
@@ -530,6 +717,23 @@ export const adminApi = {
         body: JSON.stringify(password ? { password } : {}),
       },
     ),
+
+  listUserMfa: (userId: string) =>
+    request<AdminUserMfaResponse>(`/api/v1/admin/users/${userId}/mfa`),
+
+  updateUserMfaPolicy: (userId: string, policy: AdminUserMfaPolicy) =>
+    request<Pick<AdminUserMfaResponse, "policy" | "effective_requirements">>(
+      `/api/v1/admin/users/${userId}/mfa`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(policy),
+      },
+    ),
+
+  resetUserMfaFactor: (userId: string, factorId: string) =>
+    request<{ deleted: true }>(`/api/v1/admin/users/${userId}/mfa/${factorId}`, {
+      method: "DELETE",
+    }),
 
   listTeams: (q?: string) =>
     request<{ teams: AdminTeam[] }>(
@@ -730,8 +934,75 @@ export const adminApi = {
 
   getSettings: () => request<AdminSettings>("/api/v1/admin/settings"),
 
+  listIdentityProviders: () =>
+    request<{ providers: AdminIdentityProvider[] }>("/api/v1/admin/identity-providers"),
+
+  createIdentityProvider: (input: {
+    slug: string;
+    template: "google" | "apple" | "github" | "custom";
+    name: string;
+    client_id: string;
+    client_secret: string;
+    issuer_url?: string;
+    authorization_url?: string;
+    token_url?: string;
+    userinfo_url?: string;
+    jwks_url?: string;
+    scopes?: string[];
+    enabled?: boolean;
+  }) =>
+    request<{ provider: AdminIdentityProvider }>("/api/v1/admin/identity-providers", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  updateIdentityProvider: (
+    providerId: string,
+    input: Partial<
+      Pick<
+        AdminIdentityProvider,
+        | "name"
+        | "enabled"
+        | "client_id"
+        | "issuer_url"
+        | "authorization_url"
+        | "token_url"
+        | "userinfo_url"
+        | "jwks_url"
+        | "scopes"
+      >
+    > & { client_secret?: string },
+  ) =>
+    request<{ provider: AdminIdentityProvider }>(`/api/v1/admin/identity-providers/${providerId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+
+  deleteIdentityProvider: (providerId: string) =>
+    request<{ deleted: true }>(`/api/v1/admin/identity-providers/${providerId}`, {
+      method: "DELETE",
+    }),
+
+  listAnnouncements: (page = 1, perPage = 20) =>
+    request<AdminAnnouncementsPage>(`/api/v1/admin/announcements?page=${page}&per_page=${perPage}`),
+
+  publishAnnouncement: (input: { title: string; content: string; auto_popup: boolean }) =>
+    request<{ announcement: AdminAnnouncement; recipients: number }>(
+      "/api/v1/admin/announcements",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    ),
+
+  removeAnnouncement: (announcementId: string) =>
+    request<{ ok: true }>(`/api/v1/admin/announcements/${announcementId}`, {
+      method: "DELETE",
+    }),
+
   updateSettings: (input: {
     site_name?: string;
+    site_logo_url?: string;
     site_url?: string;
     public_base_url?: string;
     storage_root?: string;
@@ -746,6 +1017,18 @@ export const adminApi = {
     session_idle_ttl_seconds?: number;
     session_ttl_seconds?: number;
     audit_retention_days?: number;
+    mail_mode?: "none" | "local" | "smtp";
+    mail_from_address?: string;
+    mail_from_name?: string;
+    mail_sendmail_command?: string;
+    mail_smtp_host?: string;
+    mail_smtp_port?: number;
+    mail_smtp_security?: "none" | "starttls" | "tls";
+    mail_smtp_username?: string;
+    mail_smtp_password?: string;
+    password_policy?: AdminPasswordPolicy;
+    registration_email_verification?: boolean;
+    mfa_policy?: AdminMfaPolicy;
     node_manager_auto_start_local_node?: boolean;
     node_manager_local_node_binary?: string;
     node_manager_local_node_config?: string;

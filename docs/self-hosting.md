@@ -30,6 +30,29 @@ Or use the Docker image (both binaries are included):
 docker build -t grass-worker .
 ```
 
+Published images use Debian Bookworm as the default runtime. The `-slim` and
+`-alpine` tags select Debian Bookworm Slim and Alpine 3.22 respectively:
+
+```text
+ghcr.io/yuanzui-cf/grass-worker:<version>
+ghcr.io/yuanzui-cf/grass-worker:<version>-slim
+ghcr.io/yuanzui-cf/grass-worker:<version>-alpine
+```
+
+Build all local runtime variants with Docker Bake:
+
+```sh
+docker buildx bake
+```
+
+To build one target, use its Dockerfile stage:
+
+```sh
+docker build --target runtime -t grass-worker:debian .
+docker build --target runtime-slim -t grass-worker:slim .
+docker build --target runtime-alpine -t grass-worker:alpine .
+```
+
 ## 2. Start the Control API
 
 Copy `config.toml.example` to `config.toml` and set at least the database
@@ -60,6 +83,49 @@ Control API settings under **Administration → Settings**. Secret settings
 remain write-only: the Console reports whether each value is configured but
 never returns it. File and environment configuration still provide the
 startup values for settings that cannot be changed before the API is running.
+
+### Authentication and email
+
+Outbound email is optional and is configured under **Administration → Settings
+→ Email**. The `none` mode disables delivery, `local` invokes the configured
+absolute `sendmail`/MTA command on the Control API host, and `smtp` connects to
+the configured SMTP server. SMTP passwords are write-only in the API and can
+also be supplied with `GWAPI_MAIL_SMTP_PASSWORD`.
+
+The **Administration → Settings → Authentication** page controls password
+length and character requirements, password history, and the independent
+registration email-verification switch. Enabling registration verification
+requires an enabled email transport; it is not an MFA setting. Password reset
+mail, invitations, MFA email codes, and deployment result notifications use
+the same transport. Deployment notifications go to the triggering user and
+active members of the project team.
+
+The signup policy on that page can be `Open`, `Invite only`, or `Closed`.
+Invite-only registration accepts either a single-use `registration` scope Code
+from **Administration → Code** or an exact email entry from **Administration →
+Registration**. Email entries are removed after successful registration. The
+same authorization applies to password, OIDC, and GitHub registration, while
+the independent email-verification switch continues to control whether a new
+password account must verify its email.
+
+Team invitations are separate from platform registration authorization. Team
+administrators select an active platform user from the member dialog. With an
+`Open` signup policy, an exact unregistered email can also be selected and the
+recipient may register through the normal open-registration flow. Under
+`Invite only` or `Closed`, the email must already belong to an active platform
+user. A Team invitation never acts as a registration credential and is never
+accepted automatically during signup; after authentication, the recipient
+returns to the invitation page and explicitly accepts it.
+
+Identity providers are configured on the same Authentication page. Google,
+Apple, GitHub, and custom OIDC templates are available; custom endpoints must
+use HTTPS. OAuth callbacks use state, nonce, and PKCE validation and only
+accept local return paths.
+
+MFA is disabled by default. Administrators can allow TOTP and/or email codes
+and enforce MFA for platform administrators, all users, or a selected set of
+users. Users manage their own enrolled factors under **Account → Security**;
+administrators can inspect or reset a user's factors.
 
 With an empty database the service starts in **setup mode**. Open the
 Console (`just run console` during development, or the embedded Console on
@@ -387,6 +453,9 @@ SSH, and `git://` connections are pinned to an address that passed this policy.
 - User-facing API access and key business actions are recorded with separate
   platform/team visibility; audit metadata and before/after values are
   redacted before storage.
+- **Administration → Cleanup** previews and removes filtered audit events or
+  persisted deployment build logs. Active, pending-release, assigned, and
+  migrating deployment logs are protected and reported as skipped.
 - Secrets never land in the repository: node tokens are stored hashed, and
   DNS provider credentials belong in host source config or environment
   variables.

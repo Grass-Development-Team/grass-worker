@@ -1,4 +1,6 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -24,6 +26,8 @@ vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => false }));
 function renderLayout(
   platformRole: "admin" | "user",
   teamRole: "owner" | "admin" | "member" | "viewer" = "owner",
+  path = "/",
+  isLoading = false,
 ) {
   vi.mocked(useAuth).mockReturnValue({
     user: {
@@ -35,32 +39,47 @@ function renderLayout(
     logout: vi.fn(),
   } as ReturnType<typeof useAuth>);
   vi.mocked(useTeam).mockReturnValue({
-    activeTeam: { id: "team-1", slug: "team", name: "Team", kind: "team" },
+    activeTeam: isLoading ? null : { id: "team-1", slug: "team", name: "Team", kind: "team" },
     activeRole: teamRole,
     error: null,
+    isLoading,
     refreshTeams: vi.fn(),
   } as ReturnType<typeof useTeam>);
 
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
-    <BrandingProvider branding={{ siteName: "Acme Deploy", version: "0.1.0" }}>
-      <MemoryRouter>
-        <AppLayout />
-      </MemoryRouter>
-    </BrandingProvider>,
+    <QueryClientProvider client={queryClient}>
+      <BrandingProvider branding={{ siteName: "Acme Deploy", version: "0.1.0" }}>
+        <MemoryRouter initialEntries={[path]}>
+          <AppLayout />
+        </MemoryRouter>
+      </BrandingProvider>
+    </QueryClientProvider>,
   );
 }
 
 describe("App layout administration navigation", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("hides Administration from a regular platform user", () => {
+  it("hides Administration from a regular platform user's account menu", async () => {
     renderLayout("user");
+
+    await userEvent.click(screen.getByRole("button", { name: /User/ }));
+
     expect(screen.queryByRole("link", { name: "Administration" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Administration" })).not.toBeInTheDocument();
   });
 
-  it("shows Administration to a platform administrator", () => {
+  it("shows Administration in a platform administrator's account menu", async () => {
     renderLayout("admin");
-    expect(screen.getByRole("link", { name: "Administration" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Administration" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /User/ }));
+
+    expect(screen.getByRole("menuitem", { name: "Administration" })).toHaveAttribute(
+      "href",
+      "/admin",
+    );
   });
 
   it.each(["member", "viewer"] as const)("hides team Audit from %s", (role) => {
@@ -85,5 +104,42 @@ describe("App layout administration navigation", () => {
       "href",
       "/notifications",
     );
+  });
+
+  it("keeps workspace chrome stable while teams are loading", () => {
+    renderLayout("user", "owner", "/", true);
+
+    expect(screen.getByText("Loading workspace")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toBeInTheDocument();
+  });
+
+  it("replaces the administration sidebar inside Settings", () => {
+    renderLayout("admin", "owner", "/admin/settings/basic");
+
+    expect(screen.getByRole("link", { name: "Administration" })).toHaveAttribute("href", "/admin");
+    expect(screen.getByRole("link", { name: "Basic" })).toHaveAttribute(
+      "href",
+      "/admin/settings/basic",
+    );
+    expect(screen.getByRole("link", { name: "Announcements" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Reviews" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the existing Administration return navigation", () => {
+    renderLayout("admin", "owner", "/admin/reviews");
+
+    expect(screen.getByRole("link", { name: "Console" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "Reviews" })).toBeInTheDocument();
+  });
+
+  it("uses a dedicated personal settings sidebar", () => {
+    renderLayout("user", "owner", "/account/profile");
+
+    expect(screen.getByRole("link", { name: "Console" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "Profile" })).toHaveAttribute(
+      "href",
+      "/account/profile",
+    );
+    expect(screen.queryByRole("link", { name: "Projects" })).not.toBeInTheDocument();
   });
 });

@@ -509,6 +509,7 @@ async fn handle_preview_callback(state: &ServeState, host: &str, code: Option<St
     }
 }
 
+#[allow(clippy::result_large_err)]
 async fn require_preview_access(
     state: &ServeState,
     host: &str,

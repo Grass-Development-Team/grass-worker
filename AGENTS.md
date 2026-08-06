@@ -139,8 +139,8 @@ Issue workflow:
 
 1. Determine the current version from the header of `docs/todo.md`.
 2. Determine the repository name from local git configuration or repository metadata.
-3. Search for an issue corresponding to the small feature, for example `M3.1 Quota 数据访问层`.
-4. Search for a parent issue corresponding to the Milestone, for example `Milestone 3：配额系统`.
+3. Search for an issue corresponding to the small feature, for example `Quota Data Access Layer`.
+4. Search for a parent issue corresponding to the Milestone, for example `Quota System`.
 5. If a small-feature issue already exists, use it.
 6. If the small-feature issue does not exist but the Milestone parent issue exists, create the small-feature issue and add it as a sub-issue.
 7. If the Milestone parent issue does not exist, create the parent issue first, then create the small-feature issue and add it as a sub-issue.
@@ -168,6 +168,16 @@ Label rules:
 - If labels are missing and the available tools support creating labels, create clear labels such as `type: feat`, `type: docs`, `area: backend`, `area: frontend`, `area: node`, `area: infra`, `area: docs`, `milestone`, and `subtask` as appropriate.
 - If label creation is unavailable, proceed with existing labels and mention the limitation.
 
+## Issue and Pull Request Content Standards
+
+- Issue and pull request titles and bodies must be written in English.
+- Titles and bodies must not use internal priority, phase, or milestone-slice identifiers. Use GitHub Milestones, Projects, and parent/child relationships for tracking instead.
+- Issue titles should describe the capability or problem directly without an identifier prefix.
+- Issue bodies should use `Objective`, `Scope`, `Acceptance Criteria`, and `Constraints` sections as applicable.
+- Pull request titles should follow the Conventional Commit style used by repository commits.
+- Pull request bodies should use `Summary`, `Validation`, and `Tracking` sections, with `Known Limitations` when applicable.
+- Use `Closes #<number>` only for issues completed by the pull request. Closing keywords take effect when the pull request is merged into the default `main` branch; promotion pull requests into `main` must repeat the relevant closing references.
+
 ## Worktree and Branch Workflow
 
 Before changing files, agents must prepare an isolated worktree and branch unless the user explicitly requests otherwise.
@@ -178,7 +188,7 @@ Worktree rules:
 - Do not overwrite or discard user changes without explicit permission.
 - All git worktrees must be created under the current project directory's `.worktree/` directory.
 - Do not create worktrees in parent directories, sibling directories, temporary directories, home directories, or any location outside the current project directory.
-- Create a worktree named with a kebab-case feature name, for example `.worktree/gw-m3-1-quota-domain`.
+- Create a worktree named with a kebab-case feature name, for example `.worktree/gw-quota-domain`.
 - The worktree name should include the Milestone small-feature ID when applicable.
 - After creating the worktree and branch, stop and report the worktree path, branch name, and intended next step to the user before continuing implementation.
 
@@ -192,7 +202,7 @@ Branch rules:
   - `refactor/<feature-description>`
   - `test/<feature-description>`
   - `chore/<feature-description>`
-- Example: `feat/quota-domain` for `M3.1`.
+- Example: `feat/quota-domain` for a quota capability.
 - Example: `docs/agent-guidelines` for documentation-only changes.
 
 ## Implementation Workflow
