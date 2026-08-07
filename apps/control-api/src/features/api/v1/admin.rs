@@ -1,5 +1,6 @@
 pub mod announcements;
 pub mod audit_events;
+pub mod batch;
 pub mod build_logs;
 pub mod codes;
 pub mod deployments;
@@ -72,6 +73,7 @@ pub fn router() -> Router<ControlApiState> {
             patch(team_groups::update).delete(team_groups::remove),
         )
         .route("/teams", get(teams::list).post(teams::create))
+        .route("/teams/batch", post(teams::batch))
         .route(
             "/teams/{team_id}",
             get(teams::detail)
@@ -81,6 +83,7 @@ pub fn router() -> Router<ControlApiState> {
         .route("/teams/{team_id}/group", post(team_groups::assign))
         .route("/teams/{team_id}/quota-plan", post(teams::set_quota_plan))
         .route("/users", get(users::list).post(users::create))
+        .route("/users/batch", post(users::batch))
         .route("/users/{user_id}", patch(users::update))
         .route(
             "/users/{user_id}/reset-password",
@@ -112,6 +115,7 @@ pub fn router() -> Router<ControlApiState> {
             delete(announcements::remove),
         )
         .route("/projects", get(projects::list))
+        .route("/projects/batch", post(projects::batch))
         .route("/projects/{project_id}", get(projects::detail))
         .route(
             "/projects/{project_id}/slug",
@@ -129,6 +133,7 @@ pub fn router() -> Router<ControlApiState> {
             post(projects::unarchive),
         )
         .route("/projects/{project_id}/delete", post(projects::remove))
+        .route("/projects/{project_id}/restore", post(projects::restore))
         .route(
             "/deployments/{deployment_id}/withdraw",
             post(deployments::withdraw),

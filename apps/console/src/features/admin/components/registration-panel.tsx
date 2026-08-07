@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
-import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
@@ -68,7 +68,7 @@ export function RegistrationPanel() {
         }}
       >
         <FieldGroup>
-          <Field data-invalid={Boolean(add.error)}>
+          <Field>
             <FieldLabel htmlFor="registration-email">Email</FieldLabel>
             <div className="flex flex-col gap-2 sm:flex-row">
               <Input
@@ -77,7 +77,6 @@ export function RegistrationPanel() {
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 placeholder="name@example.com"
-                aria-invalid={Boolean(add.error)}
                 required
               />
               <Button type="submit" disabled={add.isPending || email.trim().length === 0}>
@@ -89,17 +88,12 @@ export function RegistrationPanel() {
                 Add email
               </Button>
             </div>
-            {add.error && <FieldError>{add.error.message}</FieldError>}
           </Field>
         </FieldGroup>
       </form>
 
       {emails.isLoading ? (
         <Skeleton className="h-48 w-full" aria-busy="true" />
-      ) : emails.isError ? (
-        <p role="alert" className="text-sm text-destructive">
-          {emails.error.message}
-        </p>
       ) : emails.data?.emails.length === 0 ? (
         <Empty className="border-y">
           <EmptyHeader>
@@ -144,11 +138,6 @@ export function RegistrationPanel() {
         </div>
       )}
 
-      {remove.error && (
-        <p role="alert" className="text-sm text-destructive">
-          {remove.error.message}
-        </p>
-      )}
       <AlertDialog open={deleting !== null} onOpenChange={(open) => !open && setDeleting(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>

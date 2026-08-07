@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
-import { AlertCircleIcon, CheckCircle, Package, RefreshCwIcon } from "lucide-react";
+import { CheckCircle, Package, RefreshCwIcon } from "lucide-react";
 
 import { setupApi } from "@/features/setup/setup.api";
 import { StepIndicator } from "@/features/setup/components/step-indicator";
@@ -46,12 +46,7 @@ export function SetupRoute() {
 
   if (isError) {
     return (
-      <div
-        role="alert"
-        className="flex flex-col items-center gap-4 rounded-md border border-destructive/40 p-6 text-center"
-      >
-        <AlertCircleIcon className="size-8 text-destructive" />
-        <p className="text-sm text-destructive">Unable to load setup state.</p>
+      <div className="flex flex-col items-center gap-4 p-6 text-center">
         <Button variant="outline" onClick={() => refetch()}>
           <RefreshCwIcon data-icon="inline-start" />
           Retry

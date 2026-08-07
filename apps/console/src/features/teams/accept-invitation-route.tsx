@@ -1,4 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { useAuth } from "@/features/auth/auth-context";
 import { usePageTitle } from "@/features/branding/branding-context";
+import { showErrorToast } from "@/lib/toast";
 import { ACTIVE_TEAM_STORAGE_KEY } from "./team-context";
 import { teamsApi } from "./teams.api";
 
@@ -58,6 +60,14 @@ export function AcceptInvitationRoute() {
 
   const stateMessage = preflight.data && invitationStateMessage(preflight.data.status);
 
+  useEffect(() => {
+    if (!token) {
+      showErrorToast(new Error("The invitation link is missing its token."), "invitation-missing");
+    } else if (stateMessage) {
+      showErrorToast(new Error(stateMessage), `invitation-state:${preflight.data?.status}`);
+    }
+  }, [preflight.data?.status, stateMessage, token]);
+
   return (
     <div className="mx-auto flex w-full max-w-lg flex-1 items-center">
       <Card className="w-full">
@@ -66,18 +76,10 @@ export function AcceptInvitationRoute() {
           <CardDescription>Review the invitation before joining.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {!token ? (
-            <p role="alert" className="text-sm text-destructive">
-              The invitation link is missing its token.
-            </p>
-          ) : preflight.isLoading ? (
+          {!token ? null : preflight.isLoading ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Spinner /> Checking invitation…
             </div>
-          ) : preflight.error ? (
-            <p role="alert" className="text-sm text-destructive">
-              {preflight.error.message}
-            </p>
           ) : preflight.data ? (
             <>
               <dl className="grid grid-cols-[7rem_1fr] gap-x-4 gap-y-3 text-sm">
@@ -93,21 +95,8 @@ export function AcceptInvitationRoute() {
                   }).format(new Date(preflight.data.expires_at))}
                 </dd>
               </dl>
-              {stateMessage && (
-                <p
-                  role="alert"
-                  className="border-l-2 border-destructive pl-3 text-sm text-destructive"
-                >
-                  {stateMessage}
-                </p>
-              )}
             </>
           ) : null}
-          {accept.error && (
-            <p role="alert" className="text-sm text-destructive">
-              {accept.error.message}
-            </p>
-          )}
         </CardContent>
         {preflight.data && !stateMessage && (
           <CardFooter className="gap-2">

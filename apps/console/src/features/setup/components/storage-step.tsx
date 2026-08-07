@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
-import { AlertCircle, ArrowRight, Package } from "lucide-react";
+import { ArrowRight, Package } from "lucide-react";
 
 import { setupApi } from "@/features/setup/setup.api";
 import { Button } from "@/components/ui/button";
@@ -17,16 +17,13 @@ import { Label } from "@/components/ui/label";
 
 export function StorageStep({ onSuccess }: { onSuccess: () => void }) {
   const [root, setRoot] = useState("/data");
-  const [error, setError] = useState<string | null>(null);
   const mutation = useMutation({
     mutationFn: () => setupApi.configureStorage(root || undefined),
     onSuccess,
-    onError: (err: Error) => setError(err.message),
   });
   const skipMutation = useMutation({
     mutationFn: () => setupApi.configureStorage("/data"),
     onSuccess,
-    onError: (err: Error) => setError(err.message),
   });
   const isPending = mutation.isPending || skipMutation.isPending;
   return (
@@ -43,7 +40,6 @@ export function StorageStep({ onSuccess }: { onSuccess: () => void }) {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          setError(null);
           mutation.mutate();
         }}
       >
@@ -56,12 +52,6 @@ export function StorageStep({ onSuccess }: { onSuccess: () => void }) {
               onChange={(e) => setRoot(e.target.value)}
               placeholder="/data"
             />
-            {error && (
-              <div role="alert" className="flex items-center gap-2 text-sm text-destructive">
-                <AlertCircle className="size-4" />
-                {error}
-              </div>
-            )}
           </div>
         </CardContent>
         <CardFooter className="flex flex-col gap-2">
@@ -74,10 +64,7 @@ export function StorageStep({ onSuccess }: { onSuccess: () => void }) {
             variant="ghost"
             className="w-full"
             disabled={isPending}
-            onClick={() => {
-              setError(null);
-              skipMutation.mutate();
-            }}
+            onClick={() => skipMutation.mutate()}
           >
             {skipMutation.isPending ? "Skipping..." : "Skip for now (use /data)"}
           </Button>

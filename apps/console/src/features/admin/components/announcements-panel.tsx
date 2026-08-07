@@ -65,20 +65,7 @@ export function AnnouncementsPanel() {
   });
 
   if (listQuery.isPending) return <Skeleton className="h-[38rem] w-full" aria-busy="true" />;
-  if (listQuery.isError) {
-    return (
-      <p role="alert" className="text-sm text-destructive">
-        {listQuery.error.message}
-      </p>
-    );
-  }
-
-  const error =
-    publishMutation.error instanceof Error
-      ? publishMutation.error.message
-      : "Unable to publish announcement.";
-  const deleteError =
-    deleteMutation.error instanceof Error ? deleteMutation.error.message : "Unable to delete.";
+  if (listQuery.isError) return null;
   const data = listQuery.data;
 
   return (
@@ -147,11 +134,6 @@ export function AnnouncementsPanel() {
               />
             </label>
           </FieldGroup>
-          {publishMutation.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          )}
           {publishMutation.isSuccess && (
             <p className="text-sm text-muted-foreground">Announcement published.</p>
           )}
@@ -243,11 +225,6 @@ export function AnnouncementsPanel() {
               This removes the announcement from history and deletes its user notifications.
             </DialogDescription>
           </DialogHeader>
-          {deleteMutation.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              {deleteError}
-            </p>
-          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleting(null)}>
               Cancel

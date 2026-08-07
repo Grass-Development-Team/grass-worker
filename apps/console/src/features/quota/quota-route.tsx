@@ -46,13 +46,7 @@ export function QuotaRoute() {
     );
   }
 
-  if (usageQuery.isError) {
-    return (
-      <p role="alert" className="text-sm text-destructive">
-        {usageQuery.error instanceof Error ? usageQuery.error.message : "Unable to load quota."}
-      </p>
-    );
-  }
+  if (usageQuery.isError) return null;
 
   const data = usageQuery.data;
   if (!data) return null;

@@ -108,7 +108,6 @@ interface AuditEventResultsProps {
   events?: AuditEvent[];
   pagination?: AuditPage["pagination"];
   isLoading?: boolean;
-  errorMessage?: string;
   emptyMessage?: string;
   onPageChange: (page: number) => void;
 }
@@ -117,7 +116,6 @@ export function AuditEventResults({
   events,
   pagination,
   isLoading = false,
-  errorMessage,
   emptyMessage = "No audit events match this filter.",
   onPageChange,
 }: AuditEventResultsProps) {
@@ -126,11 +124,6 @@ export function AuditEventResults({
   return (
     <div className="flex flex-col gap-4">
       {isLoading && <Skeleton className="h-64 w-full" aria-busy="true" />}
-      {errorMessage && (
-        <p role="alert" className="text-sm text-destructive">
-          {errorMessage}
-        </p>
-      )}
       {events &&
         (events.length === 0 ? (
           <p className="text-sm text-muted-foreground">{emptyMessage}</p>
@@ -338,13 +331,6 @@ export function AuditEventsTable({ teamId }: { teamId?: string }) {
         events={eventsQuery.data?.events}
         pagination={pagination}
         isLoading={eventsQuery.isLoading}
-        errorMessage={
-          eventsQuery.isError
-            ? eventsQuery.error instanceof Error
-              ? eventsQuery.error.message
-              : "Unable to load audit events."
-            : undefined
-        }
         onPageChange={setPage}
       />
     </div>

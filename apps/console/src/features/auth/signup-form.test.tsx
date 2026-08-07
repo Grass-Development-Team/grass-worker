@@ -7,9 +7,11 @@ import { LoginForm } from "./login-form";
 import { SignupForm } from "./signup-form";
 import { useAuth } from "./auth-context";
 import { BrandingProvider } from "@/features/branding/branding-context";
+import { showErrorToast } from "@/lib/toast";
 import { useAuthConfiguration } from "./provider-buttons";
 
 vi.mock("./auth-context", () => ({ useAuth: vi.fn() }));
+vi.mock("@/lib/toast", () => ({ showErrorToast: vi.fn() }));
 vi.mock("./provider-buttons", () => ({
   useAuthConfiguration: vi.fn(),
   ProviderButtons: ({
@@ -249,6 +251,29 @@ it("uses an optional registration code for invite-only password and provider sig
   });
 });
 
+it("places the registration code after confirm password", () => {
+  vi.mocked(useAuth).mockReturnValue({ register: vi.fn() } as unknown as ReturnType<
+    typeof useAuth
+  >);
+  vi.mocked(useAuthConfiguration).mockReturnValue({
+    ...vi.mocked(useAuthConfiguration)()!,
+    signup_policy: "invite_only",
+  });
+
+  render(
+    <MemoryRouter initialEntries={["/signup"]}>
+      <SignupForm />
+    </MemoryRouter>,
+  );
+
+  const confirmPassword = screen.getByLabelText("Confirm password");
+  const registrationCode = screen.getByLabelText("Registration code (optional)");
+
+  expect(
+    confirmPassword.compareDocumentPosition(registrationCode) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+});
+
 it("hides signup controls when registration is closed", () => {
   vi.mocked(useAuth).mockReturnValue({ register: vi.fn() } as unknown as ReturnType<
     typeof useAuth
@@ -283,7 +308,7 @@ it("does not request a registration code for open signup", () => {
   expect(screen.queryByLabelText("Registration code (optional)")).not.toBeInTheDocument();
 });
 
-it("rejects mismatched passwords without registering", async () => {
+it("shows mismatched passwords in a toast without registering", async () => {
   const user = userEvent.setup();
   const register = vi.fn();
   vi.mocked(useAuth).mockReturnValue({ register } as unknown as ReturnType<typeof useAuth>);
@@ -300,8 +325,85 @@ it("rejects mismatched passwords without registering", async () => {
   await user.type(screen.getByLabelText("Confirm password"), "different-password");
   await user.click(screen.getByRole("button", { name: "Create account" }));
 
-  expect(screen.getByText("Passwords do not match.")).toBeInTheDocument();
+  expect(showErrorToast).toHaveBeenCalledWith(
+    expect.objectContaining({
+      message: "Passwords do not match.",
+    }),
+  );
+  expect(screen.queryByText("Passwords do not match.")).not.toBeInTheDocument();
   expect(register).not.toHaveBeenCalled();
+});
+
+it("shows incomplete fields in a toast instead of native validation", async () => {
+  const user = userEvent.setup();
+  const register = vi.fn();
+  vi.mocked(useAuth).mockReturnValue({ register } as unknown as ReturnType<typeof useAuth>);
+
+  render(
+    <MemoryRouter initialEntries={["/signup"]}>
+      <SignupForm />
+    </MemoryRouter>,
+  );
+
+  await user.click(screen.getByRole("button", { name: "Create account" }));
+
+  expect(showErrorToast).toHaveBeenCalledWith(
+    expect.objectContaining({
+      message: "Please complete all fields.",
+    }),
+  );
+  expect(register).not.toHaveBeenCalled();
+});
+
+it("shows invalid fields in a toast instead of native validation", async () => {
+  const user = userEvent.setup();
+  const register = vi.fn();
+  vi.mocked(useAuth).mockReturnValue({ register } as unknown as ReturnType<typeof useAuth>);
+
+  render(
+    <MemoryRouter initialEntries={["/signup"]}>
+      <SignupForm />
+    </MemoryRouter>,
+  );
+
+  await user.type(screen.getByLabelText("Email"), "not-an-email");
+  await user.type(screen.getByLabelText("Display name"), "Leo");
+  await user.type(screen.getByLabelText("Password", { selector: "#password" }), "short");
+  await user.type(screen.getByLabelText("Confirm password"), "short");
+  const submit = screen.getByRole("button", { name: "Create account" });
+  const form = submit.closest("form");
+  await user.click(submit);
+
+  expect(showErrorToast).toHaveBeenCalledWith(
+    expect.objectContaining({
+      message: "Please complete all fields.",
+    }),
+  );
+  expect(form).toHaveAttribute("novalidate");
+  expect(register).not.toHaveBeenCalled();
+});
+
+it("shows registration failures in a toast and restores the submit button", async () => {
+  const user = userEvent.setup();
+  const cause = new Error("Registration denied");
+  const register = vi.fn().mockRejectedValue(cause);
+  vi.mocked(useAuth).mockReturnValue({ register } as unknown as ReturnType<typeof useAuth>);
+
+  render(
+    <MemoryRouter initialEntries={["/signup"]}>
+      <SignupForm />
+    </MemoryRouter>,
+  );
+
+  await user.type(screen.getByLabelText("Email"), "leo@example.com");
+  await user.type(screen.getByLabelText("Display name"), "Leo");
+  await user.type(screen.getByLabelText("Password", { selector: "#password" }), "password123");
+  await user.type(screen.getByLabelText("Confirm password"), "password123");
+  await user.click(screen.getByRole("button", { name: "Create account" }));
+
+  await waitFor(() => expect(showErrorToast).toHaveBeenCalledWith(cause));
+  expect(screen.getByRole("button", { name: "Create account" })).toBeEnabled();
+  expect(screen.queryByText("Registration denied")).not.toBeInTheDocument();
 });
 
 it("uses the configured site name on the registration page", () => {

@@ -20,9 +20,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { showErrorToast } from "@/lib/toast";
 
 import { useTeam } from "./team-context";
 
@@ -40,13 +41,11 @@ export function TeamSwitcher() {
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
 
   const resetCreateForm = () => {
     setName("");
     setSlug("");
-    setError(null);
   };
 
   const setCreateDialogOpen = (open: boolean) => {
@@ -57,17 +56,16 @@ export function TeamSwitcher() {
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!name.trim() || !slug.trim()) {
-      setError("Team name and slug are required.");
+      showErrorToast(new Error("Team name and slug are required."));
       return;
     }
 
     setIsCreating(true);
-    setError(null);
     try {
       await createTeam({ name: name.trim(), slug: slug.trim() });
       setCreateDialogOpen(false);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to create team.");
+      showErrorToast(cause);
     } finally {
       setIsCreating(false);
     }
@@ -144,27 +142,24 @@ export function TeamSwitcher() {
               </DialogDescription>
             </DialogHeader>
             <FieldGroup>
-              <Field data-invalid={Boolean(error)}>
+              <Field>
                 <FieldLabel htmlFor="team-name">Team name</FieldLabel>
                 <Input
                   id="team-name"
                   value={name}
                   onChange={(event) => setName(event.target.value)}
-                  aria-invalid={Boolean(error)}
                   autoComplete="organization"
                 />
               </Field>
-              <Field data-invalid={Boolean(error)}>
+              <Field>
                 <FieldLabel htmlFor="team-slug">Team slug</FieldLabel>
                 <Input
                   id="team-slug"
                   value={slug}
                   onChange={(event) => setSlug(event.target.value)}
-                  aria-invalid={Boolean(error)}
                   autoCapitalize="none"
                   spellCheck={false}
                 />
-                {error && <FieldError>{error}</FieldError>}
               </Field>
             </FieldGroup>
             <DialogFooter className="gap-2">

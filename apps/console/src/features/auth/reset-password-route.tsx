@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { showErrorToast } from "@/lib/toast";
 import { authApi } from "./auth.api";
 import { useAuthConfiguration } from "./provider-buttons";
 
@@ -16,7 +17,6 @@ export function ResetPasswordRoute() {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   return (
     <div className="flex w-full max-w-sm flex-col gap-6">
@@ -33,20 +33,19 @@ export function ResetPasswordRoute() {
             onSubmit={async (event) => {
               event.preventDefault();
               if (!token) {
-                setError("The reset link is missing its token.");
+                showErrorToast(new Error("The reset link is missing its token."));
                 return;
               }
               if (password !== confirm) {
-                setError("Passwords do not match.");
+                showErrorToast(new Error("Passwords do not match."));
                 return;
               }
               setPending(true);
-              setError(null);
               try {
                 await authApi.resetPassword(token, password);
                 navigate("/login", { replace: true });
               } catch (cause) {
-                setError(cause instanceof Error ? cause.message : "Unable to reset the password.");
+                showErrorToast(cause);
               } finally {
                 setPending(false);
               }
@@ -76,11 +75,6 @@ export function ResetPasswordRoute() {
                 required
               />
             </div>
-            {error && (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-            )}
             <Button type="submit" disabled={pending}>
               {pending ? "Saving..." : "Save password"}
             </Button>

@@ -78,6 +78,37 @@ polling, artifact/static transfers, WebSocket messages, and frontend static
 assets are intentionally not recorded per item. A WebSocket handshake is
 still recorded once as a user-facing read.
 
+### Local HTTP development mode
+
+For trusted local testing over plain HTTP, development mode omits `Secure`
+from authentication cookies and bypasses CSRF validation for authenticated
+mutations. Authentication and authorization remain required; unauthenticated
+mutations still receive `401 Unauthorized`.
+
+Enable it in `config.toml`:
+
+```toml
+[development]
+enabled = true
+```
+
+The environment variable overrides the file value:
+
+```sh
+GWAPI_DEV_MODE=true grass-control-api --config config.toml
+```
+
+The CLI flag is applied last and always enables the mode:
+
+```sh
+grass-control-api --config config.toml --dev
+```
+
+Development mode deliberately relaxes browser request protections. Use it
+only on a trusted local interface and never expose an enabled instance to a
+public or untrusted network. Keep it disabled for every production or shared
+environment.
+
 After setup, platform administrators can inspect and update non-secret
 Control API settings under **Administration → Settings**. Secret settings
 remain write-only: the Console reports whether each value is configured but

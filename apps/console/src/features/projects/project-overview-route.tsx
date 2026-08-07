@@ -91,13 +91,6 @@ export function ProjectOverviewRoute() {
         </div>
         <CardContent className="px-6 py-6">
           {deploymentsQuery.isLoading && <Skeleton className="h-48 w-full" aria-busy="true" />}
-          {deploymentsQuery.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              {deploymentsQuery.error instanceof Error
-                ? deploymentsQuery.error.message
-                : "Unable to load deployments."}
-            </p>
-          )}
           {deploymentsQuery.data &&
             (production ? (
               <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">

@@ -18,6 +18,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SettingsCard } from "@/components/settings-card";
 import { useBranding } from "@/features/branding/branding-context";
+import { showErrorToast } from "@/lib/toast";
 import {
   canContributeToProjects,
   canManageProjectLifecycle,
@@ -32,7 +33,6 @@ export function ProjectSettingsRoute() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [name, setName] = useState(project.name);
-  const [nameError, setNameError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const canEdit = canContributeToProjects(role);
   const canManageLifecycle = canManageProjectLifecycle(role);
@@ -41,12 +41,7 @@ export function ProjectSettingsRoute() {
 
   const nameMutation = useMutation({
     mutationFn: () => projectsApi.update(project.id, { name }),
-    onSuccess: () => {
-      setNameError(null);
-      invalidate();
-    },
-    onError: (cause) =>
-      setNameError(cause instanceof Error ? cause.message : "Unable to save the project name."),
+    onSuccess: invalidate,
   });
 
   const archiveMutation = useMutation({
@@ -65,8 +60,8 @@ export function ProjectSettingsRoute() {
       await navigator.clipboard.writeText(project.id);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard access can be denied; the ID stays selectable in the input.
+    } catch (cause) {
+      showErrorToast(cause);
     }
   };
 
@@ -98,11 +93,6 @@ export function ProjectSettingsRoute() {
             readOnly={!canEdit}
             onChange={(event) => setName(event.target.value)}
           />
-          {nameError && (
-            <p role="alert" className="mt-2 text-sm text-destructive">
-              {nameError}
-            </p>
-          )}
         </SettingsCard>
       </form>
 

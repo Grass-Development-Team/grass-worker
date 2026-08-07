@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CheckIcon, Code2Icon } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { useTeam } from "@/features/teams/team-context";
 import { canCreateProject } from "@/features/teams/team-permissions";
+import { showErrorToast } from "@/lib/toast";
 
 import { projectsApi, type CreateProjectInput } from "./projects.api";
 
@@ -114,15 +115,16 @@ function slugify(value: string): string {
 }
 
 function AccessState() {
+  useEffect(() => {
+    showErrorToast(
+      new Error("You do not have permission to create projects in the active team."),
+      "project-create-forbidden",
+    );
+  }, []);
+
   return (
     <div className="flex flex-1 items-center justify-center px-6 py-16">
-      <div role="alert" className="max-w-sm space-y-4 text-center">
-        <div>
-          <h1 className="text-lg font-semibold">Project creation unavailable</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            You do not have permission to create projects in the active team.
-          </p>
-        </div>
+      <div className="max-w-sm text-center">
         <Button variant="outline" asChild>
           <Link to="/projects">Back to Projects</Link>
         </Button>
@@ -134,6 +136,10 @@ function AccessState() {
 export function ProjectCreateRoute() {
   const { activeTeam, activeRole, error, isLoading, refreshTeams } = useTeam();
   const teamId = activeTeam?.id;
+
+  useEffect(() => {
+    if (error) showErrorToast(error, "project-create-team-error");
+  }, [error]);
 
   if (isLoading) {
     return (
@@ -148,15 +154,9 @@ export function ProjectCreateRoute() {
   if (error) {
     return (
       <div className="flex flex-1 items-center justify-center px-6 py-16">
-        <div role="alert" className="max-w-sm space-y-4 text-center">
-          <div>
-            <h1 className="text-lg font-semibold">Unable to load teams</h1>
-            <p className="mt-2 text-sm text-muted-foreground">{error.message}</p>
-          </div>
-          <Button variant="outline" onClick={() => void refreshTeams()}>
-            Try again
-          </Button>
-        </div>
+        <Button variant="outline" onClick={() => void refreshTeams()}>
+          Try again
+        </Button>
       </div>
     );
   }
@@ -274,13 +274,6 @@ function CreateProjectForm({ teamId }: { teamId: string }) {
           </div>
 
           <div className="mt-auto pt-10">
-            {createMutation.isError && (
-              <p role="alert" className="mb-4 text-sm text-destructive">
-                {createMutation.error instanceof Error
-                  ? createMutation.error.message
-                  : "Unable to create the project."}
-              </p>
-            )}
             <Button type="submit" size="lg" className="w-full" disabled={createMutation.isPending}>
               {createMutation.isPending ? "Creating Project..." : "Create Project"}
             </Button>

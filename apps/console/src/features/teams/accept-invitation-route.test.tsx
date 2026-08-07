@@ -5,11 +5,13 @@ import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 import { useAuth } from "@/features/auth/auth-context";
+import { showErrorToast } from "@/lib/toast";
 import { AcceptInvitationRoute } from "./accept-invitation-route";
 import { ACTIVE_TEAM_STORAGE_KEY } from "./team-context";
 import { teamsApi } from "./teams.api";
 
 vi.mock("@/features/auth/auth-context", () => ({ useAuth: vi.fn() }));
+vi.mock("@/lib/toast", () => ({ showErrorToast: vi.fn() }));
 vi.mock("./teams.api", async (load) => {
   const original = await load<typeof import("./teams.api")>();
   return { ...original, teamsApi: { ...original.teamsApi, acceptInvitation: vi.fn() } };
@@ -79,7 +81,7 @@ it("accepts the token, refreshes teams, and opens the joined team", async () => 
   expect(localStorage.getItem(ACTIVE_TEAM_STORAGE_KEY)).toBe("team-2");
 });
 
-it("shows an email mismatch immediately and does not offer acceptance", async () => {
+it("shows an email mismatch Toast immediately and does not offer acceptance", async () => {
   vi.mocked(globalThis.fetch).mockResolvedValue(
     jsonResponse({
       ...preflight,
@@ -92,7 +94,12 @@ it("shows an email mismatch immediately and does not offer acceptance", async ()
   renderInvitation();
 
   expect(await screen.findByText("Acme Team")).toBeInTheDocument();
-  expect(screen.getByRole("alert")).toHaveTextContent("different email address");
+  expect(showErrorToast).toHaveBeenCalledWith(
+    expect.objectContaining({
+      message: "This invitation was sent to a different email address.",
+    }),
+    "invitation-state:email_mismatch",
+  );
   expect(screen.queryByRole("button", { name: "Accept invitation" })).not.toBeInTheDocument();
 });
 

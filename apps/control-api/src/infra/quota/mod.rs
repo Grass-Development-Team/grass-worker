@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use grass_cache::{Cache, CacheStore, QuotaCheckOutcome, QuotaCounterCheck};
 use sea_orm::DatabaseConnection;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
@@ -249,10 +250,63 @@ impl<'a> QuotaService<'a> {
         resource_type: &str,
         resource_id: Uuid,
     ) -> Result<(), AppError> {
+        self.release_once_with_key(
+            op,
+            team_id,
+            charges,
+            resource_type,
+            resource_id,
+            |dimension| release_idempotency_key(resource_type, resource_id, dimension),
+        )
+        .await
+    }
+
+    /// Releases a project resource once for one soft-deletion generation.
+    /// A later delete after restore receives a distinct key while retries of
+    /// the same tombstone remain idempotent.
+    pub async fn release_once_for_generation(
+        &self,
+        op: &'static str,
+        team_id: Uuid,
+        charges: &[QuotaCharge],
+        resource_type: &str,
+        resource_id: Uuid,
+        generation: OffsetDateTime,
+    ) -> Result<(), AppError> {
+        self.release_once_with_key(
+            op,
+            team_id,
+            charges,
+            resource_type,
+            resource_id,
+            |dimension| {
+                release_idempotency_key_for_generation(
+                    resource_type,
+                    resource_id,
+                    dimension,
+                    generation,
+                )
+            },
+        )
+        .await
+    }
+
+    async fn release_once_with_key<F>(
+        &self,
+        op: &'static str,
+        team_id: Uuid,
+        charges: &[QuotaCharge],
+        resource_type: &str,
+        resource_id: Uuid,
+        key_for_dimension: F,
+    ) -> Result<(), AppError>
+    where
+        F: Fn(QuotaDimension) -> String,
+    {
         for charge in charges {
             quotas::record_event_once(
                 self.db,
-                release_idempotency_key(resource_type, resource_id, charge.dimension),
+                key_for_dimension(charge.dimension),
                 RecordEventParams {
                     team_id,
                     dimension: charge.dimension,
@@ -508,6 +562,19 @@ fn release_idempotency_key(
     )
 }
 
+fn release_idempotency_key_for_generation(
+    resource_type: &str,
+    resource_id: Uuid,
+    dimension: QuotaDimension,
+    generation: OffsetDateTime,
+) -> String {
+    format!(
+        "release:{resource_type}:{resource_id}:{}:generation:{}",
+        dimension.as_str(),
+        generation.unix_timestamp_nanos()
+    )
+}
+
 async fn release_build_slot_once(
     cache: &CacheStore,
     team_id: Uuid,
@@ -559,6 +626,36 @@ mod tests {
         assert_eq!(
             release_idempotency_key("project_host_binding", resource_id, QuotaDimension::Hosts),
             format!("release:project_host_binding:{resource_id}:hosts")
+        );
+    }
+
+    #[test]
+    fn project_release_idempotency_keys_include_the_deletion_generation() {
+        let project_id = Uuid::now_v7();
+        let generation = time::OffsetDateTime::from_unix_timestamp_nanos(1_234).unwrap();
+        let same_generation = release_idempotency_key_for_generation(
+            "project",
+            project_id,
+            QuotaDimension::Projects,
+            generation,
+        );
+        assert_eq!(
+            same_generation,
+            release_idempotency_key_for_generation(
+                "project",
+                project_id,
+                QuotaDimension::Projects,
+                generation,
+            )
+        );
+        assert_ne!(
+            same_generation,
+            release_idempotency_key_for_generation(
+                "project",
+                project_id,
+                QuotaDimension::Projects,
+                generation + time::Duration::nanoseconds(1),
+            )
         );
     }
 

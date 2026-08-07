@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLinkIcon, RocketIcon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
 
 import { Badge } from "@/components/ui/badge";
@@ -22,6 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { showErrorToast } from "@/lib/toast";
 import {
   Table,
   TableBody,
@@ -57,7 +58,6 @@ export function DeploymentsTab({
     null,
   );
   const [serveNodeId, setServeNodeId] = useState("automatic");
-  const [error, setError] = useState<string | null>(null);
 
   const deploymentsQuery = useQuery({
     queryKey: ["deployments", projectId, environmentFilter],
@@ -84,12 +84,9 @@ export function DeploymentsTab({
     mutationFn: (input: { environment: DeploymentEnvironment; serve_node_id?: string }) =>
       deploymentsApi.create(projectId, input),
     onSuccess: () => {
-      setError(null);
       setDeploymentEnvironment(null);
       queryClient.invalidateQueries({ queryKey: ["deployments", projectId] });
     },
-    onError: (cause) =>
-      setError(cause instanceof Error ? cause.message : "Unable to create the deployment."),
   });
 
   const serveNodes = serveNodesQuery.data?.serve_nodes ?? [];
@@ -101,9 +98,17 @@ export function DeploymentsTab({
       ? serveNodes.some((node) => node.schedulable)
       : selectedNode?.schedulable === true);
 
+  useEffect(() => {
+    if (serveNodesQuery.data && !serveNodes.some((node) => node.schedulable)) {
+      showErrorToast(
+        new Error("No Serve Node can accept this deployment."),
+        `serve-node-unavailable:${projectId}`,
+      );
+    }
+  }, [projectId, serveNodes, serveNodesQuery.data]);
+
   const openDeploymentDialog = (environment: DeploymentEnvironment) => {
     setServeNodeId("automatic");
-    setError(null);
     setDeploymentEnvironment(environment);
   };
 
@@ -197,23 +202,6 @@ export function DeploymentsTab({
             {serveNodesQuery.isLoading && (
               <p className="text-sm text-muted-foreground">Loading Serve Nodes…</p>
             )}
-            {serveNodesQuery.isError && (
-              <p role="alert" className="text-sm text-destructive">
-                {serveNodesQuery.error instanceof Error
-                  ? serveNodesQuery.error.message
-                  : "Unable to load Serve Nodes."}
-              </p>
-            )}
-            {serveNodesQuery.data && !serveNodes.some((node) => node.schedulable) && (
-              <p role="alert" className="text-sm text-destructive">
-                No Serve Node can accept this deployment.
-              </p>
-            )}
-            {createMutation.isError && error && (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-            )}
             <DialogFooter>
               <Button type="submit" disabled={!canSubmit || createMutation.isPending}>
                 {createMutation.isPending ? "Creating…" : "Create deployment"}
@@ -223,13 +211,6 @@ export function DeploymentsTab({
         </DialogContent>
       </Dialog>
       {deploymentsQuery.isLoading && <Skeleton className="h-64 w-full" aria-busy="true" />}
-      {deploymentsQuery.isError && (
-        <p role="alert" className="text-sm text-destructive">
-          {deploymentsQuery.error instanceof Error
-            ? deploymentsQuery.error.message
-            : "Unable to load deployments."}
-        </p>
-      )}
       {deploymentsQuery.data &&
         (deploymentsQuery.data.deployments.length === 0 ? (
           <p className="text-sm text-muted-foreground">

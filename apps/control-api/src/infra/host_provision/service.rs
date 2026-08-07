@@ -37,6 +37,12 @@ pub struct BindHostRequest<'a> {
     pub actor_user_id: Option<Uuid>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeprovisionOutcome {
+    Completed,
+    Failed,
+}
+
 fn custom_binding_status(review_status: &HostReviewStatus) -> HostBindingStatus {
     match review_status {
         HostReviewStatus::Approved => HostBindingStatus::Active,
@@ -148,7 +154,7 @@ impl<'a> HostBindingService<'a> {
         op: &'static str,
         binding: &project_host_binding::Model,
         source: &host_source::Model,
-    ) -> Result<(), AppError> {
+    ) -> Result<DeprovisionOutcome, AppError> {
         if let Err(error) = self
             .provisioner
             .deprovision_project_host(super::DeprovisionProjectHostInput {
@@ -173,8 +179,9 @@ impl<'a> HostBindingService<'a> {
             )
             .await
             .map_err(|source| AppError::Infrastructure { op, source })?;
+            return Ok(DeprovisionOutcome::Failed);
         }
-        Ok(())
+        Ok(DeprovisionOutcome::Completed)
     }
 
     /// Runs the provisioner for an existing binding and records the outcome.
@@ -247,8 +254,14 @@ impl<'a> HostBindingService<'a> {
 
 #[cfg(test)]
 mod tests {
+    use sea_orm::{DbBackend, MockDatabase};
+    use time::OffsetDateTime;
+
     use super::*;
-    use crate::infra::database::entity::HostReviewStatus;
+    use crate::infra::database::entity::{
+        HostBindingEnvironment, HostBindingKind, HostBindingStatus, HostProvisionEventStatus,
+        HostReviewStatus, HostSourceKind, host_provision_event, host_source, project_host_binding,
+    };
 
     #[test]
     fn custom_binding_only_activates_after_automatic_approval() {
@@ -264,5 +277,68 @@ mod tests {
             custom_binding_status(&HostReviewStatus::Rejected),
             HostBindingStatus::Pending
         );
+    }
+
+    #[tokio::test]
+    async fn deprovision_provider_failure_is_not_reported_as_completed() {
+        let now = OffsetDateTime::UNIX_EPOCH;
+        let source = host_source::Model {
+            id: Uuid::now_v7(),
+            kind: HostSourceKind::DnsProvider,
+            label: "unsupported provider".to_owned(),
+            base_domain: "example.invalid".to_owned(),
+            enabled: true,
+            allows_auto_assign: true,
+            is_default: true,
+            provider: Some("route53".to_owned()),
+            config: serde_json::json!({}),
+            deleted_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let binding = project_host_binding::Model {
+            id: Uuid::now_v7(),
+            project_id: Uuid::now_v7(),
+            team_id: Uuid::now_v7(),
+            host_source_id: Some(source.id),
+            host: "site.example.invalid".to_owned(),
+            kind: HostBindingKind::Platform,
+            environment: HostBindingEnvironment::Production,
+            status: HostBindingStatus::Active,
+            failure_reason: None,
+            is_primary: true,
+            review_status: HostReviewStatus::NotRequired,
+            reviewed_by_user_id: None,
+            reviewed_at: None,
+            review_reason: None,
+            deleted_at: Some(now),
+            created_at: now,
+            updated_at: now,
+        };
+        let event = host_provision_event::Model {
+            id: Uuid::now_v7(),
+            host_binding_id: binding.id,
+            host_source_id: Some(source.id),
+            status: HostProvisionEventStatus::Failed,
+            operation: "host.deprovision".to_owned(),
+            provider_request_id: None,
+            error_code: Some("deprovision_failed".to_owned()),
+            error_message: Some("provider failure".to_owned()),
+            metadata: serde_json::json!({ "host": binding.host }),
+            created_at: now,
+        };
+        let db = MockDatabase::new(DbBackend::Postgres)
+            .append_query_results([[event]])
+            .into_connection();
+        let cache = grass_cache::CacheStore::Moka(grass_cache::MokaCache::connect());
+
+        let outcome = HostBindingService::new(&db, &cache)
+            .deprovision("test.host.deprovision", &binding, &source)
+            .await
+            .expect("the provider failure should be recorded");
+
+        assert_eq!(outcome, DeprovisionOutcome::Failed);
+        let statements = format!("{:?}", db.into_transaction_log());
+        assert!(statements.contains("host_provision_events"), "{statements}");
     }
 }

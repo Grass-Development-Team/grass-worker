@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { showErrorToast } from "@/lib/toast";
 import { authApi } from "./auth.api";
 import { authHref, safeLocalReturnTo } from "./auth-continuation";
 import { useAuth } from "./auth-context";
@@ -19,7 +20,6 @@ export function VerifyEmailRoute() {
   const [email, setEmail] = useState(query.get("email") ?? "");
   const [pending, setPending] = useState(false);
   const [sent, setSent] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const started = useRef(false);
 
   useEffect(() => {
@@ -28,9 +28,7 @@ export function VerifyEmailRoute() {
     setPending(true);
     verifyEmail(token)
       .then(() => navigate(returnTo ?? "/", { replace: true }))
-      .catch((cause) =>
-        setError(cause instanceof Error ? cause.message : "Unable to verify this email."),
-      )
+      .catch(showErrorToast)
       .finally(() => setPending(false));
   }, [navigate, returnTo, token, verifyEmail]);
 
@@ -54,14 +52,11 @@ export function VerifyEmailRoute() {
               onSubmit={async (event) => {
                 event.preventDefault();
                 setPending(true);
-                setError(null);
                 try {
                   await authApi.resendVerification(email.trim(), returnTo ?? undefined);
                   setSent(true);
                 } catch (cause) {
-                  setError(
-                    cause instanceof Error ? cause.message : "Unable to resend verification.",
-                  );
+                  showErrorToast(cause);
                 } finally {
                   setPending(false);
                 }
@@ -78,11 +73,6 @@ export function VerifyEmailRoute() {
                 />
               </div>
               {sent && <p className="text-sm text-muted-foreground">Verification email sent.</p>}
-              {error && (
-                <p role="alert" className="text-sm text-destructive">
-                  {error}
-                </p>
-              )}
               <Button type="submit" disabled={pending}>
                 {pending ? "Sending..." : "Resend verification"}
               </Button>

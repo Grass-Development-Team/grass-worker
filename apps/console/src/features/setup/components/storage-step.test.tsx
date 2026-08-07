@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -10,7 +10,7 @@ vi.mock("../setup.api", () => ({
   setupApi: { configureStorage: vi.fn() },
 }));
 
-it("shows an error when using the default storage path fails", async () => {
+it("keeps the form available while the default storage error is handled by Toast", async () => {
   vi.mocked(setupApi.configureStorage).mockRejectedValue(new Error("Storage path is unavailable"));
 
   render(
@@ -20,5 +20,7 @@ it("shows an error when using the default storage path fails", async () => {
   );
   await userEvent.click(screen.getByRole("button", { name: "Skip for now (use /data)" }));
 
-  expect(await screen.findByRole("alert")).toHaveTextContent("Storage path is unavailable");
+  await waitFor(() => expect(setupApi.configureStorage).toHaveBeenCalledWith("/data"));
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Skip for now (use /data)" })).toBeEnabled();
 });

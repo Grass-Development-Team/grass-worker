@@ -42,6 +42,78 @@ fn user_view(user: &user::Model) -> serde_json::Value {
 pub struct ListUsersQuery {
     pub q: Option<String>,
     pub limit: Option<u64>,
+    pub status: Option<String>,
+    pub role: Option<String>,
+}
+
+fn parse_user_status_filter(
+    value: Option<&str>,
+    op: &'static str,
+) -> Result<Option<UserStatus>, AppError> {
+    value
+        .map(|value| {
+            UserStatus::parse(value).ok_or_else(|| AppError::Validation {
+                op,
+                message: "status must be active or disabled".to_owned(),
+            })
+        })
+        .transpose()
+}
+
+fn parse_user_role_filter(
+    value: Option<&str>,
+    op: &'static str,
+) -> Result<Option<PlatformRole>, AppError> {
+    value
+        .map(|value| {
+            PlatformRole::parse(value).ok_or_else(|| AppError::Validation {
+                op,
+                message: "role must be user or admin".to_owned(),
+            })
+        })
+        .transpose()
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum UserBatchRequest {
+    Enable { ids: Vec<Uuid> },
+    Disable { ids: Vec<Uuid> },
+}
+
+/// POST /api/v1/admin/users/batch
+pub async fn batch(
+    State(state): State<ControlApiState>,
+    session: Session,
+    Json(body): Json<UserBatchRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "admin.users.batch";
+    let (ids, status) = match body {
+        UserBatchRequest::Enable { ids } => (ids, "active"),
+        UserBatchRequest::Disable { ids } => (ids, "disabled"),
+    };
+    let ids = super::batch::normalize_ids(ids, OP)?;
+    let results = super::batch::run(ids, |user_id| {
+        let state = state.clone();
+        let session = session.clone();
+        async move {
+            update(
+                State(state),
+                session,
+                Path(user_id),
+                Json(UpdateUserRequest {
+                    display_name: None,
+                    status: Some(status.to_owned()),
+                    platform_role: None,
+                }),
+            )
+            .await
+            .map(|_| ())
+        }
+    })
+    .await;
+
+    Ok(ok_response(json!({ "results": results })))
 }
 
 /// GET /api/v1/admin/users
@@ -51,11 +123,15 @@ pub async fn list(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.users.list";
     let db = super::database(&state, OP)?;
+    let status = parse_user_status_filter(query.status.as_deref(), OP)?;
+    let platform_role = parse_user_role_filter(query.role.as_deref(), OP)?;
 
     let users = users::list_users(
         db,
         UserListFilter {
             query: query.q,
+            status,
+            platform_role,
             limit: query.limit.unwrap_or(100),
         },
     )
@@ -573,4 +649,41 @@ pub async fn reset_mfa_factor(
     )
     .await;
     Ok(ok_response(json!({ "deleted": true })))
+}
+
+#[cfg(test)]
+mod batch_and_filter_tests {
+    use super::*;
+
+    #[test]
+    fn user_filters_are_typed_and_reject_unknown_values() {
+        assert_eq!(
+            parse_user_status_filter(Some("disabled"), "test.users").unwrap(),
+            Some(UserStatus::Disabled)
+        );
+        assert_eq!(
+            parse_user_role_filter(Some("admin"), "test.users").unwrap(),
+            Some(PlatformRole::Admin)
+        );
+        assert!(parse_user_status_filter(Some("deleted"), "test.users").is_err());
+        assert!(parse_user_role_filter(Some("owner"), "test.users").is_err());
+    }
+
+    #[test]
+    fn user_batch_actions_are_resource_specific() {
+        let id = Uuid::now_v7();
+        let request: UserBatchRequest = serde_json::from_value(json!({
+            "action": "disable",
+            "ids": [id],
+        }))
+        .unwrap();
+        assert!(matches!(request, UserBatchRequest::Disable { .. }));
+        assert!(
+            serde_json::from_value::<UserBatchRequest>(json!({
+                "action": "delete",
+                "ids": [id],
+            }))
+            .is_err()
+        );
+    }
 }

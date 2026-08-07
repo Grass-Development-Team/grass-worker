@@ -15,6 +15,7 @@ vi.mock("../admin.api", async (importOriginal) => {
     adminApi: {
       ...actual.adminApi,
       listUsers: vi.fn(),
+      batchUsers: vi.fn(),
       listUserMfa: vi.fn(),
       updateUserMfaPolicy: vi.fn(),
     },
@@ -50,6 +51,9 @@ beforeEach(() => {
     user: { id: "user-1", email: "admin@example.com", platform_role: "admin" },
   } as ReturnType<typeof useAuth>);
   vi.mocked(adminApi.listUsers).mockResolvedValue({ users });
+  vi.mocked(adminApi.batchUsers).mockResolvedValue({
+    results: users.map((item) => ({ id: item.id, success: true })),
+  });
   vi.mocked(adminApi.listUserMfa).mockResolvedValue({
     factors: [],
     policy: { inherit_platform: true, minimum_factors: 0, required_factors: [] },
@@ -60,6 +64,32 @@ beforeEach(() => {
     policy: { inherit_platform: false, minimum_factors: 1, required_factors: ["totp"] },
     effective_requirements: { minimum_factors: 1, required_factors: ["totp"] },
   });
+});
+
+it("filters users on the server and disables selected accounts in one batch", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const user = userEvent.setup();
+  render(
+    <QueryClientProvider client={client}>
+      <UsersPanel />
+    </QueryClientProvider>,
+  );
+
+  await screen.findByText("admin@example.com");
+  await user.click(screen.getByRole("combobox", { name: "User status" }));
+  await user.click(screen.getByRole("option", { name: "Disabled" }));
+  await waitFor(() => expect(adminApi.listUsers).toHaveBeenLastCalledWith({ status: "disabled" }));
+
+  await user.click(screen.getByRole("checkbox", { name: "Select all visible users" }));
+  await user.click(screen.getByRole("button", { name: "Bulk actions" }));
+  await user.click(screen.getByRole("menuitem", { name: "Disable selected" }));
+
+  await waitFor(() =>
+    expect(adminApi.batchUsers).toHaveBeenCalledWith({
+      action: "disable",
+      ids: ["user-1", "user-2"],
+    }),
+  );
 });
 
 it("selects visible users and saves a per-user MFA policy", async () => {

@@ -78,7 +78,6 @@ export function QuotaPlansPanel() {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState<AdminQuotaPlan | null>(null);
   const [creating, setCreating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const plansQuery = useQuery({
     queryKey: ["admin", "quota-plans"],
@@ -89,12 +88,7 @@ export function QuotaPlansPanel() {
 
   const defaultMutation = useMutation({
     mutationFn: (planId: string) => adminApi.updateQuotaPlan(planId, { is_default: true }),
-    onSuccess: () => {
-      setError(null);
-      invalidate();
-    },
-    onError: (cause) =>
-      setError(cause instanceof Error ? cause.message : "Unable to change the default plan."),
+    onSuccess: invalidate,
   });
 
   return (
@@ -109,18 +103,7 @@ export function QuotaPlansPanel() {
         </Button>
       </div>
 
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-
       {plansQuery.isLoading && <Skeleton className="h-64 w-full" aria-busy="true" />}
-      {plansQuery.isError && (
-        <p role="alert" className="text-sm text-destructive">
-          Unable to load quota plans.
-        </p>
-      )}
       {plansQuery.data && (
         <div className="grid gap-4 lg:grid-cols-2">
           {plansQuery.data.plans.map((plan) => (
@@ -333,11 +316,6 @@ function PlanFormDialog({
             })}
           </div>
 
-          {mutation.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              {mutation.error instanceof Error ? mutation.error.message : "Unable to save."}
-            </p>
-          )}
           <DialogFooter>
             <Button type="submit" disabled={mutation.isPending}>
               {mutation.isPending ? "Saving…" : plan ? "Save plan" : "Create plan"}

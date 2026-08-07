@@ -155,6 +155,9 @@ pub async fn list_for_user(
 
 pub struct TeamListFilter {
     pub query: Option<String>,
+    pub kind: Option<TeamKind>,
+    pub group_id: Option<Uuid>,
+    pub quota_plan_id: Option<Uuid>,
     pub limit: u64,
 }
 
@@ -167,6 +170,15 @@ pub async fn list_all(
     use sea_orm::QueryOrder;
 
     let mut query = team::Entity::find().filter(team::Column::DeletedAt.is_null());
+    if let Some(kind) = filter.kind {
+        query = query.filter(team::Column::Kind.eq(kind));
+    }
+    if let Some(group_id) = filter.group_id {
+        query = query.filter(team::Column::GroupId.eq(group_id));
+    }
+    if let Some(quota_plan_id) = filter.quota_plan_id {
+        query = query.filter(team::Column::ExplicitQuotaPlanId.eq(quota_plan_id));
+    }
     if let Some(term) = filter
         .query
         .as_deref()
@@ -191,6 +203,45 @@ pub async fn list_all(
         .all(db)
         .await
         .map_err(Into::into)
+}
+
+#[cfg(test)]
+mod administrator_list_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn administrator_team_list_applies_kind_group_and_plan_filters() {
+        let group_id = Uuid::now_v7();
+        let plan_id = Uuid::now_v7();
+        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([Vec::<team::Model>::new()])
+            .into_connection();
+        let log = db.clone();
+
+        list_all(
+            &db,
+            TeamListFilter {
+                query: None,
+                kind: Some(TeamKind::Team),
+                group_id: Some(group_id),
+                quota_plan_id: Some(plan_id),
+                limit: 25,
+            },
+        )
+        .await
+        .unwrap();
+
+        let statements = format!("{:?}", log.into_transaction_log());
+        assert!(statements.as_str().contains("kind\\\" ="), "{statements}");
+        assert!(
+            statements.as_str().contains("group_id\\\" ="),
+            "{statements}"
+        );
+        assert!(
+            statements.as_str().contains("explicit_quota_plan_id\\\" ="),
+            "{statements}"
+        );
+    }
 }
 
 /// Live member counts for a set of teams in one grouped query.

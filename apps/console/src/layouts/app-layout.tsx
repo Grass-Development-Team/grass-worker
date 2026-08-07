@@ -13,7 +13,7 @@ import {
   UsersIcon,
 } from "lucide-react";
 import { useTheme } from "next-themes";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { matchPath, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -59,6 +59,7 @@ import { canViewTeamAudit, canViewTeamSettings } from "@/features/teams/team-per
 import { TeamSwitcher } from "@/features/teams/team-switcher";
 import { useTeam } from "@/features/teams/team-context";
 import { NotificationBell } from "@/features/notifications/notification-bell";
+import { showErrorToast } from "@/lib/toast";
 
 const primaryNavigation = [
   { title: "Overview", url: "/", icon: HomeIcon },
@@ -209,7 +210,6 @@ function AppLayoutContent() {
   const location = useLocation();
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
-  const [actionError, setActionError] = useState<string | null>(null);
   const showSettings = activeRole ? canViewTeamSettings(activeRole) : false;
   const showAudit = activeRole ? canViewTeamAudit(activeRole) : false;
   const navigation = primaryNavigation;
@@ -230,12 +230,11 @@ function AppLayoutContent() {
   }, [isMobile, location.pathname, location.search, setOpenMobile]);
 
   const signOut = async () => {
-    setActionError(null);
     try {
       await logout();
       navigate("/login", { replace: true });
     } catch (cause) {
-      setActionError(cause instanceof Error ? cause.message : "Unable to log out.");
+      showErrorToast(cause);
     }
   };
 
@@ -357,23 +356,8 @@ function AppLayoutContent() {
         </header>
         <main className="flex flex-1 flex-col p-4 md:p-6">
           <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6">
-            {actionError && (
-              <p
-                role="alert"
-                className="border-l-2 border-destructive pl-3 text-sm text-destructive"
-              >
-                {actionError}
-              </p>
-            )}
             {error ? (
-              <div
-                role="alert"
-                className="flex min-h-64 flex-col items-center justify-center gap-4 text-center"
-              >
-                <div>
-                  <h1 className="font-semibold">Unable to load this workspace</h1>
-                  <p className="text-sm text-muted-foreground">{error.message}</p>
-                </div>
+              <div className="flex min-h-64 flex-col items-center justify-center gap-4 text-center">
                 <Button variant="outline" onClick={() => refreshTeams()}>
                   Retry
                 </Button>

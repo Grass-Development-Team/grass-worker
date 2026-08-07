@@ -199,6 +199,19 @@ export interface AdminUser {
   created_at: string;
 }
 
+export interface AdminBatchItemResult {
+  id: string;
+  success: boolean;
+  code?: number;
+  message?: string;
+}
+
+export interface AdminUserFilters {
+  q?: string;
+  status?: AdminUser["status"];
+  role?: AdminUser["platform_role"];
+}
+
 export type AdminCodeStatus = "available" | "used" | "expired" | "revoked";
 
 export interface AdminCodeUser {
@@ -331,6 +344,13 @@ export interface AdminTeam {
   created_at: string;
 }
 
+export interface AdminTeamFilters {
+  q?: string;
+  kind?: AdminTeam["kind"];
+  group_id?: string;
+  quota_plan_id?: string;
+}
+
 export interface AdminTeamDetail {
   team: AdminTeam;
   members: {
@@ -387,8 +407,15 @@ export interface AdminProject {
   repository_url: string | null;
   team: AdminProjectTeamRef | null;
   latest_deployment: AdminDeploymentSummary | null;
+  status: "active" | "archived" | "deleted";
   archived_at: string | null;
+  deleted_at: string | null;
   created_at: string;
+}
+
+export interface AdminProjectFilters {
+  q?: string;
+  status?: AdminProject["status"];
 }
 
 export interface AdminProjectDetail {
@@ -404,7 +431,9 @@ export interface AdminProjectDetail {
   output_directory: string | null;
   source_config: Record<string, unknown>;
   build_config: Record<string, unknown>;
+  status: "active" | "archived" | "deleted";
   archived_at: string | null;
+  deleted_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -680,10 +709,20 @@ export const adminApi = {
       body: JSON.stringify(input),
     }),
 
-  listUsers: (q?: string) =>
-    request<{ users: AdminUser[] }>(
-      `/api/v1/admin/users${q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ""}`,
-    ),
+  listUsers: (filters: AdminUserFilters = {}) => {
+    const query = new URLSearchParams();
+    if (filters.q?.trim()) query.set("q", filters.q.trim());
+    if (filters.status) query.set("status", filters.status);
+    if (filters.role) query.set("role", filters.role);
+    const suffix = query.size ? `?${query}` : "";
+    return request<{ users: AdminUser[] }>(`/api/v1/admin/users${suffix}`);
+  },
+
+  batchUsers: (input: { action: "enable" | "disable"; ids: string[] }) =>
+    request<{ results: AdminBatchItemResult[] }>("/api/v1/admin/users/batch", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
 
   createUser: (input: {
     email: string;
@@ -735,10 +774,26 @@ export const adminApi = {
       method: "DELETE",
     }),
 
-  listTeams: (q?: string) =>
-    request<{ teams: AdminTeam[] }>(
-      `/api/v1/admin/teams${q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ""}`,
-    ),
+  listTeams: (filters: AdminTeamFilters = {}) => {
+    const query = new URLSearchParams();
+    if (filters.q?.trim()) query.set("q", filters.q.trim());
+    if (filters.kind) query.set("kind", filters.kind);
+    if (filters.group_id) query.set("group_id", filters.group_id);
+    if (filters.quota_plan_id) query.set("quota_plan_id", filters.quota_plan_id);
+    const suffix = query.size ? `?${query}` : "";
+    return request<{ teams: AdminTeam[] }>(`/api/v1/admin/teams${suffix}`);
+  },
+
+  batchTeams: (
+    input:
+      | { action: "delete"; ids: string[] }
+      | { action: "assign_group"; ids: string[]; group_id: string }
+      | { action: "assign_quota_plan"; ids: string[]; plan_id: string | null },
+  ) =>
+    request<{ results: AdminBatchItemResult[] }>("/api/v1/admin/teams/batch", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
 
   createTeam: (input: { name: string; slug?: string; owner_user_id: string }) =>
     request<{ team: AdminTeam }>("/api/v1/admin/teams", {
@@ -835,10 +890,19 @@ export const adminApi = {
       body: JSON.stringify({ plan_id: planId }),
     }),
 
-  listProjects: (q?: string) =>
-    request<{ projects: AdminProject[] }>(
-      `/api/v1/admin/projects${q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ""}`,
-    ),
+  listProjects: (filters: AdminProjectFilters = {}) => {
+    const query = new URLSearchParams();
+    if (filters.q?.trim()) query.set("q", filters.q.trim());
+    if (filters.status) query.set("status", filters.status);
+    const suffix = query.size ? `?${query}` : "";
+    return request<{ projects: AdminProject[] }>(`/api/v1/admin/projects${suffix}`);
+  },
+
+  batchProjects: (input: { action: "archive" | "unarchive" | "delete"; ids: string[] }) =>
+    request<{ results: AdminBatchItemResult[] }>("/api/v1/admin/projects/batch", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
 
   getProject: (projectId: string) =>
     request<{ project: AdminProjectDetail; team: AdminProjectTeamRef | null }>(
@@ -913,6 +977,11 @@ export const adminApi = {
 
   deleteProject: (projectId: string) =>
     request<{ deleted: true }>(`/api/v1/admin/projects/${projectId}/delete`, { method: "POST" }),
+
+  restoreProject: (projectId: string) =>
+    request<{ project: AdminProject }>(`/api/v1/admin/projects/${projectId}/restore`, {
+      method: "POST",
+    }),
 
   listReviews: () => request<{ total: number; reviews: AdminReview[] }>("/api/v1/admin/reviews"),
 

@@ -148,12 +148,21 @@ pub async fn set_archived<C: ConnectionTrait>(
     active.update(db).await.map_err(Into::into)
 }
 
+#[allow(dead_code)]
 pub async fn soft_delete<C: ConnectionTrait>(
     db: &C,
     project: project::Model,
 ) -> anyhow::Result<project::Model> {
+    soft_delete_at(db, project, OffsetDateTime::now_utc()).await
+}
+
+pub async fn soft_delete_at<C: ConnectionTrait>(
+    db: &C,
+    project: project::Model,
+    deleted_at: OffsetDateTime,
+) -> anyhow::Result<project::Model> {
     let mut active: project::ActiveModel = project.into();
-    active.deleted_at = Set(Some(OffsetDateTime::now_utc()));
+    active.deleted_at = Set(Some(deleted_at));
     active.update(db).await.map_err(Into::into)
 }
 

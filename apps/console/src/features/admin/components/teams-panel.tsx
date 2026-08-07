@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { MoreHorizontalIcon, PlusIcon } from "lucide-react";
+import { ChevronDownIcon, MoreHorizontalIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -15,9 +16,13 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Field, FieldLabel } from "@/components/ui/field";
@@ -25,6 +30,7 @@ import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -40,6 +46,7 @@ import {
 } from "@/components/ui/table";
 
 import { adminApi, type AdminTeam } from "../admin.api";
+import { showBatchResultToast } from "../batch-result-toast";
 
 type TeamAction =
   | { kind: "detail"; team: AdminTeam }
@@ -52,28 +59,70 @@ export function TeamsPanel() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
+  const [kind, setKind] = useState<AdminTeam["kind"] | undefined>();
+  const [groupId, setGroupId] = useState<string | undefined>();
+  const [quotaPlanId, setQuotaPlanId] = useState<string | undefined>();
   const [action, setAction] = useState<TeamAction | null>(null);
   const [creating, setCreating] = useState(false);
+  const [selectedTeamIds, setSelectedTeamIds] = useState<Set<string>>(new Set());
+
+  const filters = {
+    ...(query ? { q: query } : {}),
+    ...(kind ? { kind } : {}),
+    ...(groupId ? { group_id: groupId } : {}),
+    ...(quotaPlanId ? { quota_plan_id: quotaPlanId } : {}),
+  };
 
   const teamsQuery = useQuery({
-    queryKey: ["admin", "teams", query],
-    queryFn: () => adminApi.listTeams(query),
+    queryKey: ["admin", "teams", filters],
+    queryFn: () => adminApi.listTeams(filters),
   });
+  const groupsQuery = useQuery({
+    queryKey: ["admin", "team-groups"],
+    queryFn: adminApi.listTeamGroups,
+  });
+  const plansQuery = useQuery({
+    queryKey: ["admin", "quota-plans"],
+    queryFn: adminApi.listQuotaPlans,
+  });
+  const visibleTeamIds = teamsQuery.data?.teams.map((team) => team.id) ?? [];
+  const selectedVisibleCount = visibleTeamIds.filter((id) => selectedTeamIds.has(id)).length;
+  const allVisibleSelected =
+    visibleTeamIds.length > 0 && selectedVisibleCount === visibleTeamIds.length;
 
   const close = () => setAction(null);
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["admin", "teams"] });
 
+  const batchMutation = useMutation({
+    mutationFn: (
+      input:
+        | { action: "delete" }
+        | { action: "assign_group"; group_id: string }
+        | { action: "assign_quota_plan"; plan_id: string | null },
+    ) => adminApi.batchTeams({ ...input, ids: [...selectedTeamIds] }),
+    onSuccess: ({ results }, input) => {
+      showBatchResultToast(
+        results,
+        results.length === 1 ? "team" : "teams",
+        input.action === "delete" ? "deleted" : "updated",
+      );
+      setSelectedTeamIds(new Set());
+      invalidate();
+    },
+  });
+
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-4">
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <p className="text-sm text-muted-foreground">
           All teams on this platform, including personal teams.
         </p>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <form
             onSubmit={(event) => {
               event.preventDefault();
               setQuery(search);
+              setSelectedTeamIds(new Set());
             }}
           >
             <Input
@@ -84,22 +133,177 @@ export function TeamsPanel() {
               onChange={(event) => setSearch(event.target.value)}
             />
           </form>
+          <Select
+            value={kind ?? "all"}
+            onValueChange={(value) => {
+              setKind(value === "all" ? undefined : (value as AdminTeam["kind"]));
+              setSelectedTeamIds(new Set());
+            }}
+          >
+            <SelectTrigger aria-label="Team kind" size="sm">
+              <SelectValue placeholder="All kinds" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="all">All kinds</SelectItem>
+                <SelectItem value="team">Team</SelectItem>
+                <SelectItem value="personal">Personal</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <Select
+            value={groupId ?? "all"}
+            onValueChange={(value) => {
+              setGroupId(value === "all" ? undefined : value);
+              setSelectedTeamIds(new Set());
+            }}
+          >
+            <SelectTrigger aria-label="Team group" size="sm">
+              <SelectValue placeholder="All groups" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="all">All groups</SelectItem>
+                {groupsQuery.data?.groups.map((group) => (
+                  <SelectItem key={group.id} value={group.id}>
+                    {group.name}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <Select
+            value={quotaPlanId ?? "all"}
+            onValueChange={(value) => {
+              setQuotaPlanId(value === "all" ? undefined : value);
+              setSelectedTeamIds(new Set());
+            }}
+          >
+            <SelectTrigger aria-label="Quota plan" size="sm">
+              <SelectValue placeholder="All quota plans" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="all">All quota plans</SelectItem>
+                {plansQuery.data?.plans.map((plan) => (
+                  <SelectItem key={plan.id} value={plan.id}>
+                    {plan.name}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
           <Button onClick={() => setCreating(true)}>
             <PlusIcon /> New team
           </Button>
         </div>
       </div>
 
-      {teamsQuery.isLoading && <Skeleton className="h-40 w-full" aria-busy="true" />}
-      {teamsQuery.isError && (
-        <p role="alert" className="text-sm text-destructive">
-          {teamsQuery.error instanceof Error ? teamsQuery.error.message : "Unable to load teams."}
-        </p>
+      {selectedTeamIds.size > 0 && (
+        <div className="flex min-h-10 items-center justify-between gap-4 border-y px-1 py-2">
+          <p className="text-sm font-medium">{selectedTeamIds.size} teams selected</p>
+          <div className="flex items-center gap-2">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  aria-label="Bulk actions"
+                  disabled={batchMutation.isPending}
+                >
+                  Bulk actions <ChevronDownIcon />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuGroup>
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>Assign group</DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      {groupsQuery.data?.groups.map((group) => (
+                        <DropdownMenuItem
+                          key={group.id}
+                          onClick={() =>
+                            batchMutation.mutate({ action: "assign_group", group_id: group.id })
+                          }
+                        >
+                          {group.name}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>Assign quota plan</DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      <DropdownMenuItem
+                        onClick={() =>
+                          batchMutation.mutate({ action: "assign_quota_plan", plan_id: null })
+                        }
+                      >
+                        Inherit from group
+                      </DropdownMenuItem>
+                      {plansQuery.data?.plans
+                        .filter((plan) => plan.enabled)
+                        .map((plan) => (
+                          <DropdownMenuItem
+                            key={plan.id}
+                            onClick={() =>
+                              batchMutation.mutate({
+                                action: "assign_quota_plan",
+                                plan_id: plan.id,
+                              })
+                            }
+                          >
+                            {plan.name}
+                          </DropdownMenuItem>
+                        ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                </DropdownMenuGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={() => batchMutation.mutate({ action: "delete" })}
+                >
+                  <Trash2Icon data-icon="inline-start" /> Delete selected
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => setSelectedTeamIds(new Set())}
+            >
+              Clear selection
+            </Button>
+          </div>
+        </div>
       )}
+
+      {teamsQuery.isLoading && <Skeleton className="h-40 w-full" aria-busy="true" />}
       {teamsQuery.data && (
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-10">
+                <Checkbox
+                  aria-label="Select all visible teams"
+                  checked={
+                    allVisibleSelected ? true : selectedVisibleCount > 0 ? "indeterminate" : false
+                  }
+                  onCheckedChange={(checked) =>
+                    setSelectedTeamIds((current) => {
+                      const next = new Set(current);
+                      for (const id of visibleTeamIds) {
+                        if (checked === true) next.add(id);
+                        else next.delete(id);
+                      }
+                      return next;
+                    })
+                  }
+                />
+              </TableHead>
               <TableHead>Team</TableHead>
               <TableHead>Kind</TableHead>
               <TableHead>Group</TableHead>
@@ -111,6 +315,20 @@ export function TeamsPanel() {
           <TableBody>
             {teamsQuery.data.teams.map((team) => (
               <TableRow key={team.id}>
+                <TableCell>
+                  <Checkbox
+                    aria-label={`Select ${team.name}`}
+                    checked={selectedTeamIds.has(team.id)}
+                    onCheckedChange={(checked) =>
+                      setSelectedTeamIds((current) => {
+                        const next = new Set(current);
+                        if (checked === true) next.add(team.id);
+                        else next.delete(team.id);
+                        return next;
+                      })
+                    }
+                  />
+                </TableCell>
                 <TableCell>
                   <span className="font-medium">{team.name}</span>
                   <p className="text-xs text-muted-foreground">{team.slug}</p>
@@ -238,11 +456,6 @@ function TeamDetailDialog({ team, onClose }: { team: AdminTeam; onClose: () => v
           </DialogDescription>
         </DialogHeader>
         {detailQuery.isLoading && <Skeleton className="h-32 w-full" aria-busy="true" />}
-        {detailQuery.isError && (
-          <p role="alert" className="text-sm text-destructive">
-            Unable to load team details.
-          </p>
-        )}
         {detailQuery.data && (
           <div className="space-y-4 text-sm">
             <div className="grid grid-cols-2 gap-2">
@@ -318,11 +531,6 @@ function RenameTeamDialog({
               required
             />
           </Field>
-          {mutation.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              {mutation.error instanceof Error ? mutation.error.message : "Unable to rename."}
-            </p>
-          )}
           <DialogFooter>
             <Button type="submit" disabled={mutation.isPending}>
               {mutation.isPending ? "Saving…" : "Save"}
@@ -384,13 +592,6 @@ function ChangeGroupDialog({
               </SelectContent>
             </Select>
           </Field>
-          {mutation.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              {mutation.error instanceof Error
-                ? mutation.error.message
-                : "Unable to change the group."}
-            </p>
-          )}
           <DialogFooter>
             <Button type="submit" disabled={mutation.isPending || !groupId}>
               {mutation.isPending ? "Saving…" : "Save"}
@@ -425,11 +626,6 @@ function DeleteTeamDialog({
             Soft-deletes “{team.name}”. Teams that still own projects are refused.
           </DialogDescription>
         </DialogHeader>
-        {mutation.isError && (
-          <p role="alert" className="text-sm text-destructive">
-            {mutation.error instanceof Error ? mutation.error.message : "Unable to delete."}
-          </p>
-        )}
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
             Cancel
@@ -502,11 +698,6 @@ function OverridePlanDialog({
               </SelectContent>
             </Select>
           </Field>
-          {mutation.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              {mutation.error instanceof Error ? mutation.error.message : "Unable to save."}
-            </p>
-          )}
           <DialogFooter>
             <Button type="submit" disabled={mutation.isPending}>
               {mutation.isPending ? "Saving…" : "Save"}
@@ -598,11 +789,6 @@ function CreateTeamDialog({ onClose, onCreated }: { onClose: () => void; onCreat
               </SelectContent>
             </Select>
           </Field>
-          {mutation.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              {mutation.error instanceof Error ? mutation.error.message : "Unable to create."}
-            </p>
-          )}
           <DialogFooter>
             <Button type="submit" disabled={mutation.isPending || !ownerId}>
               {mutation.isPending ? "Creating…" : "Create team"}

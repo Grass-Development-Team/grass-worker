@@ -151,7 +151,6 @@ function CloudflareFields({
 
 export function HostSourcesPanel() {
   const queryClient = useQueryClient();
-  const [error, setError] = useState<string | null>(null);
 
   const sourcesQuery = useQuery({
     queryKey: ["admin", "host-sources"],
@@ -163,15 +162,11 @@ export function HostSourcesPanel() {
   const removeMutation = useMutation({
     mutationFn: (sourceId: string) => adminApi.removeHostSource(sourceId),
     onSuccess: invalidate,
-    onError: (cause) =>
-      setError(cause instanceof Error ? cause.message : "Unable to remove the host source."),
   });
   const toggleDefaultMutation = useMutation({
     mutationFn: ({ sourceId, isDefault }: { sourceId: string; isDefault: boolean }) =>
       adminApi.updateHostSource(sourceId, { is_default: isDefault }),
     onSuccess: invalidate,
-    onError: (cause) =>
-      setError(cause instanceof Error ? cause.message : "Unable to update the host source."),
   });
 
   return (
@@ -182,27 +177,9 @@ export function HostSourcesPanel() {
           sources create records through the provider API (Cloudflare), and manual sources wait for
           operator DNS.
         </p>
-        <CreateHostSourceDialog
-          onCreated={() => {
-            setError(null);
-            invalidate();
-          }}
-        />
+        <CreateHostSourceDialog onCreated={invalidate} />
       </div>
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-
       {sourcesQuery.isLoading && <Skeleton className="h-40 w-full" aria-busy="true" />}
-      {sourcesQuery.isError && (
-        <p role="alert" className="text-sm text-destructive">
-          {sourcesQuery.error instanceof Error
-            ? sourcesQuery.error.message
-            : "Unable to load host sources."}
-        </p>
-      )}
       {sourcesQuery.data &&
         (sourcesQuery.data.sources.length === 0 ? (
           <p className="text-sm text-muted-foreground">
@@ -252,13 +229,7 @@ export function HostSourcesPanel() {
                     >
                       {source.is_default ? "Unset default" : "Make default"}
                     </Button>
-                    <EditHostSourceDialog
-                      source={source}
-                      onSaved={() => {
-                        setError(null);
-                        invalidate();
-                      }}
-                    />
+                    <EditHostSourceDialog source={source} onSaved={invalidate} />
                     <Button
                       size="sm"
                       variant="ghost"
@@ -379,13 +350,6 @@ function CreateHostSourceDialog({ onCreated }: { onCreated: () => void }) {
             />
             Use as the default source for automatic assignment
           </label>
-          {createMutation.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              {createMutation.error instanceof Error
-                ? createMutation.error.message
-                : "Unable to create the host source."}
-            </p>
-          )}
           <DialogFooter>
             <Button type="submit" disabled={createMutation.isPending}>
               {createMutation.isPending ? "Creating…" : "Create source"}
@@ -505,13 +469,6 @@ function EditHostSourceDialog({
               requireSecrets={false}
               idPrefix={`edit-cf-${source.id}`}
             />
-          )}
-          {updateMutation.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              {updateMutation.error instanceof Error
-                ? updateMutation.error.message
-                : "Unable to update the host source."}
-            </p>
           )}
           <DialogFooter>
             <Button type="submit" disabled={updateMutation.isPending}>

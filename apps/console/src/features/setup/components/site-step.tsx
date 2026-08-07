@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
-import { AlertCircle, ArrowRight, Globe } from "lucide-react";
+import { ArrowRight, Globe } from "lucide-react";
 
 import { setupApi } from "@/features/setup/setup.api";
 import { useBranding } from "@/features/branding/branding-context";
@@ -21,11 +21,9 @@ export function SiteStep({ onSuccess }: { onSuccess: () => void }) {
   const [name, setName] = useState(siteName);
   const [siteUrl, setSiteUrl] = useState(window.location.origin);
   const [publicBaseUrl, setPublicBaseUrl] = useState(window.location.origin);
-  const [error, setError] = useState<string | null>(null);
   const mutation = useMutation({
     mutationFn: () => setupApi.configureSite(name, siteUrl, publicBaseUrl),
     onSuccess,
-    onError: (err: Error) => setError(err.message),
   });
   return (
     <Card>
@@ -38,7 +36,6 @@ export function SiteStep({ onSuccess }: { onSuccess: () => void }) {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          setError(null);
           mutation.mutate();
         }}
       >
@@ -70,12 +67,6 @@ export function SiteStep({ onSuccess }: { onSuccess: () => void }) {
               placeholder="https://sites.example.com"
               required
             />
-            {error && (
-              <div className="flex items-center gap-2 text-sm text-destructive">
-                <AlertCircle className="size-4" />
-                {error}
-              </div>
-            )}
           </div>
         </CardContent>
         <CardFooter>

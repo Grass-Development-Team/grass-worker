@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
-import { AlertCircle, ArrowRight, Database } from "lucide-react";
+import { ArrowRight, Database } from "lucide-react";
 
 import { setupApi } from "@/features/setup/setup.api";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { showErrorToast } from "@/lib/toast";
 
 export function DatabaseStep({ onSuccess }: { onSuccess: () => void }) {
   const [host, setHost] = useState("");
@@ -21,12 +22,10 @@ export function DatabaseStep({ onSuccess }: { onSuccess: () => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [database, setDatabase] = useState("");
-  const [error, setError] = useState<string | null>(null);
 
   const mutation = useMutation({
     mutationFn: () => setupApi.configureDatabase(host, port, username, password, database),
     onSuccess,
-    onError: (err: Error) => setError(err.message),
   });
 
   return (
@@ -40,13 +39,12 @@ export function DatabaseStep({ onSuccess }: { onSuccess: () => void }) {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          setError(null);
           if (!host.trim() || !port.trim() || !username.trim() || !database.trim()) {
-            setError("All fields are required.");
+            showErrorToast(new Error("All fields are required."));
             return;
           }
           if (!/^\d+$/.test(port.trim())) {
-            setError("Port must be a number.");
+            showErrorToast(new Error("Port must be a number."));
             return;
           }
           mutation.mutate();
@@ -111,12 +109,6 @@ export function DatabaseStep({ onSuccess }: { onSuccess: () => void }) {
                 required
               />
             </div>
-            {error && (
-              <div className="flex items-center gap-2 text-sm text-destructive">
-                <AlertCircle className="size-4" />
-                {error}
-              </div>
-            )}
           </div>
         </CardContent>
         <CardFooter>

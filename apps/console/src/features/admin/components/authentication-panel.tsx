@@ -66,13 +66,7 @@ export function AuthenticationPanel() {
   if (settings.isLoading || providers.isLoading) {
     return <Skeleton className="h-72 w-full" aria-busy="true" />;
   }
-  if (settings.isError || providers.isError || !settings.data || !providers.data) {
-    return (
-      <p role="alert" className="text-sm text-destructive">
-        Unable to load authentication settings.
-      </p>
-    );
-  }
+  if (settings.isError || providers.isError || !settings.data || !providers.data) return null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -360,11 +354,6 @@ function AuthenticationPolicyForm({
               />
             </Field>
           </div>
-          {mutation.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              {mutation.error instanceof Error ? mutation.error.message : "Unable to save policy."}
-            </p>
-          )}
         </FieldGroup>
       </SettingsCard>
       <AddMfaMethodDialog
@@ -757,13 +746,6 @@ function ProviderDialog({
                 onChange={(value) => setValue("scopes", value.split(/\s+/).filter(Boolean))}
               />
             </>
-          )}
-          {mutation.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              {mutation.error instanceof Error
-                ? mutation.error.message
-                : "Unable to save provider."}
-            </p>
           )}
           <DialogFooter>
             <Button type="submit" disabled={mutation.isPending}>

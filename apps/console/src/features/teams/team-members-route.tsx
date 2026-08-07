@@ -27,7 +27,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
   Command,
@@ -46,6 +46,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { showErrorToast } from "@/lib/toast";
 import {
   Table,
   TableBody,
@@ -76,7 +77,6 @@ export function TeamMembersRoute() {
   const [invitation, setInvitation] = useState<TeamInvitation | null>(null);
   const [removeTarget, setRemoveTarget] = useState<TeamMember | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
-  const [copyError, setCopyError] = useState<string | null>(null);
   const manageable = activeRole ? canManageMembers(activeRole) : false;
   const members = useQuery({
     queryKey: activeTeam ? teamKeys.members(activeTeam.id) : ["teams", "none", "members"],
@@ -98,7 +98,6 @@ export function TeamMembersRoute() {
       teamsApi.inviteMember(activeTeam!.id, { email: selectedCandidate!.email, role }),
     onSuccess: ({ invitation }) => {
       setInvitation(invitation);
-      setCopyError(null);
       setCopyState("idle");
     },
   });
@@ -125,7 +124,6 @@ export function TeamMembersRoute() {
       setSelectedCandidate(null);
       setRole("member");
       setInvitation(null);
-      setCopyError(null);
       setCopyState("idle");
       invite.reset();
     }
@@ -137,7 +135,6 @@ export function TeamMembersRoute() {
     setSelectedCandidate(null);
     setRole("member");
     setInvitation(null);
-    setCopyError(null);
     setCopyState("idle");
     setInviteOpen(true);
   };
@@ -171,10 +168,6 @@ export function TeamMembersRoute() {
         <CardContent>
           {members.isLoading ? (
             <Spinner />
-          ) : members.error ? (
-            <p role="alert" className="text-sm text-destructive">
-              {members.error.message}
-            </p>
           ) : members.data?.members.length === 0 ? (
             <div className="py-10 text-center text-sm text-muted-foreground">
               No members found for this team.
@@ -269,11 +262,6 @@ export function TeamMembersRoute() {
               </TableBody>
             </Table>
           )}
-          {updateRole.error && (
-            <p role="alert" className="mt-4 text-sm text-destructive">
-              {updateRole.error.message}
-            </p>
-          )}
         </CardContent>
       </Card>
       <Dialog open={inviteOpen} onOpenChange={setInviteDialogOpen}>
@@ -296,10 +284,9 @@ export function TeamMembersRoute() {
                   onClick={async () => {
                     try {
                       await navigator.clipboard.writeText(link);
-                      setCopyError(null);
                       setCopyState("copied");
-                    } catch {
-                      setCopyError("Unable to copy the invitation link.");
+                    } catch (cause) {
+                      showErrorToast(cause);
                     }
                   }}
                   aria-label={
@@ -309,11 +296,6 @@ export function TeamMembersRoute() {
                   {copyState === "copied" ? <CheckIcon /> : <CopyIcon />}
                 </Button>
               </div>
-              {copyError && (
-                <p role="alert" className="text-sm text-destructive">
-                  {copyError}
-                </p>
-              )}
             </div>
           ) : (
             <form
@@ -382,7 +364,6 @@ export function TeamMembersRoute() {
                       </CommandList>
                     )}
                   </Command>
-                  {candidates.error && <FieldError>{candidates.error.message}</FieldError>}
                 </Field>
                 <Field>
                   <FieldLabel>Role</FieldLabel>
@@ -401,7 +382,6 @@ export function TeamMembersRoute() {
                     </SelectContent>
                   </Select>
                 </Field>
-                {invite.error && <FieldError>{invite.error.message}</FieldError>}
               </FieldGroup>
               <DialogFooter>
                 <Button type="submit" disabled={invite.isPending || !selectedCandidate}>
@@ -420,11 +400,6 @@ export function TeamMembersRoute() {
               {removeTarget?.email} will lose access to this team.
             </DialogDescription>
           </DialogHeader>
-          {remove.error && (
-            <p role="alert" className="text-sm text-destructive">
-              {remove.error.message}
-            </p>
-          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setRemoveDialogOpen(false)}>
               Cancel

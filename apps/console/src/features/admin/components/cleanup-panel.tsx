@@ -336,20 +336,6 @@ export function CleanupPanel() {
                 </Button>
                 <PreviewSummary preview={auditPreview} />
               </div>
-              {auditPreviewMutation.isError && (
-                <p role="alert" className="text-sm text-destructive">
-                  {auditPreviewMutation.error instanceof Error
-                    ? auditPreviewMutation.error.message
-                    : "Unable to preview audit events."}
-                </p>
-              )}
-              {auditDeleteMutation.isError && (
-                <p role="alert" className="text-sm text-destructive">
-                  {auditDeleteMutation.error instanceof Error
-                    ? auditDeleteMutation.error.message
-                    : "Unable to delete audit events."}
-                </p>
-              )}
               <ResultMessage result={auditResult} />
               <AuditEventResults
                 events={auditPreview?.events}
@@ -460,20 +446,6 @@ export function CleanupPanel() {
                 </Button>
                 <PreviewSummary preview={buildLogPreview} />
               </div>
-              {buildLogPreviewMutation.isError && (
-                <p role="alert" className="text-sm text-destructive">
-                  {buildLogPreviewMutation.error instanceof Error
-                    ? buildLogPreviewMutation.error.message
-                    : "Unable to preview build logs."}
-                </p>
-              )}
-              {buildLogDeleteMutation.isError && (
-                <p role="alert" className="text-sm text-destructive">
-                  {buildLogDeleteMutation.error instanceof Error
-                    ? buildLogDeleteMutation.error.message
-                    : "Unable to delete build logs."}
-                </p>
-              )}
               <ResultMessage result={buildLogResult} />
             </form>
           </CardContent>

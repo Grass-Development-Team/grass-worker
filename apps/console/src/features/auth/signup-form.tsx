@@ -5,9 +5,10 @@ import { SiteLogo } from "@/components/site-logo";
 import { Alert, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { useBranding } from "@/features/branding/branding-context";
+import { showErrorToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { useAuth } from "./auth-context";
 import { authHref, safeLocalReturnTo } from "./auth-continuation";
@@ -26,22 +27,26 @@ export function SignupForm({ className, ...props }: React.ComponentPropsWithoutR
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [registrationCode, setRegistrationCode] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const returnTo = safeLocalReturnTo(new URLSearchParams(location.search).get("return_to"));
   const signupPolicy = configuration?.signup_policy ?? "open";
   const loginHref = authHref("/login", returnTo);
 
-  const handleSubmit = async (event: React.FormEvent) => {
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setError(null);
 
-    if (!email.trim() || !displayName.trim() || !password || !confirmPassword) {
-      setError("Please complete all fields.");
+    if (
+      !event.currentTarget.checkValidity() ||
+      !email.trim() ||
+      !displayName.trim() ||
+      !password ||
+      !confirmPassword
+    ) {
+      showErrorToast(new Error("Please complete all fields."));
       return;
     }
     if (password !== confirmPassword) {
-      setError("Passwords do not match.");
+      showErrorToast(new Error("Passwords do not match."));
       return;
     }
 
@@ -70,7 +75,7 @@ export function SignupForm({ className, ...props }: React.ComponentPropsWithoutR
       }
       navigate(returnTo ?? "/", { replace: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Registration failed");
+      showErrorToast(err);
       setIsSubmitting(false);
     }
   };
@@ -102,21 +107,8 @@ export function SignupForm({ className, ...props }: React.ComponentPropsWithoutR
         <>
           <Card>
             <CardContent>
-              <form onSubmit={handleSubmit}>
+              <form onSubmit={handleSubmit} noValidate>
                 <FieldGroup className="gap-4">
-                  {signupPolicy === "invite_only" && (
-                    <Field className="gap-2">
-                      <FieldLabel htmlFor="registration-code">
-                        Registration code (optional)
-                      </FieldLabel>
-                      <Input
-                        id="registration-code"
-                        autoComplete="one-time-code"
-                        value={registrationCode}
-                        onChange={(event) => setRegistrationCode(event.target.value)}
-                      />
-                    </Field>
-                  )}
                   <Field className="gap-2">
                     <FieldLabel htmlFor="email">Email</FieldLabel>
                     <Input
@@ -163,7 +155,19 @@ export function SignupForm({ className, ...props }: React.ComponentPropsWithoutR
                       required
                     />
                   </Field>
-                  {error && <FieldError>{error}</FieldError>}
+                  {signupPolicy === "invite_only" && (
+                    <Field className="gap-2">
+                      <FieldLabel htmlFor="registration-code">
+                        Registration code (optional)
+                      </FieldLabel>
+                      <Input
+                        id="registration-code"
+                        autoComplete="one-time-code"
+                        value={registrationCode}
+                        onChange={(event) => setRegistrationCode(event.target.value)}
+                      />
+                    </Field>
+                  )}
                   <Field>
                     <Button type="submit" className="w-full" disabled={isSubmitting}>
                       {isSubmitting ? "Creating account..." : "Create account"}

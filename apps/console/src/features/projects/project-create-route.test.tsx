@@ -5,11 +5,13 @@ import { MemoryRouter, useLocation } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { useTeam } from "@/features/teams/team-context";
+import { showErrorToast } from "@/lib/toast";
 
 import { ProjectCreateRoute } from "./project-create-route";
 import { projectsApi } from "./projects.api";
 
 vi.mock("@/features/teams/team-context", () => ({ useTeam: vi.fn() }));
+vi.mock("@/lib/toast", () => ({ showErrorToast: vi.fn() }));
 vi.mock("./projects.api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./projects.api")>();
   return { ...actual, projectsApi: { ...actual.projectsApi, create: vi.fn() } };
@@ -130,7 +132,7 @@ describe("ProjectCreateRoute", () => {
     );
   });
 
-  it("shows an API error without leaving the page", async () => {
+  it("keeps the form open while an API error is handled by the global Toast", async () => {
     const user = userEvent.setup();
     vi.mocked(projectsApi.create).mockRejectedValueOnce(new Error("Slug already exists"));
     renderCreate();
@@ -138,7 +140,8 @@ describe("ProjectCreateRoute", () => {
     await user.type(screen.getByLabelText("Project name"), "Existing Site");
     await user.click(screen.getByRole("button", { name: "Create Project" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Slug already exists");
+    await waitFor(() => expect(projectsApi.create).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Configure Project" })).toBeInTheDocument();
     expect(screen.getByTestId("location")).toHaveTextContent("/projects/new");
   });
@@ -155,10 +158,15 @@ describe("ProjectCreateRoute", () => {
     );
   });
 
-  it("shows an access state to viewers", () => {
+  it("shows a Toast access state to viewers", () => {
     renderCreate("viewer");
 
-    expect(screen.getByRole("alert")).toHaveTextContent("You do not have permission");
+    expect(showErrorToast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "You do not have permission to create projects in the active team.",
+      }),
+      "project-create-forbidden",
+    );
     expect(screen.queryByLabelText("Project name")).not.toBeInTheDocument();
   });
 
@@ -181,7 +189,7 @@ describe("ProjectCreateRoute", () => {
     expect(screen.queryByLabelText("Project name")).not.toBeInTheDocument();
   });
 
-  it("shows a retry state when teams fail to load", () => {
+  it("shows a Toast and retry action when teams fail to load", () => {
     vi.mocked(useTeam).mockReturnValue({
       activeTeam: null,
       activeRole: null,
@@ -198,7 +206,10 @@ describe("ProjectCreateRoute", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole("alert")).toHaveTextContent("Network unavailable");
+    expect(showErrorToast).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Network unavailable" }),
+      "project-create-team-error",
+    );
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
   });
 });

@@ -88,11 +88,29 @@ function storeAuthenticatedResponse(data: AuthResponse): AuthResponse {
 
 let restorePromise: Promise<MeResponse> | null = null;
 
+function getMe(broadcastUnauthorized = true): Promise<MeResponse> {
+  return request<MeResponse>(
+    "/api/v1/me",
+    { credentials: "include" as RequestCredentials },
+    { broadcastUnauthorized },
+  );
+}
+
+async function getCsrf(broadcastUnauthorized = true): Promise<CsrfResponse> {
+  const data = await request<CsrfResponse>(
+    "/api/v1/auth/csrf",
+    { credentials: "include" as RequestCredentials },
+    { broadcastUnauthorized },
+  );
+  setCsrfToken(data.csrf_token);
+  return data;
+}
+
 function restoreSession(): Promise<MeResponse> {
   if (!restorePromise) {
     const pending = (async () => {
-      const data = await authApi.me();
-      await authApi.csrf();
+      const data = await getMe(false);
+      await getCsrf(false);
       return data;
     })();
     const shared = pending.finally(() => {
@@ -129,22 +147,13 @@ export const authApi = {
     setCsrfToken(null);
     return data;
   },
-  me: () =>
-    request<MeResponse>("/api/v1/me", {
-      credentials: "include" as RequestCredentials,
-    }),
+  me: () => getMe(),
   updateMe: (input: { display_name: string | null }) =>
     request<MeResponse>("/api/v1/me", {
       method: "PATCH",
       body: JSON.stringify(input),
     }),
-  csrf: async () => {
-    const data = await request<CsrfResponse>("/api/v1/auth/csrf", {
-      credentials: "include" as RequestCredentials,
-    });
-    setCsrfToken(data.csrf_token);
-    return data;
-  },
+  csrf: () => getCsrf(),
   forgotPassword: (email: string) =>
     request<{ accepted: true }>("/api/v1/auth/password/forgot", {
       method: "POST",

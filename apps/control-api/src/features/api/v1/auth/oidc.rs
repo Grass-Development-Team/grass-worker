@@ -181,10 +181,15 @@ pub async fn start(
         }
     }
     let apple_form_post = provider.issuer_url.as_deref() == Some("https://appleid.apple.com");
+    let (cookie_secure, development_enabled) = {
+        let config = state.config.read().unwrap();
+        (config.session.cookie_secure, config.development_enabled())
+    };
     let state_cookie = state_cookie(
         &state_token,
         apple_form_post,
-        state.config.read().unwrap().session.cookie_secure,
+        cookie_secure,
+        development_enabled,
     );
     Ok((
         jar.add(state_cookie),
@@ -785,7 +790,12 @@ fn flow_key(state: &str) -> String {
     format!("auth:oauth:flow:{}", grass_token::hash_token(state))
 }
 
-fn state_cookie(state: &str, apple_form_post: bool, cookie_secure: bool) -> Cookie<'static> {
+fn state_cookie(
+    state: &str,
+    apple_form_post: bool,
+    configured_secure: bool,
+    development_enabled: bool,
+) -> Cookie<'static> {
     let mut cookie = Cookie::new(STATE_COOKIE, grass_token::hash_token(state));
     cookie.set_path("/api/v1/auth/providers");
     cookie.set_http_only(true);
@@ -795,7 +805,7 @@ fn state_cookie(state: &str, apple_form_post: bool, cookie_secure: bool) -> Cook
     } else {
         SameSite::Lax
     });
-    cookie.set_secure(apple_form_post || cookie_secure);
+    cookie.set_secure((apple_form_post || configured_secure) && !development_enabled);
     cookie
 }
 
@@ -936,15 +946,37 @@ mod tests {
 
     #[test]
     fn oauth_state_cookie_matches_the_callback_transport() {
-        let regular = state_cookie("state", false, false);
+        let regular = state_cookie("state", false, true, false);
         assert_eq!(regular.name(), STATE_COOKIE);
         assert_eq!(regular.path(), Some("/api/v1/auth/providers"));
         assert_eq!(regular.http_only(), Some(true));
         assert_eq!(regular.same_site(), Some(SameSite::Lax));
-        assert_eq!(regular.secure(), Some(false));
+        assert_eq!(regular.secure(), Some(true));
 
-        let apple = state_cookie("state", true, false);
+        let regular_without_configured_secure = state_cookie("state", false, false, false);
+        assert_eq!(
+            regular_without_configured_secure.same_site(),
+            Some(SameSite::Lax)
+        );
+        assert_eq!(regular_without_configured_secure.secure(), Some(false));
+
+        let development = state_cookie("state", false, true, true);
+        assert_eq!(development.same_site(), Some(SameSite::Lax));
+        assert_eq!(development.secure(), Some(false));
+
+        let apple = state_cookie("state", true, true, false);
         assert_eq!(apple.same_site(), Some(SameSite::None));
         assert_eq!(apple.secure(), Some(true));
+
+        let apple_without_configured_secure = state_cookie("state", true, false, false);
+        assert_eq!(
+            apple_without_configured_secure.same_site(),
+            Some(SameSite::None)
+        );
+        assert_eq!(apple_without_configured_secure.secure(), Some(true));
+
+        let apple_development = state_cookie("state", true, true, true);
+        assert_eq!(apple_development.same_site(), Some(SameSite::None));
+        assert_eq!(apple_development.secure(), Some(false));
     }
 }

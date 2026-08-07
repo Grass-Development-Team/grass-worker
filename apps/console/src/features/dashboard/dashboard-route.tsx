@@ -69,13 +69,6 @@ export function DashboardRoute() {
       <section className="space-y-3">
         <h2 className="text-base font-semibold">Projects</h2>
         {projectsQuery.isLoading && <Skeleton className="h-40 w-full" aria-busy="true" />}
-        {projectsQuery.isError && (
-          <p role="alert" className="text-sm text-destructive">
-            {projectsQuery.error instanceof Error
-              ? projectsQuery.error.message
-              : "Unable to load projects."}
-          </p>
-        )}
         {projectsQuery.data &&
           (projects.length === 0 ? (
             <Empty>
@@ -149,83 +142,74 @@ export function DashboardRoute() {
           )}
         </div>
       </section>
-      {!announcementsQuery.isPending &&
-        (announcementsQuery.isError || announcements.length > 0) && (
-          <section className="space-y-3" aria-labelledby="dashboard-announcements-heading">
-            <div className="flex items-end justify-between gap-3">
-              <div>
-                <h2 id="dashboard-announcements-heading" className="text-base font-semibold">
-                  Announcements
-                </h2>
-                <p className="text-sm text-muted-foreground">Recent updates from the platform.</p>
-              </div>
+      {!announcementsQuery.isPending && announcements.length > 0 && (
+        <section className="space-y-3" aria-labelledby="dashboard-announcements-heading">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <h2 id="dashboard-announcements-heading" className="text-base font-semibold">
+                Announcements
+              </h2>
+              <p className="text-sm text-muted-foreground">Recent updates from the platform.</p>
             </div>
-            {announcementsQuery.isError ? (
-              <p role="alert" className="text-sm text-destructive">
-                {announcementsQuery.error.message}
-              </p>
-            ) : (
-              <div className="divide-y overflow-hidden rounded-md border">
-                {announcements.map((announcement) => (
-                  <button
-                    key={announcement.id}
-                    type="button"
-                    className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 px-4 py-4 text-left transition-colors hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:outline-none"
-                    onClick={() => setSelectedAnnouncement(announcement)}
-                  >
-                    <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-                      <MegaphoneIcon className="size-4" />
-                    </span>
-                    <span className="min-w-0">
-                      <span className="block truncate text-sm font-medium">
-                        {announcement.title}
-                      </span>
-                      <span className="mt-1 block truncate text-xs text-muted-foreground">
-                        {announcement.content}
-                      </span>
-                    </span>
-                    <time
-                      dateTime={announcement.published_at}
-                      className="pt-0.5 text-xs text-muted-foreground"
-                    >
-                      {new Intl.DateTimeFormat(undefined, {
-                        month: "short",
-                        day: "numeric",
-                      }).format(new Date(announcement.published_at))}
-                    </time>
-                  </button>
-                ))}
-              </div>
-            )}
-            {announcementsQuery.data?.pagination?.total_pages &&
-              announcementsQuery.data.pagination.total_pages > 1 && (
-                <nav className="flex items-center justify-between" aria-label="Announcement pages">
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    onClick={() => setAnnouncementPage((current) => Math.max(1, current - 1))}
-                    disabled={announcementPage <= 1}
-                    aria-label="Previous page"
-                  >
-                    <ArrowLeftIcon />
-                  </Button>
-                  <span className="text-xs text-muted-foreground">
-                    {announcementsQuery.data.pagination.page} /{" "}
-                    {announcementsQuery.data.pagination.total_pages}
+          </div>
+          <div className="divide-y overflow-hidden rounded-md border">
+            {announcements.map((announcement) => (
+              <button
+                key={announcement.id}
+                type="button"
+                className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 px-4 py-4 text-left transition-colors hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:outline-none"
+                onClick={() => setSelectedAnnouncement(announcement)}
+              >
+                <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                  <MegaphoneIcon className="size-4" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium">{announcement.title}</span>
+                  <span className="mt-1 block truncate text-xs text-muted-foreground">
+                    {announcement.content}
                   </span>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    onClick={() => setAnnouncementPage((current) => current + 1)}
-                    disabled={announcementPage >= announcementsQuery.data.pagination.total_pages}
-                    aria-label="Next page"
-                  >
-                    <ArrowRightIcon />
-                  </Button>
-                </nav>
-              )}
-          </section>
-        )}
+                </span>
+                <time
+                  dateTime={announcement.published_at}
+                  className="pt-0.5 text-xs text-muted-foreground"
+                >
+                  {new Intl.DateTimeFormat(undefined, {
+                    month: "short",
+                    day: "numeric",
+                  }).format(new Date(announcement.published_at))}
+                </time>
+              </button>
+            ))}
+          </div>
+          {announcementsQuery.data?.pagination?.total_pages &&
+            announcementsQuery.data.pagination.total_pages > 1 && (
+              <nav className="flex items-center justify-between" aria-label="Announcement pages">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => setAnnouncementPage((current) => Math.max(1, current - 1))}
+                  disabled={announcementPage <= 1}
+                  aria-label="Previous page"
+                >
+                  <ArrowLeftIcon />
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  {announcementsQuery.data.pagination.page} /{" "}
+                  {announcementsQuery.data.pagination.total_pages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => setAnnouncementPage((current) => current + 1)}
+                  disabled={announcementPage >= announcementsQuery.data.pagination.total_pages}
+                  aria-label="Next page"
+                >
+                  <ArrowRightIcon />
+                </Button>
+              </nav>
+            )}
+        </section>
+      )}
       <AnnouncementDialog
         announcement={selectedAnnouncement}
         onOpenChange={(open) => !open && setSelectedAnnouncement(null)}

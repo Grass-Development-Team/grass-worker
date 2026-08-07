@@ -41,7 +41,6 @@ export function ProjectDomainsRoute() {
   const canEdit = canContributeToProjects(role);
   const queryClient = useQueryClient();
   const [newHost, setNewHost] = useState("");
-  const [error, setError] = useState<string | null>(null);
 
   const hostsQuery = useQuery({
     queryKey: ["project-hosts", projectId],
@@ -55,27 +54,20 @@ export function ProjectDomainsRoute() {
     mutationFn: () => projectsApi.createHost(projectId, { host: newHost }),
     onSuccess: () => {
       setNewHost("");
-      setError(null);
       invalidate();
     },
-    onError: (cause) => setError(cause instanceof Error ? cause.message : "Unable to add domain."),
   });
   const removeMutation = useMutation({
     mutationFn: (hostId: string) => projectsApi.removeHost(projectId, hostId),
     onSuccess: invalidate,
-    onError: (cause) =>
-      setError(cause instanceof Error ? cause.message : "Unable to remove domain."),
   });
   const primaryMutation = useMutation({
     mutationFn: (hostId: string) => projectsApi.setPrimaryHost(projectId, hostId),
     onSuccess: invalidate,
-    onError: (cause) => setError(cause instanceof Error ? cause.message : "Unable to set primary."),
   });
   const provisionMutation = useMutation({
     mutationFn: (hostId: string) => projectsApi.provisionHost(projectId, hostId),
     onSuccess: invalidate,
-    onError: (cause) =>
-      setError(cause instanceof Error ? cause.message : "Unable to retry provisioning."),
   });
 
   return (
@@ -110,12 +102,6 @@ export function ProjectDomainsRoute() {
           </Button>
         </form>
       )}
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-
       {hostsQuery.isLoading && <Skeleton className="h-40 w-full" aria-busy="true" />}
       {hostsQuery.data &&
         (hostsQuery.data.hosts.length === 0 ? (

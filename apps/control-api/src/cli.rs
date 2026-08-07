@@ -11,6 +11,9 @@ pub struct Cli {
     )]
     pub config: String,
 
+    #[arg(long, help = "Enable explicit Control API development mode")]
+    pub dev: bool,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -24,5 +27,17 @@ pub enum Command {
 impl Cli {
     pub fn config_path(&self) -> &str {
         &self.config
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dev_flag_enables_explicit_development_mode() {
+        let cli = Cli::try_parse_from(["grass-control-api", "--dev"]).unwrap();
+
+        assert!(cli.dev);
     }
 }

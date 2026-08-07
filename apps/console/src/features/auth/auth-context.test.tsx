@@ -8,6 +8,8 @@ import { authApi } from "./auth.api";
 import { AuthProvider, useAuth } from "./auth-context";
 
 vi.mock("./auth.api", () => ({
+  isAuthResponse: (value: unknown) =>
+    typeof value === "object" && value !== null && "user" in value && "csrf_token" in value,
   authApi: {
     restore: vi.fn(),
     login: vi.fn(),
@@ -71,4 +73,38 @@ it("clears local authentication when an API request reports an expired session",
 
   expect(result.current.user).toBeNull();
   expect(getCsrfToken()).toBeNull();
+});
+
+it("keeps a newer login when the initial session restore fails late", async () => {
+  let rejectRestore!: (reason?: unknown) => void;
+  const restore = new Promise<Awaited<ReturnType<typeof authApi.restore>>>((_, reject) => {
+    rejectRestore = reject;
+  });
+  vi.mocked(authApi.restore).mockReturnValue(restore);
+  vi.mocked(authApi.login).mockResolvedValue({
+    user: {
+      id: "user-2",
+      email: "new-session@example.com",
+      display_name: "New session",
+      platform_role: "user",
+      email_verified: true,
+    },
+    csrf_token: "new-csrf-token",
+  });
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <AuthProvider>{children}</AuthProvider>
+  );
+  const { result } = renderHook(() => useAuth(), { wrapper });
+  await waitFor(() => expect(authApi.restore).toHaveBeenCalledOnce());
+
+  await act(() => result.current.login("new-session@example.com", "password"));
+  expect(result.current.user?.id).toBe("user-2");
+
+  await act(async () => {
+    rejectRestore(new Error("initial session was not authenticated"));
+    await restore.catch(() => undefined);
+  });
+
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+  expect(result.current.user?.id).toBe("user-2");
 });

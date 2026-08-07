@@ -18,7 +18,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -44,6 +44,7 @@ import {
   type AdminCodeStatus,
   type AdminGeneratedCode,
 } from "../admin.api";
+import { showErrorToast } from "@/lib/toast";
 
 const statusLabels: Record<AdminCodeStatus, string> = {
   available: "Available",
@@ -145,10 +146,6 @@ export function CodePanel() {
 
       {codes.isLoading ? (
         <Skeleton className="h-56 w-full" aria-busy="true" />
-      ) : codes.isError ? (
-        <p role="alert" className="text-sm text-destructive">
-          {codes.error.message}
-        </p>
       ) : codes.data?.codes.length === 0 ? (
         <div className="border-y py-12 text-center text-sm text-muted-foreground">
           No codes found.
@@ -232,11 +229,6 @@ export function CodePanel() {
         </div>
       )}
 
-      {revoke.error && (
-        <p role="alert" className="text-sm text-destructive">
-          {revoke.error.message}
-        </p>
-      )}
       {codes.data && codes.data.pagination.total_pages > 1 && (
         <div className="flex items-center justify-end gap-2">
           <Button
@@ -373,7 +365,6 @@ function GenerateCodesForm({
             onCheckedChange={setNeverExpires}
           />
         </Field>
-        {generate.error && <FieldError>{generate.error.message}</FieldError>}
       </FieldGroup>
       <DialogFooter>
         <Button type="submit" disabled={generate.isPending || count < 1 || count > 500}>
@@ -387,7 +378,6 @@ function GenerateCodesForm({
 
 function GeneratedCodes({ codes, onClose }: { codes: AdminGeneratedCode[]; onClose: () => void }) {
   const [copied, setCopied] = useState(false);
-  const [copyError, setCopyError] = useState<string | null>(null);
 
   return (
     <>
@@ -419,11 +409,6 @@ function GeneratedCodes({ codes, onClose }: { codes: AdminGeneratedCode[]; onClo
           </TableBody>
         </Table>
       </div>
-      {copyError && (
-        <p role="alert" className="text-sm text-destructive">
-          {copyError}
-        </p>
-      )}
       <DialogFooter>
         <Button
           type="button"
@@ -432,9 +417,8 @@ function GeneratedCodes({ codes, onClose }: { codes: AdminGeneratedCode[]; onClo
             try {
               await navigator.clipboard.writeText(codes.map((item) => item.code).join("\n"));
               setCopied(true);
-              setCopyError(null);
-            } catch {
-              setCopyError("Unable to copy generated codes.");
+            } catch (cause) {
+              showErrorToast(cause);
             }
           }}
         >

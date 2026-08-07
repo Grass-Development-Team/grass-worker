@@ -59,13 +59,6 @@ export function ProjectsRoute() {
       </div>
 
       {projectsQuery.isLoading && <Skeleton className="h-64 w-full" aria-busy="true" />}
-      {projectsQuery.isError && (
-        <p role="alert" className="text-sm text-destructive">
-          {projectsQuery.error instanceof Error
-            ? projectsQuery.error.message
-            : "Unable to load projects."}
-        </p>
-      )}
       {projectsQuery.data &&
         (projectsQuery.data.projects.length === 0 ? (
           <Empty>

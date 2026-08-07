@@ -26,17 +26,49 @@ pub async fn handler(
             source,
         })?;
 
+    let (configured_secure, development_enabled) = {
+        let config = state.config.read().unwrap();
+        (config.session.cookie_secure, config.development_enabled())
+    };
+    let jar = jar.add(removal_cookie(configured_secure, development_enabled));
+
+    Ok((jar, ok_response(json!({"message": "logged out"}))))
+}
+
+fn removal_cookie(configured_secure: bool, development_enabled: bool) -> Cookie<'static> {
+    let secure = configured_secure && !development_enabled;
     let mut clear_cookie = Cookie::new("session_id", "");
     clear_cookie.set_path("/api");
     clear_cookie.set_http_only(true);
-    let secure = state.config.read().unwrap().session.cookie_secure;
     clear_cookie.set_secure(secure);
     clear_cookie.set_same_site(axum_extra::extract::cookie::SameSite::Strict);
     if secure {
         clear_cookie.set_partitioned(true);
     }
     clear_cookie.make_removal();
-    let jar = jar.add(clear_cookie);
+    clear_cookie
+}
 
-    Ok((jar, ok_response(json!({"message": "logged out"}))))
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn removal_cookie_is_not_secure_in_development_mode() {
+        let production = removal_cookie(true, false);
+        assert_eq!(production.secure(), Some(true));
+        assert_eq!(production.partitioned(), Some(true));
+
+        let cookie = removal_cookie(true, true);
+
+        assert_eq!(cookie.path(), Some("/api"));
+        assert_eq!(cookie.http_only(), Some(true));
+        assert_eq!(cookie.secure(), Some(false));
+        assert_eq!(
+            cookie.same_site(),
+            Some(axum_extra::extract::cookie::SameSite::Strict)
+        );
+        assert_eq!(cookie.partitioned(), None);
+        assert_eq!(cookie.max_age(), Some(time::Duration::ZERO));
+    }
 }

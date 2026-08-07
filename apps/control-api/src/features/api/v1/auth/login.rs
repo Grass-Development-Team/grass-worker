@@ -151,10 +151,11 @@ pub(crate) async fn create_authenticated_session(
                 source,
             })?;
     }
-    let (cookie_secure, session_ttl) = {
+    let (cookie_secure, development_enabled, session_ttl) = {
         let config = state.config.read().unwrap();
         (
             config.session.cookie_secure,
+            config.development_enabled(),
             Duration::from_secs(config.session.session_ttl_seconds),
         )
     };
@@ -173,16 +174,23 @@ pub(crate) async fn create_authenticated_session(
         })?;
 
     Ok((
-        jar.add(session_cookie(session_id, cookie_secure, session_ttl)),
+        jar.add(session_cookie(
+            session_id,
+            cookie_secure,
+            development_enabled,
+            session_ttl,
+        )),
         csrf_token,
     ))
 }
 
 fn session_cookie(
     session_id: impl Into<String>,
-    secure: bool,
+    configured_secure: bool,
+    development_enabled: bool,
     session_ttl: Duration,
 ) -> Cookie<'static> {
+    let secure = configured_secure && !development_enabled;
     let mut cookie = Cookie::new("session_id", session_id.into());
     cookie.set_path("/api");
     cookie.set_http_only(true);
@@ -233,7 +241,7 @@ mod tests {
 
     #[test]
     fn session_cookie_contains_all_security_attributes() {
-        let cookie = session_cookie("session", true, Duration::from_secs(3600));
+        let cookie = session_cookie("session", true, false, Duration::from_secs(3600));
 
         assert_eq!(cookie.path(), Some("/api"));
         assert_eq!(cookie.http_only(), Some(true));
@@ -244,5 +252,17 @@ mod tests {
         );
         assert_eq!(cookie.partitioned(), Some(true));
         assert_eq!(cookie.max_age(), Some(time::Duration::hours(1)));
+    }
+
+    #[test]
+    fn session_cookie_is_not_secure_in_development_mode() {
+        let cookie = session_cookie("session", true, true, Duration::from_secs(3600));
+
+        assert_eq!(cookie.secure(), Some(false));
+        assert_eq!(cookie.partitioned(), None);
+        assert_eq!(
+            cookie.same_site(),
+            Some(axum_extra::extract::cookie::SameSite::Strict)
+        );
     }
 }

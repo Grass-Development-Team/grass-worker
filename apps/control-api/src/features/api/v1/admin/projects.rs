@@ -17,7 +17,7 @@ use crate::infra::http::timestamps::ts;
 use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
-        deployments, hosts, notifications, projects,
+        deployments, hosts, notifications, projects, teams,
     },
     infra::{
         database::entity::{
@@ -58,14 +58,101 @@ fn project_view(
         })),
         "latest_deployment": latest.map(deployment_summary),
         "archived_at": ts(project.archived_at),
+        "deleted_at": ts(project.deleted_at),
+        "status": project_status(project),
         "created_at": ts(project.created_at),
     })
+}
+
+fn project_status(project: &project::Model) -> &'static str {
+    if project.deleted_at.is_some() {
+        "deleted"
+    } else if project.archived_at.is_some() {
+        "archived"
+    } else {
+        "active"
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProjectStatusFilter {
+    Active,
+    Archived,
+    Deleted,
+}
+
+fn parse_project_status(
+    value: Option<&str>,
+    op: &'static str,
+) -> Result<Option<ProjectStatusFilter>, AppError> {
+    value
+        .map(|value| match value {
+            "active" => Ok(ProjectStatusFilter::Active),
+            "archived" => Ok(ProjectStatusFilter::Archived),
+            "deleted" => Ok(ProjectStatusFilter::Deleted),
+            _ => Err(AppError::Validation {
+                op,
+                message: "status must be active, archived, or deleted".to_owned(),
+            }),
+        })
+        .transpose()
 }
 
 #[derive(Deserialize)]
 pub struct ListProjectsQuery {
     pub q: Option<String>,
     pub limit: Option<u64>,
+    pub status: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum ProjectBatchRequest {
+    Archive { ids: Vec<Uuid> },
+    Unarchive { ids: Vec<Uuid> },
+    Delete { ids: Vec<Uuid> },
+}
+
+#[derive(Clone, Copy)]
+enum ProjectBatchAction {
+    Archive,
+    Unarchive,
+    Delete,
+}
+
+/// POST /api/v1/admin/projects/batch
+pub async fn batch(
+    State(state): State<ControlApiState>,
+    session: Session,
+    Json(body): Json<ProjectBatchRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "admin.projects.batch";
+    let (ids, action) = match body {
+        ProjectBatchRequest::Archive { ids } => (ids, ProjectBatchAction::Archive),
+        ProjectBatchRequest::Unarchive { ids } => (ids, ProjectBatchAction::Unarchive),
+        ProjectBatchRequest::Delete { ids } => (ids, ProjectBatchAction::Delete),
+    };
+    let ids = super::batch::normalize_ids(ids, OP)?;
+    let results = super::batch::run(ids, |project_id| {
+        let state = state.clone();
+        let session = session.clone();
+        async move {
+            match action {
+                ProjectBatchAction::Archive => archive(State(state), session, Path(project_id))
+                    .await
+                    .map(|_| ()),
+                ProjectBatchAction::Unarchive => unarchive(State(state), session, Path(project_id))
+                    .await
+                    .map(|_| ()),
+                ProjectBatchAction::Delete => remove(State(state), session, Path(project_id))
+                    .await
+                    .map(|_| ()),
+            }
+        }
+    })
+    .await;
+
+    Ok(ok_response(json!({ "results": results })))
 }
 
 #[derive(Deserialize)]
@@ -85,16 +172,28 @@ fn binding_audit_target_types() -> [&'static str; 2] {
     ["host", "project_host_binding"]
 }
 
-/// GET /api/v1/admin/projects — every non-deleted project on the platform
+/// GET /api/v1/admin/projects — every project on the platform
 /// with its team and most recent deployment.
 pub async fn list(
     State(state): State<ControlApiState>,
     Query(query): Query<ListProjectsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.projects.list";
+    let status = parse_project_status(query.status.as_deref(), OP)?;
     let db = super::database(&state, OP)?;
 
-    let mut select = project::Entity::find().filter(project::Column::DeletedAt.is_null());
+    let mut select = project::Entity::find();
+    if let Some(status) = status {
+        select = match status {
+            ProjectStatusFilter::Active => select
+                .filter(project::Column::DeletedAt.is_null())
+                .filter(project::Column::ArchivedAt.is_null()),
+            ProjectStatusFilter::Archived => select
+                .filter(project::Column::DeletedAt.is_null())
+                .filter(project::Column::ArchivedAt.is_not_null()),
+            ProjectStatusFilter::Deleted => select.filter(project::Column::DeletedAt.is_not_null()),
+        };
+    }
     if let Some(term) = query
         .q
         .as_deref()
@@ -185,7 +284,7 @@ pub async fn detail(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.projects.detail";
     let db = super::database(&state, OP)?;
-    let project = load_project(db, project_id, OP).await?;
+    let project = load_project_any(db, project_id, OP).await?;
     let team = team::Entity::find_by_id(project.team_id)
         .one(db)
         .await
@@ -208,6 +307,8 @@ pub async fn detail(
             "source_config": project.source_config,
             "build_config": project.build_config,
             "archived_at": ts(project.archived_at),
+            "deleted_at": ts(project.deleted_at),
+            "status": project_status(&project),
             "created_at": ts(project.created_at),
             "updated_at": ts(project.updated_at),
         },
@@ -350,7 +451,7 @@ pub async fn deployments(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.projects.deployments";
     let db = super::database(&state, OP)?;
-    let _project = load_project(db, project_id, OP).await?;
+    let _project = load_project_any(db, project_id, OP).await?;
     let items = deployment::Entity::find()
         .filter(deployment::Column::ProjectId.eq(project_id))
         .filter(deployment::Column::DeletedAt.is_null())
@@ -394,7 +495,7 @@ pub async fn domains(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.projects.domains";
     let db = super::database(&state, OP)?;
-    let _project = load_project(db, project_id, OP).await?;
+    let _project = load_project_any(db, project_id, OP).await?;
     let bindings = hosts::list_bindings_for_project(db, project_id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
@@ -411,7 +512,7 @@ pub async fn activity(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.projects.activity";
     let db = super::database(&state, OP)?;
-    let _project = load_project(db, project_id, OP).await?;
+    let _project = load_project_any(db, project_id, OP).await?;
     let deployment_ids = deployment::Entity::find()
         .select_only()
         .column(deployment::Column::Id)
@@ -487,6 +588,20 @@ async fn load_project<C: ConnectionTrait>(
     op: &'static str,
 ) -> Result<project::Model, AppError> {
     projects::get_by_id(db, project_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op, source })?
+        .ok_or_else(|| AppError::NotFound {
+            op,
+            message: "project not found".to_owned(),
+        })
+}
+
+async fn load_project_any<C: ConnectionTrait>(
+    db: &C,
+    project_id: Uuid,
+    op: &'static str,
+) -> Result<project::Model, AppError> {
+    projects::get_by_id_any(db, project_id)
         .await
         .map_err(|source| AppError::Infrastructure { op, source })?
         .ok_or_else(|| AppError::NotFound {
@@ -641,23 +756,25 @@ pub async fn remove(
             op: OP,
             source: source.into(),
         })?;
-    let project = load_project(&transaction, project_id, OP).await?;
-    let (project, bindings) =
-        crate::features::api::v1::projects::lifecycle::soft_delete_project_records(
-            &transaction,
-            project,
-        )
-        .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    record_project_event(
+    let project = load_project_any(&transaction, project_id, OP).await?;
+    let deletion = crate::features::api::v1::projects::lifecycle::soft_delete_project_records(
         &transaction,
-        data.user_id,
-        &project,
-        "project.deleted",
-        "/projects".to_owned(),
+        project,
     )
     .await
     .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    if deletion.newly_deleted {
+        record_project_event(
+            &transaction,
+            data.user_id,
+            &deletion.project,
+            "project.deleted",
+            "/projects".to_owned(),
+        )
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    }
+    let project = deletion.project;
     transaction
         .commit()
         .await
@@ -665,11 +782,67 @@ pub async fn remove(
             op: OP,
             source: source.into(),
         })?;
-    crate::features::api::v1::projects::lifecycle::finalize_deleted_project_resources(
-        db, cache, OP, &project, &bindings,
+    let warnings = if deletion.newly_deleted {
+        crate::features::api::v1::projects::lifecycle::finalize_deleted_project_resources(
+            db,
+            cache,
+            OP,
+            &project,
+            &deletion.bindings,
+        )
+        .await?
+    } else {
+        crate::features::api::v1::projects::lifecycle::release_deleted_project_quota(
+            db,
+            cache,
+            OP,
+            &project,
+            &deletion.bindings,
+        )
+        .await?;
+        Vec::new()
+    };
+    Ok(ok_response(
+        json!({ "deleted": true, "warnings": warnings }),
+    ))
+}
+
+/// POST /api/v1/admin/projects/{project_id}/restore
+pub async fn restore(
+    State(state): State<ControlApiState>,
+    Session { data, .. }: Session,
+    Path(project_id): Path<Uuid>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "admin.projects.restore";
+    let db = super::database(&state, OP)?;
+    let project = load_project_any(db, project_id, OP).await?;
+    if project.deleted_at.is_none() {
+        return Err(AppError::Conflict {
+            op: OP,
+            message: "project is not deleted".to_owned(),
+        });
+    }
+    let team = teams::get_by_id(db, project.team_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "project team not found".to_owned(),
+        })?;
+    let cache = super::cache(&state, OP)?;
+    let project = crate::features::api::v1::projects::lifecycle::restore_project_with_quota(
+        db,
+        cache,
+        OP,
+        data.user_id,
+        &team,
+        project,
+        crate::features::api::v1::projects::lifecycle::RestoreAuditContext::PlatformAdmin,
     )
     .await?;
-    Ok(ok_response(json!({ "deleted": true })))
+    Ok(ok_response(json!({
+        "project": project_view(&project, Some(&team), None),
+    })))
 }
 
 #[cfg(test)]
@@ -678,10 +851,14 @@ mod tests {
     use uuid::Uuid;
 
     use crate::infra::database::entity::{
-        PlatformRole, ProjectRuntime, TeamMemberRole, UserStatus, project, team_member, user,
+        PlatformRole, ProjectRuntime, TeamKind, TeamMemberRole, UserStatus, project,
+        project_host_binding, team, team_member, user,
     };
 
-    use super::{binding_audit_target_types, record_project_event};
+    use super::{
+        ListProjectsQuery, binding_audit_target_types, detail, list, parse_project_status,
+        project_status, project_view, record_project_event, remove, restore,
+    };
 
     #[test]
     fn project_activity_includes_both_host_audit_target_names() {
@@ -689,6 +866,494 @@ mod tests {
             binding_audit_target_types(),
             ["host", "project_host_binding"]
         );
+    }
+
+    #[test]
+    fn project_status_and_view_expose_deleted_rows() {
+        let now = OffsetDateTime::UNIX_EPOCH;
+        let project = project::Model {
+            id: Uuid::now_v7(),
+            team_id: Uuid::now_v7(),
+            created_by_user_id: None,
+            slug: "deleted-project".to_owned(),
+            name: "Deleted project".to_owned(),
+            runtime: ProjectRuntime::Static,
+            repository_url: None,
+            default_branch: None,
+            install_command: None,
+            build_command: None,
+            output_directory: None,
+            source_config: serde_json::json!({}),
+            build_config: serde_json::json!({}),
+            archived_at: None,
+            deleted_at: Some(now),
+            created_at: now,
+            updated_at: now,
+        };
+
+        assert_eq!(project_status(&project), "deleted");
+        let view = project_view(&project, None, None);
+        assert_eq!(view["status"], "deleted");
+        assert_eq!(
+            view["deleted_at"],
+            serde_json::json!("1970-01-01T00:00:00Z")
+        );
+    }
+
+    #[test]
+    fn invalid_project_status_is_validation() {
+        let error = parse_project_status(Some("purged"), "admin.projects.list").unwrap_err();
+        assert!(matches!(
+            error,
+            crate::infra::error::AppError::Validation { .. }
+        ));
+    }
+
+    #[test]
+    fn project_batch_actions_are_resource_specific() {
+        let id = Uuid::now_v7();
+        let request: super::ProjectBatchRequest = serde_json::from_value(serde_json::json!({
+            "action": "archive",
+            "ids": [id],
+        }))
+        .unwrap();
+        assert!(matches!(
+            request,
+            super::ProjectBatchRequest::Archive { .. }
+        ));
+        assert!(
+            serde_json::from_value::<super::ProjectBatchRequest>(serde_json::json!({
+                "action": "restore",
+                "ids": [id],
+            }))
+            .is_err()
+        );
+    }
+
+    fn inventory_project(
+        team_id: Uuid,
+        archived_at: Option<OffsetDateTime>,
+        deleted_at: Option<OffsetDateTime>,
+    ) -> project::Model {
+        let now = OffsetDateTime::UNIX_EPOCH;
+        project::Model {
+            id: Uuid::now_v7(),
+            team_id,
+            created_by_user_id: None,
+            slug: Uuid::now_v7().to_string(),
+            name: "Inventory project".to_owned(),
+            runtime: ProjectRuntime::Static,
+            repository_url: None,
+            default_branch: None,
+            install_command: None,
+            build_command: None,
+            output_directory: None,
+            source_config: serde_json::json!({}),
+            build_config: serde_json::json!({}),
+            archived_at,
+            deleted_at,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn inventory_team(team_id: Uuid) -> team::Model {
+        let now = OffsetDateTime::UNIX_EPOCH;
+        team::Model {
+            id: team_id,
+            slug: "inventory-team".to_owned(),
+            name: "Inventory team".to_owned(),
+            kind: TeamKind::Personal,
+            group_id: None,
+            explicit_quota_plan_id: None,
+            owner_user_id: None,
+            deleted_at: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[tokio::test]
+    async fn inventory_defaults_to_active_archived_and_deleted_projects() {
+        use axum::{
+            body::to_bytes,
+            extract::{Query, State},
+            response::IntoResponse,
+        };
+
+        let team_id = Uuid::now_v7();
+        let deleted_at = OffsetDateTime::from_unix_timestamp(10).unwrap();
+        let archived_at = OffsetDateTime::from_unix_timestamp(20).unwrap();
+        let projects = vec![
+            inventory_project(team_id, None, None),
+            inventory_project(team_id, Some(archived_at), None),
+            inventory_project(team_id, None, Some(deleted_at)),
+        ];
+        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([projects])
+            .append_query_results([[inventory_team(team_id)]])
+            .append_query_results([Vec::<crate::infra::database::entity::deployment::Model>::new()])
+            .into_connection();
+        let mut config = crate::infra::config::ControlApiConfig::default();
+        config.redis.backend = grass_cache::CacheBackend::Moka;
+        let state = crate::state::ControlApiState::new(config, "unused.toml");
+        state.database.set(db).unwrap();
+
+        let response = list(
+            State(state),
+            Query(ListProjectsQuery {
+                q: None,
+                limit: None,
+                status: None,
+            }),
+        )
+        .await
+        .unwrap()
+        .into_response();
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        let rows = body["data"]["projects"].as_array().unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["status"], "active");
+        assert_eq!(rows[1]["status"], "archived");
+        assert_eq!(rows[2]["status"], "deleted");
+        assert_eq!(rows[2]["deleted_at"], "1970-01-01T00:00:10Z");
+    }
+
+    #[tokio::test]
+    async fn inventory_status_filter_adds_a_typed_deleted_predicate() {
+        use axum::{
+            extract::{Query, State},
+            response::IntoResponse,
+        };
+
+        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([Vec::<project::Model>::new()])
+            .into_connection();
+        let db_log = db.clone();
+        let state = crate::state::ControlApiState::new(
+            crate::infra::config::ControlApiConfig::default(),
+            "unused.toml",
+        );
+        state.database.set(db).unwrap();
+
+        let _ = list(
+            State(state),
+            Query(ListProjectsQuery {
+                q: None,
+                limit: Some(10),
+                status: Some("deleted".to_owned()),
+            }),
+        )
+        .await
+        .unwrap()
+        .into_response();
+        let statements = format!("{:?}", db_log.into_transaction_log());
+        assert!(
+            statements.contains("deleted_at\\\" IS NOT NULL"),
+            "{statements}"
+        );
+    }
+
+    #[tokio::test]
+    async fn admin_detail_loads_and_describes_a_deleted_project() {
+        use axum::{
+            body::to_bytes,
+            extract::{Path, State},
+            response::IntoResponse,
+        };
+
+        let team_id = Uuid::now_v7();
+        let project = inventory_project(
+            team_id,
+            None,
+            Some(OffsetDateTime::from_unix_timestamp(10).unwrap()),
+        );
+        let project_id = project.id;
+        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([[project.clone()]])
+            .append_query_results([[inventory_team(team_id)]])
+            .into_connection();
+        let db_log = db.clone();
+        let state = crate::state::ControlApiState::new(
+            crate::infra::config::ControlApiConfig::default(),
+            "unused.toml",
+        );
+        state.database.set(db).unwrap();
+
+        let response = detail(State(state), Path(project_id))
+            .await
+            .unwrap()
+            .into_response();
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["data"]["project"]["status"], "deleted");
+        assert_eq!(
+            body["data"]["project"]["deleted_at"],
+            "1970-01-01T00:00:10Z"
+        );
+        let statements = format!("{:?}", db_log.into_transaction_log());
+        assert!(
+            !statements.contains("deleted_at\\\" IS NULL"),
+            "{statements}"
+        );
+    }
+
+    #[tokio::test]
+    async fn admin_restore_rejects_a_live_project_without_membership_queries() {
+        use axum::extract::{Path, State};
+
+        let actor_id = Uuid::now_v7();
+        let project = inventory_project(Uuid::now_v7(), None, None);
+        let project_id = project.id;
+        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([[project]])
+            .into_connection();
+        let db_log = db.clone();
+        let state = crate::state::ControlApiState::new(
+            crate::infra::config::ControlApiConfig::default(),
+            "unused.toml",
+        );
+        state.database.set(db).unwrap();
+        let session = crate::infra::http::extractors::Session {
+            data: grass_session::SessionData {
+                user_id: actor_id,
+                created_at: OffsetDateTime::UNIX_EPOCH,
+                last_accessed_at: OffsetDateTime::UNIX_EPOCH,
+            },
+            session_id: "admin-session".to_owned(),
+        };
+
+        let result = restore(State(state), session, Path(project_id)).await;
+
+        assert!(matches!(
+            result,
+            Err(crate::infra::error::AppError::Conflict { .. })
+        ));
+        let statements = format!("{:?}", db_log.into_transaction_log());
+        assert!(!statements.contains("team_members"), "{statements}");
+    }
+
+    #[tokio::test]
+    async fn admin_delete_retry_releases_quota_without_repeating_lifecycle_event() {
+        use axum::{
+            body::to_bytes,
+            extract::{Path, State},
+            response::IntoResponse,
+        };
+
+        let actor_id = Uuid::now_v7();
+        let team_id = Uuid::now_v7();
+        let tombstone = inventory_project(
+            team_id,
+            None,
+            Some(OffsetDateTime::from_unix_timestamp(42).unwrap()),
+        );
+        let project_id = tombstone.id;
+        let count_row = || {
+            std::collections::BTreeMap::from([(
+                "num_items".to_owned(),
+                sea_orm::Value::BigInt(Some(0)),
+            )])
+        };
+        let quota_event = |dimension: &str| crate::infra::database::entity::quota_event::Model {
+            id: Uuid::now_v7(),
+            team_id,
+            dimension: dimension.to_owned(),
+            kind: crate::infra::database::entity::QuotaEventKind::Release,
+            delta_value: -1,
+            idempotency_key: Some("retry-release".to_owned()),
+            resource_type: Some("project".to_owned()),
+            resource_id: Some(project_id),
+            metadata: serde_json::json!({}),
+            created_at: OffsetDateTime::UNIX_EPOCH,
+        };
+        let counter =
+            |dimension: &str| crate::infra::database::entity::quota_usage_counter::Model {
+                id: Uuid::now_v7(),
+                team_id,
+                dimension: dimension.to_owned(),
+                used_value: 0,
+                period_start: None,
+                period_end: None,
+                updated_at: OffsetDateTime::UNIX_EPOCH,
+            };
+        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([[tombstone.clone()]])
+            .append_query_results([[tombstone]])
+            .append_query_results([Vec::<project_host_binding::Model>::new()])
+            .append_query_results([[quota_event("projects")]])
+            .append_query_results([Vec::<
+                crate::infra::database::entity::quota_usage_counter::Model,
+            >::new()])
+            .append_query_results([[counter("projects")]])
+            .append_query_results([[count_row()]])
+            .append_query_results([[quota_event("projects.static")]])
+            .append_query_results([Vec::<
+                crate::infra::database::entity::quota_usage_counter::Model,
+            >::new()])
+            .append_query_results([[counter("projects.static")]])
+            .append_query_results([[count_row()]])
+            .into_connection();
+        let db_log = db.clone();
+        let state = crate::state::ControlApiState::new(
+            crate::infra::config::ControlApiConfig::default(),
+            "unused.toml",
+        );
+        state.database.set(db).unwrap();
+        assert!(
+            state
+                .cache
+                .set(grass_cache::CacheStore::Moka(
+                    grass_cache::MokaCache::connect()
+                ))
+                .is_ok()
+        );
+        let session = crate::infra::http::extractors::Session {
+            data: grass_session::SessionData {
+                user_id: actor_id,
+                created_at: OffsetDateTime::UNIX_EPOCH,
+                last_accessed_at: OffsetDateTime::UNIX_EPOCH,
+            },
+            session_id: "admin-session".to_owned(),
+        };
+
+        let response = remove(State(state), session, Path(project_id))
+            .await
+            .expect("a repeated admin delete should reuse its tombstone")
+            .into_response();
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["data"]["deleted"], true);
+        assert_eq!(body["data"]["warnings"], serde_json::json!([]));
+        let statements = format!("{:?}", db_log.into_transaction_log());
+        assert!(statements.contains("FOR UPDATE"), "{statements}");
+        assert!(statements.contains("project_host_bindings"), "{statements}");
+        assert!(
+            !statements.contains("project_host_bindings\".\"deleted_at\" IS NULL"),
+            "{statements}"
+        );
+        assert!(!statements.contains("audit_events"), "{statements}");
+        assert!(statements.contains("quota_events"), "{statements}");
+    }
+
+    #[tokio::test]
+    async fn admin_restore_reserves_and_commits_project_runtime_quota() {
+        use axum::{
+            body::to_bytes,
+            extract::{Path, State},
+            response::IntoResponse,
+        };
+
+        let actor_id = Uuid::now_v7();
+        let team_id = Uuid::now_v7();
+        let deleted_at = OffsetDateTime::from_unix_timestamp(10).unwrap();
+        let project = inventory_project(team_id, None, Some(deleted_at));
+        let project_id = project.id;
+        let mut restored = project.clone();
+        restored.deleted_at = None;
+        let team = inventory_team(team_id);
+        let plan = crate::infra::database::entity::quota_plan::Model {
+            id: Uuid::now_v7(),
+            code: "default".to_owned(),
+            name: "Default".to_owned(),
+            description: None,
+            is_default: true,
+            enabled: true,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+        };
+        let count_row = || {
+            std::collections::BTreeMap::from([(
+                "num_items".to_owned(),
+                sea_orm::Value::BigInt(Some(0)),
+            )])
+        };
+        let counter =
+            |dimension: &str| crate::infra::database::entity::quota_usage_counter::Model {
+                id: Uuid::now_v7(),
+                team_id,
+                dimension: dimension.to_owned(),
+                used_value: 0,
+                period_start: None,
+                period_end: None,
+                updated_at: OffsetDateTime::UNIX_EPOCH,
+            };
+        let quota_event = |dimension: &str| crate::infra::database::entity::quota_event::Model {
+            id: Uuid::now_v7(),
+            team_id,
+            dimension: dimension.to_owned(),
+            kind: crate::infra::database::entity::QuotaEventKind::Consume,
+            delta_value: 1,
+            idempotency_key: None,
+            resource_type: Some("project".to_owned()),
+            resource_id: Some(project_id),
+            metadata: serde_json::json!({}),
+            created_at: OffsetDateTime::UNIX_EPOCH,
+        };
+        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([[project.clone()]])
+            .append_query_results([[team.clone()]])
+            .append_query_results([[plan]])
+            .append_query_results([
+                Vec::<crate::infra::database::entity::quota_limit::Model>::new(),
+            ])
+            .append_query_results([[count_row()]])
+            .append_query_results([[count_row()]])
+            .append_query_results([[project.clone()]])
+            .append_query_results([[restored.clone()]])
+            .append_query_results([
+                Vec::<crate::infra::database::entity::team_member::Model>::new(),
+            ])
+            .append_query_results([Vec::<crate::infra::database::entity::user::Model>::new()])
+            .append_query_results([[quota_event("projects")]])
+            .append_query_results([[counter("projects")]])
+            .append_query_results([[counter("projects")]])
+            .append_query_results([[quota_event("projects.static")]])
+            .append_query_results([[counter("projects.static")]])
+            .append_query_results([[counter("projects.static")]])
+            .append_exec_results([sea_orm::MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .into_connection();
+        let db_log = db.clone();
+        let state = crate::state::ControlApiState::new(
+            crate::infra::config::ControlApiConfig::default(),
+            "unused.toml",
+        );
+        state.database.set(db).unwrap();
+        assert!(
+            state
+                .cache
+                .set(grass_cache::CacheStore::Moka(
+                    grass_cache::MokaCache::connect()
+                ))
+                .is_ok()
+        );
+        let session = crate::infra::http::extractors::Session {
+            data: grass_session::SessionData {
+                user_id: actor_id,
+                created_at: OffsetDateTime::UNIX_EPOCH,
+                last_accessed_at: OffsetDateTime::UNIX_EPOCH,
+            },
+            session_id: "admin-session".to_owned(),
+        };
+
+        let response = restore(State(state), session, Path(project_id))
+            .await
+            .expect("admin restore should reserve quota and restore the tombstone")
+            .into_response();
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["data"]["project"]["status"], "active");
+        let statements = format!("{:?}", db_log.into_transaction_log());
+        assert!(statements.contains("quota_events"), "{statements}");
+        assert!(statements.contains("projects.static"), "{statements}");
     }
 
     #[tokio::test]

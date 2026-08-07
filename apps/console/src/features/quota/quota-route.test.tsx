@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { useTeam } from "@/features/teams/team-context";
@@ -62,14 +62,15 @@ describe("QuotaRoute", () => {
     expect(within(storageRow as HTMLElement).getByText("Unlimited")).toBeInTheDocument();
   });
 
-  it("shows the API error instead of stale quota data", async () => {
+  it("does not render stale quota data while the API error is handled by Toast", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       apiResponse(null, 503, "Quota service unavailable"),
     );
 
     renderQuota();
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Quota service unavailable");
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Usage & quota" })).not.toBeInTheDocument();
   });
 

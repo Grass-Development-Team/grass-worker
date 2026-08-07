@@ -248,8 +248,9 @@ pub async fn remove(
             op: OP,
             message: "domain binding not found".to_owned(),
         })?;
+    let generation = deletion_generation(binding.deleted_at, time::OffsetDateTime::now_utc());
     if binding.deleted_at.is_none() {
-        hosts::soft_delete_binding(&transaction, binding.clone())
+        hosts::soft_delete_binding_at(&transaction, binding.clone(), generation)
             .await
             .map_err(|source| AppError::Infrastructure { op: OP, source })?;
         audits::create_platform_audit_event_with_changes(
@@ -293,12 +294,12 @@ pub async fn remove(
             .await
             .map_err(|source| AppError::Infrastructure { op: OP, source })?
     {
-        HostBindingService::new(db, cache)
+        let _ = HostBindingService::new(db, cache)
             .deprovision(OP, &binding, &source)
             .await?;
     }
     QuotaService::new(db, cache)
-        .release_once(
+        .release_once_for_generation(
             OP,
             binding.team_id,
             &[QuotaCharge::one(
@@ -306,10 +307,18 @@ pub async fn remove(
             )],
             "project_host_binding",
             binding.id,
+            generation,
         )
         .await?;
     invalidate_project_routes(&state, binding.project_id, OP).await?;
     Ok(ok_response(json!({ "deleted": true, "reason": reason })))
+}
+
+fn deletion_generation(
+    deleted_at: Option<time::OffsetDateTime>,
+    now: time::OffsetDateTime,
+) -> time::OffsetDateTime {
+    deleted_at.unwrap_or(now)
 }
 
 async fn invalidate_project_routes(
@@ -363,8 +372,9 @@ fn domain_view(binding: &project_host_binding::Model) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use crate::infra::database::entity::{HostBindingStatus, HostReviewStatus};
+    use time::OffsetDateTime;
 
-    use super::{DomainDecision, domain_decision, optional_reason};
+    use super::{DomainDecision, deletion_generation, domain_decision, optional_reason};
 
     #[test]
     fn reasons_trim_and_blank_is_none() {
@@ -399,5 +409,14 @@ mod tests {
             domain_decision(&HostReviewStatus::Rejected, false),
             DomainDecision::Conflict
         );
+    }
+
+    #[test]
+    fn domain_deletion_reuses_an_existing_binding_generation() {
+        let now = OffsetDateTime::from_unix_timestamp(20).unwrap();
+        let deleted_at = OffsetDateTime::from_unix_timestamp(10).unwrap();
+
+        assert_eq!(deletion_generation(Some(deleted_at), now), deleted_at);
+        assert_eq!(deletion_generation(None, now), now);
     }
 }

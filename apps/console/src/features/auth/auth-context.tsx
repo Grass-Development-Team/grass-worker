@@ -1,4 +1,12 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   authApi,
   isAuthResponse,
@@ -26,22 +34,31 @@ const AuthContext = createContext<AuthState | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const authenticationVersion = useRef(0);
+
+  const commitUser = useCallback((nextUser: AuthUser) => {
+    authenticationVersion.current += 1;
+    setUser(nextUser);
+  }, []);
+
+  const clearAuthentication = useCallback(() => {
+    authenticationVersion.current += 1;
+    setUser(null);
+    setCsrfToken(null);
+  }, []);
 
   useEffect(() => {
     let active = true;
-    const clearAuthentication = () => {
-      setUser(null);
-      setCsrfToken(null);
-    };
+    const restoreVersion = authenticationVersion.current;
     window.addEventListener(API_UNAUTHORIZED_EVENT, clearAuthentication);
 
     authApi
       .restore()
       .then((data) => {
-        if (active) setUser(data.user);
+        if (active && authenticationVersion.current === restoreVersion) setUser(data.user);
       })
       .catch(() => {
-        if (active) clearAuthentication();
+        if (active && authenticationVersion.current === restoreVersion) clearAuthentication();
       })
       .finally(() => {
         if (active) setIsLoading(false);
@@ -51,43 +68,55 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       active = false;
       window.removeEventListener(API_UNAUTHORIZED_EVENT, clearAuthentication);
     };
-  }, []);
+  }, [clearAuthentication]);
 
-  const login = useCallback(async (email: string, password: string, returnTo?: string) => {
-    const data = await authApi.login(email, password, returnTo);
-    if (isAuthResponse(data)) setUser(data.user);
-    return data;
-  }, []);
+  const login = useCallback(
+    async (email: string, password: string, returnTo?: string) => {
+      const data = await authApi.login(email, password, returnTo);
+      if (isAuthResponse(data)) commitUser(data.user);
+      return data;
+    },
+    [commitUser],
+  );
 
-  const register = useCallback(async (input: RegisterInput) => {
-    const data = await authApi.register(input);
-    if (isAuthResponse(data)) setUser(data.user);
-    return data;
-  }, []);
+  const register = useCallback(
+    async (input: RegisterInput) => {
+      const data = await authApi.register(input);
+      if (isAuthResponse(data)) commitUser(data.user);
+      return data;
+    },
+    [commitUser],
+  );
 
   const completeMfa = useCallback(
     async (challengeToken: string, factorId: string, code: string) => {
       const data = await authApi.mfaVerify(challengeToken, factorId, code);
-      if (isAuthResponse(data)) setUser(data.user);
+      if (isAuthResponse(data)) commitUser(data.user);
       return data;
     },
-    [],
+    [commitUser],
   );
 
-  const verifyEmail = useCallback(async (token: string) => {
-    const data = await authApi.verifyEmail(token);
-    setUser(data.user);
-  }, []);
+  const verifyEmail = useCallback(
+    async (token: string) => {
+      const data = await authApi.verifyEmail(token);
+      commitUser(data.user);
+    },
+    [commitUser],
+  );
 
   const logout = useCallback(async () => {
     await authApi.logout();
-    setUser(null);
-  }, []);
+    clearAuthentication();
+  }, [clearAuthentication]);
 
-  const updateProfile = useCallback(async (displayName: string | null) => {
-    const data = await authApi.updateMe({ display_name: displayName });
-    setUser(data.user);
-  }, []);
+  const updateProfile = useCallback(
+    async (displayName: string | null) => {
+      const data = await authApi.updateMe({ display_name: displayName });
+      commitUser(data.user);
+    },
+    [commitUser],
+  );
 
   const value = useMemo(
     () => ({
