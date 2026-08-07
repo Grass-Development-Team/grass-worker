@@ -64,6 +64,32 @@ describe("teamsApi", () => {
     );
   });
 
+  it("uploads and removes a team avatar through the scoped endpoint", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => response({ team: { id: "team-1", avatar_url: null } }));
+    const png = new Blob(["png"], { type: "image/png" });
+
+    await teamsApi.uploadAvatar("team-1", png);
+    await teamsApi.deleteAvatar("team-1");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/teams/team-1/avatar",
+      expect.objectContaining({
+        method: "PUT",
+        body: png,
+        credentials: "include",
+        headers: expect.objectContaining({ "content-type": "image/png" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/teams/team-1/avatar",
+      expect.objectContaining({ method: "DELETE", credentials: "include" }),
+    );
+  });
+
   it("updates a member role through the scoped team endpoint", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")

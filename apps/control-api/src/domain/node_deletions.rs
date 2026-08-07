@@ -931,6 +931,7 @@ mod tests {
             id: Set(Uuid::now_v7()),
             email: Set(format!("{}@example.test", Uuid::now_v7().simple())),
             display_name: Set(Some("Node Deletion Tester".to_owned())),
+            avatar_version: Set(None),
             status: Set(UserStatus::Active),
             platform_role: Set(PlatformRole::Admin),
             email_verified_at: Set(Some(now)),

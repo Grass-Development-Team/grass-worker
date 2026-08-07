@@ -1,14 +1,16 @@
 import { useState } from "react";
 
+import { AvatarEditor } from "@/components/avatar-editor";
 import { SettingsCard } from "@/components/settings-card";
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/features/auth/auth-context";
+import { apiUrl } from "@/lib/api";
 import { showErrorToast } from "@/lib/toast";
 
 export function ProfileRoute() {
-  const { user, updateProfile } = useAuth();
+  const { user, updateProfile, uploadAvatar, removeAvatar } = useAuth();
   const [displayName, setDisplayName] = useState(user?.display_name ?? "");
   const [pending, setPending] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -35,6 +37,14 @@ export function ProfileRoute() {
           Manage the profile shown across the Console.
         </p>
       </header>
+      <SettingsCard title="Avatar" description="Your image across the Console.">
+        <AvatarEditor
+          src={user?.avatar_url ? apiUrl(user.avatar_url) : null}
+          fallback={(user?.display_name || user?.email || "GW").slice(0, 2).toUpperCase()}
+          onUpload={uploadAvatar}
+          onRemove={removeAvatar}
+        />
+      </SettingsCard>
       <form onSubmit={submit} onChange={() => setSaved(false)}>
         <SettingsCard
           title="Profile"

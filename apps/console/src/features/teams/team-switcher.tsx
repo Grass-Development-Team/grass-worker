@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { CheckIcon, ChevronsUpDownIcon, PlusIcon } from "lucide-react";
 
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -24,6 +24,7 @@ import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { showErrorToast } from "@/lib/toast";
+import { apiUrl } from "@/lib/api";
 
 import { useTeam } from "./team-context";
 
@@ -82,6 +83,13 @@ export function TeamSwitcher() {
             aria-label={activeTeam ? `Switch team, current team ${activeTeam.name}` : "Select team"}
           >
             <Avatar className="size-8 rounded-md">
+              {activeTeam?.avatar_url && (
+                <AvatarImage
+                  src={apiUrl(activeTeam.avatar_url)}
+                  alt=""
+                  className="rounded-md object-cover"
+                />
+              )}
               <AvatarFallback className="rounded-md text-xs">
                 {activeTeam ? initials(activeTeam.name) : "GW"}
               </AvatarFallback>
@@ -106,6 +114,13 @@ export function TeamSwitcher() {
             {teams.map((team) => (
               <DropdownMenuItem key={team.id} onSelect={() => selectTeam(team.id)}>
                 <Avatar className="size-6 rounded-md">
+                  {team.avatar_url && (
+                    <AvatarImage
+                      src={apiUrl(team.avatar_url)}
+                      alt=""
+                      className="rounded-md object-cover"
+                    />
+                  )}
                   <AvatarFallback className="rounded-md text-[10px]">
                     {initials(team.name)}
                   </AvatarFallback>

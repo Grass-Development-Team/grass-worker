@@ -35,6 +35,7 @@ pub async fn create_user<C: ConnectionTrait>(
         id: Set(user_id),
         email: Set(params.email.clone()),
         display_name: Set(params.display_name),
+        avatar_version: Set(None),
         status: Set(UserStatus::Active),
         platform_role: Set(params.platform_role),
         email_verified_at: Set(params.email_verified_at),

@@ -8,6 +8,7 @@ const team = (id: string, kind: Team["kind"]): Team => ({
   kind,
   slug: id,
   name: id,
+  avatar_url: null,
   owner_user_id: "user-1",
   group_id: null,
 });

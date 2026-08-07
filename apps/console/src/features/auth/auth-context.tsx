@@ -26,6 +26,8 @@ interface AuthState {
   completeMfa: (challengeToken: string, factorId: string, code: string) => Promise<LoginResponse>;
   verifyEmail: (token: string) => Promise<void>;
   updateProfile: (displayName: string | null) => Promise<void>;
+  uploadAvatar: (png: Blob) => Promise<void>;
+  removeAvatar: () => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -118,6 +120,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [commitUser],
   );
 
+  const uploadAvatar = useCallback(
+    async (png: Blob) => {
+      const data = await authApi.uploadAvatar(png);
+      commitUser(data.user);
+    },
+    [commitUser],
+  );
+
+  const removeAvatar = useCallback(async () => {
+    const data = await authApi.deleteAvatar();
+    commitUser(data.user);
+  }, [commitUser]);
+
   const value = useMemo(
     () => ({
       user,
@@ -127,9 +142,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       completeMfa,
       verifyEmail,
       updateProfile,
+      uploadAvatar,
+      removeAvatar,
       logout,
     }),
-    [user, isLoading, login, register, completeMfa, verifyEmail, updateProfile, logout],
+    [
+      user,
+      isLoading,
+      login,
+      register,
+      completeMfa,
+      verifyEmail,
+      updateProfile,
+      uploadAvatar,
+      removeAvatar,
+      logout,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

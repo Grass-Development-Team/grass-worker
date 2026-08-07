@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod announcements;
 pub mod auth;
+pub mod avatars;
 pub mod internal;
 pub mod me;
 pub mod notifications;
@@ -63,6 +64,10 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
                     require_ready_mode,
                 )),
         )
+        .merge(avatars::router().layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_ready_mode,
+        )))
         .route(
             "/me/password",
             post(auth::password::change).layer(middleware::from_fn_with_state(

@@ -24,6 +24,7 @@ const shared: Team = {
   id: "shared",
   slug: "shared",
   name: "Shared",
+  avatar_url: null,
   kind: "team",
   owner_user_id: "user-1",
   group_id: null,

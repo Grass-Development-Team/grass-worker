@@ -16,7 +16,7 @@ import { useTheme } from "next-themes";
 import { useEffect } from "react";
 import { matchPath, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { SiteLogo } from "@/components/site-logo";
 import { Button } from "@/components/ui/button";
 import {
@@ -60,6 +60,7 @@ import { TeamSwitcher } from "@/features/teams/team-switcher";
 import { useTeam } from "@/features/teams/team-context";
 import { NotificationBell } from "@/features/notifications/notification-bell";
 import { showErrorToast } from "@/lib/toast";
+import { apiUrl } from "@/lib/api";
 
 const primaryNavigation = [
   { title: "Overview", url: "/", icon: HomeIcon },
@@ -278,6 +279,13 @@ function AppLayoutContent() {
                 <DropdownMenuTrigger asChild>
                   <SidebarMenuButton tooltip={user?.display_name || user?.email || "Account"}>
                     <Avatar className="size-6">
+                      {user?.avatar_url && (
+                        <AvatarImage
+                          src={apiUrl(user.avatar_url)}
+                          alt=""
+                          className="object-cover"
+                        />
+                      )}
                       <AvatarFallback className="text-[10px]">
                         {initials(user?.display_name || user?.email || "GW")}
                       </AvatarFallback>

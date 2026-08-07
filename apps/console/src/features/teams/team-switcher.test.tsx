@@ -14,6 +14,7 @@ const personal: Team = {
   id: "personal",
   slug: "personal",
   name: "Personal",
+  avatar_url: null,
   kind: "personal",
   owner_user_id: "user-1",
   group_id: null,

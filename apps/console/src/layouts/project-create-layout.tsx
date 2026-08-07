@@ -2,7 +2,7 @@ import { ArrowLeftIcon, LogOutIcon, MoonIcon, SunIcon, UserRoundIcon } from "luc
 import { useTheme } from "next-themes";
 import { Link, Outlet, useNavigate } from "react-router";
 
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -15,6 +15,7 @@ import {
 import { useAuth } from "@/features/auth/auth-context";
 import { NotificationBell } from "@/features/notifications/notification-bell";
 import { showErrorToast } from "@/lib/toast";
+import { apiUrl } from "@/lib/api";
 
 const initials = (value: string) => value.slice(0, 2).toUpperCase();
 
@@ -75,6 +76,9 @@ export function ProjectCreateLayout() {
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" aria-label="Open account menu">
                 <Avatar className="size-7">
+                  {user?.avatar_url && (
+                    <AvatarImage src={apiUrl(user.avatar_url)} alt="" className="object-cover" />
+                  )}
                   <AvatarFallback className="text-[10px]">
                     {initials(user?.display_name || user?.email || "GW")}
                   </AvatarFallback>

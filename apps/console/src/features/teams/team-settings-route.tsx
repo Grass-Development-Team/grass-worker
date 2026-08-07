@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
+import { AvatarEditor } from "@/components/avatar-editor";
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { SettingsCard } from "@/components/settings-card";
 import { Spinner } from "@/components/ui/spinner";
+import { apiUrl } from "@/lib/api";
 import { canEditTeam } from "./team-permissions";
 import { teamKeys, useTeam } from "./team-context";
 import { teamsApi } from "./teams.api";
@@ -37,6 +39,23 @@ export function TeamSettingsRoute() {
     },
   });
   const editable = activeRole ? canEditTeam(activeRole) : false;
+  const avatar = detail.data?.team.avatar_url ?? activeTeam?.avatar_url ?? null;
+
+  const uploadAvatar = async (png: Blob) => {
+    await teamsApi.uploadAvatar(activeTeam!.id, png);
+    await Promise.all([
+      refreshTeams(),
+      queryClient.invalidateQueries({ queryKey: teamKeys.detail(activeTeam!.id) }),
+    ]);
+  };
+
+  const removeAvatar = async () => {
+    await teamsApi.deleteAvatar(activeTeam!.id);
+    await Promise.all([
+      refreshTeams(),
+      queryClient.invalidateQueries({ queryKey: teamKeys.detail(activeTeam!.id) }),
+    ]);
+  };
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
@@ -44,6 +63,20 @@ export function TeamSettingsRoute() {
         <h1 className="text-2xl font-semibold">Team settings</h1>
         <p className="text-sm text-muted-foreground">Manage the identity of this workspace.</p>
       </div>
+      <SettingsCard
+        title="Avatar"
+        description="The image used for this workspace."
+        hint={editable ? undefined : "Only the team owner can change this avatar."}
+      >
+        <AvatarEditor
+          src={avatar ? apiUrl(avatar) : null}
+          fallback={(activeTeam?.name ?? "GW").slice(0, 2).toUpperCase()}
+          onUpload={uploadAvatar}
+          onRemove={removeAvatar}
+          disabled={!editable}
+          square
+        />
+      </SettingsCard>
       <form
         onSubmit={(event) => {
           event.preventDefault();

@@ -33,6 +33,7 @@ bytes = "1"
 clap = { version = "4.5.50", features = ["derive", "env"] }
 config = { version = "0.15.19", default-features = false, features = ["toml"] }
 hex = "0.4"
+image = { version = "0.25", default-features = false, features = ["png"] }
 lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "pool", "sendmail-transport", "smtp-transport", "tokio1", "tokio1-rustls-tls"] }
 jsonwebtoken = "9"
 mime_guess = "2"
@@ -61,6 +62,7 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "jso
 url = "2.5.4"
 uuid = { version = "1.18.1", features = ["serde", "v7"] }
 walkdir = "2"
+webp = "0.3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 bollard = "0.19"
 tar = "0.4"
