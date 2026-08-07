@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { getCsrfToken, setCsrfToken } from "@/lib/csrf";
-import { request } from "@/lib/api";
+import { API_UNAUTHORIZED_EVENT, ApiError, request } from "@/lib/api";
 import { authApi } from "./auth.api";
 
 const response = (data: unknown) =>
@@ -134,6 +134,30 @@ describe("authApi.register", () => {
     expect(first).toEqual(second);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(getCsrfToken()).toBe("restored-token");
+  });
+
+  it("does not broadcast an unauthenticated initial session restore", async () => {
+    const unauthorized = vi.fn();
+    window.addEventListener(API_UNAUTHORIZED_EVENT, unauthorized);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: 40101,
+          message: "authentication required",
+          data: null,
+          op: "auth.session_required",
+        }),
+        {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    await expect(authApi.restore()).rejects.toBeInstanceOf(ApiError);
+
+    expect(unauthorized).not.toHaveBeenCalled();
+    window.removeEventListener(API_UNAUTHORIZED_EVENT, unauthorized);
   });
 
   it("updates the current display name", async () => {

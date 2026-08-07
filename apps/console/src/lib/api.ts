@@ -9,6 +9,10 @@ interface ApiResponse<T> {
   op?: string;
 }
 
+interface RequestBehavior {
+  broadcastUnauthorized?: boolean;
+}
+
 export class ApiError extends Error {
   readonly status: number;
   readonly code?: number;
@@ -31,7 +35,11 @@ function baseUrl(): string {
   return (import.meta.env.VITE_API_BASE_URL ?? "").trim().replace(/\/+$/, "");
 }
 
-export async function request<T>(url: string, options?: RequestInit): Promise<T> {
+export async function request<T>(
+  url: string,
+  options?: RequestInit,
+  behavior: RequestBehavior = {},
+): Promise<T> {
   const headers: Record<string, string> = {};
 
   new Headers(options?.headers).forEach((value, key) => {
@@ -72,7 +80,11 @@ export async function request<T>(url: string, options?: RequestInit): Promise<T>
     return json.data;
   }
 
-  if (response.status === 401 && typeof window !== "undefined") {
+  if (
+    response.status === 401 &&
+    behavior.broadcastUnauthorized !== false &&
+    typeof window !== "undefined"
+  ) {
     window.dispatchEvent(new Event(API_UNAUTHORIZED_EVENT));
   }
 
