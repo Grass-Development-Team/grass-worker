@@ -24,3 +24,4 @@ pub mod m20260804_000023_mfa_policy;
 pub mod m20260806_000024_scoped_codes;
 pub mod m20260806_000025_registration_allowlist;
 pub mod m20260807_000026_avatars;
+pub mod m20260807_000027_deployment_screenshots;

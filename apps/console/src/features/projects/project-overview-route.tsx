@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ExternalLinkIcon, GitBranchIcon, GlobeIcon, RocketIcon } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
 
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +24,7 @@ import {
   BuildStatusBadge,
   ReleaseStatusBadge,
 } from "@/features/deployments/components/status-badges";
+import { apiUrl } from "@/lib/api";
 
 import { projectsApi } from "./projects.api";
 import { useProject } from "./project-layout";
@@ -49,12 +51,57 @@ function OverviewRow({ label, children }: { label: string; children: React.React
   );
 }
 
+function DeploymentPreview({ deployment, label }: { deployment: Deployment; label: string }) {
+  const [imageFailed, setImageFailed] = useState(false);
+
+  useEffect(() => setImageFailed(false), [deployment.screenshot_url]);
+
+  if (deployment.screenshot_status === "pending") {
+    return (
+      <div className="relative aspect-video overflow-hidden rounded-md border bg-muted/40">
+        <Skeleton className="absolute inset-0 size-full rounded-none" aria-busy="true" />
+        <span className="sr-only">Capturing deployment preview</span>
+      </div>
+    );
+  }
+
+  if (deployment.screenshot_status === "ready" && deployment.screenshot_url && !imageFailed) {
+    return (
+      <div className="aspect-video overflow-hidden rounded-md border bg-muted/40">
+        <img
+          src={apiUrl(deployment.screenshot_url)}
+          alt={`Deployment preview for ${label}`}
+          className="size-full object-cover object-top"
+          onError={() => setImageFailed(true)}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      role="img"
+      aria-label={`No deployment preview available for ${label}`}
+      className="grid aspect-video place-items-center rounded-md border bg-muted/40"
+    >
+      <div className="max-w-full px-4 text-center text-muted-foreground">
+        <GlobeIcon className="mx-auto size-8" strokeWidth={1.25} />
+        <p className="mt-2 max-w-52 truncate text-xs">{label}</p>
+      </div>
+    </div>
+  );
+}
+
 export function ProjectOverviewRoute() {
   const { project } = useProject();
 
   const deploymentsQuery = useQuery({
     queryKey: ["deployments", project.id, "production"],
     queryFn: () => deploymentsApi.list(project.id, { environment: "production" }),
+    refetchInterval: (query) =>
+      query.state.data?.deployments.some((deployment) => deployment.screenshot_status === "pending")
+        ? 4000
+        : false,
   });
   const hostsQuery = useQuery({
     queryKey: ["project-hosts", project.id],
@@ -94,14 +141,10 @@ export function ProjectOverviewRoute() {
           {deploymentsQuery.data &&
             (production ? (
               <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-                <div className="grid min-h-44 place-items-center rounded-lg border bg-muted/40">
-                  <div className="text-center text-muted-foreground">
-                    <GlobeIcon className="mx-auto size-8" strokeWidth={1.25} />
-                    <p className="mt-2 max-w-52 truncate text-xs">
-                      {primaryHost?.host ?? project.slug}
-                    </p>
-                  </div>
-                </div>
+                <DeploymentPreview
+                  deployment={production}
+                  label={primaryHost?.host ?? project.slug}
+                />
                 <div className="grid content-start gap-5 sm:grid-cols-2">
                   <OverviewRow label="Deployment">
                     <Link

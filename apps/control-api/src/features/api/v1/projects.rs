@@ -97,6 +97,10 @@ pub fn router() -> Router<ControlApiState> {
             get(deployments::artifacts),
         )
         .route(
+            "/projects/{project_id}/deployments/{deployment_id}/screenshot",
+            get(deployments::screenshot),
+        )
+        .route(
             "/projects/{project_id}/deployments/{deployment_id}/cancel",
             post(deployments::cancel),
         )

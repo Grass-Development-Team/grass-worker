@@ -4,12 +4,15 @@ use std::collections::{HashMap, HashSet};
 
 use axum::{
     Json,
+    body::Body,
     extract::{Path, Query, State},
-    response::IntoResponse,
+    http::{StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
 use serde::Deserialize;
 use serde_json::json;
+use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 use crate::infra::http::timestamps::ts;
@@ -24,18 +27,21 @@ use crate::{
         hosts, projects,
         quotas::QuotaDimension,
         scheduler::{self, PlacementMode, ScheduleError},
+        screenshots::{self, ScreenshotState},
         source_credentials,
     },
     infra::{
         database::entity::{
-            AuditEventResult, AuditEventVisibility, DeploymentBuildStatus, DeploymentEnvironment,
-            DeploymentReleaseStatus, HostBindingEnvironment, HostBindingStatus, ReleaseReason,
-            deployment, node, project_host_binding, user,
+            AuditEventResult, AuditEventVisibility, DeploymentArtifactKind, DeploymentBuildStatus,
+            DeploymentEnvironment, DeploymentReleaseStatus, HostBindingEnvironment,
+            HostBindingStatus, ReleaseReason, deployment, deployment_artifact,
+            deployment_screenshot_job, node, project_host_binding, user,
         },
         error::{AppError, accepted_response, ok_response},
         http::extractors::Session,
         quota::{QuotaCharge, QuotaService},
         route_invalidation,
+        storage::LocalStorage,
     },
     state::ControlApiState,
 };
@@ -228,6 +234,8 @@ pub(crate) fn deployment_view(
         "serve_started_at": ts(deployment.serve_started_at),
         "serve_finished_at": ts(deployment.serve_finished_at),
         "created_at": ts(deployment.created_at),
+        "screenshot_status": "unavailable",
+        "screenshot_url": null,
     });
     if let serde_json::Value::Object(map) =
         urls.urls(deployment, effective_preview_ids.contains(&deployment.id))
@@ -236,6 +244,44 @@ pub(crate) fn deployment_view(
         view_map.extend(map);
     }
     view
+}
+
+fn attach_screenshot(
+    view: &mut serde_json::Value,
+    deployment: &deployment::Model,
+    state: Option<&ScreenshotState>,
+    capture_configured: bool,
+) {
+    let effective = state.copied().unwrap_or_else(|| {
+        if capture_configured && screenshots::eligible(deployment) {
+            ScreenshotState::Pending
+        } else {
+            ScreenshotState::Unavailable
+        }
+    });
+    let serde_json::Value::Object(map) = view else {
+        return;
+    };
+    match effective {
+        ScreenshotState::Pending => {
+            map.insert("screenshot_status".to_owned(), json!("pending"));
+            map.insert("screenshot_url".to_owned(), serde_json::Value::Null);
+        }
+        ScreenshotState::Ready(_) => {
+            map.insert("screenshot_status".to_owned(), json!("ready"));
+            map.insert(
+                "screenshot_url".to_owned(),
+                json!(format!(
+                    "/api/v1/projects/{}/deployments/{}/screenshot",
+                    deployment.project_id, deployment.id
+                )),
+            );
+        }
+        ScreenshotState::Unavailable => {
+            map.insert("screenshot_status".to_owned(), json!("unavailable"));
+            map.insert("screenshot_url".to_owned(), serde_json::Value::Null);
+        }
+    }
 }
 
 async fn effective_preview_ids(
@@ -702,11 +748,25 @@ pub async fn list(
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     let preview_ids = effective_preview_ids(db, access.project.id, OP).await?;
+    let deployment_ids = deployments.iter().map(|item| item.id).collect::<Vec<_>>();
+    let screenshot_states = screenshots::states_for(db, &deployment_ids)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let capture_configured = state.config.read().unwrap().screenshot.is_some();
 
     Ok(ok_response(json!({
         "deployments": deployments
             .iter()
-            .map(|deployment| deployment_view(deployment, &urls, &preview_ids, &users, &nodes))
+            .map(|deployment| {
+                let mut view = deployment_view(deployment, &urls, &preview_ids, &users, &nodes);
+                attach_screenshot(
+                    &mut view,
+                    deployment,
+                    screenshot_states.get(&deployment.id),
+                    capture_configured,
+                );
+                view
+            })
             .collect::<Vec<_>>(),
     })))
 }
@@ -826,9 +886,19 @@ pub async fn detail(
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     let preview_ids = effective_preview_ids(db, access.project.id, OP).await?;
+    let screenshot_states = screenshots::states_for(db, &[deployment.id])
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let mut deployment_view = deployment_view(&deployment, &urls, &preview_ids, &users, &nodes);
+    attach_screenshot(
+        &mut deployment_view,
+        &deployment,
+        screenshot_states.get(&deployment.id),
+        state.config.read().unwrap().screenshot.is_some(),
+    );
 
     Ok(ok_response(json!({
-        "deployment": deployment_view(&deployment, &urls, &preview_ids, &users, &nodes),
+        "deployment": deployment_view,
         "events": events.iter().map(|event| json!({
             "id": event.id,
             "kind": event_kind_value(&event.kind),
@@ -878,7 +948,76 @@ fn artifact_kind_value(
         K::GrassOutput => "grass_output",
         K::BuildLog => "build_log",
         K::StaticSite => "static_site",
+        K::Screenshot => "screenshot",
     }
+}
+
+/// GET /api/v1/projects/{project_id}/deployments/{deployment_id}/screenshot
+pub async fn screenshot(
+    State(state): State<ControlApiState>,
+    session: Session,
+    Path((project_id, deployment_id)): Path<(Uuid, Uuid)>,
+) -> Result<Response, AppError> {
+    const OP: &str = "deployments.screenshot";
+    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    let db = super::database(&state, OP)?;
+    let deployment = load_deployment(db, &access, deployment_id, OP).await?;
+    let artifact_id = deployment_screenshot_job::Entity::find_by_id(deployment.id)
+        .one(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?
+        .and_then(|job| {
+            matches!(
+                job.status,
+                crate::infra::database::entity::DeploymentScreenshotStatus::Succeeded
+            )
+            .then_some(job.artifact_id)
+            .flatten()
+        })
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "deployment screenshot not found".to_owned(),
+        })?;
+    let artifact = deployment_artifact::Entity::find_by_id(artifact_id)
+        .filter(deployment_artifact::Column::DeploymentId.eq(deployment.id))
+        .filter(deployment_artifact::Column::Kind.eq(DeploymentArtifactKind::Screenshot))
+        .filter(deployment_artifact::Column::DeletedAt.is_null())
+        .one(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "deployment screenshot not found".to_owned(),
+        })?;
+    let storage = LocalStorage::new(state.config.read().unwrap().storage.root.clone());
+    let object = storage
+        .open_artifact(&artifact.storage_path)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "deployment screenshot not found".to_owned(),
+        })?;
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "image/webp")
+        .header(header::CONTENT_LENGTH, object.size_bytes)
+        .header(header::CACHE_CONTROL, "private, max-age=3600");
+    if let Some(checksum) = artifact.checksum_sha256 {
+        builder = builder.header(header::ETAG, format!("\"{checksum}\""));
+    }
+    builder
+        .body(Body::from_stream(ReaderStream::new(object.file)))
+        .map_err(|error| AppError::Internal {
+            op: OP,
+            message: format!("failed to build screenshot response: {error}"),
+        })
 }
 
 fn review_status_value(
@@ -1526,6 +1665,14 @@ mod tests {
         assert!(environment_gets_preview_host(
             &DeploymentEnvironment::Production
         ));
+    }
+
+    #[test]
+    fn screenshot_artifacts_use_the_public_api_kind() {
+        assert_eq!(
+            artifact_kind_value(&DeploymentArtifactKind::Screenshot),
+            "screenshot"
+        );
     }
 
     #[test]

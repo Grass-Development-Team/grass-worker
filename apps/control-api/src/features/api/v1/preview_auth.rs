@@ -30,6 +30,9 @@ use crate::{
 const AUTHORIZATION_STATE_TTL: Duration = Duration::from_secs(5 * 60);
 const CALLBACK_CODE_TTL: Duration = Duration::from_secs(60);
 const PREVIEW_GRANT_TTL: Duration = Duration::from_secs(12 * 60 * 60);
+const SCREENSHOT_GRANT_TTL: Duration = Duration::from_secs(2 * 60);
+const SECURE_PREVIEW_COOKIE: &str = "__Host-gw_preview_access";
+const INSECURE_PREVIEW_COOKIE: &str = "gw_preview_access";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct PreviewBinding {
@@ -63,6 +66,18 @@ struct PreviewGrantRecord {
     session_id: String,
     user_id: Uuid,
     expires_at: i64,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ScreenshotGrantRecord {
+    binding: PreviewBinding,
+    expires_at: i64,
+}
+
+pub(crate) struct ScreenshotPreviewGrant {
+    pub target_url: String,
+    pub cookie_name: String,
+    pub token: String,
 }
 
 fn token_key(kind: &str, token: &str) -> String {
@@ -196,6 +211,49 @@ async fn configured_site_url(
             op,
             message: "site.url is not configured".to_owned(),
         })
+}
+
+pub(crate) async fn issue_screenshot_grant(
+    state: &ControlApiState,
+    host: &str,
+) -> Result<ScreenshotPreviewGrant, AppError> {
+    const OP: &str = "preview.screenshot_grant";
+    let db = state.try_database().ok_or_else(|| AppError::Internal {
+        op: OP,
+        message: "database not available".to_owned(),
+    })?;
+    let cache = state.try_cache().ok_or_else(|| AppError::Internal {
+        op: OP,
+        message: "cache service not available".to_owned(),
+    })?;
+    let binding = resolve_preview_binding(db, host, OP).await?;
+    let site_url = configured_site_url(db, OP).await?;
+    let scheme = parsed_site_url(&site_url)
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .scheme()
+        .to_owned();
+    let token = grass_token::generate_token();
+    store_record(
+        cache,
+        "screenshot-grant",
+        &token,
+        &ScreenshotGrantRecord {
+            binding: binding.clone(),
+            expires_at: expires_after(SCREENSHOT_GRANT_TTL),
+        },
+        SCREENSHOT_GRANT_TTL,
+        OP,
+    )
+    .await?;
+    Ok(ScreenshotPreviewGrant {
+        target_url: format!("{scheme}://{}", binding.host),
+        cookie_name: if scheme == "https" {
+            SECURE_PREVIEW_COOKIE.to_owned()
+        } else {
+            INSECURE_PREVIEW_COOKIE.to_owned()
+        },
+        token,
+    })
 }
 
 async fn resolve_preview_binding(
@@ -597,6 +655,14 @@ pub async fn verify(
             op: OP,
             message: error.to_string(),
         })?;
+    if let Some(record) =
+        get_record::<ScreenshotGrantRecord>(cache, "screenshot-grant", &body.grant, OP)
+            .await?
+            .filter(|record| !is_expired(record.expires_at) && record.binding.host == host)
+    {
+        require_current_binding(db, &record.binding, OP).await?;
+        return Ok(ok_response(VerifyPreviewGrantResponse { allowed: true }).into_response());
+    }
     let record = get_record::<PreviewGrantRecord>(cache, "grant", &body.grant, OP)
         .await?
         .filter(|record| !is_expired(record.expires_at) && record.binding.host == host)

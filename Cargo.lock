@@ -1644,6 +1644,7 @@ name = "grass-control-api"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "axum-extra",
  "base64 0.22.1",
@@ -1676,6 +1677,7 @@ dependencies = [
  "thiserror",
  "time",
  "tokio",
+ "tokio-tungstenite 0.26.2",
  "tokio-util",
  "toml 0.8.23",
  "totp-rs",

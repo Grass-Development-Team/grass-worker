@@ -11,6 +11,12 @@ url = "redis://127.0.0.1:6379/0"
 [storage]
 root = "/data"
 
+# Deployment screenshots are disabled when this section is omitted. Chromium
+# must be installed separately and executable by the Control API process.
+# [screenshot]
+# provider = "chromium"
+# executable_path = "/usr/bin/chromium"
+
 [secrets]
 secret_key = "change-me"
 

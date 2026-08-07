@@ -9,4 +9,5 @@ pub mod mail;
 pub mod node_manager;
 pub mod quota;
 pub mod route_invalidation;
+pub mod screenshot;
 pub mod storage;

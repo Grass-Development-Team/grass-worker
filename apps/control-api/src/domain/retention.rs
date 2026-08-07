@@ -388,4 +388,35 @@ mod tests {
         assert!(artifact_expired(&old, &item, Some(2), false, policy, now));
         assert!(!artifact_expired(&old, &item, Some(1), false, policy, now));
     }
+
+    #[test]
+    fn screenshots_follow_their_deployments_retention_rank() {
+        let now = OffsetDateTime::now_utc();
+        let item = deployment(DeploymentEnvironment::Production);
+        let screenshot = artifact(
+            DeploymentArtifactKind::Screenshot,
+            now - Duration::days(365),
+        );
+        let policy = RetentionPolicy {
+            production_keep: 2,
+            ..RetentionPolicy::default()
+        };
+
+        assert!(artifact_expired(
+            &screenshot,
+            &item,
+            Some(2),
+            false,
+            policy,
+            now,
+        ));
+        assert!(!artifact_expired(
+            &screenshot,
+            &item,
+            Some(0),
+            false,
+            policy,
+            now,
+        ));
+    }
 }
