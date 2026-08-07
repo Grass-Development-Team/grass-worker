@@ -6,6 +6,7 @@ pub mod log;
 pub mod mail;
 pub mod migration;
 pub mod node_manager;
+pub mod screenshot;
 pub mod secrets;
 pub mod server;
 pub mod session;
@@ -23,8 +24,8 @@ use tracing_subscriber::{EnvFilter, fmt};
 use self::{
     audit::AuditConfig, cache::CacheConfig, database::DatabaseConfig,
     development::DevelopmentConfig, log::LogConfig, mail::MailConfig, migration::MigrationConfig,
-    node_manager::NodeManagerConfig, secrets::SecretsConfig, server::ServerConfig,
-    session::SessionConfig, storage::StorageConfig,
+    node_manager::NodeManagerConfig, screenshot::ScreenshotConfig, secrets::SecretsConfig,
+    server::ServerConfig, session::SessionConfig, storage::StorageConfig,
 };
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -39,6 +40,8 @@ pub struct ControlApiConfig {
     pub redis: CacheConfig,
     #[serde(default)]
     pub storage: StorageConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screenshot: Option<ScreenshotConfig>,
     #[serde(default)]
     pub secrets: SecretsConfig,
     #[serde(default)]
@@ -185,6 +188,22 @@ mod tests {
 
         assert!(config.development.enabled);
         assert!(config.development_enabled());
+    }
+
+    #[test]
+    fn screenshot_capture_is_disabled_unless_a_provider_is_configured() {
+        assert!(ControlApiConfig::default().screenshot.is_none());
+
+        let config: ControlApiConfig = toml::from_str(
+            "[screenshot]\nprovider = \"chromium\"\nexecutable_path = \"/usr/bin/chromium\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            config.screenshot,
+            Some(ScreenshotConfig::Chromium {
+                executable_path: "/usr/bin/chromium".to_owned(),
+            })
+        );
     }
 
     #[test]

@@ -14,6 +14,7 @@ pub mod quotas;
 pub mod registration;
 pub mod retention;
 pub mod scheduler;
+pub mod screenshots;
 pub mod settings;
 pub mod source_credentials;
 pub mod ssh_host_keys;

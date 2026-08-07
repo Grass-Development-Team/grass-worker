@@ -8,6 +8,7 @@ export interface AuthUser {
   id: string;
   email: string;
   display_name: string | null;
+  avatar_url: string | null;
   platform_role: PlatformRole;
   email_verified: boolean;
 }
@@ -153,6 +154,13 @@ export const authApi = {
       method: "PATCH",
       body: JSON.stringify(input),
     }),
+  uploadAvatar: (png: Blob) =>
+    request<MeResponse>("/api/v1/me/avatar", {
+      method: "PUT",
+      headers: { "Content-Type": "image/png" },
+      body: png,
+    }),
+  deleteAvatar: () => request<MeResponse>("/api/v1/me/avatar", { method: "DELETE" }),
   csrf: () => getCsrf(),
   forgotPassword: (email: string) =>
     request<{ accepted: true }>("/api/v1/auth/password/forgot", {

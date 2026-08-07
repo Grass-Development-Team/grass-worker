@@ -93,6 +93,7 @@ pub async fn create_team_with_connection<C: ConnectionTrait>(
         id: Set(team_id),
         slug: Set(params.slug.clone()),
         name: Set(params.name),
+        avatar_version: Set(None),
         kind: Set(params.kind),
         group_id: Set(group_id),
         explicit_quota_plan_id: Set(None),

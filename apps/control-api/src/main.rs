@@ -33,6 +33,7 @@ async fn main() -> anyhow::Result<()> {
     spawn_node_health_sweep(state.clone());
     spawn_audit_retention_sweep(state.clone());
     spawn_artifact_retention_sweep(state.clone());
+    spawn_screenshot_sweep(state.clone());
     spawn_ssr_lease_sweep(state.clone());
     spawn_node_deletion_sweep(state.clone());
     auto_start_local_node(&state).await;
@@ -128,6 +129,42 @@ fn spawn_node_health_sweep(state: ControlApiState) {
                     operation = "control_api.node_health_sweep",
                     %error,
                     "node health sweep failed"
+                ),
+            }
+        }
+    });
+}
+
+fn spawn_screenshot_sweep(state: ControlApiState) {
+    if state.config.read().unwrap().screenshot.is_none() {
+        return;
+    }
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            match domain::screenshots::sweep(&state).await {
+                Ok(result)
+                    if result.enqueued > 0
+                        || result.succeeded > 0
+                        || result.retried > 0
+                        || result.failed > 0 =>
+                {
+                    info!(
+                        operation = "control_api.screenshot_sweep",
+                        enqueued = result.enqueued,
+                        succeeded = result.succeeded,
+                        retried = result.retried,
+                        failed = result.failed,
+                        "deployment screenshot sweep completed"
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => tracing::warn!(
+                    operation = "control_api.screenshot_sweep",
+                    %error,
+                    "deployment screenshot sweep failed"
                 ),
             }
         }

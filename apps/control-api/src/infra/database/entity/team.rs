@@ -11,6 +11,7 @@ pub struct Model {
     #[sea_orm(unique)]
     pub slug: String,
     pub name: String,
+    pub avatar_version: Option<Uuid>,
     pub kind: TeamKind,
     pub group_id: Option<Uuid>,
     pub explicit_quota_plan_id: Option<Uuid>,

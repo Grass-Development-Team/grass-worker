@@ -31,6 +31,7 @@ pub async fn handler(
             "id": team.id,
             "slug": team.slug,
             "name": team.name,
+            "avatar_url": super::super::avatars::team_avatar_url(team.id, team.avatar_version),
             "kind": super::kind_value(&team.kind),
             "owner_user_id": team.owner_user_id,
             "group_id": team.group_id,

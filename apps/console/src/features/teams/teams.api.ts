@@ -8,6 +8,7 @@ export interface Team {
   id: string;
   slug: string;
   name: string;
+  avatar_url: string | null;
   kind: TeamKind;
   owner_user_id: string | null;
   group_id: string | null;
@@ -110,6 +111,22 @@ export const teamsApi = {
     request<{ team: Team }>(
       `/api/v1/teams/${teamId}`,
       withCredentials({ method: "PATCH", body: JSON.stringify(input) }),
+    ),
+
+  uploadAvatar: (teamId: string, png: Blob) =>
+    request<{ team: Team }>(
+      `/api/v1/teams/${teamId}/avatar`,
+      withCredentials({
+        method: "PUT",
+        headers: { "Content-Type": "image/png" },
+        body: png,
+      }),
+    ),
+
+  deleteAvatar: (teamId: string) =>
+    request<{ team: Team }>(
+      `/api/v1/teams/${teamId}/avatar`,
+      withCredentials({ method: "DELETE" }),
     ),
 
   listMembers: (teamId: string) =>

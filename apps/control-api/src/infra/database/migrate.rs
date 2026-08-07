@@ -34,6 +34,8 @@ impl MigratorTrait for Migrator {
             Box::new(migration::m20260804_000023_mfa_policy::Migration),
             Box::new(migration::m20260806_000024_scoped_codes::Migration),
             Box::new(migration::m20260806_000025_registration_allowlist::Migration),
+            Box::new(migration::m20260807_000026_avatars::Migration),
+            Box::new(migration::m20260807_000027_deployment_screenshots::Migration),
         ]
     }
 }
@@ -110,7 +112,7 @@ mod tests {
     fn registers_audit_foundation_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 25);
+        assert_eq!(migrations.len(), 27);
         assert_eq!(
             migrations.get(11).expect("twelfth migration").name(),
             "m20260729_000012_audit_foundation"
@@ -139,7 +141,7 @@ mod tests {
     fn registers_team_group_review_policy_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 25);
+        assert_eq!(migrations.len(), 27);
         assert_eq!(
             migrations.get(12).expect("thirteenth migration").name(),
             "m20260729_000013_team_group_review_policy"
@@ -150,7 +152,7 @@ mod tests {
     fn registers_node_config_sync_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 25);
+        assert_eq!(migrations.len(), 27);
         assert_eq!(
             migrations.get(13).expect("fourteenth migration").name(),
             "m20260729_000014_node_config_sync"
@@ -161,7 +163,7 @@ mod tests {
     fn registers_node_deletion_queue_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 25);
+        assert_eq!(migrations.len(), 27);
         assert_eq!(
             migrations.get(14).expect("fifteenth migration").name(),
             "m20260729_000015_node_deletion_queue"
@@ -172,7 +174,7 @@ mod tests {
     fn registers_domain_review_policy_after_node_deletion_queue() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 25);
+        assert_eq!(migrations.len(), 27);
         assert_eq!(
             migrations.get(14).expect("fifteenth migration").name(),
             "m20260729_000015_node_deletion_queue"
@@ -187,7 +189,7 @@ mod tests {
     fn registers_project_notifications_after_domain_review_policy() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 25);
+        assert_eq!(migrations.len(), 27);
         assert_eq!(
             migrations.get(15).expect("sixteenth migration").name(),
             "m20260730_000016_domain_review_policy"
@@ -210,7 +212,7 @@ mod tests {
     fn registers_scoped_codes_after_authentication_migrations() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 25);
+        assert_eq!(migrations.len(), 27);
         assert_eq!(
             migrations.get(23).expect("twenty-fourth migration").name(),
             "m20260806_000024_scoped_codes"
@@ -221,11 +223,73 @@ mod tests {
     fn registers_registration_allowlist_after_scoped_codes() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 25);
+        assert_eq!(migrations.len(), 27);
         assert_eq!(
-            migrations.last().expect("last migration").name(),
+            migrations.get(24).expect("twenty-fifth migration").name(),
             "m20260806_000025_registration_allowlist"
         );
+    }
+
+    #[test]
+    fn registers_avatar_versions_after_registration_allowlist() {
+        let migrations = Migrator::migrations();
+
+        assert_eq!(migrations.len(), 27);
+        assert_eq!(
+            migrations.get(25).expect("twenty-sixth migration").name(),
+            "m20260807_000026_avatars"
+        );
+    }
+
+    #[test]
+    fn registers_deployment_screenshots_after_avatars() {
+        let migrations = Migrator::migrations();
+
+        assert_eq!(migrations.len(), 27);
+        assert_eq!(
+            migrations.last().expect("last migration").name(),
+            "m20260807_000027_deployment_screenshots"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires GRASS_TEST_DATABASE_URL"]
+    async fn postgres_media_schema_matches_domain_and_is_reversible() -> anyhow::Result<()> {
+        let _migration_guard = MIGRATION_TEST_LOCK.lock().await;
+        let database_url = std::env::var("GRASS_TEST_DATABASE_URL")
+            .expect("GRASS_TEST_DATABASE_URL must be set to run this ignored migration test");
+        let test_db = PostgresMigrationDatabase::start(&database_url).await?;
+
+        let verification = async {
+            Migrator::up(&test_db.db, None).await?;
+            assert_migration_tracking(&test_db.db, 27, 0).await?;
+            assert_avatar_schema(&test_db.db).await?;
+            assert_screenshot_schema(&test_db.db).await?;
+
+            Migrator::down(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 26, 1).await?;
+            assert_avatar_schema(&test_db.db).await?;
+            assert_screenshot_schema_absent(&test_db.db).await?;
+
+            Migrator::down(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 25, 2).await?;
+            assert_avatar_schema_absent(&test_db.db).await?;
+
+            Migrator::up(&test_db.db, Some(2)).await?;
+            assert_migration_tracking(&test_db.db, 27, 0).await?;
+            assert_avatar_schema(&test_db.db).await?;
+            assert_screenshot_schema(&test_db.db).await
+        }
+        .await;
+        let cleanup = test_db.cleanup().await;
+
+        match (verification, cleanup) {
+            (Err(verification_error), Err(cleanup_error)) => Err(verification_error.context(
+                format!("disposable schema cleanup also failed: {cleanup_error:#}"),
+            )),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Ok(()), Ok(())) => Ok(()),
+        }
     }
 
     #[tokio::test]
@@ -1575,6 +1639,238 @@ VALUES (
             );
         }
 
+        Ok(())
+    }
+
+    async fn assert_avatar_schema(db: &DatabaseConnection) -> anyhow::Result<()> {
+        let rows = db
+            .query_all_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT table_name, udt_name, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND column_name = 'avatar_version'
+  AND table_name IN ('teams', 'users')
+ORDER BY table_name
+"#,
+            ))
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok((
+                    row.try_get::<String>("", "table_name")?,
+                    row.try_get::<String>("", "udt_name")?,
+                    row.try_get::<String>("", "is_nullable")?,
+                    row.try_get::<Option<String>>("", "column_default")?,
+                ))
+            })
+            .collect::<Result<Vec<_>, sea_orm::DbErr>>()?;
+        ensure!(
+            rows == vec![
+                (
+                    "teams".to_owned(),
+                    "uuid".to_owned(),
+                    "YES".to_owned(),
+                    None,
+                ),
+                (
+                    "users".to_owned(),
+                    "uuid".to_owned(),
+                    "YES".to_owned(),
+                    None,
+                ),
+            ],
+            "unexpected avatar columns: {rows:#?}"
+        );
+        Ok(())
+    }
+
+    async fn assert_avatar_schema_absent(db: &DatabaseConnection) -> anyhow::Result<()> {
+        let row = db
+            .query_one_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT count(*)::bigint AS count
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND column_name = 'avatar_version'
+  AND table_name IN ('teams', 'users')
+"#,
+            ))
+            .await?
+            .context("avatar absence query returned no row")?;
+        ensure!(row.try_get::<i64>("", "count")? == 0);
+        Ok(())
+    }
+
+    async fn assert_screenshot_schema(db: &DatabaseConnection) -> anyhow::Result<()> {
+        let enum_rows = db
+            .query_all_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT t.typname, string_agg(e.enumlabel, ',' ORDER BY e.enumsortorder) AS labels
+FROM pg_type t
+JOIN pg_enum e ON e.enumtypid = t.oid
+JOIN pg_namespace n ON n.oid = t.typnamespace
+WHERE n.nspname = current_schema()
+  AND t.typname IN ('deployment_artifact_kind', 'deployment_screenshot_status')
+GROUP BY t.typname
+ORDER BY t.typname
+"#,
+            ))
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok((
+                    row.try_get::<String>("", "typname")?,
+                    row.try_get::<String>("", "labels")?,
+                ))
+            })
+            .collect::<Result<Vec<_>, sea_orm::DbErr>>()?;
+        ensure!(
+            enum_rows
+                == vec![
+                    (
+                        "deployment_artifact_kind".to_owned(),
+                        "grass_output,build_log,static_site,screenshot".to_owned(),
+                    ),
+                    (
+                        "deployment_screenshot_status".to_owned(),
+                        "pending,running,succeeded,failed".to_owned(),
+                    ),
+                ],
+            "unexpected screenshot enum values: {enum_rows:#?}"
+        );
+
+        let columns = query_column_shapes(
+            db,
+            r#"
+SELECT column_name, udt_name, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'deployment_screenshot_jobs'
+ORDER BY ordinal_position
+"#,
+        )
+        .await?;
+        ensure!(
+            columns.len() == 8
+                && columns[0] == column("deployment_id", "uuid", "NO", None)
+                && columns[1].name == "status"
+                && columns[1].udt_name == "deployment_screenshot_status"
+                && columns[1].nullable == "NO"
+                && columns[1]
+                    .default
+                    .as_deref()
+                    .is_some_and(|value| value.contains("'pending'"))
+                && columns[2].name == "attempt_count"
+                && columns[2].udt_name == "int4"
+                && columns[2].nullable == "NO"
+                && columns[2].default.as_deref() == Some("0")
+                && columns[3] == column("next_attempt_at", "timestamptz", "NO", None)
+                && columns[4] == column("last_error", "text", "YES", None)
+                && columns[5] == column("artifact_id", "uuid", "YES", None)
+                && columns[6] == column("created_at", "timestamptz", "NO", None)
+                && columns[7] == column("updated_at", "timestamptz", "NO", None),
+            "unexpected screenshot job columns: {columns:#?}"
+        );
+
+        let constraints = db
+            .query_all_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT conname, pg_get_constraintdef(oid) AS definition
+FROM pg_constraint
+WHERE conrelid = 'deployment_screenshot_jobs'::regclass
+ORDER BY conname
+"#,
+            ))
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok((
+                    row.try_get::<String>("", "conname")?,
+                    row.try_get::<String>("", "definition")?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, sea_orm::DbErr>>()?;
+        ensure!(
+            constraints
+                .get("deployment_screenshot_jobs_deployment_id_fkey")
+                .is_some_and(|value| value.contains("ON DELETE CASCADE")),
+            "screenshot deployment foreign key must cascade"
+        );
+        ensure!(
+            constraints
+                .get("deployment_screenshot_jobs_artifact_id_fkey")
+                .is_some_and(|value| value.contains("ON DELETE CASCADE")),
+            "screenshot artifact foreign key must cascade"
+        );
+        ensure!(
+            constraints
+                .get("ck_deployment_screenshot_attempt_count")
+                .is_some_and(|value| value.contains("attempt_count <= 4")),
+            "screenshot attempt constraint is missing"
+        );
+        ensure!(
+            constraints
+                .get("ck_deployment_screenshot_artifact")
+                .is_some_and(|value| value.contains("artifact_id IS NOT NULL")),
+            "screenshot artifact state constraint is missing"
+        );
+
+        let index = db
+            .query_one_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT indexdef
+FROM pg_indexes
+WHERE schemaname = current_schema()
+  AND indexname = 'ix_deployment_screenshot_jobs_due'
+"#,
+            ))
+            .await?
+            .context("screenshot due-job index is missing")?;
+        let index = index.try_get::<String>("", "indexdef")?;
+        ensure!(
+            index.contains("next_attempt_at, deployment_id")
+                && index.contains("status = 'pending'"),
+            "unexpected screenshot due-job index: {index}"
+        );
+        Ok(())
+    }
+
+    async fn assert_screenshot_schema_absent(db: &DatabaseConnection) -> anyhow::Result<()> {
+        let row = db
+            .query_one_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+SELECT
+  to_regclass('deployment_screenshot_jobs') IS NULL AS jobs_absent,
+  NOT EXISTS (
+    SELECT 1
+    FROM pg_type t
+    JOIN pg_namespace n ON n.oid = t.typnamespace
+    WHERE n.nspname = current_schema()
+      AND t.typname = 'deployment_screenshot_status'
+  ) AS status_absent,
+  NOT EXISTS (
+    SELECT 1
+    FROM pg_type t
+    JOIN pg_enum e ON e.enumtypid = t.oid
+    JOIN pg_namespace n ON n.oid = t.typnamespace
+    WHERE n.nspname = current_schema()
+      AND t.typname = 'deployment_artifact_kind'
+      AND e.enumlabel = 'screenshot'
+  ) AS artifact_value_absent
+"#,
+            ))
+            .await?
+            .context("screenshot schema absence query returned no row")?;
+        ensure!(row.try_get::<bool>("", "jobs_absent")?);
+        ensure!(row.try_get::<bool>("", "status_absent")?);
+        ensure!(row.try_get::<bool>("", "artifact_value_absent")?);
         Ok(())
     }
 

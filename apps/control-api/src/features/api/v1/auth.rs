@@ -42,6 +42,7 @@ pub(crate) fn user_data(user: &user::Model) -> Value {
         "id": user.id,
         "email": user.email,
         "display_name": user.display_name,
+        "avatar_url": super::avatars::user_avatar_url(user.id, user.avatar_version),
         "platform_role": user.platform_role.as_str(),
         "email_verified": user.email_verified_at.is_some(),
     })
@@ -59,10 +60,12 @@ mod tests {
     #[test]
     fn authenticated_user_data_exposes_the_platform_role() {
         let now = OffsetDateTime::UNIX_EPOCH;
+        let avatar_version = Uuid::max();
         let user = user::Model {
             id: Uuid::nil(),
             email: "admin@example.com".to_owned(),
             display_name: Some("Admin".to_owned()),
+            avatar_version: Some(avatar_version),
             status: UserStatus::Active,
             platform_role: PlatformRole::Admin,
             email_verified_at: Some(now),
@@ -73,5 +76,12 @@ mod tests {
         };
 
         assert_eq!(user_data(&user)["platform_role"], "admin");
+        assert_eq!(
+            user_data(&user)["avatar_url"],
+            format!(
+                "/api/v1/avatars/users/{}/{avatar_version}/avatar.webp",
+                Uuid::nil()
+            )
+        );
     }
 }

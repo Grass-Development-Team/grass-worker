@@ -42,6 +42,8 @@ pub enum StorageError {
     Stream(String),
     #[error("artifact is too large to represent")]
     UnsupportedSize,
+    #[error("unsafe storage path: {0}")]
+    UnsafePath(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -117,6 +119,44 @@ impl LocalStorage {
 
     pub fn build_log_relative_path(project_id: Uuid, deployment_id: Uuid) -> String {
         format!("deployments/{project_id}/{deployment_id}/build.log")
+    }
+
+    pub async fn write_bytes(
+        &self,
+        relative_path: &str,
+        content: &[u8],
+    ) -> Result<StoredArtifact, StorageError> {
+        let final_path = self
+            .resolve(relative_path)
+            .map_err(|error| StorageError::UnsafePath(error.to_string()))?;
+        let directory = final_path
+            .parent()
+            .ok_or_else(|| StorageError::UnsafePath(relative_path.to_owned()))?;
+        tokio::fs::create_dir_all(directory).await?;
+        let temporary_path = directory.join(format!(".write-{}.tmp", Uuid::now_v7().simple()));
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary_path)
+            .await?;
+        let result = async {
+            file.write_all(content).await?;
+            file.flush().await?;
+            file.sync_all().await?;
+            tokio::fs::rename(&temporary_path, &final_path).await?;
+            Ok::<(), std::io::Error>(())
+        }
+        .await;
+        if let Err(error) = result {
+            drop(file);
+            let _ = tokio::fs::remove_file(&temporary_path).await;
+            return Err(error.into());
+        }
+        Ok(StoredArtifact {
+            relative_path: relative_path.to_owned(),
+            size_bytes: i64::try_from(content.len()).map_err(|_| StorageError::UnsupportedSize)?,
+            checksum_sha256: hex::encode(Sha256::digest(content)),
+        })
     }
 
     /// Resolves a stored relative path, refusing anything that escapes the
@@ -337,6 +377,25 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(opened.size_bytes, 9);
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn object_bytes_are_hashed_and_atomically_written() {
+        let dir = std::env::temp_dir().join(format!("grass-storage-bytes-{}", Uuid::now_v7()));
+        let storage = LocalStorage::new(&dir);
+        let key = format!("avatars/users/{}/{}.webp", Uuid::now_v7(), Uuid::now_v7());
+
+        let stored = storage.write_bytes(&key, b"webp-bytes").await.unwrap();
+
+        assert_eq!(stored.relative_path, key);
+        assert_eq!(stored.size_bytes, 10);
+        assert_eq!(
+            stored.checksum_sha256,
+            hex::encode(Sha256::digest(b"webp-bytes"))
+        );
+        let object = storage.open_artifact(&key).await.unwrap().unwrap();
+        assert_eq!(object.size_bytes, 10);
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 

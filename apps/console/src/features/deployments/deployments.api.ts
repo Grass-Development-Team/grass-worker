@@ -12,6 +12,7 @@ export type BuildStatus =
 export type ReleaseStatus = "draft" | "pending_review" | "approved" | "rejected" | "active";
 export type ServeStatus = "pending" | "syncing" | "ready" | "failed" | "retired";
 export type DeploymentEnvironment = "production" | "preview";
+export type ScreenshotStatus = "pending" | "ready" | "unavailable";
 
 export interface NodeRef {
   id: string;
@@ -82,6 +83,8 @@ export interface Deployment {
   created_at: string;
   preview_url: string | null;
   production_url: string | null;
+  screenshot_status: ScreenshotStatus;
+  screenshot_url: string | null;
 }
 
 export interface DeploymentEvent {
@@ -94,7 +97,7 @@ export interface DeploymentEvent {
 
 export interface DeploymentArtifact {
   id: string;
-  kind: "grass_output" | "build_log" | "static_site";
+  kind: "grass_output" | "build_log" | "static_site" | "screenshot";
   storage_path: string;
   checksum_sha256: string | null;
   size_bytes: number | null;

@@ -78,6 +78,25 @@ polling, artifact/static transfers, WebSocket messages, and frontend static
 assets are intentionally not recorded per item. A WebSocket handshake is
 still recorded once as a user-facing read.
 
+### Deployment screenshots
+
+Deployment preview screenshots are optional and disabled by default. To capture
+the active production deployment for the Project Overview, install Chromium and
+configure its executable path:
+
+```toml
+[screenshot]
+provider = "chromium"
+executable_path = "/usr/bin/chromium"
+```
+
+The Control API launches Chromium headlessly at `1280x720`, converts the PNG
+capture to WebP, and stores it as a deployment artifact. Screenshot requests
+may load only the deployment's own origin plus inline `data:` and `blob:`
+resources; cross-origin requests are blocked to prevent access to unrelated
+network services. The screenshot therefore follows the same retention and
+storage migration lifecycle as the deployment's other artifacts.
+
 ### Local HTTP development mode
 
 For trusted local testing over plain HTTP, development mode omits `Secure`

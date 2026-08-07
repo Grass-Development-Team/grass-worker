@@ -6,6 +6,7 @@ pub mod deployment;
 pub mod deployment_artifact;
 pub mod deployment_event;
 pub mod deployment_review;
+pub mod deployment_screenshot_job;
 pub mod enums;
 pub mod host_policy;
 pub mod host_provision_event;
@@ -57,6 +58,8 @@ pub use deployment_artifact::Entity as DeploymentArtifact;
 pub use deployment_event::Entity as DeploymentEvent;
 #[allow(unused_imports)]
 pub use deployment_review::Entity as DeploymentReview;
+#[allow(unused_imports)]
+pub use deployment_screenshot_job::Entity as DeploymentScreenshotJob;
 #[allow(unused_imports)]
 pub use enums::*;
 #[allow(unused_imports)]

@@ -62,6 +62,8 @@ const activeDeployment = {
   created_at: "2026-07-02T00:00:00Z",
   preview_url: null,
   production_url: "http://landing.apps.example.com",
+  screenshot_status: "unavailable",
+  screenshot_url: null,
 };
 
 function mockFetch(deployments: unknown[]) {
@@ -125,6 +127,35 @@ describe("Project overview", () => {
     const visit = await screen.findByRole("link", { name: /visit/i });
     expect(visit).toHaveAttribute("href", "http://landing.apps.example.com");
     expect(screen.getByText("Ship the landing page")).toBeInTheDocument();
+    expect(
+      screen.getByRole("img", {
+        name: "No deployment preview available for landing.apps.example.com",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the captured deployment preview", async () => {
+    mockFetch([
+      {
+        ...activeDeployment,
+        screenshot_status: "ready",
+        screenshot_url: "/api/v1/projects/p1/deployments/deploy-11112222/screenshot",
+      },
+    ]);
+    renderOverview();
+
+    expect(
+      await screen.findByRole("img", { name: "Deployment preview for landing.apps.example.com" }),
+    ).toHaveAttribute("src", "/api/v1/projects/p1/deployments/deploy-11112222/screenshot");
+  });
+
+  it("keeps the preview frame stable while capture is pending", async () => {
+    mockFetch([{ ...activeDeployment, screenshot_status: "pending" }]);
+    renderOverview();
+
+    expect(await screen.findByText("Capturing deployment preview")).toBeInTheDocument();
+    expect(screen.getByRole("generic", { busy: true })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /deployment preview/i })).not.toBeInTheDocument();
   });
 
   it("shows an empty state when no production deployment exists", async () => {

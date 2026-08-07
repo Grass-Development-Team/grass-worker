@@ -1518,6 +1518,7 @@ mod tests {
             id: team_id,
             slug: "claim-slot-release".to_owned(),
             name: "Claim Slot Release".to_owned(),
+            avatar_version: None,
             kind: TeamKind::Team,
             group_id: None,
             explicit_quota_plan_id: None,

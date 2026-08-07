@@ -176,6 +176,14 @@ string_active_enum!(DeploymentArtifactKind, "deployment_artifact_kind", {
     GrassOutput => "grass_output",
     BuildLog => "build_log",
     StaticSite => "static_site",
+    Screenshot => "screenshot",
+});
+
+string_active_enum!(DeploymentScreenshotStatus, "deployment_screenshot_status", {
+    Pending => "pending",
+    Running => "running",
+    Succeeded => "succeeded",
+    Failed => "failed",
 });
 
 string_active_enum!(DeploymentReviewStatus, "deployment_review_status", {

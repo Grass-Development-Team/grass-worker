@@ -682,6 +682,7 @@ mod tests {
                 id: team_id,
                 slug: "domain-review".to_owned(),
                 name: "Domain Review".to_owned(),
+                avatar_version: None,
                 kind: TeamKind::Team,
                 group_id: Some(group_id),
                 explicit_quota_plan_id: None,

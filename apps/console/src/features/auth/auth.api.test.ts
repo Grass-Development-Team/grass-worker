@@ -17,7 +17,7 @@ describe("authApi.register", () => {
   });
 
   it("registers with a local return destination and stores the returned csrf token", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       response({
         user: {
           id: "user-1",
@@ -161,7 +161,7 @@ describe("authApi.register", () => {
   });
 
   it("updates the current display name", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       response({
         user: {
           id: "user-1",
@@ -180,6 +180,39 @@ describe("authApi.register", () => {
         method: "PATCH",
         body: JSON.stringify({ display_name: "Leonard" }),
       }),
+    );
+  });
+
+  it("uploads and removes the current user avatar as raw PNG", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      response({
+        user: {
+          id: "user-1",
+          email: "leo@example.com",
+          display_name: "Leo",
+          avatar_url: "/api/v1/avatars/users/user-1/version/avatar.webp",
+          platform_role: "user",
+        },
+      }),
+    );
+    const png = new Blob(["png"], { type: "image/png" });
+
+    await authApi.uploadAvatar(png);
+    await authApi.deleteAvatar();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/me/avatar",
+      expect.objectContaining({
+        method: "PUT",
+        body: png,
+        headers: expect.objectContaining({ "content-type": "image/png" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/me/avatar",
+      expect.objectContaining({ method: "DELETE" }),
     );
   });
 });
