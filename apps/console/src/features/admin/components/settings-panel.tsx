@@ -25,6 +25,7 @@ import { Switch } from "@/components/ui/switch";
 import { useBranding } from "@/features/branding/branding-context";
 
 import { adminApi, type AdminSettings } from "../admin.api";
+import { StorageSettingsPanel } from "./storage-settings-panel";
 
 type UpdateSettingsInput = Parameters<typeof adminApi.updateSettings>[0];
 
@@ -127,7 +128,6 @@ function SettingsForm({ initial, section }: { initial: AdminSettings; section: S
   const [siteLogoUrl, setSiteLogoUrl] = useState(initial.site.logo_url ?? "");
   const [siteUrl, setSiteUrl] = useState(initial.site.url ?? "");
   const [publicBaseUrl, setPublicBaseUrl] = useState(initial.site.public_base_url ?? "");
-  const [storageRoot, setStorageRoot] = useState(initial.storage.root);
   const [signupPolicy, setSignupPolicy] = useState(initial.signup.policy);
   const [reviewProduction, setReviewProduction] = useState(initial.review.production);
   const [reviewPreview, setReviewPreview] = useState(initial.review.preview);
@@ -161,7 +161,6 @@ function SettingsForm({ initial, section }: { initial: AdminSettings; section: S
   const [logFormat, setLogFormat] = useState(initial.log.format);
 
   const site = useSettingsMutation();
-  const storage = useSettingsMutation();
   const policies = useSettingsMutation();
   const server = useSettingsMutation();
   const sessions = useSettingsMutation();
@@ -672,34 +671,7 @@ function SettingsForm({ initial, section }: { initial: AdminSettings; section: S
       </SettingsSectionView>
 
       <SettingsSectionView section={section} visible="infrastructure">
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            storage.mutation.mutate({ storage_root: storageRoot });
-          }}
-          onChange={() => storage.setSaved(false)}
-        >
-          <SettingsCard
-            title="Storage"
-            description="Where the Control API keeps artifacts and where Nodes derive their work directories."
-            hint="Node work roots move with this path automatically."
-            action={<SaveAction pending={storage.mutation.isPending} saved={storage.saved} />}
-          >
-            <Field>
-              <FieldLabel htmlFor="settings-storage-root">Storage root</FieldLabel>
-              <Input
-                id="settings-storage-root"
-                value={storageRoot}
-                onChange={(event) => setStorageRoot(event.target.value)}
-                required
-              />
-              <FieldDescription>
-                Absolute path. Node work roots move to {"{root}"}/node; the generated local node
-                config is updated automatically.
-              </FieldDescription>
-            </Field>
-          </SettingsCard>
-        </form>
+        <StorageSettingsPanel />
       </SettingsSectionView>
 
       <SettingsSectionView section={section} visible="governance">

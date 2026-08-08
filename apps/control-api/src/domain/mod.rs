@@ -19,5 +19,7 @@ pub mod settings;
 pub mod source_credentials;
 pub mod ssh_host_keys;
 pub mod ssr_leases;
+pub mod storage_migrations;
+pub mod storage_settings;
 pub mod teams;
 pub mod users;

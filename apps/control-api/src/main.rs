@@ -29,10 +29,12 @@ async fn main() -> anyhow::Result<()> {
     }
 
     init::database(&state).await?;
+    init::storage(&state).await?;
     init::cache(&state).await?;
     spawn_node_health_sweep(state.clone());
     spawn_audit_retention_sweep(state.clone());
     spawn_artifact_retention_sweep(state.clone());
+    spawn_storage_migration_sweep(state.clone());
     spawn_screenshot_sweep(state.clone());
     spawn_ssr_lease_sweep(state.clone());
     spawn_node_deletion_sweep(state.clone());
@@ -129,6 +131,33 @@ fn spawn_node_health_sweep(state: ControlApiState) {
                     operation = "control_api.node_health_sweep",
                     %error,
                     "node health sweep failed"
+                ),
+            }
+        }
+    });
+}
+
+fn spawn_storage_migration_sweep(state: ControlApiState) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            match domain::storage_migrations::sweep(&state).await {
+                Ok(result) if result.copied > 0 || result.completed || result.failed => {
+                    info!(
+                        operation = "control_api.storage_migration_sweep",
+                        copied = result.copied,
+                        completed = result.completed,
+                        failed = result.failed,
+                        "storage migration sweep completed"
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => tracing::warn!(
+                    operation = "control_api.storage_migration_sweep",
+                    %error,
+                    "storage migration failed"
                 ),
             }
         }
@@ -253,8 +282,7 @@ fn spawn_artifact_retention_sweep(state: ControlApiState) {
                     continue;
                 }
             };
-            let storage_root = state.config.read().unwrap().storage.root.clone();
-            let storage = infra::storage::LocalStorage::new(storage_root);
+            let storage = state.storage.clone();
             match domain::retention::sweep(
                 db,
                 cache,

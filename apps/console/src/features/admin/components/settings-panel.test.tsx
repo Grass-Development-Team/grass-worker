@@ -14,6 +14,7 @@ vi.mock("../admin.api", async (importOriginal) => {
       ...actual.adminApi,
       getSettings: vi.fn(),
       updateSettings: vi.fn(),
+      getStorage: vi.fn(),
     },
   };
 });
@@ -25,7 +26,6 @@ const settings = {
     url: "https://console.example.com",
     public_base_url: "https://apps.example.com",
   },
-  storage: { root: "/var/lib/grass-worker" },
   signup: { policy: "open" },
   review: { production: "manual", preview: "auto" },
   domain_review: { default: "auto" },
@@ -77,6 +77,21 @@ const settings = {
 
 beforeEach(() => {
   vi.mocked(adminApi.getSettings).mockResolvedValue(settings);
+  vi.mocked(adminApi.getStorage).mockResolvedValue({
+    storage: {
+      backend: "local",
+      local_root: "/var/lib/grass-worker",
+      endpoint: "",
+      region: "us-east-1",
+      bucket: "",
+      prefix: "",
+      force_path_style: false,
+      allow_http: false,
+      credentials_configured: false,
+    },
+    maintenance: false,
+    migration: null,
+  });
   vi.mocked(adminApi.updateSettings).mockResolvedValue({
     ...settings,
     site: { ...settings.site, name: "Acme Deploy" },

@@ -20,7 +20,6 @@ use crate::{
             is_unique_violation,
         },
         screenshot::{CaptureRequest, from_config},
-        storage::LocalStorage,
     },
     state::ControlApiState,
 };
@@ -256,7 +255,7 @@ async fn capture_job(
     let webp = encode_webp(&png)?;
     let artifact_id = Uuid::now_v7();
     let key = artifact_key(deployment.project_id, deployment.id, artifact_id);
-    let storage = LocalStorage::new(state.config.read().unwrap().storage.root.clone());
+    let storage = state.storage.clone();
     let stored = storage.write_bytes(&key, &webp).await?;
     let transaction = match db.begin().await {
         Ok(transaction) => transaction,

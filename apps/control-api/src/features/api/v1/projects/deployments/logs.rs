@@ -56,15 +56,15 @@ pub async fn build_log(
             message: "deployment not found".to_owned(),
         })?;
 
-    let storage = {
-        let root = state.config.read().unwrap().storage.root.clone();
-        crate::infra::storage::LocalStorage::new(root)
-    };
+    let storage = state.storage.clone();
     let after_seq = query.after_seq.unwrap_or(0);
     let content = storage
         .read_build_log(deployment.project_id, deployment.id)
         .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?
         .unwrap_or_default();
 
     let mut lines: Vec<BuildLogLine> = Vec::new();

@@ -30,6 +30,34 @@ pub async fn cache(state: &ControlApiState) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub async fn storage(state: &ControlApiState) -> anyhow::Result<()> {
+    let Some(db) = state.try_database() else {
+        return Ok(());
+    };
+    let (legacy_root, platform_secret) = {
+        let config = state.config.read().unwrap();
+        (
+            config.storage.root.clone(),
+            config.secrets.secret_key.clone(),
+        )
+    };
+    let loaded =
+        if let Some(loaded) = crate::domain::storage_settings::load(db, &platform_secret).await? {
+            loaded
+        } else if is_setup_finished(db).await?
+            || crate::domain::storage_settings::has_legacy_root(db).await?
+        {
+            crate::domain::storage_settings::seed_local(db, &legacy_root, &platform_secret).await?
+        } else {
+            return Ok(());
+        };
+    state.storage.replace(loaded.config, loaded.credentials)?;
+    if crate::domain::storage_migrations::has_active(db).await? {
+        state.storage.mark_maintenance();
+    }
+    Ok(())
+}
+
 pub fn config(path: &str) -> anyhow::Result<ControlApiConfig> {
     ControlApiConfig::load(path)
         .with_context(|| format!("failed to load Control API config from {path}"))
@@ -93,7 +121,23 @@ pub async fn is_setup_finished(db: &DatabaseConnection) -> anyhow::Result<bool> 
 
 #[cfg(test)]
 mod tests {
+    use sea_orm::{DbBackend, MockDatabase};
+    use time::OffsetDateTime;
+    use uuid::Uuid;
+
     use super::*;
+
+    fn setting(key: &str) -> system_setting::Model {
+        system_setting::Model {
+            id: Uuid::now_v7(),
+            key: key.to_owned(),
+            value_kind: crate::infra::database::entity::SystemSettingValueKind::Json,
+            value: serde_json::Value::Null,
+            is_secret: false,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+        }
+    }
 
     #[tokio::test]
     async fn configured_database_connection_failure_is_fatal() {
@@ -123,5 +167,31 @@ mod tests {
 
         cache(&state).await.unwrap();
         assert!(state.try_cache().is_some());
+    }
+
+    #[tokio::test]
+    async fn unfinished_setup_without_legacy_storage_does_not_seed_storage_config() {
+        let database = MockDatabase::new(DbBackend::Postgres)
+            .append_query_results([
+                Vec::<system_setting::Model>::new(),
+                Vec::<system_setting::Model>::new(),
+                Vec::<system_setting::Model>::new(),
+                vec![setting(crate::domain::storage_settings::CONFIG_KEY)],
+                Vec::<system_setting::Model>::new(),
+                vec![setting(crate::domain::storage_settings::CREDENTIALS_KEY)],
+                Vec::<system_setting::Model>::new(),
+                vec![setting(crate::domain::storage_settings::LEGACY_ROOT_KEY)],
+            ])
+            .append_query_results([Vec::<
+                crate::infra::database::entity::storage_migration_job::Model,
+            >::new()])
+            .into_connection();
+        let state = ControlApiState::new(ControlApiConfig::default(), "unused.toml");
+        state.database.set(database.clone()).unwrap();
+
+        storage(&state).await.unwrap();
+
+        let statements = format!("{:?}", database.into_transaction_log());
+        assert!(!statements.contains("INSERT INTO \\\"system_settings\\\""));
     }
 }

@@ -24,6 +24,16 @@ pub async fn set_setting<C: ConnectionTrait>(
     value_kind: SystemSettingValueKind,
     value: serde_json::Value,
 ) -> anyhow::Result<()> {
+    set_setting_with_secret(db, key, value_kind, value, false).await
+}
+
+pub async fn set_setting_with_secret<C: ConnectionTrait>(
+    db: &C,
+    key: &str,
+    value_kind: SystemSettingValueKind,
+    value: serde_json::Value,
+    is_secret: bool,
+) -> anyhow::Result<()> {
     let now = OffsetDateTime::now_utc();
     let existing = get_setting(db, key).await?;
 
@@ -31,6 +41,8 @@ pub async fn set_setting<C: ConnectionTrait>(
         let mut active: system_setting::ActiveModel = model.into();
         active.value = Set(value);
         active.value_kind = Set(value_kind);
+        active.is_secret = Set(is_secret);
+        active.updated_at = Set(now);
         active.update(db).await?;
     } else {
         system_setting::ActiveModel {
@@ -38,7 +50,7 @@ pub async fn set_setting<C: ConnectionTrait>(
             key: Set(key.to_owned()),
             value_kind: Set(value_kind),
             value: Set(value),
-            is_secret: Set(false),
+            is_secret: Set(is_secret),
             created_at: Set(now),
             updated_at: Set(now),
         }
@@ -51,4 +63,20 @@ pub async fn set_setting<C: ConnectionTrait>(
 
 pub async fn set_string<C: ConnectionTrait>(db: &C, key: &str, value: &str) -> anyhow::Result<()> {
     set_setting(db, key, SystemSettingValueKind::String, json!(value)).await
+}
+
+pub async fn set_json<C: ConnectionTrait>(
+    db: &C,
+    key: &str,
+    value: serde_json::Value,
+) -> anyhow::Result<()> {
+    set_setting(db, key, SystemSettingValueKind::Json, value).await
+}
+
+pub async fn set_secret_json<C: ConnectionTrait>(
+    db: &C,
+    key: &str,
+    value: serde_json::Value,
+) -> anyhow::Result<()> {
+    set_setting_with_secret(db, key, SystemSettingValueKind::Json, value, true).await
 }

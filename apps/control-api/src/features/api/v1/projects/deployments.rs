@@ -12,7 +12,6 @@ use axum::{
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
 use serde::Deserialize;
 use serde_json::json;
-use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 use crate::infra::http::timestamps::ts;
@@ -41,7 +40,6 @@ use crate::{
         http::extractors::Session,
         quota::{QuotaCharge, QuotaService},
         route_invalidation,
-        storage::LocalStorage,
     },
     state::ControlApiState,
 };
@@ -995,11 +993,14 @@ pub async fn screenshot(
             op: OP,
             message: "deployment screenshot not found".to_owned(),
         })?;
-    let storage = LocalStorage::new(state.config.read().unwrap().storage.root.clone());
+    let storage = state.storage.clone();
     let object = storage
         .open_artifact(&artifact.storage_path)
         .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?
         .ok_or_else(|| AppError::NotFound {
             op: OP,
             message: "deployment screenshot not found".to_owned(),
@@ -1013,7 +1014,7 @@ pub async fn screenshot(
         builder = builder.header(header::ETAG, format!("\"{checksum}\""));
     }
     builder
-        .body(Body::from_stream(ReaderStream::new(object.file)))
+        .body(Body::from_stream(object.stream))
         .map_err(|error| AppError::Internal {
             op: OP,
             message: format!("failed to build screenshot response: {error}"),

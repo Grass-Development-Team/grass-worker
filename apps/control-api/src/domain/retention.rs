@@ -16,7 +16,7 @@ use crate::{
             node_deployment_migration,
         },
         quota::QuotaService,
-        storage::LocalStorage,
+        storage::StorageManager,
     },
 };
 
@@ -155,7 +155,7 @@ fn older_than(created_at: OffsetDateTime, days: u64, now: OffsetDateTime) -> boo
 pub async fn sweep(
     db: &sea_orm::DatabaseConnection,
     cache: &grass_cache::CacheStore,
-    storage: &LocalStorage,
+    storage: &StorageManager,
     policy: RetentionPolicy,
     now: OffsetDateTime,
 ) -> anyhow::Result<SweepResult> {

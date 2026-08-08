@@ -535,7 +535,6 @@ export interface AdminSettings {
     url: string | null;
     public_base_url: string | null;
   };
-  storage: { root: string };
   signup: { policy: "open" | "invite_only" | "closed" };
   review: { production: "auto" | "manual"; preview: "auto" | "manual" };
   domain_review: { default: "auto" | "manual" };
@@ -574,6 +573,57 @@ export interface AdminSettings {
   migration: { auto_migrate: boolean };
   log: { level: string; format: "pretty" | "json" };
   restart_required_sections: Array<"server" | "redis" | "node_manager" | "migration" | "log">;
+}
+
+export type AdminStorageBackend = "local" | "s3" | "minio" | "r2";
+
+export interface AdminStorageConfiguration {
+  backend: AdminStorageBackend;
+  local_root: string;
+  endpoint: string;
+  region: string;
+  bucket: string;
+  prefix: string;
+  force_path_style: boolean;
+  allow_http: boolean;
+  credentials_configured: boolean;
+}
+
+export interface AdminStorageInput {
+  backend: AdminStorageBackend;
+  local_root?: string;
+  endpoint?: string;
+  region?: string;
+  bucket?: string;
+  prefix?: string;
+  force_path_style?: boolean;
+  allow_http?: boolean;
+  access_key_id?: string;
+  secret_access_key?: string;
+  session_token?: string;
+}
+
+export type AdminStorageMigrationStatus = "pending" | "running" | "succeeded" | "failed";
+
+export interface AdminStorageMigration {
+  id: string;
+  status: AdminStorageMigrationStatus;
+  source: AdminStorageConfiguration;
+  target: AdminStorageConfiguration;
+  copied_objects: number;
+  copied_bytes: number;
+  total_objects: number | null;
+  total_bytes: number | null;
+  last_error: string | null;
+  created_at: number;
+  started_at: number | null;
+  finished_at: number | null;
+}
+
+export interface AdminStorageState {
+  storage: AdminStorageConfiguration;
+  maintenance: boolean;
+  migration: AdminStorageMigration | null;
 }
 
 export type AdminAnnouncement = Announcement;
@@ -1003,6 +1053,25 @@ export const adminApi = {
 
   getSettings: () => request<AdminSettings>("/api/v1/admin/settings"),
 
+  getStorage: () => request<AdminStorageState>("/api/v1/admin/storage"),
+
+  testStorage: (input: AdminStorageInput) =>
+    request<{ tested: true }>("/api/v1/admin/storage/test", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  createStorageMigration: (input: AdminStorageInput) =>
+    request<{ migration: AdminStorageMigration }>("/api/v1/admin/storage/migrations", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  getStorageMigration: () =>
+    request<Pick<AdminStorageState, "maintenance" | "migration">>(
+      "/api/v1/admin/storage/migrations",
+    ),
+
   listIdentityProviders: () =>
     request<{ providers: AdminIdentityProvider[] }>("/api/v1/admin/identity-providers"),
 
@@ -1074,7 +1143,6 @@ export const adminApi = {
     site_logo_url?: string;
     site_url?: string;
     public_base_url?: string;
-    storage_root?: string;
     signup_policy?: "open" | "invite_only" | "closed";
     review_production?: "auto" | "manual";
     review_preview?: "auto" | "manual";

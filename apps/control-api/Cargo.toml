@@ -29,6 +29,7 @@ grass-session.workspace = true
 grass-token.workspace = true
 grass-validator.workspace = true
 futures-util.workspace = true
+object_store.workspace = true
 grass-assets.workspace = true
 subtle = "2"
 mime_guess.workspace = true
@@ -51,6 +52,7 @@ tracing-subscriber.workspace = true
 url.workspace = true
 uuid.workspace = true
 webp.workspace = true
+walkdir.workspace = true
 
 [dev-dependencies]
 sea-orm = { workspace = true, features = ["mock"] }

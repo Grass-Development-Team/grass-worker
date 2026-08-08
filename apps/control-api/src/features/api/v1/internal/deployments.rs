@@ -17,7 +17,6 @@ use sea_orm::{
     QuerySelect, TransactionTrait,
 };
 use serde_json::json;
-use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 use crate::{
@@ -39,7 +38,7 @@ use crate::{
         error::{AppError, ok_response},
         http::middlewares::node_auth::AuthenticatedNode,
         quota::{QuotaCharge, QuotaService},
-        storage::{LocalStorage, StorageError},
+        storage::{StorageError, StorageManager},
     },
     state::ControlApiState,
 };
@@ -676,7 +675,7 @@ async fn record_build_log_artifact(
         id: Set(Uuid::now_v7()),
         deployment_id: Set(deployment.id),
         kind: Set(DeploymentArtifactKind::BuildLog),
-        storage_path: Set(LocalStorage::build_log_relative_path(
+        storage_path: Set(StorageManager::build_log_relative_path(
             deployment.project_id,
             deployment.id,
         )),
@@ -885,7 +884,10 @@ pub async fn append_build_log(
     super::storage(&state)
         .append_build_log(deployment.project_id, deployment.id, &buffer)
         .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     let _ = cache
         .set(
@@ -1311,7 +1313,10 @@ pub async fn download_artifact(
     let opened = super::storage(&state)
         .open_artifact(&artifact.storage_path)
         .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?
         .ok_or_else(|| AppError::NotFound {
             op: OP,
             message: "artifact not found".to_owned(),
@@ -1338,7 +1343,7 @@ pub async fn download_artifact(
             op: OP,
             message: "artifact unpacked size metadata is invalid".to_owned(),
         })?;
-    let mut response = Response::new(Body::from_stream(ReaderStream::new(opened.file)));
+    let mut response = Response::new(Body::from_stream(opened.stream));
     let response_headers = response.headers_mut();
     response_headers.insert(
         header::CONTENT_TYPE,

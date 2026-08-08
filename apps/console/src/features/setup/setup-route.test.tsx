@@ -70,7 +70,20 @@ beforeEach(() => {
   });
   vi.mocked(setupApi.configureStorage).mockImplementation(async () => {
     stage = "finish";
-    return { configured: true, root: "/data" };
+    return {
+      configured: true,
+      storage: {
+        backend: "local",
+        local_root: "/data",
+        endpoint: "",
+        region: "us-east-1",
+        bucket: "",
+        prefix: "",
+        force_path_style: false,
+        allow_http: false,
+        credentials_configured: false,
+      },
+    };
   });
   vi.mocked(setupApi.finishSetup).mockImplementation(async () => {
     stage = "complete";
@@ -135,6 +148,6 @@ it("completes the setup workflow and redirects to login", async () => {
     "https://sites.example.com",
   );
   expect(setupApi.createNode).toHaveBeenCalledWith("local-node");
-  expect(setupApi.configureStorage).toHaveBeenCalledWith("/data");
+  expect(setupApi.configureStorage).toHaveBeenCalledWith({ backend: "local", local_root: "/data" });
   expect(setupApi.finishSetup).toHaveBeenCalledOnce();
 });
