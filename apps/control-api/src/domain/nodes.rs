@@ -79,6 +79,10 @@ pub async fn any_node_exists(db: &DatabaseConnection) -> anyhow::Result<bool> {
         .map_err(|e| anyhow::anyhow!("failed to check nodes existence: {e}"))
 }
 
+pub fn work_root_for_storage(storage_root: &str) -> String {
+    format!("{}/node", storage_root.trim_end_matches('/'))
+}
+
 pub async fn update_work_roots<C: ConnectionTrait>(db: &C, work_root: &str) -> anyhow::Result<()> {
     node::Entity::update_many()
         .col_expr(

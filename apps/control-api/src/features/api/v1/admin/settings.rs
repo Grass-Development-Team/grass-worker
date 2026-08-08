@@ -7,7 +7,7 @@ use crate::{
     domain::{
         audits::{self, CreateAuditEventParams},
         authentication::{self, MfaPolicy, PasswordPolicy},
-        nodes, retention, settings,
+        retention, settings,
     },
     infra::{
         config::mail::{MailMode, SmtpSecurity},
@@ -22,7 +22,6 @@ const SITE_NAME_KEY: &str = "site.name";
 const SITE_LOGO_URL_KEY: &str = "site.logo_url";
 const SITE_URL_KEY: &str = "site.url";
 const PUBLIC_BASE_URL_KEY: &str = "site.public_base_url";
-const STORAGE_ROOT_KEY: &str = "storage.root";
 const SIGNUP_POLICY_KEY: &str = "signup.policy";
 const REVIEW_POLICY_KEY: &str = "release_review_policy.default";
 const DOMAIN_REVIEW_POLICY_KEY: &str = "domain_review_policy.default";
@@ -55,9 +54,6 @@ pub async fn get(State(state): State<ControlApiState>) -> Result<impl IntoRespon
     let artifact_retention = retention::RetentionPolicy::load(db)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    let storage_root = setting_string(db, STORAGE_ROOT_KEY, OP)
-        .await?
-        .unwrap_or_else(|| config.storage.root.clone());
     let secret_key = config.secrets.secret_key.trim();
     let password_policy = authentication::password_policy(db)
         .await
@@ -75,9 +71,6 @@ pub async fn get(State(state): State<ControlApiState>) -> Result<impl IntoRespon
             "logo_url": setting_string(db, SITE_LOGO_URL_KEY, OP).await?,
             "url": setting_string(db, SITE_URL_KEY, OP).await?,
             "public_base_url": setting_string(db, PUBLIC_BASE_URL_KEY, OP).await?,
-        },
-        "storage": {
-            "root": storage_root,
         },
         "signup": {
             "policy": setting_string(db, SIGNUP_POLICY_KEY, OP)
@@ -145,7 +138,6 @@ pub struct UpdateSettingsRequest {
     pub site_logo_url: Option<String>,
     pub site_url: Option<String>,
     pub public_base_url: Option<String>,
-    pub storage_root: Option<String>,
     pub signup_policy: Option<String>,
     pub review_production: Option<String>,
     pub review_preview: Option<String>,
@@ -187,7 +179,6 @@ struct PreparedSettingsUpdate {
     site_logo_url: Option<String>,
     site_url: Option<String>,
     public_base_url: Option<String>,
-    storage_root: Option<String>,
     signup_policy: Option<String>,
     review_production: Option<String>,
     review_preview: Option<String>,
@@ -228,13 +219,11 @@ struct PreparedConfigUpdate {
     original: crate::infra::config::ControlApiConfig,
     persisted: crate::infra::config::ControlApiConfig,
     runtime: crate::infra::config::ControlApiConfig,
-    local_node_config: String,
 }
 
 impl PreparedSettingsUpdate {
     fn has_config_update(&self) -> bool {
-        self.storage_root.is_some()
-            || self.server_host.is_some()
+        self.server_host.is_some()
             || self.server_port.is_some()
             || self.redis_backend.is_some()
             || self.session_cookie_secure.is_some()
@@ -264,9 +253,6 @@ impl PreparedSettingsUpdate {
         config: &mut crate::infra::config::ControlApiConfig,
         op: &'static str,
     ) -> Result<(), AppError> {
-        if let Some(root) = self.storage_root.as_deref() {
-            config.storage.root = root.to_owned();
-        }
         if let Some(host) = self.server_host {
             config.server.host = host;
         }
@@ -598,18 +584,6 @@ fn prepare_settings_update(
         validate_review_mode(mode, op)?;
     }
 
-    let storage_root = body
-        .storage_root
-        .map(|value| value.trim().trim_end_matches('/').to_owned());
-    if let Some(root) = storage_root.as_deref()
-        && (root.is_empty() || !std::path::Path::new(root).is_absolute())
-    {
-        return Err(AppError::Validation {
-            op,
-            message: "storage root must be a non-empty absolute path".to_owned(),
-        });
-    }
-
     let server_host = body
         .server_host
         .as_deref()
@@ -773,7 +747,6 @@ fn prepare_settings_update(
         site_logo_url,
         site_url,
         public_base_url,
-        storage_root,
         signup_policy,
         review_production,
         review_preview,
@@ -813,7 +786,6 @@ fn prepare_settings_update(
         && prepared.site_logo_url.is_none()
         && prepared.site_url.is_none()
         && prepared.public_base_url.is_none()
-        && prepared.storage_root.is_none()
         && prepared.signup_policy.is_none()
         && prepared.review_production.is_none()
         && prepared.review_preview.is_none()
@@ -903,12 +875,10 @@ pub async fn update(
         body.apply_to_config(&mut persisted, OP)?;
         let mut runtime = state.config.read().unwrap().clone();
         body.apply_to_config(&mut runtime, OP)?;
-        let local_node_config = runtime.node_manager.local_node_config.clone();
         Some(PreparedConfigUpdate {
             original,
             persisted,
             runtime,
-            local_node_config,
         })
     } else {
         None
@@ -1233,26 +1203,6 @@ pub async fn update(
         current_retention.production_keep
     );
 
-    if let Some(root) = body.storage_root.as_deref() {
-        let configured_root = state.config.read().unwrap().storage.root.clone();
-        before.insert(
-            "storage_root".to_owned(),
-            json!(
-                setting_string(&transaction, STORAGE_ROOT_KEY, OP)
-                    .await?
-                    .unwrap_or(configured_root)
-            ),
-        );
-        settings::set_string(&transaction, STORAGE_ROOT_KEY, root)
-            .await
-            .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-        nodes::update_work_roots(&transaction, &format!("{root}/node"))
-            .await
-            .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-        after.insert("storage_root".to_owned(), json!(root));
-        changed.push("storage_root");
-    }
-
     create_settings_audit_in_transaction(&transaction, data.user_id, changed, before, after)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
@@ -1284,18 +1234,6 @@ pub async fn update(
 
     if let Some(config_update) = config_update {
         *state.config.write().unwrap() = config_update.runtime;
-        if let Some(root) = body.storage_root.as_deref()
-            && let Err(error) = crate::infra::node_manager::config_file::update_storage_root(
-                &config_update.local_node_config,
-                root,
-            )
-        {
-            tracing::warn!(
-                operation = "admin.settings.update_local_node_config",
-                %error,
-                "failed to update generated local node config"
-            );
-        }
     }
 
     get(State(state)).await
@@ -1440,6 +1378,7 @@ mod tests {
             data["domain_review"],
             serde_json::json!({ "default": "auto" })
         );
+        assert!(data.get("storage").is_none());
 
         let serialized = String::from_utf8(bytes.to_vec()).unwrap();
         assert!(!serialized.contains("database-secret"));
@@ -1549,6 +1488,16 @@ mod tests {
             prepare_settings_update(control_api_config_update_request(), "test.settings.prepare")
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn legacy_storage_root_is_not_an_admin_settings_update() {
+        let request: UpdateSettingsRequest = serde_json::from_value(serde_json::json!({
+            "storage_root": "/srv/grass-new"
+        }))
+        .unwrap();
+
+        assert!(prepare_settings_update(request, "test.settings.prepare").is_err());
     }
 
     #[test]

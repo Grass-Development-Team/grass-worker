@@ -28,6 +28,8 @@ pub mod source_credential_lease;
 pub mod source_credential_version;
 pub mod ssh_host_key;
 pub mod ssr_process_lease;
+pub mod storage_migration_job;
+pub mod storage_migration_object;
 pub mod system_setting;
 pub mod team;
 pub mod team_group;
@@ -100,6 +102,10 @@ pub use source_credential_lease::Entity as SourceCredentialLease;
 pub use source_credential_version::Entity as SourceCredentialVersion;
 #[allow(unused_imports)]
 pub use ssh_host_key::Entity as SshHostKey;
+#[allow(unused_imports)]
+pub use storage_migration_job::Entity as StorageMigrationJob;
+#[allow(unused_imports)]
+pub use storage_migration_object::Entity as StorageMigrationObject;
 #[allow(unused_imports)]
 pub use system_setting::Entity as SystemSetting;
 #[allow(unused_imports)]

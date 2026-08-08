@@ -94,7 +94,6 @@ pub(crate) fn cache<'a>(
     })
 }
 
-pub(crate) fn storage(state: &ControlApiState) -> crate::infra::storage::LocalStorage {
-    let root = state.config.read().unwrap().storage.root.clone();
-    crate::infra::storage::LocalStorage::new(root)
+pub(crate) fn storage(state: &ControlApiState) -> crate::infra::storage::StorageManager {
+    state.storage.clone()
 }

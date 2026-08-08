@@ -8,8 +8,9 @@ url = "postgres://postgres:postgres@127.0.0.1:5432/grass_worker"
 [redis]
 url = "redis://127.0.0.1:6379/0"
 
-[storage]
-root = "/data"
+# Object storage is configured during Setup and in the database-backed
+# Administration -> Settings -> Infrastructure page. The legacy
+# [storage].root value is still read when upgrading an existing installation.
 
 # Deployment screenshots are disabled when this section is omitted. Chromium
 # must be installed separately and executable by the Control API process.

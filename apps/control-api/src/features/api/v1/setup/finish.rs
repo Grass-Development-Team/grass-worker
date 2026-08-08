@@ -36,7 +36,7 @@ pub async fn handler(State(state): State<ControlApiState>) -> Result<impl IntoRe
             source,
         })?
         .is_some();
-    let storage_configured = settings::get_setting(db, "storage.root")
+    let storage_configured = settings::get_setting(db, crate::domain::storage_settings::CONFIG_KEY)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: "setup.finish.check_storage",

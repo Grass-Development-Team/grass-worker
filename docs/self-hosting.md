@@ -97,6 +97,34 @@ resources; cross-origin requests are blocked to prevent access to unrelated
 network services. The screenshot therefore follows the same retention and
 storage migration lifecycle as the deployment's other artifacts.
 
+### Object storage
+
+Managed artifacts use the local filesystem by default. The setup wizard and
+**Administration -> Settings -> Infrastructure** also support generic
+S3-compatible storage, MinIO, and Cloudflare R2. Object storage configuration
+is persisted in the database rather than `config.toml`. Access keys, secret
+keys, and session tokens are write-only in the Console and encrypted with a
+storage-specific key derived from `secrets.secret_key` before they are stored.
+
+Remote backends require a bucket and region. MinIO and R2 require an endpoint;
+R2 uses the `auto` region. A generic S3-compatible backend may omit the
+endpoint to use the provider default. Path-style requests and plain HTTP are
+available for compatible private deployments such as a trusted local MinIO
+service. Do not enable plain HTTP across an untrusted network.
+
+Changing the active backend starts a background migration. The Control API
+continues reading from the source backend while object writes and deletions are
+paused. It copies each managed object, verifies its size and SHA-256 checksum,
+and switches the active configuration only after every object succeeds. A
+failed migration keeps the source active and reports its error in the Console.
+The migration includes Grass Output archives, build logs, deployment
+screenshots, and user or team avatars. Node work directories and Serve artifact
+caches stay local and are not migrated.
+
+An existing installation remains on local storage after upgrade. On its first
+start with this version, the Control API initializes the database setting from
+the existing `[storage].root`, preserving the current path and stored files.
+
 ### Local HTTP development mode
 
 For trusted local testing over plain HTTP, development mode omits `Secure`
@@ -185,7 +213,7 @@ the Control API port in release builds) and finish the setup flow:
 2. Initial administrator (becomes the platform `admin` with a personal team)
 3. Site configuration
 4. First Node — this generates the Node token; copy it now, it is shown once
-5. Storage root (defaults to `/data`)
+5. Object storage (local filesystem at `/data` by default)
 6. Finish — the service switches to ready mode
 
 ## 3. Start a Node
@@ -208,7 +236,7 @@ With this enabled:
 - the setup wizard's Node step (or creating a node under Administration →
   Nodes with **Start local process** checked) generates
   `local_node_config` with the node token, a detected container runtime
-  socket, and work directories under `{storage.root}/node`;
+  socket, and work directories under the configured local Node root;
 - the process starts automatically when setup finishes and on every
   Control API boot, restarts with backoff on unexpected exits, and stops
   with the Control API;
@@ -216,7 +244,7 @@ With this enabled:
   start/stop/restart.
 
 The generated file is written with mode 0600 because it contains the node
-token; it is rewritten automatically if the storage root changes.
+token; it is rewritten automatically if the local Node root changes.
 Hand-written node configs are never touched.
 
 ### Standalone Node
@@ -418,7 +446,7 @@ SSH, and `git://` connections are pinned to an address that passed this policy.
    production**.
 3. Watch the realtime build log. A Build Node runs the build inside its
    configured container runtime, produces Grass Output v1, and streams the
-   artifact to Control API local storage.
+   artifact to the Control API's active object storage backend.
 4. When the build becomes Ready, the Control API automatically creates any
    review required by policy. The assigned Serve Node then downloads,
    verifies, and stages the artifact. Platform administrators can inspect the
@@ -455,9 +483,9 @@ SSH, and `git://` connections are pinned to an address that passed this policy.
 ## Notes
 
 - The Control API is the artifact relay between Build and Serve Nodes: Build
-  Nodes upload to its local storage and Serve Nodes download into their local
-  artifact cache. Size the Control API storage for retained artifacts as well
-  as logs and other platform data.
+  Nodes upload through its active local or S3-compatible backend and Serve
+  Nodes download into their local artifact cache. Size the selected backend for
+  retained artifacts, logs, screenshots, and avatars.
 - Every deployment receives a protected Preview host. Only active users in
   the project's current team and active platform administrators can open it.
   Project transfer, user disablement, or Preview replacement invalidates
@@ -468,10 +496,10 @@ SSH, and `git://` connections are pinned to an address that passed this policy.
   least once so it registers its exact capabilities and Serve capacity.
 - This phase runs exactly one Control API and assigns each deployment to one
   Serve Node. It does not provide Control API high availability, Build
-  failover, automatic failover after an unexpected Serve outage, or object
-  storage. Planned Serve Node deletion uses the drain-and-migrate workflow
-  above; an unexpected outage still makes assigned sites unavailable until
-  that Node returns or an administrator can complete a safe migration.
+  failover, or automatic failover after an unexpected Serve outage. Planned
+  Serve Node deletion uses the drain-and-migrate workflow above; an unexpected
+  outage still makes assigned sites unavailable until that Node returns or an
+  administrator can complete a safe migration.
 - Static outputs from Vite/React/Vue/Svelte SPAs, Next.js static export,
   Nuxt SPA/prerender, SvelteKit adapter-static, and Astro static are
   supported. **SSR deployments work for Next.js, Astro, and Nuxt**: the

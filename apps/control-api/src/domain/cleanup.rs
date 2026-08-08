@@ -12,7 +12,7 @@ use crate::{
         database::entity::{
             DeploymentArtifactKind, deployment, deployment_artifact, node_deployment_migration,
         },
-        storage::LocalStorage,
+        storage::StorageManager,
     },
 };
 
@@ -118,7 +118,7 @@ pub async fn summarize_build_logs<C: ConnectionTrait>(
 
 pub async fn delete_build_logs<C: ConnectionTrait>(
     db: &C,
-    storage: &LocalStorage,
+    storage: &StorageManager,
     filter: &BuildLogFilter,
 ) -> anyhow::Result<BuildLogDeleteResult> {
     let candidates = candidates(db, filter).await?;

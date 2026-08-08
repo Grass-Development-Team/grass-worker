@@ -67,6 +67,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 bollard = "0.19"
 tar = "0.4"
 futures-util = "0.3"
+object_store = { version = "0.14.1", default-features = false, features = ["fs", "aws"] }
 
 grass-archive = { path = "crates/archive" }
 grass-assets = { path = "crates/assets" }

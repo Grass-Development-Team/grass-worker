@@ -186,6 +186,20 @@ string_active_enum!(DeploymentScreenshotStatus, "deployment_screenshot_status", 
     Failed => "failed",
 });
 
+string_active_enum!(StorageMigrationStatus, "storage_migration_status", {
+    Pending => "pending",
+    Running => "running",
+    Succeeded => "succeeded",
+    Failed => "failed",
+});
+
+string_active_enum!(StorageMigrationObjectStatus, "storage_migration_object_status", {
+    Pending => "pending",
+    Running => "running",
+    Succeeded => "succeeded",
+    Failed => "failed",
+});
+
 string_active_enum!(DeploymentReviewStatus, "deployment_review_status", {
     Pending => "pending",
     Approved => "approved",

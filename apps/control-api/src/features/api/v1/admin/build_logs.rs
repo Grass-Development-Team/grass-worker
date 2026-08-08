@@ -13,7 +13,6 @@ use crate::{
         database::entity::AuditEventResult,
         error::{AppError, ok_response},
         http::extractors::Session,
-        storage::LocalStorage,
     },
     state::ControlApiState,
 };
@@ -84,11 +83,9 @@ pub async fn cleanup(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.cleanup.build_logs.delete";
     let db = super::database(&state, OP)?;
-    let storage_root = state.config.read().unwrap().storage.root.clone();
-    let result =
-        cleanup::delete_build_logs(db, &LocalStorage::new(storage_root), &filter(query, OP)?)
-            .await
-            .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let result = cleanup::delete_build_logs(db, &state.storage, &filter(query, OP)?)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
     audits::create_platform_audit_event(
         db,

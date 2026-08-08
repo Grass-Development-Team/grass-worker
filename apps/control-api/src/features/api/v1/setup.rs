@@ -78,7 +78,7 @@ pub(crate) async fn determine_stage(state: &ControlApiState) -> Result<SetupStag
         return Ok(SetupStage::Node);
     }
 
-    if settings::get_setting(db, "storage.root")
+    if settings::get_setting(db, crate::domain::storage_settings::CONFIG_KEY)
         .await
         .map_err(|source| setup_state_error("setup.state.storage", source))?
         .is_none()

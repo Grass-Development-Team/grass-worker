@@ -13,6 +13,7 @@ pub mod quota_plans;
 pub mod registration;
 pub mod reviews;
 pub mod settings;
+pub mod storage;
 pub mod team_groups;
 pub mod teams;
 pub mod users;
@@ -98,6 +99,12 @@ pub fn router() -> Router<ControlApiState> {
             delete(users::reset_mfa_factor),
         )
         .route("/settings", get(settings::get).patch(settings::update))
+        .route("/storage", get(storage::get))
+        .route("/storage/test", post(storage::test))
+        .route(
+            "/storage/migrations",
+            get(storage::migration).post(storage::create_migration),
+        )
         .route(
             "/identity-providers",
             get(identity_providers::list).post(identity_providers::create),

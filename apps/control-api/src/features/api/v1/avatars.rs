@@ -14,7 +14,6 @@ use sea_orm::{
     TransactionTrait,
 };
 use time::OffsetDateTime;
-use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 use crate::{
@@ -22,7 +21,7 @@ use crate::{
         database::entity::{team, user},
         error::{AppError, ok_response},
         http::extractors::{Session, TeamRole},
-        storage::LocalStorage,
+        storage::{StorageManager, StorageWriteGuard},
     },
     state::ControlApiState,
 };
@@ -89,8 +88,8 @@ fn team_avatar_key(team_id: Uuid, version: Uuid) -> String {
     format!("avatars/teams/{team_id}/{version}.webp")
 }
 
-fn storage(state: &ControlApiState) -> LocalStorage {
-    LocalStorage::new(state.config.read().unwrap().storage.root.clone())
+fn storage(state: &ControlApiState) -> StorageManager {
+    state.storage.clone()
 }
 
 fn require_png(headers: &HeaderMap, op: &'static str) -> Result<(), AppError> {
@@ -123,7 +122,14 @@ async fn upload_user(
     let version = Uuid::now_v7();
     let key = user_avatar_key(session.data.user_id, version);
     let storage = storage(&state);
-    storage
+    let write_guard = storage
+        .begin_write()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    write_guard
         .write_bytes(&key, &webp)
         .await
         .map_err(|source| AppError::Infrastructure {
@@ -135,12 +141,12 @@ async fn upload_user(
     let (user, old_version) = match update {
         Ok(result) => result,
         Err(error) => {
-            let _ = storage.remove(&key).await;
+            let _ = write_guard.remove(&key).await;
             return Err(error);
         }
     };
     remove_old(
-        &storage,
+        &write_guard,
         old_version.map(|old| user_avatar_key(user.id, old)),
         OP,
     )
@@ -155,9 +161,17 @@ async fn delete_user(
     session: Session,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "avatars.user.delete";
+    let write_guard =
+        storage(&state)
+            .begin_write()
+            .await
+            .map_err(|source| AppError::Infrastructure {
+                op: OP,
+                source: source.into(),
+            })?;
     let (user, old_version) = replace_user_version(&state, session.data.user_id, None, OP).await?;
     remove_old(
-        &storage(&state),
+        &write_guard,
         old_version.map(|old| user_avatar_key(user.id, old)),
         OP,
     )
@@ -234,7 +248,14 @@ async fn upload_team(
     let version = Uuid::now_v7();
     let key = team_avatar_key(team_role.team_id, version);
     let storage = storage(&state);
-    storage
+    let write_guard = storage
+        .begin_write()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    write_guard
         .write_bytes(&key, &webp)
         .await
         .map_err(|source| AppError::Infrastructure {
@@ -246,12 +267,12 @@ async fn upload_team(
     let (team, old_version) = match update {
         Ok(result) => result,
         Err(error) => {
-            let _ = storage.remove(&key).await;
+            let _ = write_guard.remove(&key).await;
             return Err(error);
         }
     };
     remove_old(
-        &storage,
+        &write_guard,
         old_version.map(|old| team_avatar_key(team.id, old)),
         OP,
     )
@@ -267,9 +288,17 @@ async fn delete_team(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "avatars.team.delete";
     team_role.require_owner("avatars.team.owner_required")?;
+    let write_guard =
+        storage(&state)
+            .begin_write()
+            .await
+            .map_err(|source| AppError::Infrastructure {
+                op: OP,
+                source: source.into(),
+            })?;
     let (team, old_version) = replace_team_version(&state, team_role.team_id, None, OP).await?;
     remove_old(
-        &storage(&state),
+        &write_guard,
         old_version.map(|old| team_avatar_key(team.id, old)),
         OP,
     )
@@ -342,7 +371,7 @@ fn team_data(team: &team::Model) -> serde_json::Value {
     })
 }
 
-async fn remove_old(storage: &LocalStorage, key: Option<String>, op: &'static str) {
+async fn remove_old(storage: &StorageWriteGuard, key: Option<String>, op: &'static str) {
     if let Some(key) = key
         && let Err(error) = storage.remove(&key).await
     {
@@ -409,14 +438,17 @@ async fn read_team(
 }
 
 async fn read_object(
-    storage: &LocalStorage,
+    storage: &StorageManager,
     key: &str,
     op: &'static str,
 ) -> Result<Response, AppError> {
     let object = storage
         .open_artifact(key)
         .await
-        .map_err(|source| AppError::Infrastructure { op, source })?
+        .map_err(|source| AppError::Infrastructure {
+            op,
+            source: source.into(),
+        })?
         .ok_or_else(|| AppError::NotFound {
             op,
             message: "avatar not found".to_owned(),
@@ -429,7 +461,7 @@ async fn read_object(
             header::CACHE_CONTROL,
             "private, max-age=31536000, immutable",
         )
-        .body(Body::from_stream(ReaderStream::new(object.file)))
+        .body(Body::from_stream(object.stream))
         .map_err(|error| AppError::Internal {
             op,
             message: format!("failed to build avatar response: {error}"),
