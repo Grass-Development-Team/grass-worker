@@ -12,6 +12,9 @@ permissions:
   contents: write
   packages: write
 
+env:
+  RUNTIME_IMAGE: ghcr.io/grass-development-team/grass-worker
+
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -39,7 +42,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ env.RUNTIME_IMAGE }}
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
@@ -50,7 +53,7 @@ jobs:
         id: meta-slim
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ env.RUNTIME_IMAGE }}
           flavor: suffix=-slim
           tags: |
             type=ref,event=branch
@@ -62,7 +65,7 @@ jobs:
         id: meta-alpine
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ env.RUNTIME_IMAGE }}
           flavor: suffix=-alpine
           tags: |
             type=ref,event=branch
@@ -87,7 +90,7 @@ jobs:
           files: docker-bake.hcl
           push: true
         env:
-          IMAGE: ghcr.io/${{ github.repository }}
+          IMAGE: ${{ env.RUNTIME_IMAGE }}
           TAGS_DEBIAN: ${{ steps.meta.outputs.tags }}
           TAGS_SLIM: ${{ steps.meta-slim.outputs.tags }}
           TAGS_ALPINE: ${{ steps.meta-alpine.outputs.tags }}
