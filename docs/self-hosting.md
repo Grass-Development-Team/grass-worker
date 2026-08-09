@@ -34,9 +34,9 @@ Published images use Debian Bookworm as the default runtime. The `-slim` and
 `-alpine` tags select Debian Bookworm Slim and Alpine 3.22 respectively:
 
 ```text
-ghcr.io/yuanzui-cf/grass-worker:<version>
-ghcr.io/yuanzui-cf/grass-worker:<version>-slim
-ghcr.io/yuanzui-cf/grass-worker:<version>-alpine
+ghcr.io/grass-development-team/grass-worker:<version>
+ghcr.io/grass-development-team/grass-worker:<version>-slim
+ghcr.io/grass-development-team/grass-worker:<version>-alpine
 ```
 
 Build all local runtime variants with Docker Bake:
