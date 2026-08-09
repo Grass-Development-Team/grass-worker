@@ -1,5 +1,5 @@
 variable "IMAGE" {
-  default = "ghcr.io/yuanzui-cf/grass-worker"
+  default = "ghcr.io/grass-development-team/grass-worker"
 }
 
 variable "TAGS_DEBIAN" {
