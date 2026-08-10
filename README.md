@@ -1,18 +1,9 @@
 # Grass Worker
 
-Grass Worker is a self-hosted deployment platform: a Vercel-style
-Deployments Page backed by a Control API, build-and-serve Nodes, teams,
-quotas, automatic platform domains, realtime build logs, and release
-reviews.
+> [!IMPORTANT]
+> This is an AI-generated project currently undergoing human review. DO NOT USE IN A PRODUCTION ENVIRONMENT.
 
-- **Control API** — HTTP API, setup flow, auth and sessions, teams and
-  roles, quota enforcement, projects, deployments, host provisioning,
-  reviews, audit, and the embedded Web Console.
-- **Node** — claims deployments, builds them inside a Podman/Docker socket
-  container runtime, normalizes output to Grass Output v1, uploads
-  artifacts, and serves static sites on public hosts.
-- **Console** — React + shadcn/ui interface for the whole flow, from setup
-  to rollback.
+Grass Worker is a self-hosted deployment platform.
 
 ## Quick start
 
