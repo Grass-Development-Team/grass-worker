@@ -63,8 +63,8 @@ impl ControlApiConfig {
         let path = path.as_ref();
         let config_exists = path.exists();
         let mut config = Self::load_persisted(path)?;
-        if !config_exists {
-            config.ensure_secret_key();
+        let secret_key_changed = config.ensure_secret_key();
+        if !config_exists || secret_key_changed {
             config.save(path)?;
         }
         apply_env(&mut config)?;
@@ -235,13 +235,39 @@ mod tests {
     }
 
     #[test]
-    fn loading_an_existing_config_does_not_rewrite_it() {
+    fn loading_an_existing_config_persists_replacement_secret_key() {
         let unique = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("grass-worker-config-{unique}.toml"));
+        let path = std::env::temp_dir().join(format!("grass-worker-config-weak-{unique}.toml"));
         let original = "# Keep operator edits intact.\n[redis]\nurl = \"redis://cache.example/2\"\n\n[secrets]\nsecret_key = \"change-me\"\n";
+        fs::write(&path, original).unwrap();
+
+        let first = ControlApiConfig::load(&path).unwrap();
+        let first_key = first.secrets.secret_key.clone();
+        let persisted_after_first = fs::read_to_string(&path).unwrap();
+        let persisted_config = ControlApiConfig::load_persisted(&path).unwrap();
+        let second = ControlApiConfig::load(&path).unwrap();
+        let persisted_after_second = fs::read_to_string(&path).unwrap();
+        fs::remove_file(path).unwrap();
+
+        assert_eq!(first.redis.url, "redis://cache.example/2");
+        assert!(secret_key_is_strong(&first_key));
+        assert_eq!(persisted_config.secrets.secret_key, first_key);
+        assert_eq!(second.secrets.secret_key, first_key);
+        assert_eq!(persisted_after_second, persisted_after_first);
+        assert_ne!(persisted_after_first, original);
+    }
+
+    #[test]
+    fn loading_an_existing_strong_config_preserves_file_contents() {
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("grass-worker-config-strong-{unique}.toml"));
+        let original = "# Keep operator edits intact.\n[redis]\nurl = \"redis://cache.example/2\"\n\n[secrets]\nsecret_key = \"persisted-platform-secret-key-1234567890\"\n";
         fs::write(&path, original).unwrap();
 
         let config = ControlApiConfig::load(&path).unwrap();
@@ -249,6 +275,10 @@ mod tests {
         fs::remove_file(path).unwrap();
 
         assert_eq!(config.redis.url, "redis://cache.example/2");
+        assert_eq!(
+            config.secrets.secret_key,
+            "persisted-platform-secret-key-1234567890"
+        );
         assert_eq!(persisted, original);
     }
 
