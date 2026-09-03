@@ -3,6 +3,9 @@ use sea_orm_migration::{MigratorTrait, prelude::*};
 
 use super::migration;
 
+#[cfg(test)]
+pub(crate) static MIGRATION_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -54,11 +57,38 @@ mod tests {
 
     use anyhow::{Context, ensure};
     use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
+    use tokio::sync::oneshot;
     use uuid::Uuid;
 
     use super::*;
 
-    static MIGRATION_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    #[tokio::test]
+    async fn shared_postgres_migration_lock_serializes_access() {
+        let (started_sender, started_receiver) = oneshot::channel();
+        let (release_sender, release_receiver) = oneshot::channel();
+        let first = tokio::spawn(async move {
+            let _guard = super::MIGRATION_TEST_LOCK.lock().await;
+            started_sender.send(()).unwrap();
+            release_receiver.await.unwrap();
+        });
+        started_receiver.await.unwrap();
+
+        let (second_sender, mut second_receiver) = oneshot::channel();
+        let second = tokio::spawn(async move {
+            let _guard = super::MIGRATION_TEST_LOCK.lock().await;
+            second_sender.send(()).unwrap();
+        });
+
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert!(second_receiver.try_recv().is_err());
+
+        release_sender.send(()).unwrap();
+        second.await.unwrap();
+        assert!(second_receiver.await.is_ok());
+        first.await.unwrap();
+    }
 
     #[derive(Debug, Eq, PartialEq)]
     struct ColumnShape {

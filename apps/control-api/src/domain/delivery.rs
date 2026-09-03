@@ -520,8 +520,6 @@ mod tests {
         transition_unsuccessful_build,
     };
 
-    static MIGRATION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
     struct PostgresTestDatabase {
         db: DatabaseConnection,
         admin: DatabaseConnection,
@@ -543,7 +541,9 @@ mod tests {
                 .query_pairs_mut()
                 .append_pair("options", &format!("-csearch_path={schema}"));
             let db = Database::connect(scoped_url.as_str()).await.unwrap();
-            let _migration_guard = MIGRATION_LOCK.lock().await;
+            let _migration_guard = crate::infra::database::migrate::MIGRATION_TEST_LOCK
+                .lock()
+                .await;
             Migrator::up(&db, None).await.unwrap();
             Some(Self { db, admin, schema })
         }
