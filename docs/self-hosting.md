@@ -62,6 +62,12 @@ URL and Redis URL. Then:
 just run api          # or: grass-control-api --config config.toml
 ```
 
+If `secrets.secret_key` is missing or still set to the example `change-me`
+value, the first startup generates a strong platform key and atomically writes
+it to `config.toml`. Protect and back up this file: the key protects platform
+tokens and encrypted settings. `GWAPI_SECRET_KEY` can provide a runtime
+override, but environment values are never written back to the file.
+
 Audit events are retained for 90 days by default. Configure another number
 of days, or use `0` for permanent retention:
 
