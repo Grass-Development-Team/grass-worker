@@ -3,6 +3,9 @@ use sea_orm_migration::{MigratorTrait, prelude::*};
 
 use super::migration;
 
+#[cfg(test)]
+pub(crate) static MIGRATION_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -50,15 +53,49 @@ pub async fn run(database: &DatabaseConnection) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, future::Future};
 
     use anyhow::{Context, ensure};
     use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
+    use tokio::sync::oneshot;
     use uuid::Uuid;
 
     use super::*;
 
-    static MIGRATION_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    #[tokio::test]
+    async fn shared_postgres_migration_lock_serializes_access() {
+        let (started_sender, started_receiver) = oneshot::channel();
+        let (release_sender, release_receiver) = oneshot::channel();
+        let first = tokio::spawn(async move {
+            let _guard = super::MIGRATION_TEST_LOCK.lock().await;
+            started_sender.send(()).unwrap();
+            release_receiver.await.unwrap();
+        });
+        started_receiver.await.unwrap();
+
+        let (second_attempted_sender, second_attempted_receiver) = oneshot::channel();
+        let (second_acquired_sender, mut second_acquired_receiver) = oneshot::channel();
+        let second = tokio::spawn(async move {
+            let mut lock = Box::pin(super::MIGRATION_TEST_LOCK.lock());
+            let mut attempted_sender = Some(second_attempted_sender);
+            let _guard = std::future::poll_fn(move |context| {
+                if let Some(sender) = attempted_sender.take() {
+                    sender.send(()).unwrap();
+                }
+                lock.as_mut().poll(context)
+            })
+            .await;
+            second_acquired_sender.send(()).unwrap();
+        });
+
+        second_attempted_receiver.await.unwrap();
+        assert!(second_acquired_receiver.try_recv().is_err());
+
+        release_sender.send(()).unwrap();
+        second.await.unwrap();
+        assert!(second_acquired_receiver.await.is_ok());
+        first.await.unwrap();
+    }
 
     #[derive(Debug, Eq, PartialEq)]
     struct ColumnShape {
