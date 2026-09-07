@@ -9,6 +9,7 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
     pub name: String,
+    pub region: String,
     pub token_hash: String,
     pub status: NodeStatus,
     pub build_enabled: bool,

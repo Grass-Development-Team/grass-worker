@@ -44,6 +44,12 @@ pub async fn register(
         node,
         RegisterNodeParams {
             name,
+            region: grass_validator::normalize_region(&body.region).map_err(|error| {
+                AppError::Validation {
+                    op: OP,
+                    message: format!("region: {error}"),
+                }
+            })?,
             version: body.version,
             build_enabled: body.capabilities.build,
             serve_enabled: body.capabilities.serve,
@@ -88,6 +94,9 @@ pub async fn register(
 }
 
 fn validate_registration(body: &RegisterRequest) -> Result<(), &'static str> {
+    if grass_validator::normalize_region(&body.region).is_err() {
+        return Err("region is invalid");
+    }
     if !body.capabilities.build && !body.capabilities.serve {
         return Err("node must enable build or serve");
     }
@@ -159,6 +168,7 @@ mod tests {
             name: "node-a".to_owned(),
             version: "0.1.0".to_owned(),
             capabilities: NodeCapabilities { build, serve },
+            region: "default".to_owned(),
             build_concurrency: u16::from(build),
             serve_base_url: serve.then(|| "http://node-a:8080".to_owned()),
             resources: serve.then_some(grass_node_protocol::NodeResources {

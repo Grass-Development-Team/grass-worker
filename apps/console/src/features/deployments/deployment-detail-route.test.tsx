@@ -28,6 +28,7 @@ function detailFixture(overrides: Partial<DeploymentDetail["deployment"]> = {}):
       id: "deployment-1",
       project_id: "project-1",
       team_id: "team-1",
+      region: "default",
       build_node: { id: "build-node-1", name: "builder-1" },
       serve_node: { id: "serve-node-1", name: "serve-node-1" },
       environment: "production",

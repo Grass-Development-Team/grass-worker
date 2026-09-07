@@ -15,6 +15,7 @@ function jsonResponse(data: unknown): Response {
 const configuration = {
   node: {
     id: "serve-node-1",
+    region: "default",
     control_api: "http://127.0.0.1:7817",
     work_root: "/data/node",
     capabilities: { build: true, serve: true },
@@ -54,6 +55,7 @@ const configuration = {
 const nodeFixture = {
   id: "node-1",
   name: "serve-node-1",
+  region: "default",
   status: "active",
   healthy: true,
   build_enabled: false,

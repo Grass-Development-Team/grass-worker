@@ -26,3 +26,4 @@ pub mod m20260806_000025_registration_allowlist;
 pub mod m20260807_000026_avatars;
 pub mod m20260807_000027_deployment_screenshots;
 pub mod m20260808_000028_object_storage;
+pub mod m20260908_000029_regional_routing;

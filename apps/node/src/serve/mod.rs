@@ -1404,6 +1404,7 @@ mod tests {
                 revision: "before-withdrawal".to_owned(),
                 routes: vec![ServeRoute {
                     host: "app.example.com".to_owned(),
+                    region: "default".to_owned(),
                     deployment_id,
                     target_node_id: Uuid::now_v7(),
                     target_base_url: format!("http://{authority_address}"),

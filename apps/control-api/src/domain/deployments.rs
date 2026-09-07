@@ -231,6 +231,7 @@ pub async fn create_deployment<C: ConnectionTrait>(
         id: Set(Uuid::now_v7()),
         project_id: Set(project.id),
         team_id: Set(project.team_id),
+        region: Set(placement.region.clone()),
         build_node_id: Set(None),
         serve_node_id: Set(Some(placement.node_id)),
         environment: Set(params.environment),

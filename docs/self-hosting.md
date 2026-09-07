@@ -266,6 +266,12 @@ socket = "unix:///run/user/1000/podman/podman.sock"
 default_build_image = "docker.io/library/node:22"
 ```
 
+Nodes are assigned to the `default` region unless `node.region` (or
+`GWNODE_REGION`) is set to another region slug. Deployments can request a
+region and the scheduler will only place them on healthy Serve Nodes in that
+region. Keep the same region on every Node that should accept those
+deployments.
+
 ```sh
 just run node         # or: grass-node --config node.toml
 ```

@@ -194,6 +194,7 @@ pub(crate) fn deployment_view(
         "id": deployment.id,
         "project_id": deployment.project_id,
         "team_id": deployment.team_id,
+        "region": deployment.region,
         "build_node": node_view(deployment.build_node_id),
         "serve_node": node_view(deployment.serve_node_id),
         "environment": deployments::environment_value(&deployment.environment),
@@ -382,6 +383,14 @@ pub struct CreateDeploymentRequest {
     pub commit_message: Option<String>,
     #[serde(default)]
     pub serve_node_id: Option<Uuid>,
+    #[serde(default)]
+    pub region: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct ServeNodesQuery {
+    #[serde(default)]
+    pub region: Option<String>,
 }
 
 fn default_environment() -> String {
@@ -430,6 +439,7 @@ async fn create_placed_deployment(
     db: &sea_orm::DatabaseConnection,
     params: CreateDeploymentParams,
     selected_node_id: Option<Uuid>,
+    region: Option<&str>,
     op: &'static str,
 ) -> Result<deployment::Model, AppError> {
     let requested = deployments::runtime_serve_resources(&params.project.runtime);
@@ -440,15 +450,22 @@ async fn create_placed_deployment(
             op,
             source: source.into(),
         })?;
-    let placement =
-        match scheduler::place_deployment(&transaction, requested, selected_node_id).await {
-            Ok(placement) => placement,
-            Err(error) => {
-                let error = map_schedule_error(error, op);
-                let _ = transaction.rollback().await;
-                return Err(error);
-            }
-        };
+    let placement = match scheduler::place_deployment_in_region(
+        &transaction,
+        requested,
+        selected_node_id,
+        region,
+    )
+    .await
+    {
+        Ok(placement) => placement,
+        Err(error) => {
+            let error = map_schedule_error(error, op);
+            let _ = transaction.rollback().await;
+            return Err(error);
+        }
+    };
+    let placement_for_event = placement.clone();
     let deployment = match deployments::create_deployment(&transaction, params, placement).await {
         Ok(deployment) => deployment,
         Err(source) => {
@@ -456,7 +473,7 @@ async fn create_placed_deployment(
             return Err(AppError::Infrastructure { op, source });
         }
     };
-    let mode = match placement.mode {
+    let mode = match placement_for_event.mode {
         PlacementMode::Automatic => "automatic",
         PlacementMode::Manual => "manual",
     };
@@ -467,9 +484,9 @@ async fn create_placed_deployment(
         "deployment assigned to serve node",
         json!({
             "mode": mode,
-            "serve_node_id": placement.node_id,
+            "serve_node_id": placement_for_event.node_id,
             "resources": requested,
-            "overcommitted": placement.overcommitted,
+            "overcommitted": placement_for_event.overcommitted,
         }),
     )
     .await
@@ -518,6 +535,15 @@ pub async fn create(
         });
     }
     let environment = parse_environment(&body.environment, OP)?;
+    let requested_region = body
+        .region
+        .as_deref()
+        .map(grass_validator::normalize_region)
+        .transpose()
+        .map_err(|error| AppError::Validation {
+            op: OP,
+            message: format!("region: {error}"),
+        })?;
 
     let quota = QuotaService::new(db, cache);
     let reservation = quota
@@ -575,6 +601,7 @@ pub async fn create(
             source_credential_version_id,
         },
         body.serve_node_id,
+        requested_region.as_deref(),
         OP,
     )
     .await
@@ -790,11 +817,21 @@ pub async fn serve_nodes(
     State(state): State<ControlApiState>,
     session: Session,
     Path(project_id): Path<Uuid>,
+    Query(query): Query<ServeNodesQuery>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "deployments.serve_nodes";
     let access = super::project_access(&state, &session, project_id, false, OP).await?;
     let db = super::database(&state, OP)?;
     let requested = deployments::runtime_serve_resources(&access.project.runtime);
+    let requested_region = query
+        .region
+        .as_deref()
+        .map(grass_validator::normalize_region)
+        .transpose()
+        .map_err(|error| AppError::Validation {
+            op: OP,
+            message: format!("region: {error}"),
+        })?;
     let candidates = scheduler::eligible_candidates(db)
         .await
         .map_err(|error| map_schedule_error(error, OP))?;
@@ -821,6 +858,12 @@ pub async fn serve_nodes(
     let views = candidates
         .iter()
         .filter_map(|candidate| {
+            if requested_region
+                .as_deref()
+                .is_some_and(|region| candidate.region != region)
+            {
+                return None;
+            }
             let node = nodes.get(&candidate.node_id)?;
             let placement = scheduler::choose_candidate(
                 std::slice::from_ref(candidate),
@@ -833,10 +876,11 @@ pub async fn serve_nodes(
             Some(json!({
                 "id": node.id,
                 "name": node.name,
+                "region": candidate.region,
                 "healthy": true,
                 "capacity": candidate.capacity,
                 "usage": candidate.usage,
-                "normal_available": placement.is_some_and(|placement| !placement.overcommitted),
+                "normal_available": placement.as_ref().is_some_and(|placement| !placement.overcommitted),
                 "schedulable": placement.is_some(),
                 "overflow_only": placement.is_some_and(|placement| placement.overcommitted),
                 "disk_available_mb": candidate.capacity.disk_mb.saturating_sub(candidate.usage.disk_mb),
@@ -1332,6 +1376,7 @@ pub async fn retry(
             source_credential_version_id: source_deployment.source_credential_version_id,
         },
         None,
+        Some(&source_deployment.region),
         OP,
     )
     .await

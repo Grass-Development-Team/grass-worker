@@ -51,6 +51,8 @@ pub struct NodeIdentityConfiguration {
     pub id: String,
     pub control_api: String,
     pub work_root: String,
+    #[serde(default = "default_region")]
+    pub region: String,
     pub capabilities: NodeCapabilities,
 }
 
@@ -144,6 +146,8 @@ pub struct RegisterRequest {
     pub name: String,
     pub version: String,
     pub capabilities: NodeCapabilities,
+    #[serde(default = "default_region")]
+    pub region: String,
     pub build_concurrency: u16,
     /// Public base URL of the Node serve listener, when known.
     #[serde(default)]
@@ -434,6 +438,8 @@ pub struct SsrLeaseResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServeRoute {
     pub host: String,
+    #[serde(default = "default_region")]
+    pub region: String,
     pub deployment_id: Uuid,
     pub target_node_id: Uuid,
     pub target_base_url: String,
@@ -445,6 +451,10 @@ pub struct ServeRoute {
 pub struct RouteSnapshotResponse {
     pub revision: String,
     pub routes: Vec<ServeRoute>,
+}
+
+fn default_region() -> String {
+    "default".to_owned()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -715,6 +725,7 @@ mod tests {
 
         let route = ServeRoute {
             host: "app.example.com".to_owned(),
+            region: "eu-west".to_owned(),
             deployment_id: Uuid::nil(),
             target_node_id: Uuid::nil(),
             target_base_url: "http://node-1:8080".to_owned(),
@@ -724,6 +735,7 @@ mod tests {
         let parsed: ServeRoute =
             serde_json::from_slice(&serde_json::to_vec(&route).unwrap()).unwrap();
         assert_eq!(parsed.host, "app.example.com");
+        assert_eq!(parsed.region, "eu-west");
         assert_eq!(parsed.resources, resources);
         assert_eq!(parsed.access, ServeAccess::TeamOrPlatformAdmin);
     }
