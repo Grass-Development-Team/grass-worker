@@ -14,6 +14,7 @@ const GENERATED_BY: &str = "grass-control-api";
 
 pub struct GenerateParams<'a> {
     pub node_name: &'a str,
+    pub region: &'a str,
     pub node_token: &'a str,
     pub control_api_url: String,
     pub storage_root: &'a str,
@@ -30,6 +31,7 @@ struct GeneratedConfig {
 #[derive(Serialize)]
 struct NodeSection {
     id: String,
+    region: String,
     control_api: String,
     node_token: String,
     work_root: String,
@@ -85,6 +87,7 @@ pub fn generate(path: &str, params: &GenerateParams<'_>) -> anyhow::Result<Vec<S
         generated_by: GENERATED_BY.to_owned(),
         node: NodeSection {
             id: params.node_name.to_owned(),
+            region: params.region.to_owned(),
             control_api: params.control_api_url.clone(),
             node_token: params.node_token.to_owned(),
             work_root: work_root.clone(),
@@ -232,6 +235,7 @@ mod tests {
         let storage = std::env::temp_dir().join("grass-node-config-storage-test");
         let params = GenerateParams {
             node_name: "local-node",
+            region: "default",
             node_token: "secret-token",
             control_api_url: "http://127.0.0.1:7817".to_owned(),
             storage_root: storage.to_str().unwrap(),
@@ -282,6 +286,7 @@ mod tests {
         let storage_new = std::env::temp_dir().join("grass-node-config-new-root");
         let params = GenerateParams {
             node_name: "local-node",
+            region: "default",
             node_token: "secret-token",
             control_api_url: "http://127.0.0.1:7817".to_owned(),
             storage_root: storage_old.to_str().unwrap(),

@@ -57,6 +57,7 @@ export function DeploymentsTab({
   const [deploymentEnvironment, setDeploymentEnvironment] = useState<DeploymentEnvironment | null>(
     null,
   );
+  const [deploymentRegion, setDeploymentRegion] = useState("automatic");
   const [serveNodeId, setServeNodeId] = useState("automatic");
 
   const deploymentsQuery = useQuery({
@@ -90,12 +91,17 @@ export function DeploymentsTab({
   });
 
   const serveNodes = serveNodesQuery.data?.serve_nodes ?? [];
-  const selectedNode = serveNodes.find((node) => node.id === serveNodeId);
+  const regions = [...new Set(serveNodes.map((node) => node.region))].sort();
+  const regionalServeNodes =
+    deploymentRegion === "automatic"
+      ? serveNodes
+      : serveNodes.filter((node) => node.region === deploymentRegion);
+  const selectedNode = regionalServeNodes.find((node) => node.id === serveNodeId);
   const canSubmit =
     !serveNodesQuery.isLoading &&
     !serveNodesQuery.isError &&
     (serveNodeId === "automatic"
-      ? serveNodes.some((node) => node.schedulable)
+      ? regionalServeNodes.some((node) => node.schedulable)
       : selectedNode?.schedulable === true);
 
   useEffect(() => {
@@ -108,6 +114,7 @@ export function DeploymentsTab({
   }, [projectId, serveNodes, serveNodesQuery.data]);
 
   const openDeploymentDialog = (environment: DeploymentEnvironment) => {
+    setDeploymentRegion("automatic");
     setServeNodeId("automatic");
     setDeploymentEnvironment(environment);
   };
@@ -173,10 +180,44 @@ export function DeploymentsTab({
               if (!deploymentEnvironment || !canSubmit) return;
               createMutation.mutate({
                 environment: deploymentEnvironment,
+                ...(deploymentRegion === "automatic" ? {} : { region: deploymentRegion }),
                 ...(serveNodeId === "automatic" ? {} : { serve_node_id: serveNodeId }),
               });
             }}
           >
+            <Field>
+              <FieldLabel htmlFor="deployment-region">Region</FieldLabel>
+              <Select
+                value={deploymentRegion}
+                onValueChange={(value) => {
+                  setDeploymentRegion(value);
+                  setServeNodeId("automatic");
+                }}
+              >
+                <SelectTrigger id="deployment-region" aria-label="Region" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem
+                    value="automatic"
+                    disabled={!serveNodes.some((node) => node.schedulable)}
+                  >
+                    Automatic · any region
+                  </SelectItem>
+                  {regions.map((region) => (
+                    <SelectItem
+                      key={region}
+                      value={region}
+                      disabled={
+                        !serveNodes.some((node) => node.region === region && node.schedulable)
+                      }
+                    >
+                      {region}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
             <Field>
               <FieldLabel htmlFor="serve-node">Serve node</FieldLabel>
               <Select value={serveNodeId} onValueChange={setServeNodeId}>
@@ -186,13 +227,13 @@ export function DeploymentsTab({
                 <SelectContent>
                   <SelectItem
                     value="automatic"
-                    disabled={!serveNodes.some((node) => node.schedulable)}
+                    disabled={!regionalServeNodes.some((node) => node.schedulable)}
                   >
                     Automatic · least loaded
                   </SelectItem>
-                  {serveNodes.map((node) => (
+                  {regionalServeNodes.map((node) => (
                     <SelectItem key={node.id} value={node.id} disabled={!node.schedulable}>
-                      {node.name} · {formatNodeUsage(node)}
+                      {node.name} · {node.region} · {formatNodeUsage(node)}
                       {node.overflow_only ? " · overflow" : ""}
                     </SelectItem>
                   ))}
@@ -283,7 +324,8 @@ export function DeploymentsTab({
                         {deployment.overcommitted && <Badge variant="warning">Overflow</Badge>}
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        {deployment.serve_node?.name ?? "Unassigned"}
+                        <span>{deployment.serve_node?.name ?? "Unassigned"}</span>
+                        <span> · {deployment.region}</span>
                       </p>
                       <p className="whitespace-nowrap text-xs text-muted-foreground">
                         {deployment.serve_resources.cpu_millicores}m ·{" "}

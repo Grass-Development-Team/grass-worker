@@ -76,6 +76,7 @@ fn node_view(
         "build_enabled": node.build_enabled,
         "serve_enabled": node.serve_enabled,
         "build_concurrency": node.build_concurrency,
+        "region": node.region,
         "base_url": node.base_url,
         "work_root": node.work_root,
         "version": node.metadata.get("version"),
@@ -327,6 +328,9 @@ fn validate_node_configuration(
     let identity = &configuration.node;
     if identity.id.trim().is_empty() || identity.id.chars().count() > 120 {
         return Err("node id must contain between 1 and 120 characters".to_owned());
+    }
+    if grass_validator::normalize_region(&identity.region).is_err() {
+        return Err("node region is invalid".to_owned());
     }
     if !validate_http_url(identity.control_api.trim()) {
         return Err("control API must be an absolute HTTP(S) URL without credentials".to_owned());
@@ -699,6 +703,8 @@ pub async fn health(
 #[derive(Deserialize)]
 pub struct CreateNodeRequest {
     pub name: String,
+    #[serde(default)]
+    pub region: Option<String>,
     /// Generate the local node config and start the managed process.
     #[serde(default)]
     pub start_local: bool,
@@ -722,11 +728,19 @@ pub async fn create(
         });
     }
 
+    let region = body.region.as_deref().unwrap_or("default");
+    let region =
+        grass_validator::normalize_region(region).map_err(|error| AppError::Validation {
+            op: OP,
+            message: format!("region: {error}"),
+        })?;
+
     let token = grass_token::generate_token();
     let node = nodes::create_node(
         db,
         CreateNodeParams {
             name: body.name.trim().to_owned(),
+            region: region.clone(),
             token_hash: grass_token::hash_token(&token),
             storage_root: None,
         },
@@ -771,6 +785,7 @@ pub async fn create(
             &config_path,
             &config_file::GenerateParams {
                 node_name: &node.name,
+                region: &region,
                 node_token: &token,
                 control_api_url,
                 storage_root: &storage_root,
@@ -1002,6 +1017,7 @@ mod tests {
         node::Model {
             id: Uuid::nil(),
             name: "serve-node-1".to_owned(),
+            region: "default".to_owned(),
             token_hash: String::new(),
             status: NodeStatus::Active,
             build_enabled: false,

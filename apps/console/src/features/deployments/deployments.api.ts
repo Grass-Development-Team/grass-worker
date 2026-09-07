@@ -36,6 +36,7 @@ export interface NodeUsage extends ServeResources {
 export interface ServeNodeTarget {
   id: string;
   name: string;
+  region: string;
   healthy: boolean;
   capacity: NodeResources;
   usage: NodeUsage;
@@ -50,6 +51,7 @@ export interface Deployment {
   id: string;
   project_id: string;
   team_id: string;
+  region: string;
   build_node: NodeRef | null;
   serve_node: NodeRef | null;
   environment: DeploymentEnvironment;
@@ -142,15 +144,24 @@ export const deploymentsApi = {
 
   create: (
     projectId: string,
-    input: { environment: DeploymentEnvironment; branch?: string; serve_node_id?: string },
+    input: {
+      environment: DeploymentEnvironment;
+      branch?: string;
+      serve_node_id?: string;
+      region?: string;
+    },
   ) =>
     request<{ deployment: Deployment }>(`/api/v1/projects/${projectId}/deployments`, {
       method: "POST",
       body: JSON.stringify(input),
     }),
 
-  serveNodes: (projectId: string) =>
-    request<{ serve_nodes: ServeNodeTarget[] }>(`/api/v1/projects/${projectId}/serve-nodes`),
+  serveNodes: (projectId: string, region?: string) => {
+    const query = region ? `?region=${encodeURIComponent(region)}` : "";
+    return request<{ serve_nodes: ServeNodeTarget[] }>(
+      `/api/v1/projects/${projectId}/serve-nodes${query}`,
+    );
+  },
 
   detail: (projectId: string, deploymentId: string) =>
     request<DeploymentDetail>(`/api/v1/projects/${projectId}/deployments/${deploymentId}`),

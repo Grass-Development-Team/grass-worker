@@ -477,6 +477,7 @@ mod tests {
             std::env::temp_dir().join(format!("grass-migration-node-{}.toml", Uuid::now_v7()));
         let node_config = GenerateParams {
             node_name: "local-node",
+            region: "default",
             node_token: "node-token",
             control_api_url: "http://127.0.0.1:7817".to_owned(),
             storage_root: source_root.to_str().unwrap(),

@@ -154,6 +154,7 @@ mod tests {
         let node = crate::infra::database::entity::node::Model {
             id: uuid::Uuid::now_v7(),
             name: "disabled-node".to_owned(),
+            region: "default".to_owned(),
             token_hash: grass_token::hash_token(token),
             status: NodeStatus::Disabled,
             build_enabled: true,

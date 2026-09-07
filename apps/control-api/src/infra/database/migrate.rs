@@ -40,6 +40,7 @@ impl MigratorTrait for Migrator {
             Box::new(migration::m20260807_000026_avatars::Migration),
             Box::new(migration::m20260807_000027_deployment_screenshots::Migration),
             Box::new(migration::m20260808_000028_object_storage::Migration),
+            Box::new(migration::m20260908_000029_regional_routing::Migration),
         ]
     }
 }
@@ -150,7 +151,7 @@ mod tests {
     fn registers_audit_foundation_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 28);
+        assert_eq!(migrations.len(), 29);
         assert_eq!(
             migrations.get(11).expect("twelfth migration").name(),
             "m20260729_000012_audit_foundation"
@@ -179,7 +180,7 @@ mod tests {
     fn registers_team_group_review_policy_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 28);
+        assert_eq!(migrations.len(), 29);
         assert_eq!(
             migrations.get(12).expect("thirteenth migration").name(),
             "m20260729_000013_team_group_review_policy"
@@ -190,7 +191,7 @@ mod tests {
     fn registers_node_config_sync_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 28);
+        assert_eq!(migrations.len(), 29);
         assert_eq!(
             migrations.get(13).expect("fourteenth migration").name(),
             "m20260729_000014_node_config_sync"
@@ -201,7 +202,7 @@ mod tests {
     fn registers_node_deletion_queue_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 28);
+        assert_eq!(migrations.len(), 29);
         assert_eq!(
             migrations.get(14).expect("fifteenth migration").name(),
             "m20260729_000015_node_deletion_queue"
@@ -212,7 +213,7 @@ mod tests {
     fn registers_domain_review_policy_after_node_deletion_queue() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 28);
+        assert_eq!(migrations.len(), 29);
         assert_eq!(
             migrations.get(14).expect("fifteenth migration").name(),
             "m20260729_000015_node_deletion_queue"
@@ -227,7 +228,7 @@ mod tests {
     fn registers_project_notifications_after_domain_review_policy() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 28);
+        assert_eq!(migrations.len(), 29);
         assert_eq!(
             migrations.get(15).expect("sixteenth migration").name(),
             "m20260730_000016_domain_review_policy"
@@ -250,7 +251,7 @@ mod tests {
     fn registers_scoped_codes_after_authentication_migrations() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 28);
+        assert_eq!(migrations.len(), 29);
         assert_eq!(
             migrations.get(23).expect("twenty-fourth migration").name(),
             "m20260806_000024_scoped_codes"
@@ -261,7 +262,7 @@ mod tests {
     fn registers_registration_allowlist_after_scoped_codes() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 28);
+        assert_eq!(migrations.len(), 29);
         assert_eq!(
             migrations.get(24).expect("twenty-fifth migration").name(),
             "m20260806_000025_registration_allowlist"
@@ -272,7 +273,7 @@ mod tests {
     fn registers_avatar_versions_after_registration_allowlist() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 28);
+        assert_eq!(migrations.len(), 29);
         assert_eq!(
             migrations.get(25).expect("twenty-sixth migration").name(),
             "m20260807_000026_avatars"
@@ -283,14 +284,18 @@ mod tests {
     fn registers_object_storage_after_deployment_screenshots() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 28);
+        assert_eq!(migrations.len(), 29);
         assert_eq!(
             migrations.get(26).expect("twenty-seventh migration").name(),
             "m20260807_000027_deployment_screenshots"
         );
         assert_eq!(
-            migrations.last().expect("last migration").name(),
+            migrations.get(27).expect("twenty-eighth migration").name(),
             "m20260808_000028_object_storage"
+        );
+        assert_eq!(
+            migrations.last().expect("last migration").name(),
+            "m20260908_000029_regional_routing"
         );
     }
 
@@ -304,7 +309,7 @@ mod tests {
 
         let verification = async {
             Migrator::up(&test_db.db, None).await?;
-            assert_migration_tracking(&test_db.db, 28, 0).await?;
+            assert_migration_tracking(&test_db.db, 29, 0).await?;
             assert_avatar_schema(&test_db.db).await?;
             assert_screenshot_schema(&test_db.db).await?;
             assert_object_storage_schema(&test_db.db).await?;
@@ -325,7 +330,7 @@ mod tests {
             assert_avatar_schema_absent(&test_db.db).await?;
 
             Migrator::up(&test_db.db, Some(3)).await?;
-            assert_migration_tracking(&test_db.db, 28, 0).await?;
+            assert_migration_tracking(&test_db.db, 29, 0).await?;
             assert_avatar_schema(&test_db.db).await?;
             assert_screenshot_schema(&test_db.db).await?;
             assert_object_storage_schema(&test_db.db).await

@@ -18,6 +18,7 @@ export type NodeStatus = "pending" | "active" | "draining" | "offline" | "disabl
 export interface AdminNode {
   id: string;
   name: string;
+  region: string;
   status: NodeStatus;
   healthy: boolean;
   build_enabled: boolean;
@@ -85,6 +86,7 @@ export interface AdminNodeConfigurationSync {
 export interface NodeConfiguration {
   node: {
     id: string;
+    region: string;
     control_api: string;
     work_root: string;
     capabilities: { build: boolean; serve: boolean };
@@ -716,7 +718,7 @@ export const adminApi = {
   listNodes: () =>
     request<{ nodes: AdminNode[]; local_process: AdminLocalProcessInfo }>("/api/v1/admin/nodes"),
 
-  createNode: (input: { name: string; start_local?: boolean }) =>
+  createNode: (input: { name: string; region?: string; start_local?: boolean }) =>
     request<{
       node: AdminNode;
       token: string;

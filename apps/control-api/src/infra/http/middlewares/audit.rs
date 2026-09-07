@@ -529,6 +529,7 @@ mod tests {
             id: deployment_id,
             project_id,
             team_id,
+            region: "default".to_owned(),
             build_node_id: None,
             serve_node_id: None,
             environment: DeploymentEnvironment::Production,

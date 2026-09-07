@@ -270,6 +270,7 @@ mod tests {
             id: Uuid::now_v7(),
             project_id: Uuid::now_v7(),
             team_id: Uuid::now_v7(),
+            region: "default".to_owned(),
             build_node_id: None,
             serve_node_id: None,
             environment,

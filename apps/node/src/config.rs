@@ -51,6 +51,8 @@ pub struct NodeIdentityConfig {
     pub control_api: String,
     #[serde(default = "default_node_token")]
     pub node_token: String,
+    #[serde(default = "default_node_region")]
+    pub region: String,
     #[serde(default = "default_node_work_root")]
     pub work_root: String,
     #[serde(default)]
@@ -63,6 +65,7 @@ impl Default for NodeIdentityConfig {
             id: default_node_id(),
             control_api: default_control_api(),
             node_token: default_node_token(),
+            region: default_node_region(),
             work_root: default_node_work_root(),
             capabilities: NodeCapabilitiesConfig::default(),
         }
@@ -306,6 +309,7 @@ impl NodeConfig {
                 id: self.node.id.clone(),
                 control_api: self.node.control_api.clone(),
                 work_root: self.node.work_root.clone(),
+                region: self.node.region.clone(),
                 capabilities: NodeCapabilities {
                     build: self.node.capabilities.build,
                     serve: self.node.capabilities.serve,
@@ -373,6 +377,7 @@ impl NodeConfig {
         self.node.id.clone_from(&desired.node.id);
         self.node.control_api.clone_from(&desired.node.control_api);
         self.node.work_root.clone_from(&desired.node.work_root);
+        self.node.region.clone_from(&desired.node.region);
         self.node.capabilities.build = desired.node.capabilities.build;
         self.node.capabilities.serve = desired.node.capabilities.serve;
         self.build.concurrency = desired.build.concurrency;
@@ -465,6 +470,8 @@ impl NodeConfig {
 
     pub fn validate(&self) -> anyhow::Result<()> {
         let capabilities = &self.node.capabilities;
+        grass_validator::normalize_region(&self.node.region)
+            .map_err(|error| anyhow::anyhow!("invalid node region: {error}"))?;
         if !capabilities.build && !capabilities.serve {
             anyhow::bail!("node must enable build or serve");
         }
@@ -486,6 +493,7 @@ fn apply_env(config: &mut NodeConfig) -> Result<(), ConfigError> {
     overlay_string("GWNODE_ID", &mut config.node.id);
     overlay_string("GWNODE_CONTROL_API", &mut config.node.control_api);
     overlay_string("GWNODE_NODE_TOKEN", &mut config.node.node_token);
+    overlay_string("GWNODE_REGION", &mut config.node.region);
     overlay_string("GWNODE_WORK_ROOT", &mut config.node.work_root);
     overlay_u16("GWNODE_BUILD_CONCURRENCY", &mut config.build.concurrency)?;
     overlay_u64(
@@ -535,6 +543,10 @@ fn default_control_api() -> String {
 
 fn default_node_token() -> String {
     "change-me".to_owned()
+}
+
+fn default_node_region() -> String {
+    "default".to_owned()
 }
 
 fn default_node_work_root() -> String {

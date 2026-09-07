@@ -2,6 +2,7 @@
 id = "local-node-1"
 control_api = "http://127.0.0.1:7817"
 node_token = "change-me"
+region = "default"
 work_root = "/data/node"
 
 [node.capabilities]

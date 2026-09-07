@@ -53,6 +53,7 @@ pub fn registration_request(
             build: config.node.capabilities.build,
             serve: config.node.capabilities.serve,
         },
+        region: config.node.region.clone(),
         build_concurrency: if config.node.capabilities.build {
             config.build.concurrency
         } else {

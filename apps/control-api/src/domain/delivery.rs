@@ -386,7 +386,15 @@ pub async fn request_release(
     let placement = if target.serve_node_id.is_none()
         || matches!(target.serve_status, DeploymentServeStatus::Retired)
     {
-        Some(scheduler::place_deployment(tx, serve_resources(&target)?, None).await?)
+        Some(
+            scheduler::place_deployment_in_region(
+                tx,
+                serve_resources(&target)?,
+                None,
+                Some(&target.region),
+            )
+            .await?,
+        )
     } else {
         None
     };
@@ -591,6 +599,7 @@ mod tests {
             },
             Placement {
                 node_id,
+                region: "default".to_owned(),
                 overcommitted: false,
                 mode: PlacementMode::Automatic,
             },
@@ -672,6 +681,7 @@ mod tests {
         let node = node::ActiveModel {
             id: Set(Uuid::now_v7()),
             name: Set("serve-1".to_owned()),
+            region: Set("default".to_owned()),
             token_hash: Set("test-token-hash".to_owned()),
             status: Set(NodeStatus::Active),
             build_enabled: Set(true),

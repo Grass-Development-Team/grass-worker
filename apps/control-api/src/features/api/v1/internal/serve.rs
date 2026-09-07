@@ -70,12 +70,14 @@ fn route_revision(routes: &[ServeRoute]) -> String {
     canonical.sort_by(|left, right| {
         (
             &left.host,
+            &left.region,
             left.deployment_id,
             left.target_node_id,
             &left.target_base_url,
         )
             .cmp(&(
                 &right.host,
+                &right.region,
                 right.deployment_id,
                 right.target_node_id,
                 &right.target_base_url,
@@ -622,6 +624,7 @@ pub async fn routes(
                 .into_iter()
                 .map(|(host, access)| ServeRoute {
                     host,
+                    region: deployment.region.clone(),
                     deployment_id: deployment.id,
                     target_node_id: node_id,
                     target_base_url: target_base_url.clone(),
@@ -867,6 +870,7 @@ mod tests {
         };
         let first = ServeRoute {
             host: "a.example.com".to_owned(),
+            region: "default".to_owned(),
             deployment_id: Uuid::now_v7(),
             target_node_id: Uuid::now_v7(),
             target_base_url: "http://node-a:8080".to_owned(),
@@ -875,6 +879,7 @@ mod tests {
         };
         let second = ServeRoute {
             host: "b.example.com".to_owned(),
+            region: "default".to_owned(),
             deployment_id: Uuid::now_v7(),
             target_node_id: Uuid::now_v7(),
             target_base_url: "http://node-b:8080".to_owned(),
