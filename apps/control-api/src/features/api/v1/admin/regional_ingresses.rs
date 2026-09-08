@@ -33,6 +33,7 @@ fn ingress_view(item: &regional_ingress::Model) -> serde_json::Value {
         "certificate_auto_renew": item.certificate_auto_renew,
         "certificate_status": item.certificate_status,
         "certificate_expires_at": ts(item.certificate_expires_at),
+        "certificate_issued_at": ts(item.certificate_issued_at),
         "certificate_error": item.certificate_error,
         "dns_challenge_provider": item.dns_challenge_provider,
         "dns_challenge_config_keys": item.dns_challenge_config.as_object().map(|object| object.keys().cloned().collect::<Vec<_>>()).unwrap_or_default(),
@@ -215,6 +216,9 @@ pub async fn create(
         .to_owned()),
         certificate_expires_at: Set(None),
         certificate_error: Set(None),
+        acme_account: Set(None),
+        certificate_bundle: Set(None),
+        certificate_issued_at: Set(None),
         dns_challenge_provider: Set(dns_challenge_provider.clone()),
         dns_challenge_config: Set(dns_challenge_config),
         dns_challenge_status: Set(if dns_challenge_provider.is_some() {
@@ -398,6 +402,36 @@ pub async fn remove(
             source: source.into(),
         })?;
     Ok(ok_response(json!({ "ok": true })))
+}
+
+/// POST /api/v1/admin/regional-ingresses/{ingress_id}/certificate/renew
+pub async fn renew_certificate(
+    State(state): State<ControlApiState>,
+    Path(ingress_id): Path<Uuid>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "admin.regional_ingresses.renew_certificate";
+    let db = super::database(&state, OP)?;
+    let item = ingress::get_by_id(db, ingress_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "regional ingress not found".to_owned(),
+        })?;
+    let platform_secret = state.config.read().unwrap().secrets.secret_key.clone();
+    crate::domain::acme::reconcile(db, &item, &platform_secret, true)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let refreshed = ingress::get_by_id(db, ingress_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "regional ingress was removed during renewal".to_owned(),
+        })?;
+    Ok(ok_response(
+        json!({ "regional_ingress": ingress_view(&refreshed) }),
+    ))
 }
 
 #[cfg(test)]

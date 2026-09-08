@@ -115,6 +115,58 @@ impl DnsProviderHostProvisioner {
         }
     }
 
+    pub async fn ensure_txt_record(
+        &self,
+        provider: &str,
+        config: &serde_json::Value,
+        zone: &str,
+        name: &str,
+        value: &str,
+    ) -> Result<String, HostProvisionError> {
+        let _ = zone;
+        match provider.trim().to_ascii_lowercase().as_str() {
+            cloudflare::PROVIDER_NAME => {
+                let mut object = config.as_object().cloned().unwrap_or_default();
+                object.insert("record_type".to_owned(), serde_json::json!("CNAME"));
+                object.insert("record_value".to_owned(), serde_json::json!(value));
+                let parsed =
+                    cloudflare::CloudflareConfig::from_json(&serde_json::Value::Object(object))
+                        .map_err(HostProvisionError::Provider)?;
+                Ok(self
+                    .cloudflare
+                    .ensure_txt_record(&parsed, name, value)
+                    .await?
+                    .id)
+            }
+            other => Err(Self::unsupported(Some(other))),
+        }
+    }
+
+    pub async fn remove_txt_record(
+        &self,
+        provider: &str,
+        config: &serde_json::Value,
+        zone: &str,
+        name: &str,
+        value: &str,
+    ) -> Result<Option<String>, HostProvisionError> {
+        let _ = zone;
+        match provider.trim().to_ascii_lowercase().as_str() {
+            cloudflare::PROVIDER_NAME => {
+                let mut object = config.as_object().cloned().unwrap_or_default();
+                object.insert("record_type".to_owned(), serde_json::json!("CNAME"));
+                object.insert("record_value".to_owned(), serde_json::json!(value));
+                let parsed =
+                    cloudflare::CloudflareConfig::from_json(&serde_json::Value::Object(object))
+                        .map_err(HostProvisionError::Provider)?;
+                self.cloudflare
+                    .remove_txt_record(&parsed, name, value)
+                    .await
+            }
+            other => Err(Self::unsupported(Some(other))),
+        }
+    }
+
     fn unsupported(provider: Option<&str>) -> HostProvisionError {
         HostProvisionError::UnsupportedSource(format!(
             "dns provider '{}' is not supported (supported: {})",

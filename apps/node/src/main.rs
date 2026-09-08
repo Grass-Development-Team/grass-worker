@@ -95,45 +95,48 @@ async fn main() -> anyhow::Result<()> {
         });
 
     let mut ssr_manager_for_shutdown = None;
-    let (artifact_sync, route_refresh, ssr_reaper, serve_task) = if config.node.capabilities.serve {
-        let ssr_manager = Arc::new(serve::ssr::SsrManager::with_client(
-            runtime,
-            node_id,
-            &config,
-            client.clone(),
-        ));
-        ssr_manager_for_shutdown = Some(ssr_manager.clone());
-        let ssr_reaper = ssr_manager.clone().spawn_reaper();
-        let route_table = Arc::new(serve::routes::RouteTable::default());
-        let route_refresh = serve::routes::spawn(
-            client.clone(),
-            route_table.clone(),
-            node_id,
-            ssr_manager.clone(),
-        );
-        let serve_state = Arc::new(serve::ServeState::new(
-            client.clone(),
-            node_id,
-            gateway_token
-                .clone()
-                .expect("Serve registration requires a gateway token"),
-            route_table,
-            &config,
-            ssr_manager,
-        ));
-        let artifact_sync = serve::sync::spawn(
-            client.clone(),
-            std::path::PathBuf::from(&config.serve.artifact_cache_root),
-        );
-        (
-            Some(artifact_sync),
-            Some(route_refresh),
-            Some(ssr_reaper),
-            Some(serve::spawn(serve_state, &config)),
-        )
-    } else {
-        (None, None, None, None)
-    };
+    let (artifact_sync, route_refresh, certificate_sync, ssr_reaper, serve_task) =
+        if config.node.capabilities.serve {
+            let ssr_manager = Arc::new(serve::ssr::SsrManager::with_client(
+                runtime,
+                node_id,
+                &config,
+                client.clone(),
+            ));
+            ssr_manager_for_shutdown = Some(ssr_manager.clone());
+            let ssr_reaper = ssr_manager.clone().spawn_reaper();
+            let route_table = Arc::new(serve::routes::RouteTable::default());
+            let route_refresh = serve::routes::spawn(
+                client.clone(),
+                route_table.clone(),
+                node_id,
+                ssr_manager.clone(),
+            );
+            let serve_state = Arc::new(serve::ServeState::new(
+                client.clone(),
+                node_id,
+                gateway_token
+                    .clone()
+                    .expect("Serve registration requires a gateway token"),
+                route_table,
+                &config,
+                ssr_manager,
+            ));
+            let artifact_sync = serve::sync::spawn(
+                client.clone(),
+                std::path::PathBuf::from(&config.serve.artifact_cache_root),
+            );
+            let certificate_sync = serve::certificates::spawn(client.clone(), config.clone());
+            (
+                Some(artifact_sync),
+                Some(route_refresh),
+                Some(certificate_sync),
+                Some(ssr_reaper),
+                Some(serve::spawn(serve_state, &config)),
+            )
+        } else {
+            (None, None, None, None, None)
+        };
 
     wait_for_shutdown().await;
 
@@ -145,6 +148,9 @@ async fn main() -> anyhow::Result<()> {
     }
     if let Some(route_refresh) = route_refresh {
         route_refresh.abort();
+    }
+    if let Some(certificate_sync) = certificate_sync {
+        certificate_sync.abort();
     }
     if let Some(ssr_reaper) = ssr_reaper {
         ssr_reaper.abort();

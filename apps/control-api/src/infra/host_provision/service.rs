@@ -44,12 +44,14 @@ pub enum DeprovisionOutcome {
     Failed,
 }
 
-fn custom_binding_status(review_status: &HostReviewStatus) -> HostBindingStatus {
-    match review_status {
-        HostReviewStatus::Approved => HostBindingStatus::Active,
-        HostReviewStatus::NotRequired | HostReviewStatus::Pending | HostReviewStatus::Rejected => {
-            HostBindingStatus::Pending
-        }
+fn custom_binding_status(
+    review_status: &HostReviewStatus,
+    ownership_status: &str,
+) -> HostBindingStatus {
+    match (review_status, ownership_status) {
+        (HostReviewStatus::Approved, "verified") => HostBindingStatus::Active,
+        (HostReviewStatus::Rejected, _) => HostBindingStatus::Disabled,
+        _ => HostBindingStatus::Pending,
     }
 }
 
@@ -139,7 +141,8 @@ impl<'a> HostBindingService<'a> {
             // Custom-host DNS is user-managed, but manual review still gates
             // whether the binding can become serving/active.
             None => {
-                let status = custom_binding_status(&binding.review_status);
+                let status =
+                    custom_binding_status(&binding.review_status, &binding.ownership_status);
                 hosts::update_binding_status(self.db, binding, status, None)
                     .await
                     .map_err(|source| AppError::Infrastructure { op, source })?
@@ -268,16 +271,16 @@ mod tests {
     #[test]
     fn custom_binding_only_activates_after_automatic_approval() {
         assert_eq!(
-            custom_binding_status(&HostReviewStatus::Approved),
+            custom_binding_status(&HostReviewStatus::Approved, "verified"),
             HostBindingStatus::Active
         );
         assert_eq!(
-            custom_binding_status(&HostReviewStatus::Pending),
+            custom_binding_status(&HostReviewStatus::Pending, "pending"),
             HostBindingStatus::Pending
         );
         assert_eq!(
-            custom_binding_status(&HostReviewStatus::Rejected),
-            HostBindingStatus::Pending
+            custom_binding_status(&HostReviewStatus::Rejected, "pending"),
+            HostBindingStatus::Disabled
         );
     }
 
@@ -315,6 +318,9 @@ mod tests {
             reviewed_by_user_id: None,
             reviewed_at: None,
             review_reason: None,
+            ownership_status: "pending".to_owned(),
+            ownership_checked_at: None,
+            ownership_error: None,
             deleted_at: Some(now),
             created_at: now,
             updated_at: now,

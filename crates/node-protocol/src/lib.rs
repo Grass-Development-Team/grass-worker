@@ -453,6 +453,20 @@ pub struct RouteSnapshotResponse {
     pub routes: Vec<ServeRoute>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CertificateBundle {
+    pub ingress_id: Uuid,
+    pub hostname: String,
+    pub certificate_pem: String,
+    pub private_key_pem: String,
+    pub issued_at_unix: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CertificateBundlesResponse {
+    pub bundles: Vec<CertificateBundle>,
+}
+
 fn default_region() -> String {
     "default".to_owned()
 }

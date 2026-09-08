@@ -42,6 +42,7 @@ impl MigratorTrait for Migrator {
             Box::new(migration::m20260808_000028_object_storage::Migration),
             Box::new(migration::m20260908_000029_regional_routing::Migration),
             Box::new(migration::m20260908_000030_regional_ingress::Migration),
+            Box::new(migration::m20260909_000031_regional_ingress_lifecycle::Migration),
         ]
     }
 }
@@ -152,7 +153,7 @@ mod tests {
     fn registers_audit_foundation_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 30);
+        assert_eq!(migrations.len(), 31);
         assert_eq!(
             migrations.get(11).expect("twelfth migration").name(),
             "m20260729_000012_audit_foundation"
@@ -181,7 +182,7 @@ mod tests {
     fn registers_team_group_review_policy_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 30);
+        assert_eq!(migrations.len(), 31);
         assert_eq!(
             migrations.get(12).expect("thirteenth migration").name(),
             "m20260729_000013_team_group_review_policy"
@@ -192,7 +193,7 @@ mod tests {
     fn registers_node_config_sync_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 30);
+        assert_eq!(migrations.len(), 31);
         assert_eq!(
             migrations.get(13).expect("fourteenth migration").name(),
             "m20260729_000014_node_config_sync"
@@ -203,7 +204,7 @@ mod tests {
     fn registers_node_deletion_queue_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 30);
+        assert_eq!(migrations.len(), 31);
         assert_eq!(
             migrations.get(14).expect("fifteenth migration").name(),
             "m20260729_000015_node_deletion_queue"
@@ -214,7 +215,7 @@ mod tests {
     fn registers_domain_review_policy_after_node_deletion_queue() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 30);
+        assert_eq!(migrations.len(), 31);
         assert_eq!(
             migrations.get(14).expect("fifteenth migration").name(),
             "m20260729_000015_node_deletion_queue"
@@ -229,7 +230,7 @@ mod tests {
     fn registers_project_notifications_after_domain_review_policy() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 30);
+        assert_eq!(migrations.len(), 31);
         assert_eq!(
             migrations.get(15).expect("sixteenth migration").name(),
             "m20260730_000016_domain_review_policy"
@@ -252,7 +253,7 @@ mod tests {
     fn registers_scoped_codes_after_authentication_migrations() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 30);
+        assert_eq!(migrations.len(), 31);
         assert_eq!(
             migrations.get(23).expect("twenty-fourth migration").name(),
             "m20260806_000024_scoped_codes"
@@ -263,7 +264,7 @@ mod tests {
     fn registers_registration_allowlist_after_scoped_codes() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 30);
+        assert_eq!(migrations.len(), 31);
         assert_eq!(
             migrations.get(24).expect("twenty-fifth migration").name(),
             "m20260806_000025_registration_allowlist"
@@ -274,7 +275,7 @@ mod tests {
     fn registers_avatar_versions_after_registration_allowlist() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 30);
+        assert_eq!(migrations.len(), 31);
         assert_eq!(
             migrations.get(25).expect("twenty-sixth migration").name(),
             "m20260807_000026_avatars"
@@ -285,7 +286,7 @@ mod tests {
     fn registers_object_storage_after_deployment_screenshots() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 30);
+        assert_eq!(migrations.len(), 31);
         assert_eq!(
             migrations.get(26).expect("twenty-seventh migration").name(),
             "m20260807_000027_deployment_screenshots"
@@ -296,7 +297,7 @@ mod tests {
         );
         assert_eq!(
             migrations.last().expect("last migration").name(),
-            "m20260908_000030_regional_ingress"
+            "m20260909_000031_regional_ingress_lifecycle"
         );
     }
 
@@ -310,32 +311,39 @@ mod tests {
 
         let verification = async {
             Migrator::up(&test_db.db, None).await?;
-            assert_migration_tracking(&test_db.db, 30, 0).await?;
+            assert_migration_tracking(&test_db.db, 31, 0).await?;
             assert_avatar_schema(&test_db.db).await?;
             assert_screenshot_schema(&test_db.db).await?;
             assert_object_storage_schema(&test_db.db).await?;
 
             Migrator::down(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 29, 1).await?;
+            assert_migration_tracking(&test_db.db, 30, 1).await?;
+            assert_regional_ingress_lifecycle_absent(&test_db.db).await?;
+            assert_avatar_schema(&test_db.db).await?;
+            assert_screenshot_schema(&test_db.db).await?;
+            assert_object_storage_schema(&test_db.db).await?;
+
+            Migrator::down(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 29, 2).await?;
             assert_regional_ingress_schema_absent(&test_db.db).await?;
             assert_avatar_schema(&test_db.db).await?;
             assert_screenshot_schema(&test_db.db).await?;
             assert_object_storage_schema(&test_db.db).await?;
 
             Migrator::down(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 28, 2).await?;
+            assert_migration_tracking(&test_db.db, 28, 3).await?;
             assert_avatar_schema(&test_db.db).await?;
             assert_screenshot_schema(&test_db.db).await?;
             assert_object_storage_schema(&test_db.db).await?;
 
             Migrator::down(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 27, 3).await?;
+            assert_migration_tracking(&test_db.db, 27, 4).await?;
             assert_avatar_schema(&test_db.db).await?;
             assert_screenshot_schema(&test_db.db).await?;
             assert_object_storage_schema_absent(&test_db.db).await?;
 
-            Migrator::up(&test_db.db, Some(3)).await?;
-            assert_migration_tracking(&test_db.db, 30, 0).await?;
+            Migrator::up(&test_db.db, Some(4)).await?;
+            assert_migration_tracking(&test_db.db, 31, 0).await?;
             assert_avatar_schema(&test_db.db).await?;
             assert_screenshot_schema(&test_db.db).await?;
             assert_object_storage_schema(&test_db.db).await
@@ -363,15 +371,19 @@ mod tests {
 
         let verification = async {
             Migrator::up(&test_db.db, None).await?;
-            assert_migration_tracking(&test_db.db, 30, 0).await?;
+            assert_migration_tracking(&test_db.db, 31, 0).await?;
             assert_regional_ingress_schema(&test_db.db).await?;
 
             Migrator::down(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 29, 1).await?;
+            assert_migration_tracking(&test_db.db, 30, 1).await?;
+            assert_regional_ingress_lifecycle_absent(&test_db.db).await?;
+
+            Migrator::down(&test_db.db, Some(1)).await?;
+            assert_migration_tracking(&test_db.db, 29, 2).await?;
             assert_regional_ingress_schema_absent(&test_db.db).await?;
 
-            Migrator::up(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 30, 0).await?;
+            Migrator::up(&test_db.db, Some(2)).await?;
+            assert_migration_tracking(&test_db.db, 31, 0).await?;
             assert_regional_ingress_schema(&test_db.db).await
         }
         .await;
@@ -2043,6 +2055,9 @@ ORDER BY ordinal_position
                     column("certificate_status", "text", "NO", Some("'pending'::text")),
                     column("certificate_expires_at", "timestamptz", "YES", None),
                     column("certificate_error", "text", "YES", None),
+                    column("acme_account", "jsonb", "YES", None),
+                    column("certificate_bundle", "jsonb", "YES", None),
+                    column("certificate_issued_at", "timestamptz", "YES", None),
                     column("dns_challenge_provider", "text", "YES", None),
                     column("dns_challenge_config", "jsonb", "NO", Some("'{}'::jsonb")),
                     column(
@@ -2134,6 +2149,39 @@ ORDER BY indexname
         ensure!(indexes["ix_regional_ingresses_enabled"].contains("(region, enabled)"));
         ensure!(indexes["ix_host_sources_region"].contains("(region)"));
         ensure!(indexes["ix_project_host_bindings_region"].contains("(region)"));
+        ensure!(
+            object_count(
+                db,
+                "SELECT count(*)::bigint AS count FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'regional_ingress_health'",
+            )
+            .await?
+                == 1,
+            "regional ingress health table is missing"
+        );
+        Ok(())
+    }
+
+    async fn assert_regional_ingress_lifecycle_absent(
+        db: &DatabaseConnection,
+    ) -> anyhow::Result<()> {
+        ensure!(
+            object_count(
+                db,
+                "SELECT count(*)::bigint AS count FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'regional_ingress_health'",
+            )
+            .await?
+                == 0,
+            "regional ingress health table remained after lifecycle down migration"
+        );
+        ensure!(
+            object_count(
+                db,
+                "SELECT count(*)::bigint AS count FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'regional_ingresses' AND column_name IN ('acme_account', 'certificate_bundle', 'certificate_issued_at')",
+            )
+            .await?
+                == 0,
+            "regional ingress lifecycle columns remained after lifecycle down migration"
+        );
         Ok(())
     }
 

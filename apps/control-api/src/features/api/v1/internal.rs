@@ -60,6 +60,7 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
             post(serve::release_ssr_lease),
         )
         .route("/serve/routes", get(serve::routes))
+        .route("/serve/certificates", get(serve::certificates))
         .route("/serve/resolve-host", get(serve::resolve_host))
         .route("/serve/preview/authorize", post(super::preview_auth::start))
         .route(

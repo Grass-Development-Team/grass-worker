@@ -6,9 +6,10 @@ use axum::{
     response::IntoResponse,
 };
 use grass_node_protocol::{
-    ReportServeStatusRequest, ReportServeStatusResponse, ReportedServeStatus, ResolveHostResponse,
-    RouteSnapshotResponse, ServeAccess, ServeArtifact, ServeAssignment, ServeAssignmentStatus,
-    ServeAssignmentsResponse, ServeResources, ServeRoute, SsrLeaseResponse,
+    CertificateBundle, CertificateBundlesResponse, ReportServeStatusRequest,
+    ReportServeStatusResponse, ReportedServeStatus, ResolveHostResponse, RouteSnapshotResponse,
+    ServeAccess, ServeArtifact, ServeAssignment, ServeAssignmentStatus, ServeAssignmentsResponse,
+    ServeResources, ServeRoute, SsrLeaseResponse,
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
@@ -24,8 +25,8 @@ use crate::{
         database::entity::{
             DeploymentArtifactKind, DeploymentBuildStatus, DeploymentEnvironment,
             DeploymentReleaseStatus, DeploymentServeStatus, HostBindingEnvironment,
-            HostBindingStatus, NodeDeploymentMigrationStatus, NodeStatus, deployment,
-            deployment_artifact, node, node_deployment_migration, project_host_binding,
+            HostBindingKind, HostBindingStatus, NodeDeploymentMigrationStatus, NodeStatus,
+            deployment, deployment_artifact, node, node_deployment_migration, project_host_binding,
         },
         error::{AppError, ok_response},
         http::middlewares::node_auth::AuthenticatedNode,
@@ -551,6 +552,10 @@ pub async fn routes(
         })?;
     let mut hosts_by_project = HashMap::<Uuid, Vec<String>>::new();
     for binding in bindings {
+        if matches!(binding.kind, HostBindingKind::Custom) && binding.ownership_status != "verified"
+        {
+            continue;
+        }
         hosts_by_project
             .entry(binding.project_id)
             .or_default()
@@ -636,6 +641,41 @@ pub async fn routes(
     routes.sort_by(|left, right| left.host.cmp(&right.host));
     let revision = route_revision(&routes);
     Ok(ok_response(RouteSnapshotResponse { revision, routes }))
+}
+
+/// GET /api/v1/internal/serve/certificates
+pub async fn certificates(
+    State(state): State<ControlApiState>,
+    Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "internal.serve.certificates";
+    ensure_serve_node(&node, OP)?;
+    let db = super::database(&state, OP)?;
+    let ingresses = crate::domain::ingress::list(db)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let platform_secret = state.config.read().unwrap().secrets.secret_key.clone();
+    let mut bundles = Vec::new();
+    for ingress in ingresses.into_iter().filter(|item| {
+        item.enabled && item.region == node.region && item.certificate_status == "active"
+    }) {
+        let Some(bundle) = crate::domain::acme::decrypt_bundle(&ingress, &platform_secret)
+            .await
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        else {
+            continue;
+        };
+        bundles.push(CertificateBundle {
+            ingress_id: ingress.id,
+            hostname: ingress.hostname,
+            certificate_pem: bundle.certificate_pem,
+            private_key_pem: bundle.private_key_pem,
+            issued_at_unix: ingress
+                .certificate_issued_at
+                .map(|value| value.unix_timestamp()),
+        });
+    }
+    Ok(ok_response(CertificateBundlesResponse { bundles }))
 }
 
 async fn artifact_available(

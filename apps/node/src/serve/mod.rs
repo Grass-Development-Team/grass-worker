@@ -6,6 +6,7 @@
 //! outputs use strict path normalization, while SSR outputs are proxied to a
 //! deployment service container started on demand by [`ssr::SsrManager`].
 
+pub mod certificates;
 pub mod routes;
 pub mod ssr;
 pub mod static_files;
