@@ -205,7 +205,9 @@ impl DnsProviderHostProvisioner {
 /// ACME configuration to contain a project-host record template.
 fn txt_config(config: &serde_json::Value, value: &str) -> serde_json::Value {
     let mut object = config.as_object().cloned().unwrap_or_default();
-    object.insert("record_type".to_owned(), serde_json::json!("TXT"));
+    // Provider parsers validate the base host-source template. The concrete
+    // TXT methods call `for_txt` after parsing and replace this placeholder.
+    object.insert("record_type".to_owned(), serde_json::json!("CNAME"));
     object.insert("record_value".to_owned(), serde_json::json!(value));
     serde_json::Value::Object(object)
 }
@@ -462,5 +464,17 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("api_token"), "{error}");
+    }
+
+    #[test]
+    fn acme_txt_config_keeps_provider_parsers_on_a_valid_base_template() {
+        let config = txt_config(
+            &serde_json::json!({ "api_token": "token", "zone_id": "zone" }),
+            "challenge",
+        );
+        let parsed = cloudflare::CloudflareConfig::from_json(&config).unwrap();
+
+        assert_eq!(parsed.record_type, "CNAME");
+        assert_eq!(parsed.record_value, "challenge");
     }
 }
