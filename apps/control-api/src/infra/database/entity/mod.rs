@@ -22,6 +22,7 @@ pub mod quota_limit;
 pub mod quota_plan;
 pub mod quota_usage_counter;
 pub mod regional_ingress;
+pub mod regional_ingress_health;
 pub mod registration_email_allowlist;
 pub mod release;
 pub mod source_credential;

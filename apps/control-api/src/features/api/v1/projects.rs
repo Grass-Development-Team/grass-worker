@@ -65,6 +65,10 @@ pub fn router() -> Router<ControlApiState> {
             post(hosts::set_primary),
         )
         .route(
+            "/projects/{project_id}/hosts/{host_id}/verify",
+            post(hosts::verify),
+        )
+        .route(
             "/projects/{project_id}/hosts/{host_id}/provision",
             post(hosts::provision),
         )

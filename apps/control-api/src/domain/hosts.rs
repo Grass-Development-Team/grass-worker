@@ -375,6 +375,13 @@ pub async fn create_binding<C: ConnectionTrait>(
         reviewed_by_user_id: Set(None),
         reviewed_at: Set(None),
         review_reason: Set(None),
+        ownership_status: Set(if params.host_source_id.is_some() {
+            "not_required".to_owned()
+        } else {
+            "pending".to_owned()
+        }),
+        ownership_checked_at: Set(None),
+        ownership_error: Set(None),
         deleted_at: Set(None),
         created_at: Set(now),
         updated_at: Set(now),

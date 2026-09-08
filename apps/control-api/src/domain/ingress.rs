@@ -1,8 +1,11 @@
-use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Set, sea_query::OnConflict,
+};
+use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::infra::database::entity::{NodeStatus, node, regional_ingress};
+use crate::infra::database::entity::{NodeStatus, node, regional_ingress, regional_ingress_health};
 
 pub const HEARTBEAT_STALE_SECONDS: i64 = 90;
 
@@ -113,6 +116,27 @@ pub async fn healthy_serve_nodes<C: ConnectionTrait>(
     region: &str,
     now: OffsetDateTime,
 ) -> anyhow::Result<Vec<IngressCandidate>> {
+    let ingress = regional_ingress::Entity::find()
+        .filter(regional_ingress::Column::Region.eq(region))
+        .filter(regional_ingress::Column::Enabled.eq(true))
+        .filter(regional_ingress::Column::DeletedAt.is_null())
+        .one(db)
+        .await?;
+    let health_freshness = ingress
+        .as_ref()
+        .map(|item| health_check_freshness_seconds(item.health_check_interval_seconds))
+        .unwrap_or(120);
+    let health = if let Some(ingress) = ingress {
+        regional_ingress_health::Entity::find()
+            .filter(regional_ingress_health::Column::IngressId.eq(ingress.id))
+            .all(db)
+            .await?
+            .into_iter()
+            .map(|item| (item.node_id, item))
+            .collect::<std::collections::HashMap<_, _>>()
+    } else {
+        std::collections::HashMap::new()
+    };
     let nodes = node::Entity::find()
         .filter(node::Column::Region.eq(region))
         .filter(node::Column::ServeEnabled.eq(true))
@@ -132,12 +156,203 @@ pub async fn healthy_serve_nodes<C: ConnectionTrait>(
                 healthy: matches!(node.status, NodeStatus::Active)
                     && node.last_heartbeat_at.is_some_and(|heartbeat| {
                         (now - heartbeat).whole_seconds() <= HEARTBEAT_STALE_SECONDS
+                    })
+                    && health.get(&node.id).is_some_and(|item| {
+                        item.status == "healthy"
+                            && item.checked_at.is_some_and(|checked| {
+                                (now - checked).whole_seconds() <= i64::from(health_freshness)
+                            })
                     }),
                 priority: 0,
             })
         })
         .collect::<Vec<_>>();
     Ok(healthy_candidates(&candidates, region))
+}
+
+fn health_check_freshness_seconds(interval_seconds: i32) -> i32 {
+    interval_seconds.saturating_mul(3).max(60)
+}
+
+pub fn health_check_due(
+    last_checked: Option<OffsetDateTime>,
+    interval_seconds: i32,
+    now: OffsetDateTime,
+) -> bool {
+    last_checked
+        .is_none_or(|checked| (now - checked).whole_seconds() >= i64::from(interval_seconds.max(5)))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProbeResult {
+    pub status: &'static str,
+    pub latency_ms: Option<i32>,
+    pub error: Option<String>,
+}
+
+pub async fn probe_node(
+    client: &reqwest::Client,
+    base_url: &str,
+    hostname: &str,
+    path: &str,
+) -> ProbeResult {
+    let started = std::time::Instant::now();
+    let url = match url::Url::parse(base_url).and_then(|base| base.join(path)) {
+        Ok(url) if matches!(url.scheme(), "http" | "https") && url.host_str().is_some() => url,
+        _ => {
+            return ProbeResult {
+                status: "unhealthy",
+                latency_ms: None,
+                error: Some("invalid node base URL".to_owned()),
+            };
+        }
+    };
+    let response = client
+        .get(url)
+        .header(reqwest::header::HOST, hostname)
+        .send()
+        .await;
+    let latency_ms = i32::try_from(started.elapsed().as_millis()).ok();
+    match response {
+        Ok(response) if response.status().is_success() || response.status().is_redirection() => {
+            ProbeResult {
+                status: "healthy",
+                latency_ms,
+                error: None,
+            }
+        }
+        Ok(response) => ProbeResult {
+            status: "unhealthy",
+            latency_ms,
+            error: Some(format!("health endpoint returned {}", response.status())),
+        },
+        Err(error) => ProbeResult {
+            status: "unhealthy",
+            latency_ms,
+            error: Some(error.without_url().to_string()),
+        },
+    }
+}
+
+pub async fn probe_regional_ingress(
+    db: &sea_orm::DatabaseConnection,
+    ingress: &regional_ingress::Model,
+    now: OffsetDateTime,
+) -> anyhow::Result<()> {
+    let last_checked = regional_ingress_health::Entity::find()
+        .filter(regional_ingress_health::Column::IngressId.eq(ingress.id))
+        .order_by_desc(regional_ingress_health::Column::CheckedAt)
+        .one(db)
+        .await?
+        .and_then(|item| item.checked_at);
+    if !health_check_due(last_checked, ingress.health_check_interval_seconds, now) {
+        return Ok(());
+    }
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(3))
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let nodes = node::Entity::find()
+        .filter(node::Column::Region.eq(&ingress.region))
+        .filter(node::Column::ServeEnabled.eq(true))
+        .filter(node::Column::BaseUrl.is_not_null())
+        .filter(node::Column::DeletedAt.is_null())
+        .all(db)
+        .await?;
+    for node in nodes {
+        let result = probe_node(
+            &client,
+            node.base_url.as_deref().unwrap_or_default(),
+            &ingress.hostname,
+            &ingress.health_check_path,
+        )
+        .await;
+        let active = regional_ingress_health::ActiveModel {
+            ingress_id: Set(ingress.id),
+            node_id: Set(node.id),
+            status: Set(result.status.to_owned()),
+            checked_at: Set(Some(now)),
+            latency_ms: Set(result.latency_ms),
+            error: Set(result.error),
+        };
+        regional_ingress_health::Entity::insert(active)
+            .on_conflict(
+                OnConflict::columns([
+                    regional_ingress_health::Column::IngressId,
+                    regional_ingress_health::Column::NodeId,
+                ])
+                .update_columns([
+                    regional_ingress_health::Column::Status,
+                    regional_ingress_health::Column::CheckedAt,
+                    regional_ingress_health::Column::LatencyMs,
+                    regional_ingress_health::Column::Error,
+                ])
+                .to_owned(),
+            )
+            .exec(db)
+            .await?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DnsVerification {
+    Verified,
+    Missing,
+    Mismatch,
+}
+
+pub async fn verify_dns_txt(host: &str, expected: &str) -> anyhow::Result<DnsVerification> {
+    verify_dns_txt_at(
+        &reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(10))
+            .build()?,
+        "https://cloudflare-dns.com/dns-query",
+        host,
+        expected,
+    )
+    .await
+}
+
+pub async fn verify_dns_txt_at(
+    client: &reqwest::Client,
+    endpoint: &str,
+    host: &str,
+    expected: &str,
+) -> anyhow::Result<DnsVerification> {
+    let name = format!("_grass.{}", host.trim_end_matches('.'));
+    let response = client
+        .get(endpoint)
+        .query(&[("name", name.as_str()), ("type", "TXT")])
+        .header("accept", "application/dns-json")
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        anyhow::bail!("DNS TXT query returned {}", response.status());
+    }
+    let body: serde_json::Value = response.json().await?;
+    let answers = body
+        .get("Answer")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut found = false;
+    for answer in answers {
+        let Some(data) = answer.get("data").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let value = data.trim().trim_matches('"');
+        if value.as_bytes().ct_eq(expected.as_bytes()).into() {
+            return Ok(DnsVerification::Verified);
+        }
+        found = true;
+    }
+    Ok(if found {
+        DnsVerification::Mismatch
+    } else {
+        DnsVerification::Missing
+    })
 }
 
 pub fn dns_verification_token(secret_key: &str, binding_id: Uuid, host: &str) -> String {
@@ -152,6 +367,36 @@ pub fn dns_verification_token(secret_key: &str, binding_id: Uuid, host: &str) ->
 #[cfg(test)]
 mod tests {
     use super::{CnameGuidanceInput, IngressCandidateInput, cname_guidance, healthy_candidates};
+    use axum::{Json, Router, routing::get};
+
+    #[tokio::test]
+    async fn dns_txt_verification_accepts_matching_answer_and_rejects_missing() {
+        let app = Router::new().route(
+            "/dns-query",
+            get(|| async {
+                Json(serde_json::json!({
+                    "Answer": [{"type": 16, "data": "\"expected-token\""}]
+                }))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/dns-query", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = reqwest::Client::new();
+        assert_eq!(
+            super::verify_dns_txt_at(&client, &endpoint, "app.example.com", "expected-token")
+                .await
+                .unwrap(),
+            super::DnsVerification::Verified
+        );
+        assert_eq!(
+            super::verify_dns_txt_at(&client, &endpoint, "app.example.com", "other-token")
+                .await
+                .unwrap(),
+            super::DnsVerification::Mismatch
+        );
+        server.abort();
+    }
 
     #[test]
     fn cname_guidance_includes_cname_and_txt_ownership_records() {

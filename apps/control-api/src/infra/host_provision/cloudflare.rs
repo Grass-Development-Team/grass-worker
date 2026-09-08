@@ -40,11 +40,11 @@ impl CloudflareConfig {
         Self::from_json(&source.config)
     }
 
-    #[allow(dead_code)]
     pub fn for_txt(&self, value: &str) -> Self {
         let mut config = self.clone();
         config.record_type = "TXT".to_owned();
         config.record_value = value.to_owned();
+        config.proxied = false;
         config
     }
 
@@ -202,6 +202,24 @@ impl CloudflareDns {
         Self {
             base_url: base_url.into(),
         }
+    }
+
+    pub async fn ensure_txt_record(
+        &self,
+        config: &CloudflareConfig,
+        name: &str,
+        value: &str,
+    ) -> Result<EnsuredRecord, HostProvisionError> {
+        self.ensure_record(&config.for_txt(value), name).await
+    }
+
+    pub async fn remove_txt_record(
+        &self,
+        config: &CloudflareConfig,
+        name: &str,
+        value: &str,
+    ) -> Result<Option<String>, HostProvisionError> {
+        self.remove_record(&config.for_txt(value), name).await
     }
 
     async fn parse<T: DeserializeOwned>(

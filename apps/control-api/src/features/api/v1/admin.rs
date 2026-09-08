@@ -65,6 +65,10 @@ pub fn router() -> Router<ControlApiState> {
             "/regional-ingresses/{ingress_id}",
             patch(regional_ingresses::update).delete(regional_ingresses::remove),
         )
+        .route(
+            "/regional-ingresses/{ingress_id}/certificate/renew",
+            post(regional_ingresses::renew_certificate),
+        )
         .route("/audit-events", get(audit_events::list))
         .route(
             "/cleanup/audit-events",

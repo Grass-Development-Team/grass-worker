@@ -69,6 +69,7 @@ tar = "0.4"
 futures-util = "0.3"
 object_store = { version = "0.14.1", default-features = false, features = ["fs", "aws"] }
 quick-xml = { version = "0.41", features = ["serialize"] }
+instant-acme = { version = "0.8.5", default-features = true, features = ["rcgen"] }
 
 grass-archive = { path = "crates/archive" }
 grass-assets = { path = "crates/assets" }

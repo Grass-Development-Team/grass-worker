@@ -32,6 +32,8 @@ async fn main() -> anyhow::Result<()> {
     init::storage(&state).await?;
     init::cache(&state).await?;
     spawn_node_health_sweep(state.clone());
+    spawn_regional_ingress_health_sweep(state.clone());
+    spawn_regional_ingress_certificate_sweep(state.clone());
     spawn_audit_retention_sweep(state.clone());
     spawn_artifact_retention_sweep(state.clone());
     spawn_storage_migration_sweep(state.clone());
@@ -353,6 +355,61 @@ async fn shutdown_signal() {
     if let Err(error) = signal.await {
         tracing::warn!(operation = "control_api.shutdown_signal", %error, "failed to listen for shutdown signal");
     }
+}
+
+fn spawn_regional_ingress_health_sweep(state: ControlApiState) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            let Some(db) = state.try_database() else {
+                continue;
+            };
+            let ingresses = match domain::ingress::list(db).await {
+                Ok(items) => items
+                    .into_iter()
+                    .filter(|item| item.enabled)
+                    .collect::<Vec<_>>(),
+                Err(error) => {
+                    tracing::warn!(operation = "control_api.ingress_health_list", %error, "failed to load regional ingresses");
+                    continue;
+                }
+            };
+            for ingress in ingresses {
+                if let Err(error) = domain::ingress::probe_regional_ingress(
+                    db,
+                    &ingress,
+                    time::OffsetDateTime::now_utc(),
+                )
+                .await
+                {
+                    tracing::warn!(operation = "control_api.ingress_health_probe", ingress_id = %ingress.id, %error, "regional ingress health probe failed");
+                }
+            }
+        }
+    });
+}
+
+fn spawn_regional_ingress_certificate_sweep(state: ControlApiState) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            let Some(db) = state.try_database() else {
+                continue;
+            };
+            let secret = state.config.read().unwrap().secrets.secret_key.clone();
+            if let Err(error) = domain::acme::sweep(db, &secret).await {
+                tracing::warn!(
+                    operation = "control_api.acme.sweep",
+                    %error,
+                    "regional ingress certificate sweep failed"
+                );
+            }
+        }
+    });
 }
 
 #[cfg(test)]

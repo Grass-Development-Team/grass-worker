@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, State},
     response::IntoResponse,
 };
-use sea_orm::TransactionTrait;
+use sea_orm::{ActiveModelTrait, TransactionTrait};
 use serde::Deserialize;
 use serde_json::json;
 use time::OffsetDateTime;
@@ -48,6 +48,9 @@ fn binding_view(binding: &project_host_binding::Model) -> serde_json::Value {
         "reviewed_by_user_id": binding.reviewed_by_user_id,
         "reviewed_at": binding.reviewed_at.map(ts),
         "review_reason": binding.review_reason,
+        "ownership_status": binding.ownership_status,
+        "ownership_checked_at": binding.ownership_checked_at.map(ts),
+        "ownership_error": binding.ownership_error,
         "created_at": ts(binding.created_at),
         "ingress": serde_json::Value::Null,
     })
@@ -367,6 +370,64 @@ pub struct UpdateHostRequest {
     pub status: Option<String>,
 }
 
+/// POST /api/v1/projects/{project_id}/hosts/{host_id}/verify
+pub async fn verify(
+    State(state): State<ControlApiState>,
+    session: Session,
+    Path((project_id, host_id)): Path<(Uuid, Uuid)>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "projects.hosts.verify";
+    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    access.require_member(OP)?;
+    let db = super::database(&state, OP)?;
+    let binding = load_binding(db, &access, host_id, OP).await?;
+    if !matches!(binding.kind, HostBindingKind::Custom) {
+        return Err(AppError::Conflict {
+            op: OP,
+            message: "platform domains do not require ownership verification".to_owned(),
+        });
+    }
+    let secret_key = state.config.read().unwrap().secrets.secret_key.clone();
+    let expected = ingress::dns_verification_token(&secret_key, binding.id, &binding.host);
+    let result = ingress::verify_dns_txt(&binding.host, &expected)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let mut active: project_host_binding::ActiveModel = binding.clone().into();
+    active.ownership_checked_at = sea_orm::ActiveValue::Set(Some(OffsetDateTime::now_utc()));
+    match result {
+        ingress::DnsVerification::Verified => {
+            active.ownership_status = sea_orm::ActiveValue::Set("verified".to_owned());
+            active.ownership_error = sea_orm::ActiveValue::Set(None);
+            if matches!(binding.review_status, HostReviewStatus::Approved) {
+                active.status = sea_orm::ActiveValue::Set(HostBindingStatus::Active);
+            }
+        }
+        ingress::DnsVerification::Missing => {
+            active.ownership_status = sea_orm::ActiveValue::Set("failed".to_owned());
+            active.ownership_error =
+                sea_orm::ActiveValue::Set(Some("TXT ownership record was not found".to_owned()));
+            active.status = sea_orm::ActiveValue::Set(HostBindingStatus::Pending);
+        }
+        ingress::DnsVerification::Mismatch => {
+            active.ownership_status = sea_orm::ActiveValue::Set("failed".to_owned());
+            active.ownership_error =
+                sea_orm::ActiveValue::Set(Some("TXT ownership record did not match".to_owned()));
+            active.status = sea_orm::ActiveValue::Set(HostBindingStatus::Pending);
+        }
+    }
+    let updated = active
+        .update(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let view = attach_ingress_guidance(&state, db, &updated, binding_view(&updated), OP).await?;
+    Ok(ok_response(
+        json!({ "host": view, "verified": result == ingress::DnsVerification::Verified }),
+    ))
+}
+
 /// PATCH /api/v1/projects/{project_id}/hosts/{host_id}
 pub async fn update(
     State(state): State<ControlApiState>,
@@ -594,6 +655,9 @@ mod tests {
             reviewed_by_user_id: Some(reviewer_id),
             reviewed_at: Some(OffsetDateTime::UNIX_EPOCH),
             review_reason: Some("Ownership could not be verified".to_owned()),
+            ownership_status: "pending".to_owned(),
+            ownership_checked_at: None,
+            ownership_error: None,
             deleted_at: None,
             created_at: OffsetDateTime::UNIX_EPOCH,
             updated_at: OffsetDateTime::UNIX_EPOCH,
