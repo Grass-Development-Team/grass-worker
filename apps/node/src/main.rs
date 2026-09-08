@@ -114,9 +114,7 @@ async fn main() -> anyhow::Result<()> {
         let serve_state = Arc::new(serve::ServeState::new(
             client.clone(),
             node_id,
-            gateway_token
-                .clone()
-                .expect("Serve registration requires a gateway token"),
+            gateway_token.clone(),
             route_table,
             &config,
             ssr_manager,

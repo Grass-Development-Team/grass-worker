@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use futures_util::future::join_all;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
+use grass_node_protocol::{GatewayAuthenticationMode, NodeConfiguration};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -20,7 +21,8 @@ struct RouteInvalidationRequest {
 async fn invalidate_at_urls(
     client: &reqwest::Client,
     base_urls: &[String],
-    gateway_token: &str,
+    gateway_token: Option<&str>,
+    gateway_authentication: GatewayAuthenticationMode,
     deployment_id: Uuid,
 ) -> anyhow::Result<()> {
     let requests = base_urls.iter().map(|base_url| async move {
@@ -29,9 +31,13 @@ async fn invalidate_at_urls(
         endpoint.set_path(INVALIDATION_PATH);
         endpoint.set_query(None);
         endpoint.set_fragment(None);
-        let response = client
-            .post(endpoint)
-            .header("x-grass-gateway-token", gateway_token)
+        let mut request = client.post(endpoint).header("x-grass-gateway-hop", "1");
+        if matches!(gateway_authentication, GatewayAuthenticationMode::Token) {
+            if let Some(gateway_token) = gateway_token {
+                request = request.header("x-grass-gateway-token", gateway_token);
+            }
+        }
+        let response = request
             .timeout(Duration::from_secs(3))
             .json(&RouteInvalidationRequest { deployment_id })
             .send()
@@ -64,10 +70,19 @@ async fn invalidate_at_urls(
 async fn invalidate_best_effort_at_urls(
     client: &reqwest::Client,
     base_urls: &[String],
-    gateway_token: &str,
+    gateway_token: Option<&str>,
+    gateway_authentication: GatewayAuthenticationMode,
     deployment_id: Uuid,
 ) {
-    if let Err(error) = invalidate_at_urls(client, base_urls, gateway_token, deployment_id).await {
+    if let Err(error) = invalidate_at_urls(
+        client,
+        base_urls,
+        gateway_token,
+        gateway_authentication,
+        deployment_id,
+    )
+    .await
+    {
         tracing::warn!(
             operation = "routes.invalidate.inactive_nodes_failed",
             %deployment_id,
@@ -97,22 +112,14 @@ pub async fn invalidate_deployment(
     secret_key: &str,
     deployment_id: Uuid,
 ) -> anyhow::Result<()> {
-    let active_base_urls = node::Entity::find()
-        .select_only()
-        .column(node::Column::BaseUrl)
+    let active_nodes = node::Entity::find()
         .filter(node::Column::ServeEnabled.eq(true))
         .filter(node::Column::Status.ne(NodeStatus::Disabled))
         .filter(node::Column::BaseUrl.is_not_null())
         .filter(node::Column::DeletedAt.is_null())
-        .into_tuple::<Option<String>>()
         .all(db)
-        .await?
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-    let inactive_base_urls = node::Entity::find()
-        .select_only()
-        .column(node::Column::BaseUrl)
+        .await?;
+    let inactive_nodes = node::Entity::find()
         .filter(node::Column::ServeEnabled.eq(true))
         .filter(node::Column::BaseUrl.is_not_null())
         .filter(
@@ -120,17 +127,78 @@ pub async fn invalidate_deployment(
                 .add(node::Column::Status.eq(NodeStatus::Disabled))
                 .add(node::Column::DeletedAt.is_not_null()),
         )
-        .into_tuple::<Option<String>>()
         .all(db)
-        .await?
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
+        .await?;
     let client = reqwest::Client::new();
     let gateway_token = nodes::gateway_token(secret_key);
+    let endpoint_groups = |nodes: Vec<node::Model>| {
+        let mut token = Vec::new();
+        let mut none = Vec::new();
+        for node in nodes {
+            let Some(base_url) = node.base_url else {
+                continue;
+            };
+            let mode = node
+                .effective_config
+                .as_ref()
+                .and_then(|value| serde_json::from_value::<NodeConfiguration>(value.clone()).ok())
+                .map(|config| config.security.gateway_authentication)
+                .unwrap_or_default();
+            match mode {
+                GatewayAuthenticationMode::Token => token.push(base_url),
+                GatewayAuthenticationMode::None => none.push(base_url),
+            }
+        }
+        (token, none)
+    };
+    let (active_token, active_none) = endpoint_groups(active_nodes);
+    let (inactive_token, inactive_none) = endpoint_groups(inactive_nodes);
     let (_, active_result) = tokio::join!(
-        invalidate_best_effort_at_urls(&client, &inactive_base_urls, &gateway_token, deployment_id,),
-        invalidate_at_urls(&client, &active_base_urls, &gateway_token, deployment_id,),
+        async {
+            invalidate_best_effort_at_urls(
+                &client,
+                &inactive_token,
+                Some(&gateway_token),
+                GatewayAuthenticationMode::Token,
+                deployment_id,
+            )
+            .await;
+            invalidate_best_effort_at_urls(
+                &client,
+                &inactive_none,
+                None,
+                GatewayAuthenticationMode::None,
+                deployment_id,
+            )
+            .await;
+        },
+        async {
+            let mut results = Vec::new();
+            results.push(
+                invalidate_at_urls(
+                    &client,
+                    &active_token,
+                    Some(&gateway_token),
+                    GatewayAuthenticationMode::Token,
+                    deployment_id,
+                )
+                .await,
+            );
+            results.push(
+                invalidate_at_urls(
+                    &client,
+                    &active_none,
+                    None,
+                    GatewayAuthenticationMode::None,
+                    deployment_id,
+                )
+                .await,
+            );
+            results
+                .into_iter()
+                .find_map(Result::err)
+                .map_or(Ok(()), Err)
+        },
     );
     active_result
 }
@@ -157,6 +225,7 @@ mod tests {
         http::{HeaderMap, StatusCode},
         routing::post,
     };
+    use grass_node_protocol::GatewayAuthenticationMode;
     use serde_json::Value;
     use uuid::Uuid;
 
@@ -188,7 +257,8 @@ mod tests {
         invalidate_at_urls(
             &reqwest::Client::new(),
             &[format!("http://{address}")],
-            "derived-gateway-token",
+            Some("derived-gateway-token"),
+            GatewayAuthenticationMode::Token,
             deployment_id,
         )
         .await
@@ -200,6 +270,7 @@ mod tests {
             received[0].0["x-grass-gateway-token"],
             "derived-gateway-token"
         );
+        assert_eq!(received[0].0["x-grass-gateway-hop"], "1");
         assert_eq!(received[0].1["deployment_id"], deployment_id.to_string());
         server.abort();
     }
@@ -234,7 +305,8 @@ mod tests {
                 format!("http://{address}"),
                 format!("http://{unavailable_address}"),
             ],
-            "derived-gateway-token",
+            Some("derived-gateway-token"),
+            GatewayAuthenticationMode::Token,
             deployment_id,
         )
         .await;
@@ -252,7 +324,8 @@ mod tests {
         let error = invalidate_at_urls(
             &reqwest::Client::new(),
             &[format!("http://{address}")],
-            "derived-gateway-token",
+            Some("derived-gateway-token"),
+            GatewayAuthenticationMode::Token,
             Uuid::now_v7(),
         )
         .await

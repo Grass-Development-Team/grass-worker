@@ -1,6 +1,7 @@
 use axum::{Extension, Json, extract::State, response::IntoResponse};
 use grass_node_protocol::{
-    HeartbeatRequest, HeartbeatResponse, NodeCapabilities, RegisterRequest, RegisterResponse,
+    GatewayAuthenticationMode, HeartbeatRequest, HeartbeatResponse, NodeCapabilities,
+    RegisterRequest, RegisterResponse,
 };
 use serde_json::json;
 
@@ -80,8 +81,12 @@ pub async fn register(
     )
     .await;
 
-    let gateway_token = serve_enabled
-        .then(|| nodes::gateway_token(&state.config.read().unwrap().secrets.secret_key));
+    let gateway_token = (serve_enabled
+        && matches!(
+            body.gateway_authentication,
+            GatewayAuthenticationMode::Token
+        ))
+    .then(|| nodes::gateway_token(&state.config.read().unwrap().secrets.secret_key));
     Ok(ok_response(RegisterResponse {
         node_id: node.id,
         name: node.name,
@@ -90,6 +95,7 @@ pub async fn register(
             serve: serve_enabled,
         },
         gateway_token,
+        gateway_authentication: body.gateway_authentication,
     }))
 }
 
@@ -180,6 +186,7 @@ mod tests {
             config_revision: 0,
             effective_config: None,
             node_token_configured: false,
+            gateway_authentication: GatewayAuthenticationMode::Token,
         }
     }
 

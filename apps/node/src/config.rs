@@ -9,8 +9,8 @@ use grass_config::{
 };
 use grass_git_source::PrivateTargetException;
 use grass_node_protocol::{
-    NodeBuildConfiguration, NodeCapabilities, NodeConfiguration, NodeDevelopmentConfiguration,
-    NodeIdentityConfiguration, NodeLogConfiguration, NodeLogFormat,
+    GatewayAuthenticationMode, NodeBuildConfiguration, NodeCapabilities, NodeConfiguration,
+    NodeDevelopmentConfiguration, NodeIdentityConfiguration, NodeLogConfiguration, NodeLogFormat,
     NodePrivateRepositoryTargetConfiguration, NodeRuntimeConfiguration,
     NodeRuntimeResourcesConfiguration, NodeSecurityConfiguration, NodeServeCapacityConfiguration,
     NodeServeConfiguration, NodeSsrConfiguration,
@@ -242,6 +242,9 @@ pub struct PrivateRepositoryTargetConfig {
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SecurityConfig {
+    /// Authentication required for Serve-to-Serve gateway requests.
+    #[serde(default)]
+    pub gateway_authentication: GatewayAuthenticationMode,
     #[serde(default)]
     pub private_repository_targets: Vec<PrivateRepositoryTargetConfig>,
 }
@@ -349,6 +352,7 @@ impl NodeConfig {
                 },
             },
             security: NodeSecurityConfiguration {
+                gateway_authentication: self.security.gateway_authentication,
                 private_repository_targets: self
                     .security
                     .private_repository_targets
@@ -428,6 +432,7 @@ impl NodeConfig {
                 })
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
+        self.security.gateway_authentication = desired.security.gateway_authentication;
         self.development.verbose_build_log = desired.development.verbose_build_log;
         self.log.level.clone_from(&desired.log.level);
         self.log.format = match desired.log.format {
@@ -495,6 +500,12 @@ fn apply_env(config: &mut NodeConfig) -> Result<(), ConfigError> {
     overlay_string("GWNODE_NODE_TOKEN", &mut config.node.node_token);
     overlay_string("GWNODE_REGION", &mut config.node.region);
     overlay_string("GWNODE_WORK_ROOT", &mut config.node.work_root);
+    if let Ok(value) = std::env::var("GWNODE_GATEWAY_AUTHENTICATION") {
+        config.security.gateway_authentication =
+            parse_gateway_authentication(&value).map_err(|error| {
+                ConfigError::Invalid(format!("GWNODE_GATEWAY_AUTHENTICATION: {error}"))
+            })?;
+    }
     overlay_u16("GWNODE_BUILD_CONCURRENCY", &mut config.build.concurrency)?;
     overlay_u64(
         "GWNODE_BUILD_COMMAND_TIMEOUT_SECONDS",
@@ -527,6 +538,14 @@ fn parse_listen(name: &'static str, value: &str) -> Result<SocketAddr, ConfigErr
         name,
         source: Box::new(source),
     })
+}
+
+fn parse_gateway_authentication(value: &str) -> Result<GatewayAuthenticationMode, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "token" => Ok(GatewayAuthenticationMode::Token),
+        "none" => Ok(GatewayAuthenticationMode::None),
+        other => Err(format!("expected 'token' or 'none', got '{other}'")),
+    }
 }
 
 fn default_log_level() -> String {
@@ -667,6 +686,26 @@ mod tests {
         assert_eq!(exceptions[0].host, "git.internal");
         assert_eq!(exceptions[0].ip.to_string(), "10.0.0.8");
         assert_eq!(exceptions[0].port, 2222);
+    }
+
+    #[test]
+    fn gateway_authentication_defaults_to_token_and_accepts_none_override() {
+        let default_config = NodeConfig::default();
+        assert_eq!(
+            default_config.security.gateway_authentication,
+            GatewayAuthenticationMode::Token
+        );
+        let config: NodeConfig = toml::from_str(
+            r#"
+            [security]
+            gateway_authentication = "none"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.security.gateway_authentication,
+            GatewayAuthenticationMode::None
+        );
     }
 
     #[test]

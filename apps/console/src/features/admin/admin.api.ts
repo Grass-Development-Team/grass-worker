@@ -114,6 +114,7 @@ export interface NodeConfiguration {
     resources: { cpu_limit: number; memory_mb: number };
   };
   security: {
+    gateway_authentication: "token" | "none";
     private_repository_targets: Array<{ host: string; ip: string; port: number }>;
   };
   development: { verbose_build_log: boolean };

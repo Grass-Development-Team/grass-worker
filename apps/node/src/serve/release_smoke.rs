@@ -348,7 +348,7 @@ async fn checks_out_builds_packages_stages_and_serves_vite() -> anyhow::Result<(
     let state = Arc::new(ServeState::new(
         client,
         node_id,
-        "release-smoke-gateway-token".to_owned(),
+        Some("release-smoke-gateway-token".to_owned()),
         routes,
         &config,
         ssr,

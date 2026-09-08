@@ -397,6 +397,13 @@ fn validate_node_configuration(
     if configuration.security.private_repository_targets.len() > 100 {
         return Err("no more than 100 private repository targets may be configured".to_owned());
     }
+    if !matches!(
+        configuration.security.gateway_authentication,
+        grass_node_protocol::GatewayAuthenticationMode::Token
+            | grass_node_protocol::GatewayAuthenticationMode::None
+    ) {
+        return Err("gateway authentication mode is invalid".to_owned());
+    }
     for target in &configuration.security.private_repository_targets {
         let host = target.host.trim();
         if host.is_empty() || host.contains('*') || host.contains('/') {

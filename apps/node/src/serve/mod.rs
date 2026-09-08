@@ -25,7 +25,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{any, post},
 };
-use grass_node_protocol::{ServeAccess, ServeRoute};
+use grass_node_protocol::{GatewayAuthenticationMode, ServeAccess, ServeRoute};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -60,7 +60,8 @@ enum ResolvedTarget {
 pub struct ServeState {
     client: ControlApiClient,
     node_id: Uuid,
-    gateway_token: String,
+    gateway_token: Option<String>,
+    gateway_authentication: GatewayAuthenticationMode,
     routes: Arc<routes::RouteTable>,
     cache_root: PathBuf,
     targets: Mutex<HashMap<Uuid, ResolvedTarget>>,
@@ -76,7 +77,7 @@ impl ServeState {
     pub fn new(
         client: ControlApiClient,
         node_id: Uuid,
-        gateway_token: String,
+        gateway_token: Option<String>,
         routes: Arc<routes::RouteTable>,
         config: &NodeConfig,
         ssr: Arc<ssr::SsrManager>,
@@ -85,6 +86,7 @@ impl ServeState {
             client,
             node_id,
             gateway_token,
+            gateway_authentication: config.security.gateway_authentication,
             routes,
             cache_root: PathBuf::from(&config.serve.artifact_cache_root),
             targets: Mutex::new(HashMap::new()),
@@ -120,10 +122,14 @@ async fn invalidate_routes(
     headers: HeaderMap,
     Json(body): Json<RouteInvalidationRequest>,
 ) -> Response {
-    let authenticated = headers
-        .get(GATEWAY_TOKEN_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|token| bool::from(token.as_bytes().ct_eq(state.gateway_token.as_bytes())));
+    let authenticated = matches!(
+        gateway_origin(
+            &headers,
+            state.gateway_token.as_deref().unwrap_or_default(),
+            state.gateway_authentication,
+        ),
+        Ok(GatewayOrigin::Authenticated)
+    );
     if !authenticated {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -298,9 +304,18 @@ enum RouteAction {
 fn gateway_origin(
     headers: &HeaderMap,
     expected_token: &str,
+    authentication: GatewayAuthenticationMode,
 ) -> Result<GatewayOrigin, &'static str> {
     let token = headers.get(GATEWAY_TOKEN_HEADER);
     let hop = headers.get(GATEWAY_HOP_HEADER);
+    if matches!(authentication, GatewayAuthenticationMode::None) {
+        return match (token, hop) {
+            (None, None) => Ok(GatewayOrigin::External),
+            (None, Some(hop)) if hop.to_str().ok() == Some("1") => Ok(GatewayOrigin::Authenticated),
+            (None, Some(_)) => Err("invalid gateway hop"),
+            (Some(_), _) => Err("gateway token is not accepted in none mode"),
+        };
+    }
     match (token, hop) {
         (None, None) => Ok(GatewayOrigin::External),
         (Some(token), Some(hop)) => {
@@ -601,6 +616,19 @@ async fn route_public_request(
     ConnectInfo(client_addr): ConnectInfo<SocketAddr>,
     request: Request,
 ) -> Response {
+    let origin = match gateway_origin(
+        request.headers(),
+        state.gateway_token.as_deref().unwrap_or_default(),
+        state.gateway_authentication,
+    ) {
+        Ok(origin) => origin,
+        Err(_) => {
+            return error_page(
+                StatusCode::FORBIDDEN,
+                "This gateway request is not authorized.",
+            );
+        }
+    };
     let Some(host) = host_from_headers(request.headers()) else {
         return error_page(
             StatusCode::BAD_REQUEST,
@@ -614,12 +642,13 @@ async fn route_public_request(
             "This host is not bound to any active deployment.",
         );
     };
-    match route_action(state.node_id, route.target_node_id, GatewayOrigin::External) {
+    match route_action(state.node_id, route.target_node_id, origin) {
         Ok(RouteAction::Proxy) => {
             return match forward_to_gateway(
                 &state.proxy,
                 &route.target_base_url,
-                &state.gateway_token,
+                state.gateway_token.as_deref().unwrap_or_default(),
+                state.gateway_authentication,
                 client_addr,
                 request,
             )
@@ -642,10 +671,15 @@ async fn route_public_request(
             };
         }
         Ok(RouteAction::Local) => {}
-        Err(_) => unreachable!("external requests can always proxy once"),
+        Err(_) => {
+            return error_page(
+                StatusCode::BAD_GATEWAY,
+                "The gateway route snapshot points to another Serve Node.",
+            );
+        }
     }
 
-    serve_local(state, route, client_addr, GatewayOrigin::External, request).await
+    serve_local(state, route, client_addr, origin, request).await
 }
 
 async fn handle_peer_proxy(
@@ -654,7 +688,11 @@ async fn handle_peer_proxy(
     mut request: Request,
 ) -> Response {
     if !matches!(
-        gateway_origin(request.headers(), &state.gateway_token),
+        gateway_origin(
+            request.headers(),
+            state.gateway_token.as_deref().unwrap_or_default(),
+            state.gateway_authentication,
+        ),
         Ok(GatewayOrigin::Authenticated)
     ) {
         return error_page(
@@ -914,6 +952,7 @@ async fn forward_to_gateway(
     proxy: &reqwest::Client,
     target_base_url: &str,
     gateway_token: &str,
+    gateway_authentication: GatewayAuthenticationMode,
     client_addr: SocketAddr,
     request: Request,
 ) -> anyhow::Result<Response> {
@@ -930,9 +969,11 @@ async fn forward_to_gateway(
         }
         builder = builder.header(name, value);
     }
+    builder = builder.header(GATEWAY_HOP_HEADER, "1");
+    if matches!(gateway_authentication, GatewayAuthenticationMode::Token) {
+        builder = builder.header(GATEWAY_TOKEN_HEADER, gateway_token);
+    }
     builder = builder
-        .header(GATEWAY_TOKEN_HEADER, gateway_token)
-        .header(GATEWAY_HOP_HEADER, "1")
         .header("x-forwarded-for", client_addr.ip().to_string())
         .header("x-forwarded-proto", "http");
     if let Some(host) = parts.headers.get(header::HOST) {
@@ -1223,7 +1264,7 @@ mod tests {
     fn gateway_hops_authenticate_and_never_reproxy() {
         let token = "shared-gateway-token";
         let mut headers = HeaderMap::new();
-        let external = gateway_origin(&headers, token).unwrap();
+        let external = gateway_origin(&headers, token, GatewayAuthenticationMode::Token).unwrap();
         assert_eq!(external, GatewayOrigin::External);
         assert_eq!(
             route_action(Uuid::nil(), Uuid::now_v7(), external).unwrap(),
@@ -1232,15 +1273,27 @@ mod tests {
 
         headers.insert("x-grass-gateway-token", token.parse().unwrap());
         headers.insert("x-grass-gateway-hop", "1".parse().unwrap());
-        let authenticated = gateway_origin(&headers, token).unwrap();
+        let authenticated =
+            gateway_origin(&headers, token, GatewayAuthenticationMode::Token).unwrap();
         assert_eq!(authenticated, GatewayOrigin::Authenticated);
         assert!(route_action(Uuid::nil(), Uuid::now_v7(), authenticated).is_err());
 
         headers.insert("x-grass-gateway-token", "wrong-token".parse().unwrap());
-        assert!(gateway_origin(&headers, token).is_err());
+        assert!(gateway_origin(&headers, token, GatewayAuthenticationMode::Token).is_err());
         headers.insert("x-grass-gateway-token", token.parse().unwrap());
         headers.insert("x-grass-gateway-hop", "2".parse().unwrap());
-        assert!(gateway_origin(&headers, token).is_err());
+        assert!(gateway_origin(&headers, token, GatewayAuthenticationMode::Token).is_err());
+
+        headers.remove(GATEWAY_TOKEN_HEADER);
+        headers.insert(GATEWAY_HOP_HEADER, "1".parse().unwrap());
+        assert_eq!(
+            gateway_origin(&headers, token, GatewayAuthenticationMode::None).unwrap(),
+            GatewayOrigin::Authenticated
+        );
+        headers.insert(GATEWAY_HOP_HEADER, "2".parse().unwrap());
+        assert!(gateway_origin(&headers, token, GatewayAuthenticationMode::None).is_err());
+        headers.insert(GATEWAY_TOKEN_HEADER, token.parse().unwrap());
+        assert!(gateway_origin(&headers, token, GatewayAuthenticationMode::None).is_err());
     }
 
     #[test]
@@ -1301,6 +1354,7 @@ mod tests {
             &proxy,
             &format!("http://{address}"),
             "shared-gateway-token",
+            GatewayAuthenticationMode::Token,
             "192.0.2.10:43123".parse().unwrap(),
             request,
         )
@@ -1422,7 +1476,7 @@ mod tests {
         let state = Arc::new(ServeState::new(
             ControlApiClient::new(&format!("http://{authority_address}"), "node-token").unwrap(),
             node_id,
-            "shared-gateway-token".to_owned(),
+            Some("shared-gateway-token".to_owned()),
             routes,
             &config,
             ssr,
@@ -1463,6 +1517,7 @@ mod tests {
                 "http://{address}/_grass/internal/routes/invalidate"
             ))
             .header(GATEWAY_TOKEN_HEADER, "shared-gateway-token")
+            .header(GATEWAY_HOP_HEADER, "1")
             .json(&serde_json::json!({ "deployment_id": deployment_id }))
             .send()
             .await
@@ -1489,7 +1544,7 @@ mod tests {
         let state = Arc::new(ServeState::new(
             ControlApiClient::new("http://127.0.0.1:9", "node-token").unwrap(),
             Uuid::now_v7(),
-            "shared-gateway-token".to_owned(),
+            Some("shared-gateway-token".to_owned()),
             routes,
             &config,
             ssr,

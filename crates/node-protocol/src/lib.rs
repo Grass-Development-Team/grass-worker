@@ -106,7 +106,22 @@ pub struct NodeRuntimeResourcesConfiguration {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeSecurityConfiguration {
+    #[serde(default)]
+    pub gateway_authentication: GatewayAuthenticationMode,
     pub private_repository_targets: Vec<NodePrivateRepositoryTargetConfiguration>,
+}
+
+/// Authentication used for Serve Node to Serve Node gateway requests.
+///
+/// `token` is the default for backwards compatibility. `none` is intended
+/// for deployments where the Serve listener is reachable only through a
+/// trusted private network or firewall.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GatewayAuthenticationMode {
+    #[default]
+    Token,
+    None,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,6 +179,9 @@ pub struct RegisterRequest {
     /// Whether the running process has a usable token, without exposing it.
     #[serde(default)]
     pub node_token_configured: bool,
+    /// Gateway authentication selected by the running Node.
+    #[serde(default)]
+    pub gateway_authentication: GatewayAuthenticationMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,6 +195,9 @@ pub struct RegisterResponse {
     /// present only when Serve capability is enabled.
     #[serde(default)]
     pub gateway_token: Option<String>,
+    /// Gateway authentication accepted by the Control API.
+    #[serde(default)]
+    pub gateway_authentication: GatewayAuthenticationMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -738,5 +759,19 @@ mod tests {
         assert_eq!(parsed.region, "eu-west");
         assert_eq!(parsed.resources, resources);
         assert_eq!(parsed.access, ServeAccess::TeamOrPlatformAdmin);
+    }
+
+    #[test]
+    fn gateway_authentication_defaults_for_legacy_payloads() {
+        let security: NodeSecurityConfiguration =
+            serde_json::from_str(r#"{"private_repository_targets":[]}"#).unwrap();
+        assert_eq!(
+            security.gateway_authentication,
+            GatewayAuthenticationMode::Token
+        );
+        assert_eq!(
+            serde_json::to_string(&GatewayAuthenticationMode::None).unwrap(),
+            r#""none""#
+        );
     }
 }
