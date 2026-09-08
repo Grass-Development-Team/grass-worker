@@ -322,19 +322,12 @@ impl CloudflareDns {
             return Err(api_error("list DNS records", &body.errors));
         }
         let records = body.result.unwrap_or_default();
-        let mut matching: Vec<DnsRecord> = records
+        // Only reconcile the configured type. A host may legitimately have
+        // TXT, MX, and address records together; falling back to the first
+        // same-name record could overwrite or delete an unrelated record.
+        Ok(records
             .into_iter()
-            .filter(|record| record.name == host)
-            .collect();
-        // Prefer a record of the configured type when several names match
-        // (e.g. an A and a TXT record on the same name).
-        if let Some(index) = matching
-            .iter()
-            .position(|record| record.record_type == config.record_type)
-        {
-            return Ok(Some(matching.swap_remove(index)));
-        }
-        Ok(matching.into_iter().next())
+            .find(|record| record.name == host && record.record_type == config.record_type))
     }
 
     async fn update_record(

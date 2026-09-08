@@ -13,7 +13,7 @@ use crate::{
     infra::{
         database::entity::{HostSourceKind, host_source},
         error::{AppError, ok_response},
-        host_provision::cloudflare,
+        host_provision::{self, cloudflare, dnspod, route53},
     },
     state::ControlApiState,
 };
@@ -73,6 +73,7 @@ fn map_source_error(error: HostSourceError, op: &'static str) -> AppError {
 /// credentials out of the provisioning path.
 fn validate_dns_provider_source(
     provider: Option<&str>,
+    base_domain: &str,
     config: &serde_json::Value,
     op: &'static str,
 ) -> Result<(), AppError> {
@@ -85,18 +86,34 @@ fn validate_dns_provider_source(
                     message: format!("cloudflare config: {message}"),
                 })
         }
+        Some(name) if name.eq_ignore_ascii_case(dnspod::PROVIDER_NAME) => {
+            dnspod::DnsPodConfig::from_json(base_domain, config)
+                .map(|_| ())
+                .map_err(|message| AppError::Validation {
+                    op,
+                    message: format!("dnspod config: {message}"),
+                })
+        }
+        Some(name) if name.eq_ignore_ascii_case(route53::PROVIDER_NAME) => {
+            route53::Route53Config::from_json(config)
+                .map(|_| ())
+                .map_err(|message| AppError::Validation {
+                    op,
+                    message: format!("route53 config: {message}"),
+                })
+        }
         Some(other) => Err(AppError::Validation {
             op,
             message: format!(
                 "provider '{other}' is not supported for dns_provider sources (supported: {})",
-                cloudflare::PROVIDER_NAME
+                host_provision::supported_provider_names()
             ),
         }),
         None => Err(AppError::Validation {
             op,
             message: format!(
                 "dns_provider sources require a provider (supported: {})",
-                cloudflare::PROVIDER_NAME
+                host_provision::supported_provider_names()
             ),
         }),
     }
@@ -202,7 +219,7 @@ pub async fn create(
         .map(str::to_ascii_lowercase);
     let config = body.config.unwrap_or_else(|| json!({}));
     if kind == HostSourceKind::DnsProvider {
-        validate_dns_provider_source(provider.as_deref(), &config, OP)?;
+        validate_dns_provider_source(provider.as_deref(), &base_domain, &config, OP)?;
     }
 
     let source = hosts::create_source(
@@ -282,7 +299,12 @@ pub async fn update(
             .clone()
             .unwrap_or_else(|| source.provider.clone());
         let effective_config = config_patch.as_ref().unwrap_or(&source.config);
-        validate_dns_provider_source(effective_provider.as_deref(), effective_config, OP)?;
+        validate_dns_provider_source(
+            effective_provider.as_deref(),
+            &source.base_domain,
+            effective_config,
+            OP,
+        )?;
     }
 
     let source = hosts::update_source(

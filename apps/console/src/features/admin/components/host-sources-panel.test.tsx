@@ -115,4 +115,37 @@ describe("Host sources panel", () => {
     expect(body.label).toBe("Cloudflare primary");
     expect(body.config).toBeUndefined();
   });
+
+  it("creates a DNSPod source with TC3 credentials and record line", async () => {
+    const calls = mockFetch();
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(await screen.findByRole("button", { name: /add host source/i }));
+    await user.type(screen.getByLabelText("Label"), "DNSPod zone");
+    await user.click(screen.getByRole("combobox", { name: "Kind" }));
+    await user.click(screen.getByRole("option", { name: /dns provider/i }));
+    await user.type(screen.getByLabelText("Base domain"), "dnspod.example.com");
+    await user.click(screen.getByRole("combobox", { name: "Provider" }));
+    await user.click(screen.getByRole("option", { name: "DNSPod" }));
+    await user.type(screen.getByLabelText("Secret ID"), "secret-id");
+    await user.type(screen.getByLabelText("Secret key"), "secret-key");
+    await user.type(screen.getByLabelText("Record value"), "203.0.113.8");
+    await user.click(screen.getByRole("button", { name: "Create source" }));
+
+    const create = calls.find(
+      (call) => call.url === "/api/v1/admin/host-sources" && call.init?.method === "POST",
+    );
+    expect(create).toBeDefined();
+    const body = JSON.parse(String(create!.init!.body));
+    expect(body.provider).toBe("dnspod");
+    expect(body.config).toMatchObject({
+      secret_id: "secret-id",
+      secret_key: "secret-key",
+      record_type: "A",
+      record_line: "默认",
+      record_value: "203.0.113.8",
+      ttl: 600,
+    });
+  });
 });

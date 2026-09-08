@@ -3,9 +3,11 @@
 //! Callers describe the host they want; a provisioner decides how the DNS
 //! side is fulfilled. Wildcard sources only need the internal binding, the
 //! manual mode leaves configuration to an operator, and the DNS provider
-//! mode drives a real provider API (currently Cloudflare).
+//! mode drives a real provider API.
 
 pub mod cloudflare;
+pub mod dnspod;
+pub mod route53;
 pub mod service;
 
 use crate::infra::database::entity::{HostBindingStatus, HostSourceKind, host_source};
@@ -102,16 +104,19 @@ impl HostProvisioner for ManualHostProvisioner {
 }
 
 /// Creates one DNS record per provisioned host through the provider named
-/// on the source. Cloudflare is the supported provider; other names fail
-/// with a clear message so the binding records why it cannot resolve.
+/// on the source. Provider credentials remain write-only in the admin API.
 pub struct DnsProviderHostProvisioner {
     cloudflare: cloudflare::CloudflareDns,
+    dnspod: dnspod::DnsPod,
+    route53: route53::Route53,
 }
 
 impl DnsProviderHostProvisioner {
     pub fn new() -> Self {
         Self {
             cloudflare: cloudflare::CloudflareDns::new(),
+            dnspod: dnspod::DnsPod::new(),
+            route53: route53::Route53::new(),
         }
     }
 
@@ -119,9 +124,13 @@ impl DnsProviderHostProvisioner {
         HostProvisionError::UnsupportedSource(format!(
             "dns provider '{}' is not supported (supported: {})",
             provider.unwrap_or("none"),
-            cloudflare::PROVIDER_NAME,
+            supported_provider_names(),
         ))
     }
+}
+
+pub fn supported_provider_names() -> &'static str {
+    "cloudflare, dnspod, route53"
 }
 
 impl Default for DnsProviderHostProvisioner {
@@ -160,6 +169,44 @@ impl HostProvisioner for DnsProviderHostProvisioner {
                     )),
                 })
             }
+            Some(dnspod::PROVIDER_NAME) => {
+                let config = dnspod::DnsPodConfig::from_source(input.source)
+                    .map_err(HostProvisionError::Provider)?;
+                let ensured = self.dnspod.ensure_record(&config, input.host).await?;
+                Ok(ProvisionedHost {
+                    status: HostBindingStatus::Active,
+                    provider_request_id: Some(ensured.id),
+                    message: Some(format!(
+                        "dnspod {} record for {} {}",
+                        config.record_type,
+                        input.host,
+                        if ensured.updated {
+                            "updated"
+                        } else {
+                            "created"
+                        },
+                    )),
+                })
+            }
+            Some(route53::PROVIDER_NAME) => {
+                let config = route53::Route53Config::from_source(input.source)
+                    .map_err(HostProvisionError::Provider)?;
+                let ensured = self.route53.ensure_record(&config, input.host).await?;
+                Ok(ProvisionedHost {
+                    status: HostBindingStatus::Active,
+                    provider_request_id: Some(ensured.id),
+                    message: Some(format!(
+                        "route53 {} record for {} {}",
+                        config.record_type,
+                        input.host,
+                        if ensured.updated {
+                            "updated"
+                        } else {
+                            "created"
+                        },
+                    )),
+                })
+            }
             other => Err(Self::unsupported(other)),
         }
     }
@@ -178,6 +225,18 @@ impl HostProvisioner for DnsProviderHostProvisioner {
                 let config = cloudflare::CloudflareConfig::from_source(input.source)
                     .map_err(HostProvisionError::Provider)?;
                 self.cloudflare.remove_record(&config, input.host).await?;
+                Ok(())
+            }
+            Some(dnspod::PROVIDER_NAME) => {
+                let config = dnspod::DnsPodConfig::from_source(input.source)
+                    .map_err(HostProvisionError::Provider)?;
+                self.dnspod.remove_record(&config, input.host).await?;
+                Ok(())
+            }
+            Some(route53::PROVIDER_NAME) => {
+                let config = route53::Route53Config::from_source(input.source)
+                    .map_err(HostProvisionError::Provider)?;
+                self.route53.remove_record(&config, input.host).await?;
                 Ok(())
             }
             other => Err(Self::unsupported(other)),
@@ -286,7 +345,7 @@ mod tests {
     #[tokio::test]
     async fn dns_provider_requires_a_supported_provider_name() {
         let mut unsupported = source(HostSourceKind::DnsProvider, serde_json::json!({}));
-        unsupported.provider = Some("route53".to_owned());
+        unsupported.provider = Some("unsupported".to_owned());
         let error = CompositeHostProvisioner::new()
             .provision_project_host(ProvisionProjectHostInput {
                 host: "demo.grass.test",

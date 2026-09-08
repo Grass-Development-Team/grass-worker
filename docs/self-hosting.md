@@ -318,6 +318,21 @@ machine:
 public_base_url = "http://serve-a.internal:8080"
 ```
 
+Serve-to-Serve gateway requests use a shared token by default. For Nodes that
+can reach one another only through a trusted private network or firewall, set
+the gateway authentication mode to `none`:
+
+```toml
+[security]
+gateway_authentication = "none"
+```
+
+The no-token mode still requires the gateway hop marker and rejects requests
+that would be proxied more than once. Use the Administration → Nodes
+configuration editor to change this setting on a managed Node; the process
+applies it after the next configuration restart. Token mode is recommended
+when Serve listeners are reachable from an untrusted network.
+
 ### Configure Serve scheduling capacity
 
 By default a Serve Node reports 80% of its logical CPU capacity, 75% of total
@@ -388,15 +403,25 @@ assigned Node through one authenticated peer hop. Make every
 `serve.public_base_url` reachable from every Serve Node and the Control API,
 and allow the serve port through internal firewalls.
 
-Without wildcard DNS, add a **DNS provider (Cloudflare)** source instead:
-provide an API token with the Zone / DNS / Edit permission, the zone ID,
-and the record the platform should create for every domain (type `A`,
-`AAAA`, or `CNAME` plus the node address as the value). Each provisioned
-domain then becomes one DNS record created through the Cloudflare API;
-bindings turn `failed` with the provider message when the API rejects a
-request and can be retried from the project's Domains page. Credentials
-are write-only: the API returns configured key names, never values, and
-editing a source only overwrites the fields you fill in.
+Without wildcard DNS, add a **DNS provider** source instead. Cloudflare,
+DNSPod, and Route53 are supported:
+
+- **Cloudflare**: provide an API token with the Zone / DNS / Edit permission,
+  the zone ID, and an `A`, `AAAA`, or `CNAME` record value.
+- **DNSPod**: provide a Tencent Cloud `secret_id` and `secret_key`, the
+  `A`, `AAAA`, or `CNAME` record value, and (when needed) the DNSPod record
+  line. The host source base domain is used as the DNSPod domain.
+- **Route53**: provide an IAM access key pair, hosted zone ID, signing region,
+  and an `A`, `AAAA`, or `CNAME` record value. The hosted zone ID may be
+  entered as either `Z123...` or `/hostedzone/Z123...`.
+
+Each provisioned domain then becomes one record created through the selected
+provider API; bindings turn `failed` with the provider message when the API
+rejects a request and can be retried from the project's Domains page.
+Provisioning is idempotent. Re-running it reconciles only the configured
+record type and value, and deprovisioning never removes unrelated TXT or MX
+records. Credentials are write-only: the API returns configured key names,
+never values, and editing a source only overwrites the fields you fill in.
 
 A **Manual** source assigns domains without touching DNS; bindings stay
 `pending` until an operator creates the record and re-runs provisioning.

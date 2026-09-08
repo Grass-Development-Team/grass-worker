@@ -30,6 +30,7 @@ grass-token.workspace = true
 grass-validator.workspace = true
 futures-util.workspace = true
 object_store.workspace = true
+quick-xml.workspace = true
 grass-assets.workspace = true
 subtle = "2"
 mime_guess.workspace = true
