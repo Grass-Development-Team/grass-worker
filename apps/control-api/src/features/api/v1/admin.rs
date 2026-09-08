@@ -10,6 +10,7 @@ pub mod identity_providers;
 pub mod nodes;
 pub mod projects;
 pub mod quota_plans;
+pub mod regional_ingresses;
 pub mod registration;
 pub mod reviews;
 pub mod settings;
@@ -55,6 +56,14 @@ pub fn router() -> Router<ControlApiState> {
         .route(
             "/host-sources/{source_id}",
             patch(host_sources::update).delete(host_sources::remove),
+        )
+        .route(
+            "/regional-ingresses",
+            get(regional_ingresses::list).post(regional_ingresses::create),
+        )
+        .route(
+            "/regional-ingresses/{ingress_id}",
+            patch(regional_ingresses::update).delete(regional_ingresses::remove),
         )
         .route("/audit-events", get(audit_events::list))
         .route(

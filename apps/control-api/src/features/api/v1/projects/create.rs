@@ -262,6 +262,7 @@ async fn auto_assign_host(
                     team,
                     source: Some(&source),
                     host,
+                    region: source.region.clone(),
                     kind: HostBindingKind::Platform,
                     environment: HostBindingEnvironment::Production,
                     is_primary: true,

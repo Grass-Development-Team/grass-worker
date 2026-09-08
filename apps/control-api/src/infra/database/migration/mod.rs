@@ -27,3 +27,4 @@ pub mod m20260807_000026_avatars;
 pub mod m20260807_000027_deployment_screenshots;
 pub mod m20260808_000028_object_storage;
 pub mod m20260908_000029_regional_routing;
+pub mod m20260908_000030_regional_ingress;

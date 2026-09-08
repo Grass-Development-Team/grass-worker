@@ -193,6 +193,7 @@ export function HostSourcesPanel() {
                 <TableHead>Label</TableHead>
                 <TableHead>Kind</TableHead>
                 <TableHead>Base domain</TableHead>
+                <TableHead>Region</TableHead>
                 <TableHead>Flags</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
@@ -210,6 +211,7 @@ export function HostSourcesPanel() {
                     <Badge variant="outline">{source.kind.replace("_", " ")}</Badge>
                   </TableCell>
                   <TableCell className="font-mono text-sm">{source.base_domain}</TableCell>
+                  <TableCell className="font-mono text-sm">{source.region}</TableCell>
                   <TableCell className="space-x-1">
                     {source.is_default && <Badge variant="success">Default</Badge>}
                     {source.allows_auto_assign && <Badge variant="outline">Auto-assign</Badge>}
@@ -254,6 +256,7 @@ function CreateHostSourceDialog({ onCreated }: { onCreated: () => void }) {
   const [label, setLabel] = useState("");
   const [kind, setKind] = useState<HostSourceKind>("wildcard");
   const [baseDomain, setBaseDomain] = useState("");
+  const [region, setRegion] = useState("default");
   const [isDefault, setIsDefault] = useState(false);
   const [cloudflare, setCloudflare] = useState<CloudflareFormState>(emptyCloudflareForm);
 
@@ -263,6 +266,7 @@ function CreateHostSourceDialog({ onCreated }: { onCreated: () => void }) {
         label,
         kind,
         base_domain: baseDomain,
+        region,
         is_default: isDefault,
         ...(kind === "dns_provider"
           ? {
@@ -275,6 +279,7 @@ function CreateHostSourceDialog({ onCreated }: { onCreated: () => void }) {
       setOpen(false);
       setLabel("");
       setBaseDomain("");
+      setRegion("default");
       setIsDefault(false);
       setCloudflare(emptyCloudflareForm);
       onCreated();
@@ -309,6 +314,16 @@ function CreateHostSourceDialog({ onCreated }: { onCreated: () => void }) {
               id="source-label"
               value={label}
               onChange={(event) => setLabel(event.target.value)}
+              required
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="source-region">Region</FieldLabel>
+            <Input
+              id="source-region"
+              placeholder="default"
+              value={region}
+              onChange={(event) => setRegion(event.target.value)}
               required
             />
           </Field>
@@ -371,6 +386,7 @@ function EditHostSourceDialog({
   const [open, setOpen] = useState(false);
   const [label, setLabel] = useState(source.label);
   const [enabled, setEnabled] = useState(source.enabled);
+  const [region, setRegion] = useState(source.region);
   const [allowsAutoAssign, setAllowsAutoAssign] = useState(source.allows_auto_assign);
   const [cloudflare, setCloudflare] = useState<CloudflareFormState>(emptyCloudflareForm);
   const [shapeTouched, setShapeTouched] = useState(false);
@@ -381,6 +397,7 @@ function EditHostSourceDialog({
       const config = cloudflareConfig(cloudflare, { includeShape: shapeTouched });
       return adminApi.updateHostSource(source.id, {
         label,
+        region,
         enabled,
         allows_auto_assign: allowsAutoAssign,
         ...(isCloudflare && Object.keys(config).length > 0
@@ -403,6 +420,7 @@ function EditHostSourceDialog({
         setOpen(next);
         if (next) {
           setLabel(source.label);
+          setRegion(source.region);
           setEnabled(source.enabled);
           setAllowsAutoAssign(source.allows_auto_assign);
           setCloudflare(emptyCloudflareForm);
@@ -437,6 +455,15 @@ function EditHostSourceDialog({
               id={`edit-label-${source.id}`}
               value={label}
               onChange={(event) => setLabel(event.target.value)}
+              required
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor={`edit-region-${source.id}`}>Region</FieldLabel>
+            <Input
+              id={`edit-region-${source.id}`}
+              value={region}
+              onChange={(event) => setRegion(event.target.value)}
               required
             />
           </Field>

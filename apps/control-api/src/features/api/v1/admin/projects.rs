@@ -473,6 +473,7 @@ fn admin_binding_view(binding: &project_host_binding::Model) -> serde_json::Valu
         "id": binding.id,
         "project_id": binding.project_id,
         "host": binding.host,
+        "region": binding.region,
         "kind": match binding.kind { HostBindingKind::Platform => "platform", HostBindingKind::Custom => "custom" },
         "environment": match binding.environment { crate::infra::database::entity::HostBindingEnvironment::Production => "production", crate::infra::database::entity::HostBindingEnvironment::Preview => "preview", crate::infra::database::entity::HostBindingEnvironment::All => "all" },
         "status": match binding.status { HostBindingStatus::Pending => "pending", HostBindingStatus::Active => "active", HostBindingStatus::Failed => "failed", HostBindingStatus::Disabled => "disabled" },

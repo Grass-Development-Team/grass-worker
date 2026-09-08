@@ -401,6 +401,32 @@ editing a source only overwrites the fields you fill in.
 A **Manual** source assigns domains without touching DNS; bindings stay
 `pending` until an operator creates the record and re-runs provisioning.
 
+### Regional CNAME ingress and certificates
+
+Platform administrators can create one ingress hostname per region under
+**Administration → Regional ingresses**. A project custom domain then shows a
+CNAME target for that region and a TXT ownership record named
+`_grass.<domain>`. Publish both records before serving traffic. The Control
+API derives the TXT value from its secret key and the binding id, so it is
+stable for retries but cannot be guessed from the hostname alone.
+
+Ingress guidance also lists the same-region Serve Nodes with a fresh heartbeat,
+the configured health-check path and interval, and whether the original Host
+header is preserved when traffic reaches the deployment. Disabled or stale
+nodes are omitted; keep at least two healthy Serve Nodes in a production
+region when failover is required.
+
+Regional ingress records expose certificate controls for Let's Encrypt,
+ZeroSSL, or manual certificates. The `certificate_status`, expiry, and error
+fields are the source of truth for the configured ACME/DNS-01 reconciler. For
+Let's Encrypt or ZeroSSL, configure a supported DNS-01 provider and grant the
+Control API only the zone permissions needed to create and remove the
+challenge TXT record. The ingress hostname remains an ordinary HTTP(S)
+endpoint in this release: terminate TLS at the regional proxy or load
+balancer, and use the status fields and TXT record guidance to coordinate
+certificate issuance and renewal there. Do not mark a certificate active until
+the proxy has installed the renewed certificate.
+
 Custom domains use the Domain Review Policy configured under Administration
 settings. The platform default is `auto`; a Team Group can override it with
 `auto`, `manual`, or inherit the platform default. Manual review keeps a new

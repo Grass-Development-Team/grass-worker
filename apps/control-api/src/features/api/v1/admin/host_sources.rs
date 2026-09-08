@@ -28,6 +28,7 @@ fn source_view(source: &host_source::Model) -> serde_json::Value {
         },
         "label": source.label,
         "base_domain": source.base_domain,
+        "region": source.region,
         "enabled": source.enabled,
         "allows_auto_assign": source.allows_auto_assign,
         "is_default": source.is_default,
@@ -144,6 +145,8 @@ pub struct CreateHostSourceRequest {
     pub kind: String,
     pub label: String,
     pub base_domain: String,
+    #[serde(default = "default_region")]
+    pub region: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default = "default_true")]
@@ -158,6 +161,10 @@ pub struct CreateHostSourceRequest {
 
 const fn default_true() -> bool {
     true
+}
+
+fn default_region() -> String {
+    "default".to_owned()
 }
 
 /// POST /api/v1/admin/host-sources
@@ -181,6 +188,11 @@ pub async fn create(
             message: format!("base_domain: {error}"),
         }
     })?;
+    let region =
+        grass_validator::normalize_region(&body.region).map_err(|error| AppError::Validation {
+            op: OP,
+            message: format!("region: {error}"),
+        })?;
 
     let provider = body
         .provider
@@ -199,6 +211,7 @@ pub async fn create(
             kind,
             label: body.label.trim().to_owned(),
             base_domain,
+            region,
             enabled: body.enabled,
             allows_auto_assign: body.allows_auto_assign,
             is_default: body.is_default,
@@ -216,6 +229,8 @@ pub async fn create(
 pub struct UpdateHostSourceRequest {
     #[serde(default)]
     pub label: Option<String>,
+    #[serde(default)]
+    pub region: Option<String>,
     #[serde(default)]
     pub enabled: Option<bool>,
     #[serde(default)]
@@ -248,6 +263,14 @@ pub async fn update(
     let provider_patch = body.provider.map(|provider| {
         Some(provider.trim().to_ascii_lowercase()).filter(|provider| !provider.is_empty())
     });
+    let region = body
+        .region
+        .map(|value| grass_validator::normalize_region(&value))
+        .transpose()
+        .map_err(|error| AppError::Validation {
+            op: OP,
+            message: format!("region: {error}"),
+        })?;
     let config_patch = body
         .config
         .map(|patch| merge_config(&source.config, patch, OP))
@@ -267,6 +290,7 @@ pub async fn update(
         source,
         UpdateHostSourceParams {
             label: body.label.filter(|label| !label.trim().is_empty()),
+            region,
             enabled: body.enabled,
             allows_auto_assign: body.allows_auto_assign,
             is_default: body.is_default,

@@ -12,6 +12,7 @@ pub struct Model {
     pub team_id: Uuid,
     pub host_source_id: Option<Uuid>,
     pub host: String,
+    pub region: String,
     pub kind: HostBindingKind,
     pub environment: HostBindingEnvironment,
     pub status: HostBindingStatus,
