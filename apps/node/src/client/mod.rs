@@ -5,14 +5,15 @@ use std::{path::Path, time::Duration};
 use anyhow::Context;
 use futures_util::StreamExt;
 use grass_node_protocol::{
-    AppendBuildLogRequest, AppendBuildLogResponse, ClaimRequest, ClaimResponse,
-    ExchangePreviewCodeRequest, ExchangePreviewCodeResponse, HeartbeatRequest, HeartbeatResponse,
-    ObserveSshHostKeyRequest, ObserveSshHostKeyResponse, RedeemGitCredentialRequest,
-    RedeemGitCredentialResponse, RegisterRequest, RegisterResponse, ReportServeStatusRequest,
-    ReportServeStatusResponse, ResolveHostResponse, RouteSnapshotResponse, ServeAssignment,
-    ServeAssignmentsResponse, SsrLeaseResponse, StageRequest, StageResponse,
-    StartPreviewAuthorizationRequest, StartPreviewAuthorizationResponse, UploadArtifactResponse,
-    VerifyPreviewGrantRequest, VerifyPreviewGrantResponse, artifact_headers,
+    AppendBuildLogRequest, AppendBuildLogResponse, CertificateBundlesResponse, ClaimRequest,
+    ClaimResponse, ExchangePreviewCodeRequest, ExchangePreviewCodeResponse, HeartbeatRequest,
+    HeartbeatResponse, ObserveSshHostKeyRequest, ObserveSshHostKeyResponse,
+    RedeemGitCredentialRequest, RedeemGitCredentialResponse, RegisterRequest, RegisterResponse,
+    ReportServeStatusRequest, ReportServeStatusResponse, ResolveHostResponse,
+    RouteSnapshotResponse, ServeAssignment, ServeAssignmentsResponse, SsrLeaseResponse,
+    StageRequest, StageResponse, StartPreviewAuthorizationRequest,
+    StartPreviewAuthorizationResponse, UploadArtifactResponse, VerifyPreviewGrantRequest,
+    VerifyPreviewGrantResponse, artifact_headers,
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -456,6 +457,17 @@ impl ControlApiClient {
         Self::unwrap_envelope(response, "serve.routes")
             .await
             .map_err(RouteSnapshotError::Infrastructure)
+    }
+
+    pub async fn certificate_bundles(&self) -> anyhow::Result<CertificateBundlesResponse> {
+        let response = self
+            .http
+            .get(self.url("/serve/certificates"))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .context("serve.certificates: request failed")?;
+        Self::unwrap_envelope(response, "serve.certificates").await
     }
 
     #[allow(dead_code)] // Wired by the serve resolver in Milestone 10.
