@@ -231,27 +231,6 @@ impl CloudflareDns {
             .map_err(request_error)
     }
 
-    /// Create the record for `host`, or reconcile with an existing one.
-    #[allow(dead_code)]
-    pub async fn ensure_txt_record(
-        &self,
-        config: &CloudflareConfig,
-        name: &str,
-        value: &str,
-    ) -> Result<EnsuredRecord, HostProvisionError> {
-        self.ensure_record(&config.for_txt(value), name).await
-    }
-
-    #[allow(dead_code)]
-    pub async fn remove_txt_record(
-        &self,
-        config: &CloudflareConfig,
-        name: &str,
-        value: &str,
-    ) -> Result<Option<String>, HostProvisionError> {
-        self.remove_record(&config.for_txt(value), name).await
-    }
-
     pub async fn ensure_record(
         &self,
         config: &CloudflareConfig,
