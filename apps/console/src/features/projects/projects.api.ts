@@ -43,6 +43,7 @@ export interface ProjectHost {
   id: string;
   project_id: string;
   host: string;
+  region?: string;
   kind: "platform" | "custom";
   environment: HostEnvironment;
   status: HostStatus;
@@ -52,6 +53,30 @@ export interface ProjectHost {
   serving?: boolean;
   created_at: string;
   provision_events?: ProvisionEvent[];
+  ingress?: ProjectHostIngress | null;
+}
+
+export interface ProjectHostIngress {
+  region: string;
+  cname: { record_type: "CNAME"; name: string; target: string };
+  txt: { record_type: "TXT"; name: string; value: string };
+  origin_host_preservation: boolean;
+  health_check: { path: string; interval_seconds: number };
+  entrance_nodes: Array<{ node_id: string; base_url: string; priority: number }>;
+  certificate: {
+    enabled: boolean;
+    issuer: "letsencrypt" | "zerossl" | "manual";
+    auto_renew: boolean;
+    status: "pending" | "issuing" | "active" | "expiring" | "failed" | "disabled";
+    expires_at: string | null;
+    error: string | null;
+  };
+  dns_challenge: {
+    provider: string | null;
+    status: "not_configured" | "pending" | "valid" | "failed";
+    record_name: string | null;
+    record_value: string | null;
+  };
 }
 
 export interface CreateProjectInput {
@@ -138,7 +163,10 @@ export const projectsApi = {
   listHosts: (projectId: string) =>
     request<{ hosts: ProjectHost[] }>(`/api/v1/projects/${projectId}/hosts`),
 
-  createHost: (projectId: string, input: { host: string; environment?: HostEnvironment }) =>
+  createHost: (
+    projectId: string,
+    input: { host: string; region?: string; environment?: HostEnvironment },
+  ) =>
     request<{ host: ProjectHost }>(`/api/v1/projects/${projectId}/hosts`, {
       method: "POST",
       body: JSON.stringify(input),

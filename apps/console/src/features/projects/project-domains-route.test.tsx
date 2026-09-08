@@ -26,6 +26,7 @@ beforeEach(() => {
         id: "host-1",
         project_id: "project-1",
         host: "www.example.com",
+        region: "default",
         kind: "custom",
         environment: "production",
         status: "failed",

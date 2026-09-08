@@ -245,6 +245,7 @@ mod tests {
             kind,
             label: "test".to_owned(),
             base_domain: "grass.test".to_owned(),
+            region: "default".to_owned(),
             enabled: true,
             allows_auto_assign: true,
             is_default: true,

@@ -5,6 +5,7 @@ pub mod codes;
 pub mod delivery;
 pub mod deployments;
 pub mod hosts;
+pub mod ingress;
 pub mod node_deletions;
 pub mod nodes;
 pub mod notifications;

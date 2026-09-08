@@ -20,6 +20,7 @@ pub struct CreateHostSourceParams {
     pub kind: HostSourceKind,
     pub label: String,
     pub base_domain: String,
+    pub region: String,
     pub enabled: bool,
     pub allows_auto_assign: bool,
     pub is_default: bool,
@@ -29,6 +30,7 @@ pub struct CreateHostSourceParams {
 
 pub struct UpdateHostSourceParams {
     pub label: Option<String>,
+    pub region: Option<String>,
     pub enabled: Option<bool>,
     pub allows_auto_assign: Option<bool>,
     pub is_default: Option<bool>,
@@ -104,6 +106,7 @@ pub async fn create_source<C: ConnectionTrait>(
         kind: Set(params.kind),
         label: Set(params.label),
         base_domain: Set(params.base_domain),
+        region: Set(params.region),
         enabled: Set(params.enabled),
         allows_auto_assign: Set(params.allows_auto_assign),
         is_default: Set(params.is_default),
@@ -132,6 +135,9 @@ pub async fn update_source<C: ConnectionTrait>(
     let mut active: host_source::ActiveModel = source.into();
     if let Some(label) = params.label {
         active.label = Set(label);
+    }
+    if let Some(region) = params.region {
+        active.region = Set(region);
     }
     if let Some(enabled) = params.enabled {
         active.enabled = Set(enabled);
@@ -263,6 +269,7 @@ pub struct CreateBindingParams {
     pub team_id: Uuid,
     pub host_source_id: Option<Uuid>,
     pub host: String,
+    pub region: String,
     pub kind: HostBindingKind,
     pub environment: HostBindingEnvironment,
     pub status: HostBindingStatus,
@@ -358,6 +365,7 @@ pub async fn create_binding<C: ConnectionTrait>(
         team_id: Set(params.team_id),
         host_source_id: Set(params.host_source_id),
         host: Set(params.host),
+        region: Set(params.region),
         kind: Set(params.kind),
         environment: Set(params.environment),
         status: Set(params.status),
@@ -546,6 +554,7 @@ mod tests {
             kind: HostSourceKind::Wildcard,
             label: label.to_owned(),
             base_domain: "example.test".to_owned(),
+            region: "default".to_owned(),
             enabled,
             allows_auto_assign,
             is_default,

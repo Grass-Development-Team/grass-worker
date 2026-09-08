@@ -6,12 +6,13 @@ use axum::{
 use sea_orm::TransactionTrait;
 use serde::Deserialize;
 use serde_json::json;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::infra::http::timestamps::ts;
 use crate::{
-    domain::deployments,
     domain::hosts::{self, DomainReviewMode},
+    domain::{deployments, ingress},
     infra::{
         database::entity::{
             DeploymentEnvironment, HostBindingEnvironment, HostBindingKind, HostBindingStatus,
@@ -29,6 +30,7 @@ fn binding_view(binding: &project_host_binding::Model) -> serde_json::Value {
         "id": binding.id,
         "project_id": binding.project_id,
         "host": binding.host,
+        "region": binding.region,
         "kind": match binding.kind {
             HostBindingKind::Platform => "platform",
             HostBindingKind::Custom => "custom",
@@ -47,7 +49,78 @@ fn binding_view(binding: &project_host_binding::Model) -> serde_json::Value {
         "reviewed_at": binding.reviewed_at.map(ts),
         "review_reason": binding.review_reason,
         "created_at": ts(binding.created_at),
+        "ingress": serde_json::Value::Null,
     })
+}
+
+async fn attach_ingress_guidance(
+    state: &ControlApiState,
+    db: &sea_orm::DatabaseConnection,
+    binding: &project_host_binding::Model,
+    mut view: serde_json::Value,
+    op: &'static str,
+) -> Result<serde_json::Value, AppError> {
+    if !matches!(binding.kind, HostBindingKind::Custom) {
+        return Ok(view);
+    }
+    let Some(regional_ingress) = ingress::get_enabled_by_region(db, &binding.region)
+        .await
+        .map_err(|source| AppError::Infrastructure { op, source })?
+    else {
+        return Ok(view);
+    };
+    let candidates = ingress::healthy_serve_nodes(db, &binding.region, OffsetDateTime::now_utc())
+        .await
+        .map_err(|source| AppError::Infrastructure { op, source })?;
+    let secret_key = state.config.read().unwrap().secrets.secret_key.clone();
+    let verification_value =
+        ingress::dns_verification_token(&secret_key, binding.id, &binding.host);
+    let guidance = ingress::cname_guidance(ingress::CnameGuidanceInput {
+        host: &binding.host,
+        region: &binding.region,
+        ingress_hostname: &regional_ingress.hostname,
+        verification_name: &format!("_grass.{}", binding.host),
+        verification_value: &verification_value,
+        origin_host_preservation: regional_ingress.origin_host_preservation,
+    });
+    view["ingress"] = json!({
+        "region": guidance.region,
+        "cname": {
+            "record_type": guidance.record_type,
+            "name": guidance.name,
+            "target": guidance.target,
+        },
+        "txt": {
+            "record_type": "TXT",
+            "name": guidance.verification_name,
+            "value": guidance.verification_value,
+        },
+        "origin_host_preservation": guidance.origin_host_preservation,
+        "health_check": {
+            "path": regional_ingress.health_check_path,
+            "interval_seconds": regional_ingress.health_check_interval_seconds,
+        },
+        "entrance_nodes": candidates.iter().map(|candidate| json!({
+            "node_id": candidate.node_id,
+            "base_url": candidate.base_url,
+            "priority": candidate.priority,
+        })).collect::<Vec<_>>(),
+        "certificate": {
+            "enabled": regional_ingress.tls_enabled,
+            "issuer": regional_ingress.certificate_issuer,
+            "auto_renew": regional_ingress.certificate_auto_renew,
+            "status": regional_ingress.certificate_status,
+            "expires_at": ts(regional_ingress.certificate_expires_at),
+            "error": regional_ingress.certificate_error,
+        },
+        "dns_challenge": {
+            "provider": regional_ingress.dns_challenge_provider,
+            "status": regional_ingress.dns_challenge_status,
+            "record_name": regional_ingress.dns_challenge_record_name,
+            "record_value": regional_ingress.dns_challenge_record_value,
+        },
+    });
+    Ok(view)
 }
 
 fn review_status_value(status: &HostReviewStatus) -> &'static str {
@@ -107,7 +180,8 @@ pub async fn list(
         let events = hosts::list_provision_events_for_binding(db, binding.id)
             .await
             .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-        let mut view = binding_view(binding);
+        let view = binding_view(binding);
+        let mut view = attach_ingress_guidance(&state, db, binding, view, OP).await?;
         view["serving"] = json!(
             matches!(binding.status, HostBindingStatus::Active)
                 && match binding.environment {
@@ -144,6 +218,8 @@ pub async fn list(
 #[derive(Deserialize)]
 pub struct CreateHostRequest {
     pub host: String,
+    #[serde(default)]
+    pub region: Option<String>,
     #[serde(default = "default_environment")]
     pub environment: String,
     #[serde(default)]
@@ -173,7 +249,6 @@ pub async fn create(
             message: error.to_string(),
         })?;
     let environment = parse_environment(&body.environment, OP)?;
-
     let source = match body.host_source_id {
         Some(source_id) => Some(
             hosts::get_source_by_id(db, source_id)
@@ -186,6 +261,29 @@ pub async fn create(
         ),
         None => None,
     };
+    let region = body
+        .region
+        .as_deref()
+        .map(grass_validator::normalize_region)
+        .transpose()
+        .map_err(|error| AppError::Validation {
+            op: OP,
+            message: format!("region: {error}"),
+        })?
+        .or_else(|| source.as_ref().map(|source| source.region.clone()))
+        .unwrap_or_else(|| "default".to_owned());
+
+    if let Some(source) = source.as_ref()
+        && region != source.region
+    {
+        return Err(AppError::Validation {
+            op: OP,
+            message: format!(
+                "region must match the host source region ({})",
+                source.region
+            ),
+        });
+    }
 
     // Custom hosts require the team group policy to allow them; hosts under
     // a platform source must live under that source's base domain.
@@ -243,6 +341,7 @@ pub async fn create(
                 team: &access.team,
                 source: source.as_ref(),
                 host,
+                region,
                 kind: if source.is_some() {
                     HostBindingKind::Platform
                 } else {
@@ -256,7 +355,8 @@ pub async fn create(
         )
         .await?;
 
-    Ok(ok_response(json!({ "host": binding_view(&binding) })))
+    let view = attach_ingress_guidance(&state, db, &binding, binding_view(&binding), OP).await?;
+    Ok(ok_response(json!({ "host": view })))
 }
 
 #[derive(Deserialize)]
@@ -308,7 +408,8 @@ pub async fn update(
             source: source.into(),
         })?;
 
-    Ok(ok_response(json!({ "host": binding_view(&binding) })))
+    let view = attach_ingress_guidance(&state, db, &binding, binding_view(&binding), OP).await?;
+    Ok(ok_response(json!({ "host": view })))
 }
 
 /// DELETE /api/v1/projects/{project_id}/hosts/{host_id}
@@ -442,7 +543,8 @@ pub async fn provision(
     let service = HostBindingService::new(db, cache);
     let binding = service.provision(OP, binding, &source).await?;
 
-    Ok(ok_response(json!({ "host": binding_view(&binding) })))
+    let view = attach_ingress_guidance(&state, db, &binding, binding_view(&binding), OP).await?;
+    Ok(ok_response(json!({ "host": view })))
 }
 
 async fn load_binding(
@@ -482,6 +584,7 @@ mod tests {
             team_id: Uuid::now_v7(),
             host_source_id: None,
             host: "manual.example.test".to_owned(),
+            region: "default".to_owned(),
             kind: HostBindingKind::Custom,
             environment: HostBindingEnvironment::Production,
             status: HostBindingStatus::Pending,

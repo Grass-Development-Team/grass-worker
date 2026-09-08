@@ -41,6 +41,7 @@ export function ProjectDomainsRoute() {
   const canEdit = canContributeToProjects(role);
   const queryClient = useQueryClient();
   const [newHost, setNewHost] = useState("");
+  const [newRegion, setNewRegion] = useState("default");
 
   const hostsQuery = useQuery({
     queryKey: ["project-hosts", projectId],
@@ -51,9 +52,10 @@ export function ProjectDomainsRoute() {
     queryClient.invalidateQueries({ queryKey: ["project-hosts", projectId] });
 
   const addMutation = useMutation({
-    mutationFn: () => projectsApi.createHost(projectId, { host: newHost }),
+    mutationFn: () => projectsApi.createHost(projectId, { host: newHost, region: newRegion }),
     onSuccess: () => {
       setNewHost("");
+      setNewRegion("default");
       invalidate();
     },
   });
@@ -82,7 +84,7 @@ export function ProjectDomainsRoute() {
 
       {canEdit && (
         <form
-          className="flex items-end gap-2"
+          className="flex flex-wrap items-end gap-2"
           onSubmit={(event) => {
             event.preventDefault();
             if (newHost.trim()) addMutation.mutate();
@@ -95,6 +97,15 @@ export function ProjectDomainsRoute() {
               placeholder="app.example.com"
               value={newHost}
               onChange={(event) => setNewHost(event.target.value)}
+            />
+          </Field>
+          <Field className="w-36">
+            <FieldLabel htmlFor="new-host-region">Region</FieldLabel>
+            <Input
+              id="new-host-region"
+              placeholder="default"
+              value={newRegion}
+              onChange={(event) => setNewRegion(event.target.value)}
             />
           </Field>
           <Button type="submit" disabled={addMutation.isPending || !newHost.trim()}>
@@ -116,6 +127,7 @@ export function ProjectDomainsRoute() {
               <TableRow>
                 <TableHead>Domain</TableHead>
                 <TableHead>Kind</TableHead>
+                <TableHead>Region</TableHead>
                 <TableHead>Environment</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Serving</TableHead>
@@ -135,8 +147,27 @@ export function ProjectDomainsRoute() {
                     {host.failure_reason && (
                       <p className="text-xs text-destructive">{host.failure_reason}</p>
                     )}
+                    {host.ingress && (
+                      <details className="mt-2 text-xs text-muted-foreground">
+                        <summary className="cursor-pointer">DNS configuration</summary>
+                        <div className="mt-1 flex flex-col gap-1 font-mono">
+                          <span>
+                            CNAME {host.ingress.cname.name} → {host.ingress.cname.target}
+                          </span>
+                          <span>
+                            TXT {host.ingress.txt.name} → {host.ingress.txt.value}
+                          </span>
+                        </div>
+                        <p className="mt-1 font-sans">
+                          TLS {host.ingress.certificate.status} · DNS-01{" "}
+                          {host.ingress.dns_challenge.status} · {host.ingress.entrance_nodes.length}{" "}
+                          healthy entrance node{host.ingress.entrance_nodes.length === 1 ? "" : "s"}
+                        </p>
+                      </details>
+                    )}
                   </TableCell>
                   <TableCell className="capitalize">{host.kind}</TableCell>
+                  <TableCell className="font-mono text-sm">{host.region ?? "default"}</TableCell>
                   <TableCell className="capitalize">{host.environment}</TableCell>
                   <TableCell>
                     <Badge variant={hostStatusVariant(host.status)}>{host.status}</Badge>
