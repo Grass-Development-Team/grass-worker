@@ -120,6 +120,78 @@ impl DnsProviderHostProvisioner {
         }
     }
 
+    #[allow(dead_code)]
+    pub async fn ensure_txt_record(
+        &self,
+        provider: &str,
+        config: &serde_json::Value,
+        zone: &str,
+        name: &str,
+        value: &str,
+    ) -> Result<String, HostProvisionError> {
+        match provider.trim().to_ascii_lowercase().as_str() {
+            cloudflare::PROVIDER_NAME => {
+                let parsed = cloudflare::CloudflareConfig::from_json(config)
+                    .map_err(HostProvisionError::Provider)?;
+                Ok(self
+                    .cloudflare
+                    .ensure_txt_record(&parsed, name, value)
+                    .await?
+                    .id)
+            }
+            dnspod::PROVIDER_NAME => {
+                let parsed = dnspod::DnsPodConfig::from_json(zone, config)
+                    .map_err(HostProvisionError::Provider)?;
+                Ok(self
+                    .dnspod
+                    .ensure_txt_record(&parsed, name, value)
+                    .await?
+                    .id)
+            }
+            route53::PROVIDER_NAME => {
+                let parsed = route53::Route53Config::from_json(config)
+                    .map_err(HostProvisionError::Provider)?;
+                Ok(self
+                    .route53
+                    .ensure_txt_record(&parsed, name, value)
+                    .await?
+                    .id)
+            }
+            other => Err(Self::unsupported(Some(other))),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub async fn remove_txt_record(
+        &self,
+        provider: &str,
+        config: &serde_json::Value,
+        zone: &str,
+        name: &str,
+        value: &str,
+    ) -> Result<Option<String>, HostProvisionError> {
+        match provider.trim().to_ascii_lowercase().as_str() {
+            cloudflare::PROVIDER_NAME => {
+                let parsed = cloudflare::CloudflareConfig::from_json(config)
+                    .map_err(HostProvisionError::Provider)?;
+                self.cloudflare
+                    .remove_txt_record(&parsed, name, value)
+                    .await
+            }
+            dnspod::PROVIDER_NAME => {
+                let parsed = dnspod::DnsPodConfig::from_json(zone, config)
+                    .map_err(HostProvisionError::Provider)?;
+                self.dnspod.remove_txt_record(&parsed, name, value).await
+            }
+            route53::PROVIDER_NAME => {
+                let parsed = route53::Route53Config::from_json(config)
+                    .map_err(HostProvisionError::Provider)?;
+                self.route53.remove_txt_record(&parsed, name, value).await
+            }
+            other => Err(Self::unsupported(Some(other))),
+        }
+    }
+
     fn unsupported(provider: Option<&str>) -> HostProvisionError {
         HostProvisionError::UnsupportedSource(format!(
             "dns provider '{}' is not supported (supported: {})",

@@ -43,6 +43,14 @@ impl Route53Config {
         Self::from_json(&source.config)
     }
 
+    #[allow(dead_code)]
+    pub fn for_txt(&self, value: &str) -> Self {
+        let mut config = self.clone();
+        config.record_type = "TXT".to_owned();
+        config.record_value = value.to_owned();
+        config
+    }
+
     pub fn from_json(config: &Value) -> Result<Self, String> {
         let object = config
             .as_object()
@@ -466,6 +474,26 @@ impl Route53 {
             .await?;
         Ok(parse_change_id(&response)
             .unwrap_or_else(|| format!("route53:{}:{}", config.hosted_zone_id, record.name)))
+    }
+
+    #[allow(dead_code)]
+    pub async fn ensure_txt_record(
+        &self,
+        config: &Route53Config,
+        name: &str,
+        value: &str,
+    ) -> Result<EnsuredRecord, HostProvisionError> {
+        self.ensure_record(&config.for_txt(value), name).await
+    }
+
+    #[allow(dead_code)]
+    pub async fn remove_txt_record(
+        &self,
+        config: &Route53Config,
+        name: &str,
+        value: &str,
+    ) -> Result<Option<String>, HostProvisionError> {
+        self.remove_record(&config.for_txt(value), name).await
     }
 
     pub async fn ensure_record(

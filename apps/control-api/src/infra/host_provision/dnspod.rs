@@ -39,6 +39,14 @@ impl DnsPodConfig {
         Self::from_json(&source.base_domain, &source.config)
     }
 
+    #[allow(dead_code)]
+    pub fn for_txt(&self, value: &str) -> Self {
+        let mut config = self.clone();
+        config.record_type = "TXT".to_owned();
+        config.record_value = value.to_owned();
+        config
+    }
+
     pub fn from_json(base_domain: &str, config: &Value) -> Result<Self, String> {
         let object = config
             .as_object()
@@ -445,6 +453,26 @@ impl DnsPod {
         )
         .await
         .map(|_| ())
+    }
+
+    #[allow(dead_code)]
+    pub async fn ensure_txt_record(
+        &self,
+        config: &DnsPodConfig,
+        name: &str,
+        value: &str,
+    ) -> Result<EnsuredRecord, HostProvisionError> {
+        self.ensure_record(&config.for_txt(value), name).await
+    }
+
+    #[allow(dead_code)]
+    pub async fn remove_txt_record(
+        &self,
+        config: &DnsPodConfig,
+        name: &str,
+        value: &str,
+    ) -> Result<Option<String>, HostProvisionError> {
+        self.remove_record(&config.for_txt(value), name).await
     }
 
     pub async fn ensure_record(

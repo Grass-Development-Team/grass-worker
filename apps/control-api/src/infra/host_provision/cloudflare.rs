@@ -22,7 +22,7 @@ const DEFAULT_BASE_URL: &str = "https://api.cloudflare.com/client/v4";
 const RECORD_EXISTS_CODES: [i64; 2] = [81_057, 81_053];
 
 /// Parsed view of a Cloudflare host source `config` object.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CloudflareConfig {
     pub api_token: String,
     pub zone_id: String,
@@ -38,6 +38,14 @@ pub struct CloudflareConfig {
 impl CloudflareConfig {
     pub fn from_source(source: &host_source::Model) -> Result<Self, String> {
         Self::from_json(&source.config)
+    }
+
+    #[allow(dead_code)]
+    pub fn for_txt(&self, value: &str) -> Self {
+        let mut config = self.clone();
+        config.record_type = "TXT".to_owned();
+        config.record_value = value.to_owned();
+        config
     }
 
     pub fn from_json(config: &serde_json::Value) -> Result<Self, String> {
@@ -206,6 +214,26 @@ impl CloudflareDns {
     }
 
     /// Create the record for `host`, or reconcile with an existing one.
+    #[allow(dead_code)]
+    pub async fn ensure_txt_record(
+        &self,
+        config: &CloudflareConfig,
+        name: &str,
+        value: &str,
+    ) -> Result<EnsuredRecord, HostProvisionError> {
+        self.ensure_record(&config.for_txt(value), name).await
+    }
+
+    #[allow(dead_code)]
+    pub async fn remove_txt_record(
+        &self,
+        config: &CloudflareConfig,
+        name: &str,
+        value: &str,
+    ) -> Result<Option<String>, HostProvisionError> {
+        self.remove_record(&config.for_txt(value), name).await
+    }
+
     pub async fn ensure_record(
         &self,
         config: &CloudflareConfig,
