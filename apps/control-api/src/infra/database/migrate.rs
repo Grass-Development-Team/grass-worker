@@ -43,6 +43,7 @@ impl MigratorTrait for Migrator {
             Box::new(migration::m20260908_000029_regional_routing::Migration),
             Box::new(migration::m20260908_000030_regional_ingress::Migration),
             Box::new(migration::m20260909_000031_regional_ingress_lifecycle::Migration),
+            Box::new(migration::m20260910_000032_managed_certificates::Migration),
         ]
     }
 }
@@ -153,7 +154,7 @@ mod tests {
     fn registers_audit_foundation_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 31);
+        assert_eq!(migrations.len(), 32);
         assert_eq!(
             migrations.get(11).expect("twelfth migration").name(),
             "m20260729_000012_audit_foundation"
@@ -182,7 +183,7 @@ mod tests {
     fn registers_team_group_review_policy_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 31);
+        assert_eq!(migrations.len(), 32);
         assert_eq!(
             migrations.get(12).expect("thirteenth migration").name(),
             "m20260729_000013_team_group_review_policy"
@@ -193,7 +194,7 @@ mod tests {
     fn registers_node_config_sync_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 31);
+        assert_eq!(migrations.len(), 32);
         assert_eq!(
             migrations.get(13).expect("fourteenth migration").name(),
             "m20260729_000014_node_config_sync"
@@ -204,7 +205,7 @@ mod tests {
     fn registers_node_deletion_queue_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 31);
+        assert_eq!(migrations.len(), 32);
         assert_eq!(
             migrations.get(14).expect("fifteenth migration").name(),
             "m20260729_000015_node_deletion_queue"
@@ -215,7 +216,7 @@ mod tests {
     fn registers_domain_review_policy_after_node_deletion_queue() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 31);
+        assert_eq!(migrations.len(), 32);
         assert_eq!(
             migrations.get(14).expect("fifteenth migration").name(),
             "m20260729_000015_node_deletion_queue"
@@ -230,7 +231,7 @@ mod tests {
     fn registers_project_notifications_after_domain_review_policy() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 31);
+        assert_eq!(migrations.len(), 32);
         assert_eq!(
             migrations.get(15).expect("sixteenth migration").name(),
             "m20260730_000016_domain_review_policy"
@@ -253,7 +254,7 @@ mod tests {
     fn registers_scoped_codes_after_authentication_migrations() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 31);
+        assert_eq!(migrations.len(), 32);
         assert_eq!(
             migrations.get(23).expect("twenty-fourth migration").name(),
             "m20260806_000024_scoped_codes"
@@ -264,7 +265,7 @@ mod tests {
     fn registers_registration_allowlist_after_scoped_codes() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 31);
+        assert_eq!(migrations.len(), 32);
         assert_eq!(
             migrations.get(24).expect("twenty-fifth migration").name(),
             "m20260806_000025_registration_allowlist"
@@ -275,7 +276,7 @@ mod tests {
     fn registers_avatar_versions_after_registration_allowlist() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 31);
+        assert_eq!(migrations.len(), 32);
         assert_eq!(
             migrations.get(25).expect("twenty-sixth migration").name(),
             "m20260807_000026_avatars"
@@ -286,7 +287,7 @@ mod tests {
     fn registers_object_storage_after_deployment_screenshots() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 31);
+        assert_eq!(migrations.len(), 32);
         assert_eq!(
             migrations.get(26).expect("twenty-seventh migration").name(),
             "m20260807_000027_deployment_screenshots"
@@ -297,7 +298,7 @@ mod tests {
         );
         assert_eq!(
             migrations.last().expect("last migration").name(),
-            "m20260909_000031_regional_ingress_lifecycle"
+            "m20260910_000032_managed_certificates"
         );
     }
 
@@ -310,7 +311,7 @@ mod tests {
         let test_db = PostgresMigrationDatabase::start(&database_url).await?;
 
         let verification = async {
-            Migrator::up(&test_db.db, None).await?;
+            Migrator::up(&test_db.db, Some(31)).await?;
             assert_migration_tracking(&test_db.db, 31, 0).await?;
             assert_avatar_schema(&test_db.db).await?;
             assert_screenshot_schema(&test_db.db).await?;
@@ -370,7 +371,7 @@ mod tests {
         let test_db = PostgresMigrationDatabase::start(&database_url).await?;
 
         let verification = async {
-            Migrator::up(&test_db.db, None).await?;
+            Migrator::up(&test_db.db, Some(31)).await?;
             assert_migration_tracking(&test_db.db, 31, 0).await?;
             assert_regional_ingress_schema(&test_db.db).await?;
 
@@ -1713,10 +1714,13 @@ VALUES (
     async fn assert_migration_tracking(
         db: &DatabaseConnection,
         applied_count: usize,
-        pending_count: usize,
+        _phase_pending_count: usize,
     ) -> anyhow::Result<()> {
         let applied = Migrator::get_applied_migrations(db).await?;
         let pending = Migrator::get_pending_migrations(db).await?;
+        // Historical shape tests stop at their target migration. Later migrations
+        // remain pending even when that historical phase is fully applied.
+        let pending_count = Migrator::migrations().len() - applied_count;
 
         ensure!(
             applied.len() == applied_count,
@@ -2055,9 +2059,6 @@ ORDER BY ordinal_position
                     column("certificate_status", "text", "NO", Some("'pending'::text")),
                     column("certificate_expires_at", "timestamptz", "YES", None),
                     column("certificate_error", "text", "YES", None),
-                    column("acme_account", "jsonb", "YES", None),
-                    column("certificate_bundle", "jsonb", "YES", None),
-                    column("certificate_issued_at", "timestamptz", "YES", None),
                     column("dns_challenge_provider", "text", "YES", None),
                     column("dns_challenge_config", "jsonb", "NO", Some("'{}'::jsonb")),
                     column(
@@ -2071,6 +2072,9 @@ ORDER BY ordinal_position
                     column("deleted_at", "timestamptz", "YES", None),
                     column("created_at", "timestamptz", "NO", None),
                     column("updated_at", "timestamptz", "NO", None),
+                    column("acme_account", "jsonb", "YES", None),
+                    column("certificate_bundle", "jsonb", "YES", None),
+                    column("certificate_issued_at", "timestamptz", "YES", None),
                 ],
             "unexpected regional_ingresses column shapes: {columns:#?}"
         );

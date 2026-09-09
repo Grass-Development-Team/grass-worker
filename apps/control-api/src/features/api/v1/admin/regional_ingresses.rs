@@ -3,7 +3,10 @@ use axum::{
     extract::{Path, State},
     response::IntoResponse,
 };
-use sea_orm::{ActiveModelTrait, ActiveValue::Set};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QuerySelect,
+    TransactionTrait,
+};
 use serde::Deserialize;
 use serde_json::json;
 use time::OffsetDateTime;
@@ -11,9 +14,15 @@ use uuid::Uuid;
 
 use crate::infra::http::timestamps::ts;
 use crate::{
-    domain::ingress,
+    domain::{certificates, ingress},
     infra::{
-        database::{self, entity::regional_ingress},
+        database::{
+            self,
+            entity::{
+                managed_certificate, node, node_ingress_status, regional_ingress,
+                regional_ingress_health,
+            },
+        },
         error::{AppError, ok_response},
     },
     state::ControlApiState,
@@ -36,7 +45,7 @@ fn ingress_view(item: &regional_ingress::Model) -> serde_json::Value {
         "certificate_issued_at": ts(item.certificate_issued_at),
         "certificate_error": item.certificate_error,
         "dns_challenge_provider": item.dns_challenge_provider,
-        "dns_challenge_config_keys": item.dns_challenge_config.as_object().map(|object| object.keys().cloned().collect::<Vec<_>>()).unwrap_or_default(),
+        "dns_challenge_config_keys": [],
         "dns_challenge_status": item.dns_challenge_status,
         "dns_challenge_record_name": item.dns_challenge_record_name,
         "dns_challenge_record_value": item.dns_challenge_record_value,
@@ -45,6 +54,64 @@ fn ingress_view(item: &regional_ingress::Model) -> serde_json::Value {
         "created_at": ts(item.created_at),
         "updated_at": ts(item.updated_at),
     })
+}
+
+async fn detailed_view(
+    db: &sea_orm::DatabaseConnection,
+    item: &regional_ingress::Model,
+    secret: &str,
+) -> anyhow::Result<serde_json::Value> {
+    let mut view = ingress_view(item);
+    view["dns_challenge_config_keys"] = json!(
+        certificates::config(item, secret)?
+            .as_object()
+            .map(|o| o.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default()
+    );
+    let cert = managed_certificate::Entity::find_by_id(item.id)
+        .one(db)
+        .await?;
+    view["certificate_revision"] = json!(
+        cert.as_ref()
+            .map(|c| c.revision.as_str())
+            .unwrap_or_default()
+    );
+    view["certificate_retry_at"] = ts(cert.as_ref().and_then(|c| c.retry_at));
+    if let Some(cert) = &cert {
+        view["certificate_status"] = json!(cert.status);
+        view["certificate_error"] = json!(cert.error);
+        view["certificate_expires_at"] = ts(cert.expires_at);
+        view["certificate_issued_at"] = ts(cert.issued_at);
+    }
+    let nodes = node::Entity::find()
+        .filter(node::Column::Region.eq(&item.region))
+        .filter(node::Column::ServeEnabled.eq(true))
+        .filter(node::Column::DeletedAt.is_null())
+        .all(db)
+        .await?;
+    let mut statuses = Vec::new();
+    for node in nodes {
+        let status = node_ingress_status::Entity::find_by_id(node.id)
+            .one(db)
+            .await?;
+        let health = regional_ingress_health::Entity::find_by_id((item.id, node.id))
+            .one(db)
+            .await?;
+        let installed = status
+            .as_ref()
+            .and_then(|s| s.certificates.as_array())
+            .and_then(|rows| {
+                rows.iter()
+                    .find(|c| c["ingress_id"].as_str() == Some(&item.id.to_string()))
+            })
+            .and_then(|c| c["revision"].as_str());
+        statuses.push(json!({"node_id":node.id,"tls_ready":status.as_ref().is_some_and(|s|s.tls_ready),"challenge_revision":status.as_ref().map(|s|s.challenge_revision.as_str()).unwrap_or_default(),"checked_at":ts(status.as_ref().map(|s|s.checked_at)),"certificate_revision":installed,"health_status":health.as_ref().map(|h|h.status.as_str()).unwrap_or("unknown"),"health_checked_at":ts(health.as_ref().and_then(|h|h.checked_at)),"health_error":health.as_ref().and_then(|h|h.error.as_deref())}));
+    }
+    view["node_statuses"] = json!(statuses);
+    if !item.enabled || !item.tls_enabled {
+        view["certificate_status"] = json!("disabled");
+    }
+    Ok(view)
 }
 
 fn parse_issuer(value: &str, op: &'static str) -> Result<String, AppError> {
@@ -68,18 +135,49 @@ fn validate_challenge(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_ascii_lowercase);
+    if provider
+        .as_ref()
+        .is_some_and(|p| !matches!(p.as_str(), "cloudflare" | "dnspod" | "route53"))
+    {
+        return Err(AppError::Validation {
+            op,
+            message: "unsupported DNS challenge provider".to_owned(),
+        });
+    }
     if provider.is_some() && !config.is_object() {
         return Err(AppError::Validation {
             op,
             message: "dns_challenge_config must be a JSON object".to_owned(),
         });
     }
+    let required: &[&str] = match provider.as_deref() {
+        Some("cloudflare") => &["api_token", "zone_id"],
+        Some("dnspod") => &["secret_id", "secret_key", "domain"],
+        Some("route53") => &["access_key_id", "secret_access_key", "hosted_zone_id"],
+        _ => &[],
+    };
+    for field in required {
+        if config
+            .get(*field)
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(|s| s.trim().is_empty())
+        {
+            return Err(AppError::Validation {
+                op,
+                message: format!("dns_challenge_config.{field} is required"),
+            });
+        }
+    }
     Ok(provider)
 }
 
 fn validate_health_check(path: &str, interval: i32, op: &'static str) -> Result<String, AppError> {
     let path = path.trim();
-    if !path.starts_with('/') || path.len() > 512 {
+    if !path.starts_with('/')
+        || path.starts_with("//")
+        || path.contains(['?', '#', '\\'])
+        || path.len() > 512
+    {
         return Err(AppError::Validation {
             op,
             message: "health_check_path must start with / and be at most 512 bytes".to_owned(),
@@ -123,7 +221,7 @@ const fn default_true() -> bool {
 }
 
 fn default_health_path() -> String {
-    "/health".to_owned()
+    "/_grass/health".to_owned()
 }
 
 const fn default_health_interval() -> i32 {
@@ -147,7 +245,10 @@ pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoRespo
         let candidates = ingress::healthy_serve_nodes(db, &item.region, now)
             .await
             .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-        let mut view = ingress_view(item);
+        let secret = state.config.read().unwrap().secrets.secret_key.clone();
+        let mut view = detailed_view(db, item, &secret)
+            .await
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?;
         view["healthy_nodes"] = json!(
             candidates
                 .iter()
@@ -197,8 +298,15 @@ pub async fn create(
         OP,
     )?;
     let now = OffsetDateTime::now_utc();
+    let id = Uuid::now_v7();
+    let secret = state.config.read().unwrap().secrets.secret_key.clone();
+    let dns_challenge_config = certificates::seal_config(id, &dns_challenge_config, &secret)
+        .map_err(|source| AppError::Validation {
+            op: OP,
+            message: source.to_string(),
+        })?;
     let item = regional_ingress::ActiveModel {
-        id: Set(Uuid::now_v7()),
+        id: Set(id),
         region: Set(region),
         hostname: Set(hostname),
         enabled: Set(body.enabled),
@@ -248,7 +356,7 @@ pub async fn create(
         }
     })?;
     Ok(ok_response(
-        json!({ "regional_ingress": ingress_view(&item) }),
+        json!({ "regional_ingress": detailed_view(db,&item,&secret).await.map_err(|source| AppError::Infrastructure {op:OP,source})? }),
     ))
 }
 
@@ -284,15 +392,55 @@ pub async fn update(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.regional_ingresses.update";
     let db = super::database(&state, OP)?;
-    let item = ingress::get_by_id(db, ingress_id)
+    let transaction = db
+        .begin()
         .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let item = regional_ingress::Entity::find_by_id(ingress_id)
+        .filter(regional_ingress::Column::DeletedAt.is_null())
+        .lock_exclusive()
+        .one(&transaction)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?
         .ok_or_else(|| AppError::NotFound {
             op: OP,
             message: "regional ingress not found".to_owned(),
         })?;
     let mut active: regional_ingress::ActiveModel = item.clone().into();
+    let old_issuer = item.certificate_issuer.clone();
+    let configuration_changed =
+        body.dns_challenge_config.is_some() || body.dns_challenge_provider.is_some();
+    let secret = state.config.read().unwrap().secrets.secret_key.clone();
+    let records = managed_certificate::Entity::find()
+        .filter(managed_certificate::Column::IngressId.eq(item.id))
+        .lock_exclusive()
+        .all(&transaction)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    if (body.hostname.is_some()
+        || body.certificate_issuer.is_some()
+        || body.dns_challenge_config.is_some()
+        || body.dns_challenge_provider.is_some())
+        && records.iter().any(|record| {
+            record
+                .lease_until
+                .is_some_and(|until| until > OffsetDateTime::now_utc())
+        })
+    {
+        return Err(AppError::Conflict{op:OP,message:"wait for certificate issuance to finish before changing hostname, issuer or DNS credentials".to_owned()});
+    }
+    let mut reset_certificate = false;
     if let Some(hostname) = body.hostname {
+        reset_certificate = hostname.trim() != item.hostname;
         active.hostname = Set(grass_validator::normalize_host(&hostname).map_err(|error| {
             AppError::Validation {
                 op: OP,
@@ -336,7 +484,12 @@ pub async fn update(
         .to_owned());
     }
     if let Some(value) = body.certificate_issuer {
-        active.certificate_issuer = Set(parse_issuer(&value, OP)?);
+        let issuer = parse_issuer(&value, OP)?;
+        reset_certificate |= issuer != item.certificate_issuer;
+        active.certificate_issuer = Set(issuer);
+        if reset_certificate {
+            active.acme_account = Set(None);
+        }
     }
     if let Some(value) = body.certificate_auto_renew {
         active.certificate_auto_renew = Set(value);
@@ -347,10 +500,28 @@ pub async fn update(
         let provider_value = provider
             .flatten()
             .or_else(|| item.dns_challenge_provider.clone());
-        let config_value = config.unwrap_or_else(|| item.dns_challenge_config.clone());
+        let previous = certificates::config(&item, &secret)
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+        let config_value = match config {
+            Some(patch) => certificates::merge_config(previous, &patch).map_err(|source| {
+                AppError::Validation {
+                    op: OP,
+                    message: source.to_string(),
+                }
+            })?,
+            None => previous,
+        };
         let provider_value = validate_challenge(provider_value.as_deref(), &config_value, OP)?;
         active.dns_challenge_provider = Set(provider_value.clone());
-        active.dns_challenge_config = Set(config_value);
+        active.dns_challenge_config = Set(certificates::seal_config(
+            item.id,
+            &config_value,
+            &secret,
+        )
+        .map_err(|source| AppError::Validation {
+            op: OP,
+            message: source.to_string(),
+        })?);
         active.dns_challenge_status = Set(if provider_value.is_some() {
             "pending"
         } else {
@@ -359,7 +530,7 @@ pub async fn update(
         .to_owned());
     }
     active.updated_at = Set(OffsetDateTime::now_utc());
-    let item = active.update(db).await.map_err(|source| {
+    let item = active.update(&transaction).await.map_err(|source| {
         let source: anyhow::Error = source.into();
         if database::is_unique_violation(&source) {
             AppError::Conflict {
@@ -370,8 +541,55 @@ pub async fn update(
             AppError::Infrastructure { op: OP, source }
         }
     })?;
+    if reset_certificate || configuration_changed {
+        for record in records {
+            let mut cert: managed_certificate::ActiveModel = record.clone().into();
+            cert.generation = Set(Uuid::now_v7());
+            let reissue = reset_certificate
+                && (record.host_binding_id.is_none()
+                    || (record.issuer != "manual" && old_issuer != item.certificate_issuer));
+            if !reissue {
+                cert.update(&transaction)
+                    .await
+                    .map_err(|source| AppError::Infrastructure {
+                        op: OP,
+                        source: source.into(),
+                    })?;
+                continue;
+            }
+            cert.lease_until = Set(None);
+            cert.status = Set("pending".to_owned());
+            cert.retry_at = Set(None);
+            cert.failure_count = Set(0);
+            cert.acme_account = Set(None);
+            cert.issuer = Set(item.certificate_issuer.clone());
+            cert.challenge_token = Set(None);
+            cert.challenge_value = Set(None);
+            cert.challenge_expires_at = Set(None);
+            if record.host_binding_id.is_none() && record.hostname != item.hostname {
+                cert.hostname = Set(item.hostname.clone());
+                cert.bundle = Set(None);
+                cert.revision = Set(String::new());
+                cert.issued_at = Set(None);
+                cert.expires_at = Set(None);
+            }
+            cert.update(&transaction)
+                .await
+                .map_err(|source| AppError::Infrastructure {
+                    op: OP,
+                    source: source.into(),
+                })?;
+        }
+    }
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     Ok(ok_response(
-        json!({ "regional_ingress": ingress_view(&item) }),
+        json!({ "regional_ingress": detailed_view(db,&item,&secret).await.map_err(|source|AppError::Infrastructure{op:OP,source})? }),
     ))
 }
 
@@ -418,10 +636,21 @@ pub async fn renew_certificate(
             op: OP,
             message: "regional ingress not found".to_owned(),
         })?;
-    let platform_secret = state.config.read().unwrap().secrets.secret_key.clone();
-    crate::domain::acme::reconcile(db, &item, &platform_secret, true)
+    if !item.enabled || !item.tls_enabled {
+        return Err(AppError::Conflict {
+            op: OP,
+            message: "enable this ingress and TLS before renewing".to_owned(),
+        });
+    }
+    let cert = certificates::ensure_record(db, &item, None)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    certificates::queue(db, &cert)
+        .await
+        .map_err(|source| AppError::Conflict {
+            op: OP,
+            message: source.to_string(),
+        })?;
     let refreshed = ingress::get_by_id(db, ingress_id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?
@@ -429,8 +658,48 @@ pub async fn renew_certificate(
             op: OP,
             message: "regional ingress was removed during renewal".to_owned(),
         })?;
+    let secret = state.config.read().unwrap().secrets.secret_key.clone();
     Ok(ok_response(
-        json!({ "regional_ingress": ingress_view(&refreshed) }),
+        json!({ "regional_ingress": detailed_view(db,&refreshed,&secret).await.map_err(|source|AppError::Infrastructure{op:OP,source})? }),
+    ))
+}
+
+pub async fn import_certificate(
+    State(state): State<ControlApiState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<certificates::PemBundle>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "admin.regional_ingresses.import_certificate";
+    let db = super::database(&state, OP)?;
+    let item = ingress::get_by_id(db, id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "regional ingress not found".to_owned(),
+        })?;
+    let secret = state.config.read().unwrap().secrets.secret_key.clone();
+    let cert = certificates::ensure_record(db, &item, None)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    certificates::import(db, &cert, body, &secret)
+        .await
+        .map_err(|source| AppError::Validation {
+            op: OP,
+            message: source.to_string(),
+        })?;
+    let mut active: regional_ingress::ActiveModel = item.into();
+    active.certificate_issuer = Set("manual".to_owned());
+    active.certificate_auto_renew = Set(false);
+    let item = active
+        .update(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    Ok(ok_response(
+        json!({"regional_ingress":detailed_view(db,&item,&secret).await.map_err(|source|AppError::Infrastructure{op:OP,source})?}),
     ))
 }
 

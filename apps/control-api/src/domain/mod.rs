@@ -1,6 +1,7 @@
 pub mod acme;
 pub mod audits;
 pub mod authentication;
+pub mod certificates;
 pub mod cleanup;
 pub mod codes;
 pub mod delivery;

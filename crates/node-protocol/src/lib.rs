@@ -460,11 +460,40 @@ pub struct CertificateBundle {
     pub certificate_pem: String,
     pub private_key_pem: String,
     pub issued_at_unix: Option<i64>,
+    #[serde(default)]
+    pub revision: String,
+    #[serde(default)]
+    pub expires_at_unix: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CertificateBundlesResponse {
     pub bundles: Vec<CertificateBundle>,
+    #[serde(default)]
+    pub challenges: Vec<HttpChallenge>,
+    #[serde(default)]
+    pub challenge_revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpChallenge {
+    pub hostname: String,
+    pub token: String,
+    pub key_authorization: String,
+    pub expires_at_unix: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledCertificate {
+    pub ingress_id: Uuid,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReportIngressStatusRequest {
+    pub certificates: Vec<InstalledCertificate>,
+    pub challenge_revision: String,
+    pub tls_ready: bool,
 }
 
 fn default_region() -> String {

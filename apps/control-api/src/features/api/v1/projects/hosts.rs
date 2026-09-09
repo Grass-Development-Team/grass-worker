@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, State},
     response::IntoResponse,
 };
-use sea_orm::{ActiveModelTrait, TransactionTrait};
+use sea_orm::{ActiveModelTrait, EntityTrait, TransactionTrait};
 use serde::Deserialize;
 use serde_json::json;
 use time::OffsetDateTime;
@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::infra::http::timestamps::ts;
 use crate::{
     domain::hosts::{self, DomainReviewMode},
-    domain::{deployments, ingress},
+    domain::{certificates, deployments, ingress},
     infra::{
         database::entity::{
             DeploymentEnvironment, HostBindingEnvironment, HostBindingKind, HostBindingStatus,
@@ -123,6 +123,23 @@ async fn attach_ingress_guidance(
             "record_value": regional_ingress.dns_challenge_record_value,
         },
     });
+    let record =
+        crate::infra::database::entity::managed_certificate::Entity::find_by_id(binding.id)
+            .one(db)
+            .await
+            .map_err(|source| AppError::Infrastructure {
+                op,
+                source: source.into(),
+            })?;
+    let mut certificate = certificates::view(record.as_ref(), &regional_ingress);
+    certificate["dns_delegation_name"] = json!(format!("_acme-challenge.{}", binding.host));
+    certificate["dns_delegation_target"] = json!(format!(
+        "_acme-{}.{}",
+        binding.id.simple(),
+        regional_ingress.hostname
+    ));
+    view["certificate"] = certificate.clone();
+    view["ingress"]["certificate"] = certificate;
     Ok(view)
 }
 
@@ -392,6 +409,21 @@ pub async fn verify(
     let result = ingress::verify_dns_txt(&binding.host, &expected)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let transaction = db
+        .begin()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let binding = hosts::get_binding_by_id_for_update(&transaction, host_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .filter(|binding| binding.project_id == project_id)
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "host binding no longer exists".to_owned(),
+        })?;
     let mut active: project_host_binding::ActiveModel = binding.clone().into();
     active.ownership_checked_at = sea_orm::ActiveValue::Set(Some(OffsetDateTime::now_utc()));
     match result {
@@ -415,8 +447,18 @@ pub async fn verify(
             active.status = sea_orm::ActiveValue::Set(HostBindingStatus::Pending);
         }
     }
+    if matches!(binding.status, HostBindingStatus::Disabled) {
+        active.status = sea_orm::ActiveValue::Set(HostBindingStatus::Disabled);
+    }
     let updated = active
-        .update(db)
+        .update(&transaction)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    transaction
+        .commit()
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
@@ -608,7 +650,7 @@ pub async fn provision(
     Ok(ok_response(json!({ "host": view })))
 }
 
-async fn load_binding(
+pub(super) async fn load_binding(
     db: &sea_orm::DatabaseConnection,
     access: &super::ProjectAccess,
     host_id: Uuid,

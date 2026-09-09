@@ -16,6 +16,7 @@ use crate::{
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let cli = Cli::parse();
     let mut config = init::config(cli.config_path())?;
     apply_cli(&mut config, &cli);
@@ -393,7 +394,7 @@ fn spawn_regional_ingress_health_sweep(state: ControlApiState) {
 
 fn spawn_regional_ingress_certificate_sweep(state: ControlApiState) {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;

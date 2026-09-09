@@ -5,7 +5,9 @@ use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::infra::database::entity::{NodeStatus, node, regional_ingress, regional_ingress_health};
+use crate::infra::database::entity::{
+    NodeStatus, node, node_ingress_status, regional_ingress, regional_ingress_health,
+};
 
 pub const HEARTBEAT_STALE_SECONDS: i64 = 90;
 
@@ -126,6 +128,7 @@ pub async fn healthy_serve_nodes<C: ConnectionTrait>(
         .as_ref()
         .map(|item| health_check_freshness_seconds(item.health_check_interval_seconds))
         .unwrap_or(120);
+    let tls_required = ingress.as_ref().is_some_and(|i| i.tls_enabled);
     let health = if let Some(ingress) = ingress {
         regional_ingress_health::Entity::find()
             .filter(regional_ingress_health::Column::IngressId.eq(ingress.id))
@@ -145,6 +148,13 @@ pub async fn healthy_serve_nodes<C: ConnectionTrait>(
         .order_by_asc(node::Column::Id)
         .all(db)
         .await?;
+    let tls_status = node_ingress_status::Entity::find()
+        .filter(node_ingress_status::Column::NodeId.is_in(nodes.iter().map(|n| n.id)))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|s| (s.node_id, s))
+        .collect::<std::collections::HashMap<_, _>>();
     let candidates = nodes
         .iter()
         .filter_map(|node| {
@@ -154,6 +164,10 @@ pub async fn healthy_serve_nodes<C: ConnectionTrait>(
                 region: node.region.clone(),
                 base_url: base_url.to_owned(),
                 healthy: matches!(node.status, NodeStatus::Active)
+                    && (!tls_required
+                        || tls_status.get(&node.id).is_some_and(|s| {
+                            s.tls_ready && (now - s.checked_at).whole_seconds() <= 30
+                        }))
                     && node.last_heartbeat_at.is_some_and(|heartbeat| {
                         (now - heartbeat).whole_seconds() <= HEARTBEAT_STALE_SECONDS
                     })
@@ -214,13 +228,11 @@ pub async fn probe_node(
         .await;
     let latency_ms = i32::try_from(started.elapsed().as_millis()).ok();
     match response {
-        Ok(response) if response.status().is_success() || response.status().is_redirection() => {
-            ProbeResult {
-                status: "healthy",
-                latency_ms,
-                error: None,
-            }
-        }
+        Ok(response) if response.status().is_success() => ProbeResult {
+            status: "healthy",
+            latency_ms,
+            error: None,
+        },
         Ok(response) => ProbeResult {
             status: "unhealthy",
             latency_ms,
@@ -249,6 +261,7 @@ pub async fn probe_regional_ingress(
         return Ok(());
     }
     let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(std::time::Duration::from_secs(3))
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
@@ -322,9 +335,19 @@ pub async fn verify_dns_txt_at(
     expected: &str,
 ) -> anyhow::Result<DnsVerification> {
     let name = format!("_grass.{}", host.trim_end_matches('.'));
+    verify_dns_record_at(client, endpoint, &name, "TXT", expected).await
+}
+
+pub async fn verify_dns_record_at(
+    client: &reqwest::Client,
+    endpoint: &str,
+    name: &str,
+    record_type: &str,
+    expected: &str,
+) -> anyhow::Result<DnsVerification> {
     let response = client
         .get(endpoint)
-        .query(&[("name", name.as_str()), ("type", "TXT")])
+        .query(&[("name", name), ("type", record_type)])
         .header("accept", "application/dns-json")
         .send()
         .await?;
@@ -332,6 +355,13 @@ pub async fn verify_dns_txt_at(
         anyhow::bail!("DNS TXT query returned {}", response.status());
     }
     let body: serde_json::Value = response.json().await?;
+    if body
+        .get("Status")
+        .and_then(serde_json::Value::as_u64)
+        .is_some_and(|status| status != 0 && status != 3)
+    {
+        anyhow::bail!("DNS resolver returned an unsuccessful status");
+    }
     let answers = body
         .get("Answer")
         .and_then(serde_json::Value::as_array)
@@ -339,10 +369,19 @@ pub async fn verify_dns_txt_at(
         .unwrap_or_default();
     let mut found = false;
     for answer in answers {
+        let wanted = if record_type == "CNAME" { 5 } else { 16 };
+        if answer.get("type").and_then(serde_json::Value::as_u64) != Some(wanted) {
+            continue;
+        }
         let Some(data) = answer.get("data").and_then(serde_json::Value::as_str) else {
             continue;
         };
-        let value = data.trim().trim_matches('"');
+        let text = if record_type == "CNAME" {
+            data.trim().trim_end_matches('.').to_ascii_lowercase()
+        } else {
+            data.trim().trim_matches('"').replace("\" \"", "")
+        };
+        let value = text.as_str();
         if value.as_bytes().ct_eq(expected.as_bytes()).into() {
             return Ok(DnsVerification::Verified);
         }
@@ -365,9 +404,87 @@ pub fn dns_verification_token(secret_key: &str, binding_id: Uuid, host: &str) ->
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::{CnameGuidanceInput, IngressCandidateInput, cname_guidance, healthy_candidates};
     use axum::{Json, Router, routing::get};
+    pub(crate) fn node_fixture() -> super::node::Model {
+        let now = time::OffsetDateTime::now_utc();
+        super::node::Model {
+            id: uuid::Uuid::now_v7(),
+            name: "entry".to_owned(),
+            region: "eu".to_owned(),
+            token_hash: "hash".to_owned(),
+            status: super::NodeStatus::Active,
+            build_enabled: false,
+            serve_enabled: true,
+            build_concurrency: 1,
+            base_url: Some("http://entry.example.org".to_owned()),
+            work_root: None,
+            capacity_cpu_millicores: 2000,
+            capacity_memory_mb: 2048,
+            capacity_disk_mb: 10000,
+            max_deployments: 10,
+            metadata: serde_json::json!({}),
+            last_heartbeat_at: Some(now),
+            desired_config: None,
+            desired_config_revision: 0,
+            effective_config: None,
+            effective_config_revision: 0,
+            config_sync_status: crate::infra::database::entity::NodeConfigSyncStatus::Applied,
+            config_sync_error: None,
+            node_token_configured: true,
+            config_updated_at: None,
+            config_applied_at: None,
+            deleted_at: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[tokio::test]
+    async fn tls_ingress_excludes_http_only_and_stale_tls_nodes() {
+        use super::*;
+        let now = OffsetDateTime::now_utc();
+        let ingress = crate::domain::certificates::tests::ingress_fixture();
+        let ready = node_fixture();
+        let http_only = node_fixture();
+        let stale = node_fixture();
+        let nodes = vec![ready.clone(), http_only.clone(), stale.clone()];
+        let health = nodes
+            .iter()
+            .map(|node| regional_ingress_health::Model {
+                ingress_id: ingress.id,
+                node_id: node.id,
+                status: "healthy".to_owned(),
+                checked_at: Some(now),
+                latency_ms: Some(1),
+                error: None,
+            })
+            .collect::<Vec<_>>();
+        let status = nodes
+            .iter()
+            .map(|node| node_ingress_status::Model {
+                node_id: node.id,
+                certificates: serde_json::json!([]),
+                challenge_revision: String::new(),
+                tls_ready: node.id != http_only.id,
+                checked_at: if node.id == stale.id {
+                    now - time::Duration::seconds(60)
+                } else {
+                    now
+                },
+            })
+            .collect::<Vec<_>>();
+        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([vec![ingress]])
+            .append_query_results([health])
+            .append_query_results([nodes])
+            .append_query_results([status])
+            .into_connection();
+        let selected = healthy_serve_nodes(&db, "eu", now).await.unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].node_id, ready.id.to_string());
+    }
 
     #[tokio::test]
     async fn dns_txt_verification_accepts_matching_answer_and_rejects_missing() {

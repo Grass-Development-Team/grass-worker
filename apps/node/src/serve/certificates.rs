@@ -124,6 +124,8 @@ mod tests {
                 certificate_pem: "CERT".to_owned(),
                 private_key_pem: "KEY".to_owned(),
                 issued_at_unix: None,
+                expires_at_unix: None,
+                revision: String::new(),
             },
         )
         .await

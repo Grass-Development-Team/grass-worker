@@ -204,6 +204,16 @@ export interface AdminRegionalIngress {
   certificate_auto_renew: boolean;
   certificate_status: "pending" | "issuing" | "active" | "expiring" | "failed" | "disabled";
   certificate_expires_at: string | null;
+  certificate_issued_at?: string | null;
+  certificate_revision?: string | null;
+  certificate_retry_at?: string | null;
+  node_statuses?: Array<{
+    node_id: string;
+    tls_ready: boolean;
+    challenge_revision: string;
+    checked_at: string | null;
+    certificate_revision: string | null;
+  }>;
   certificate_error: string | null;
   dns_challenge_provider: string | null;
   dns_challenge_config_keys: string[];
@@ -784,6 +794,21 @@ export const adminApi = {
 
   removeRegionalIngress: (ingressId: string) =>
     request<{ ok: true }>(`/api/v1/admin/regional-ingresses/${ingressId}`, { method: "DELETE" }),
+
+  renewRegionalIngressCertificate: (ingressId: string) =>
+    request<{ regional_ingress: AdminRegionalIngress }>(
+      `/api/v1/admin/regional-ingresses/${ingressId}/certificate/renew`,
+      { method: "POST" },
+    ),
+
+  importRegionalIngressCertificate: (
+    ingressId: string,
+    input: { certificate_pem: string; private_key_pem: string },
+  ) =>
+    request<{ regional_ingress: AdminRegionalIngress }>(
+      `/api/v1/admin/regional-ingresses/${ingressId}/certificate/import`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
 
   listNodes: () =>
     request<{ nodes: AdminNode[]; local_process: AdminLocalProcessInfo }>("/api/v1/admin/nodes"),
