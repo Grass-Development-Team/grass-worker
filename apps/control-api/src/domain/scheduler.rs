@@ -538,6 +538,38 @@ mod tests {
     }
 
     #[test]
+    fn regional_placement_never_falls_back_or_accepts_a_foreign_manual_node() {
+        let candidates = vec![
+            candidate_in_region(1, "us-east"),
+            candidate_in_region(2, "eu-west"),
+        ];
+        assert!(matches!(
+            choose_candidate_in_region(&candidates, request(), Some("ap-east"), None),
+            Err(ScheduleError::NoCapacityInRegion(_))
+        ));
+        assert!(matches!(
+            choose_candidate_in_region(
+                &candidates,
+                request(),
+                Some("eu-west"),
+                Some(Uuid::from_u128(1))
+            ),
+            Err(ScheduleError::SelectedNodeUnavailable)
+        ));
+        let mut full = candidate_in_region(3, "eu-west");
+        full.usage.disk_mb = full.capacity.disk_mb;
+        assert!(
+            choose_candidate_in_region(
+                &[candidates[0].clone(), full],
+                request(),
+                Some("eu-west"),
+                None
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn selection_uses_projected_dominant_resource() {
         let lower_current = candidate(1, (1_000, 1_000, 10_000, 10), (0, 0, 0, 0));
         let lower_projected = candidate(2, (10_000, 10_000, 10_000, 10), (1_000, 1_000, 0, 0));
