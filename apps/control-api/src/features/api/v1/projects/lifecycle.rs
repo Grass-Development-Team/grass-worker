@@ -148,6 +148,7 @@ pub(crate) async fn soft_delete_project_records<C: ConnectionTrait>(
 pub(crate) async fn finalize_deleted_project_resources(
     db: &sea_orm::DatabaseConnection,
     cache: &grass_cache::CacheStore,
+    platform_secret: &str,
     op: &'static str,
     project: &project::Model,
     bindings: &[project_host_binding::Model],
@@ -163,7 +164,7 @@ pub(crate) async fn finalize_deleted_project_resources(
                 && let Some(source) =
                     hosts::get_source_by_id_including_deleted(db, source_id).await?
             {
-                let outcome = HostBindingService::new(db, cache)
+                let outcome = HostBindingService::new(db, cache, platform_secret)
                     .deprovision(op, &binding, &source)
                     .await
                     .map_err(|_| anyhow::anyhow!("host deprovision did not complete"))?;
@@ -344,6 +345,7 @@ mod tests {
             team_id,
             host_source_id: None,
             host: "example.invalid".to_owned(),
+            region: "default".to_owned(),
             kind: crate::infra::database::entity::HostBindingKind::Custom,
             environment: crate::infra::database::entity::HostBindingEnvironment::Preview,
             status: crate::infra::database::entity::HostBindingStatus::Active,
@@ -353,6 +355,9 @@ mod tests {
             reviewed_by_user_id: None,
             reviewed_at: None,
             review_reason: None,
+            ownership_status: "pending".to_owned(),
+            ownership_checked_at: None,
+            ownership_error: None,
             deleted_at: Some(now),
             created_at: now,
             updated_at: now,
@@ -440,6 +445,7 @@ mod tests {
             team_id,
             host_source_id: None,
             host: "retry.example.invalid".to_owned(),
+            region: "default".to_owned(),
             kind: crate::infra::database::entity::HostBindingKind::Custom,
             environment: crate::infra::database::entity::HostBindingEnvironment::Preview,
             status: crate::infra::database::entity::HostBindingStatus::Active,
@@ -449,6 +455,9 @@ mod tests {
             reviewed_by_user_id: None,
             reviewed_at: None,
             review_reason: None,
+            ownership_status: "pending".to_owned(),
+            ownership_checked_at: None,
+            ownership_error: None,
             deleted_at: Some(tombstone_at),
             created_at: time::OffsetDateTime::UNIX_EPOCH,
             updated_at: tombstone_at,
@@ -628,6 +637,7 @@ mod tests {
             team_id,
             host_source_id: None,
             host: format!("{id}.example.invalid"),
+            region: "default".to_owned(),
             kind: crate::infra::database::entity::HostBindingKind::Custom,
             environment: crate::infra::database::entity::HostBindingEnvironment::Preview,
             status: crate::infra::database::entity::HostBindingStatus::Active,
@@ -637,6 +647,9 @@ mod tests {
             reviewed_by_user_id: None,
             reviewed_at: None,
             review_reason: None,
+            ownership_status: "pending".to_owned(),
+            ownership_checked_at: None,
+            ownership_error: None,
             deleted_at: Some(deleted_at),
             created_at: time::OffsetDateTime::UNIX_EPOCH,
             updated_at: deleted_at,
@@ -892,7 +905,16 @@ pub async fn delete(
         })?;
 
     let warnings = if deletion.newly_deleted {
-        finalize_deleted_project_resources(db, cache, OP, &project, &deletion.bindings).await?
+        let platform_secret = state.config.read().unwrap().secrets.secret_key.clone();
+        finalize_deleted_project_resources(
+            db,
+            cache,
+            &platform_secret,
+            OP,
+            &project,
+            &deletion.bindings,
+        )
+        .await?
     } else {
         release_deleted_project_quota(db, cache, OP, &project, &deletion.bindings).await?;
         Vec::new()

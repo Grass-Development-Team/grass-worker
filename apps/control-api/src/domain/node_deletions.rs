@@ -839,6 +839,7 @@ mod tests {
         node::ActiveModel {
             id: Set(Uuid::now_v7()),
             name: Set(name.to_owned()),
+            region: Set("default".to_owned()),
             token_hash: Set(format!("token-{name}")),
             status: Set(NodeStatus::Active),
             build_enabled: Set(true),
@@ -891,6 +892,7 @@ mod tests {
             },
             Placement {
                 node_id: source_node_id,
+                region: "default".to_owned(),
                 overcommitted: false,
                 mode: PlacementMode::Automatic,
             },
@@ -1339,6 +1341,7 @@ mod tests {
             },
             Placement {
                 node_id: fixture.source.id,
+                region: "default".to_owned(),
                 overcommitted: false,
                 mode: PlacementMode::Automatic,
             },

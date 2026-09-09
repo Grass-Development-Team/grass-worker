@@ -53,6 +53,7 @@ pub fn registration_request(
             build: config.node.capabilities.build,
             serve: config.node.capabilities.serve,
         },
+        region: config.node.region.clone(),
         build_concurrency: if config.node.capabilities.build {
             config.build.concurrency
         } else {
@@ -72,6 +73,7 @@ pub fn registration_request(
         config_revision: config.config_revision,
         effective_config: Some(config.sync_configuration()),
         node_token_configured: config.node_token_configured(),
+        gateway_authentication: config.security.gateway_authentication,
     })
 }
 
@@ -95,6 +97,10 @@ pub async fn register(
                     "node registered with control api"
                 );
                 if config.node.capabilities.serve
+                    && matches!(
+                        response.gateway_authentication,
+                        grass_node_protocol::GatewayAuthenticationMode::Token
+                    )
                     && response.gateway_token.as_deref().is_none_or(str::is_empty)
                 {
                     anyhow::bail!("control api omitted the serve gateway token");

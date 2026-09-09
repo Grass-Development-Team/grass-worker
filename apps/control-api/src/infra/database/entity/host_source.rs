@@ -11,6 +11,7 @@ pub struct Model {
     pub kind: HostSourceKind,
     pub label: String,
     pub base_domain: String,
+    pub region: String,
     pub enabled: bool,
     pub allows_auto_assign: bool,
     pub is_default: bool,

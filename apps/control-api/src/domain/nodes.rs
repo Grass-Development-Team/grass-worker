@@ -1,4 +1,4 @@
-use grass_node_protocol::NodeResources;
+use grass_node_protocol::{GatewayAuthenticationMode, NodeConfiguration, NodeResources};
 use ring::hmac;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
@@ -15,8 +15,17 @@ pub fn gateway_token(secret: &str) -> String {
     hex::encode(hmac::sign(&key, b"grass-node-gateway-v1").as_ref())
 }
 
+pub fn gateway_authentication(node: &node::Model) -> GatewayAuthenticationMode {
+    node.effective_config
+        .as_ref()
+        .and_then(|value| serde_json::from_value::<NodeConfiguration>(value.clone()).ok())
+        .map(|config| config.security.gateway_authentication)
+        .unwrap_or_default()
+}
+
 pub struct CreateNodeParams {
     pub name: String,
+    pub region: String,
     pub token_hash: String,
     pub storage_root: Option<String>,
 }
@@ -37,6 +46,7 @@ pub async fn create_node(
     node::ActiveModel {
         id: Set(Uuid::now_v7()),
         name: Set(params.name.clone()),
+        region: Set(params.region),
         token_hash: Set(params.token_hash),
         status: Set(NodeStatus::Pending),
         build_enabled: Set(true),
@@ -145,6 +155,7 @@ pub async fn list<C: ConnectionTrait>(db: &C) -> anyhow::Result<Vec<node::Model>
 
 pub struct RegisterNodeParams {
     pub name: String,
+    pub region: String,
     pub version: String,
     pub build_enabled: bool,
     pub serve_enabled: bool,
@@ -282,6 +293,7 @@ pub async fn apply_registration<C: ConnectionTrait>(
     let initialize_deployments = first_resource_report;
     let mut active: node::ActiveModel = node.into();
     active.name = Set(params.name);
+    active.region = Set(params.region);
     active.build_enabled = Set(params.build_enabled);
     active.serve_enabled = Set(params.serve_enabled);
     active.build_concurrency = Set(if params.build_enabled {
@@ -498,6 +510,7 @@ mod tests {
         node::Model {
             id: Uuid::nil(),
             name: "test".to_owned(),
+            region: "default".to_owned(),
             token_hash: String::new(),
             status,
             build_enabled: true,

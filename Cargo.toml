@@ -33,6 +33,7 @@ bytes = "1"
 clap = { version = "4.5.50", features = ["derive", "env"] }
 config = { version = "0.15.19", default-features = false, features = ["toml"] }
 hex = "0.4"
+hyper-util = { version = "0.1", features = ["server-auto", "service", "tokio"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "pool", "sendmail-transport", "smtp-transport", "tokio1", "tokio1-rustls-tls"] }
 jsonwebtoken = "9"
@@ -42,6 +43,9 @@ rand = "0.8"
 redis = { version = "0.31.0", default-features = false, features = ["tokio-comp", "aio", "script"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pemfile = "2"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 rust-embed = "8"
 sea-orm = { version = "2.0.0-rc.38", default-features = false, features = ["macros", "sqlx-postgres", "runtime-tokio-rustls", "with-json", "with-time", "with-uuid"] }
@@ -62,12 +66,15 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "jso
 url = "2.5.4"
 uuid = { version = "1.18.1", features = ["serde", "v7"] }
 walkdir = "2"
+x509-parser = "0.18"
 webp = "0.3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 bollard = "0.19"
 tar = "0.4"
 futures-util = "0.3"
 object_store = { version = "0.14.1", default-features = false, features = ["fs", "aws"] }
+quick-xml = { version = "0.41", features = ["serialize"] }
+instant-acme = { version = "0.8.5", default-features = true, features = ["rcgen"] }
 
 grass-archive = { path = "crates/archive" }
 grass-assets = { path = "crates/assets" }

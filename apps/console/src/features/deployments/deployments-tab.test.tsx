@@ -55,6 +55,7 @@ function deploymentFixture(overrides: Partial<Deployment> = {}): Deployment {
     id: "deployment-1",
     project_id: "project-1",
     team_id: "team-1",
+    region: "default",
     build_node: { id: "build-node-1", name: "builder-1" },
     serve_node: { id: "serve-node-1", name: "serve-node-1" },
     environment: "production",
@@ -149,6 +150,7 @@ it("creates with automatic placement by default and sends a selected serve node"
             {
               id: "node-1",
               name: "serve-node-1",
+              region: "default",
               healthy: true,
               capacity: {
                 cpu_millicores: 1000,
@@ -166,6 +168,7 @@ it("creates with automatic placement by default and sends a selected serve node"
             {
               id: "node-2",
               name: "serve-node-2",
+              region: "eu-west",
               healthy: true,
               capacity: {
                 cpu_millicores: 2000,

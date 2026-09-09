@@ -51,6 +51,8 @@ pub struct NodeIdentityConfiguration {
     pub id: String,
     pub control_api: String,
     pub work_root: String,
+    #[serde(default = "default_region")]
+    pub region: String,
     pub capabilities: NodeCapabilities,
 }
 
@@ -70,6 +72,24 @@ pub struct NodeServeConfiguration {
     pub artifact_cache_root: String,
     pub capacity: NodeServeCapacityConfiguration,
     pub ssr: NodeSsrConfiguration,
+    #[serde(default)]
+    pub tls: NodeTlsConfiguration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NodeTlsConfiguration {
+    pub enabled: bool,
+    pub port: u16,
+}
+
+impl Default for NodeTlsConfiguration {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: 8443,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,7 +124,22 @@ pub struct NodeRuntimeResourcesConfiguration {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeSecurityConfiguration {
+    #[serde(default)]
+    pub gateway_authentication: GatewayAuthenticationMode,
     pub private_repository_targets: Vec<NodePrivateRepositoryTargetConfiguration>,
+}
+
+/// Authentication used for Serve Node to Serve Node gateway requests.
+///
+/// `token` is the default for backwards compatibility. `none` is intended
+/// for deployments where the Serve listener is reachable only through a
+/// trusted private network or firewall.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GatewayAuthenticationMode {
+    #[default]
+    Token,
+    None,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,6 +179,8 @@ pub struct RegisterRequest {
     pub name: String,
     pub version: String,
     pub capabilities: NodeCapabilities,
+    #[serde(default = "default_region")]
+    pub region: String,
     pub build_concurrency: u16,
     /// Public base URL of the Node serve listener, when known.
     #[serde(default)]
@@ -160,6 +197,9 @@ pub struct RegisterRequest {
     /// Whether the running process has a usable token, without exposing it.
     #[serde(default)]
     pub node_token_configured: bool,
+    /// Gateway authentication selected by the running Node.
+    #[serde(default)]
+    pub gateway_authentication: GatewayAuthenticationMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -173,6 +213,9 @@ pub struct RegisterResponse {
     /// present only when Serve capability is enabled.
     #[serde(default)]
     pub gateway_token: Option<String>,
+    /// Gateway authentication accepted by the Control API.
+    #[serde(default)]
+    pub gateway_authentication: GatewayAuthenticationMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -434,9 +477,14 @@ pub struct SsrLeaseResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServeRoute {
     pub host: String,
+    #[serde(default = "default_region")]
+    pub region: String,
     pub deployment_id: Uuid,
     pub target_node_id: Uuid,
     pub target_base_url: String,
+    /// Authentication required by the destination, independently of the entry Node.
+    #[serde(default)]
+    pub gateway_authentication: GatewayAuthenticationMode,
     pub resources: ServeResources,
     pub access: ServeAccess,
 }
@@ -445,6 +493,68 @@ pub struct ServeRoute {
 pub struct RouteSnapshotResponse {
     pub revision: String,
     pub routes: Vec<ServeRoute>,
+}
+
+/// A certificate bundle that a Serve Node may install for a regional ingress.
+/// Private key material is sent only over the authenticated internal protocol.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CertificateBundle {
+    pub ingress_id: Uuid,
+    pub hostname: String,
+    pub certificate_pem: String,
+    pub private_key_pem: String,
+    pub issued_at_unix: Option<i64>,
+    #[serde(default)]
+    pub revision: String,
+    #[serde(default)]
+    pub expires_at_unix: Option<i64>,
+}
+
+impl std::fmt::Debug for CertificateBundle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CertificateBundle")
+            .field("ingress_id", &self.ingress_id)
+            .field("hostname", &self.hostname)
+            .field("revision", &self.revision)
+            .field("issued_at_unix", &self.issued_at_unix)
+            .field("expires_at_unix", &self.expires_at_unix)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CertificateBundlesResponse {
+    pub bundles: Vec<CertificateBundle>,
+    #[serde(default)]
+    pub challenges: Vec<HttpChallenge>,
+    #[serde(default)]
+    pub challenge_revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpChallenge {
+    pub hostname: String,
+    pub token: String,
+    pub key_authorization: String,
+    pub expires_at_unix: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledCertificate {
+    pub ingress_id: Uuid,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReportIngressStatusRequest {
+    pub certificates: Vec<InstalledCertificate>,
+    pub challenge_revision: String,
+    pub tls_ready: bool,
+}
+
+fn default_region() -> String {
+    "default".to_owned()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -715,16 +825,33 @@ mod tests {
 
         let route = ServeRoute {
             host: "app.example.com".to_owned(),
+            region: "eu-west".to_owned(),
             deployment_id: Uuid::nil(),
             target_node_id: Uuid::nil(),
             target_base_url: "http://node-1:8080".to_owned(),
+            gateway_authentication: Default::default(),
             resources,
             access: ServeAccess::TeamOrPlatformAdmin,
         };
         let parsed: ServeRoute =
             serde_json::from_slice(&serde_json::to_vec(&route).unwrap()).unwrap();
         assert_eq!(parsed.host, "app.example.com");
+        assert_eq!(parsed.region, "eu-west");
         assert_eq!(parsed.resources, resources);
         assert_eq!(parsed.access, ServeAccess::TeamOrPlatformAdmin);
+    }
+
+    #[test]
+    fn gateway_authentication_defaults_for_legacy_payloads() {
+        let security: NodeSecurityConfiguration =
+            serde_json::from_str(r#"{"private_repository_targets":[]}"#).unwrap();
+        assert_eq!(
+            security.gateway_authentication,
+            GatewayAuthenticationMode::Token
+        );
+        assert_eq!(
+            serde_json::to_string(&GatewayAuthenticationMode::None).unwrap(),
+            r#""none""#
+        );
     }
 }

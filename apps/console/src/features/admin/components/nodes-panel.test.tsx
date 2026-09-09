@@ -15,6 +15,7 @@ function jsonResponse(data: unknown): Response {
 const configuration = {
   node: {
     id: "serve-node-1",
+    region: "default",
     control_api: "http://127.0.0.1:7817",
     work_root: "/data/node",
     capabilities: { build: true, serve: true },
@@ -54,6 +55,7 @@ const configuration = {
 const nodeFixture = {
   id: "node-1",
   name: "serve-node-1",
+  region: "default",
   status: "active",
   healthy: true,
   build_enabled: false,
@@ -137,6 +139,11 @@ it("edits the complete non-secret desired Node configuration", async () => {
   const concurrencyInput = screen.getByLabelText("Build concurrency");
   await user.clear(concurrencyInput);
   await user.type(concurrencyInput, "4");
+  await user.click(screen.getByRole("tab", { name: "Serve" }));
+  await user.click(screen.getByLabelText("Native HTTPS"));
+  const httpsPortInput = screen.getByLabelText("HTTPS port");
+  await user.clear(httpsPortInput);
+  await user.type(httpsPortInput, "9443");
   await user.click(screen.getByRole("button", { name: "Save configuration" }));
 
   await waitFor(() => {
@@ -148,6 +155,7 @@ it("edits the complete non-secret desired Node configuration", async () => {
     const payload = JSON.parse(String(update!.init!.body));
     expect(payload.build.concurrency).toBe(4);
     expect(payload.serve.capacity.max_deployments).toBe(10);
+    expect(payload.serve.tls).toEqual({ enabled: true, port: 9443 });
     expect(payload.runtime.default_serve_image).toBe("docker.io/library/node:22");
     expect(JSON.stringify(payload)).not.toContain("node_token");
   });

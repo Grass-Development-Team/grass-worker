@@ -3,15 +3,16 @@ use axum::{
     extract::{Path, State},
     response::IntoResponse,
 };
-use sea_orm::TransactionTrait;
+use sea_orm::{ActiveModelTrait, EntityTrait, TransactionTrait};
 use serde::Deserialize;
 use serde_json::json;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::infra::http::timestamps::ts;
 use crate::{
-    domain::deployments,
     domain::hosts::{self, DomainReviewMode},
+    domain::{certificates, deployments, ingress},
     infra::{
         database::entity::{
             DeploymentEnvironment, HostBindingEnvironment, HostBindingKind, HostBindingStatus,
@@ -29,6 +30,7 @@ fn binding_view(binding: &project_host_binding::Model) -> serde_json::Value {
         "id": binding.id,
         "project_id": binding.project_id,
         "host": binding.host,
+        "region": binding.region,
         "kind": match binding.kind {
             HostBindingKind::Platform => "platform",
             HostBindingKind::Custom => "custom",
@@ -46,8 +48,99 @@ fn binding_view(binding: &project_host_binding::Model) -> serde_json::Value {
         "reviewed_by_user_id": binding.reviewed_by_user_id,
         "reviewed_at": binding.reviewed_at.map(ts),
         "review_reason": binding.review_reason,
+        "ownership_status": binding.ownership_status,
+        "ownership_checked_at": binding.ownership_checked_at.map(ts),
+        "ownership_error": binding.ownership_error,
         "created_at": ts(binding.created_at),
+        "ingress": serde_json::Value::Null,
     })
+}
+
+async fn attach_ingress_guidance(
+    state: &ControlApiState,
+    db: &sea_orm::DatabaseConnection,
+    binding: &project_host_binding::Model,
+    mut view: serde_json::Value,
+    op: &'static str,
+) -> Result<serde_json::Value, AppError> {
+    if !matches!(binding.kind, HostBindingKind::Custom) {
+        return Ok(view);
+    }
+    let Some(regional_ingress) = ingress::get_enabled_by_region(db, &binding.region)
+        .await
+        .map_err(|source| AppError::Infrastructure { op, source })?
+    else {
+        return Ok(view);
+    };
+    let candidates = ingress::healthy_serve_nodes(db, &binding.region, OffsetDateTime::now_utc())
+        .await
+        .map_err(|source| AppError::Infrastructure { op, source })?;
+    let secret_key = state.config.read().unwrap().secrets.secret_key.clone();
+    let verification_value =
+        ingress::dns_verification_token(&secret_key, binding.id, &binding.host);
+    let guidance = ingress::cname_guidance(ingress::CnameGuidanceInput {
+        host: &binding.host,
+        region: &binding.region,
+        ingress_hostname: &regional_ingress.hostname,
+        verification_name: &format!("_grass.{}", binding.host),
+        verification_value: &verification_value,
+        origin_host_preservation: regional_ingress.origin_host_preservation,
+    });
+    view["ingress"] = json!({
+        "region": guidance.region,
+        "cname": {
+            "record_type": guidance.record_type,
+            "name": guidance.name,
+            "target": guidance.target,
+        },
+        "txt": {
+            "record_type": "TXT",
+            "name": guidance.verification_name,
+            "value": guidance.verification_value,
+        },
+        "origin_host_preservation": guidance.origin_host_preservation,
+        "health_check": {
+            "path": regional_ingress.health_check_path,
+            "interval_seconds": regional_ingress.health_check_interval_seconds,
+        },
+        "entrance_nodes": candidates.iter().map(|candidate| json!({
+            "node_id": candidate.node_id,
+            "base_url": candidate.base_url,
+            "priority": candidate.priority,
+        })).collect::<Vec<_>>(),
+        "certificate": {
+            "enabled": regional_ingress.tls_enabled,
+            "issuer": regional_ingress.certificate_issuer,
+            "auto_renew": regional_ingress.certificate_auto_renew,
+            "status": regional_ingress.certificate_status,
+            "expires_at": ts(regional_ingress.certificate_expires_at),
+            "error": regional_ingress.certificate_error,
+        },
+        "dns_challenge": {
+            "provider": regional_ingress.dns_challenge_provider,
+            "status": regional_ingress.dns_challenge_status,
+            "record_name": regional_ingress.dns_challenge_record_name,
+            "record_value": regional_ingress.dns_challenge_record_value,
+        },
+    });
+    let record =
+        crate::infra::database::entity::managed_certificate::Entity::find_by_id(binding.id)
+            .one(db)
+            .await
+            .map_err(|source| AppError::Infrastructure {
+                op,
+                source: source.into(),
+            })?;
+    let mut certificate = certificates::view(record.as_ref(), &regional_ingress);
+    certificate["dns_delegation_name"] = json!(format!("_acme-challenge.{}", binding.host));
+    certificate["dns_delegation_target"] = json!(format!(
+        "_acme-{}.{}",
+        binding.id.simple(),
+        regional_ingress.hostname
+    ));
+    view["certificate"] = certificate.clone();
+    view["ingress"]["certificate"] = certificate;
+    Ok(view)
 }
 
 fn review_status_value(status: &HostReviewStatus) -> &'static str {
@@ -107,7 +200,8 @@ pub async fn list(
         let events = hosts::list_provision_events_for_binding(db, binding.id)
             .await
             .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-        let mut view = binding_view(binding);
+        let view = binding_view(binding);
+        let mut view = attach_ingress_guidance(&state, db, binding, view, OP).await?;
         view["serving"] = json!(
             matches!(binding.status, HostBindingStatus::Active)
                 && match binding.environment {
@@ -144,6 +238,8 @@ pub async fn list(
 #[derive(Deserialize)]
 pub struct CreateHostRequest {
     pub host: String,
+    #[serde(default)]
+    pub region: Option<String>,
     #[serde(default = "default_environment")]
     pub environment: String,
     #[serde(default)]
@@ -173,7 +269,6 @@ pub async fn create(
             message: error.to_string(),
         })?;
     let environment = parse_environment(&body.environment, OP)?;
-
     let source = match body.host_source_id {
         Some(source_id) => Some(
             hosts::get_source_by_id(db, source_id)
@@ -186,6 +281,29 @@ pub async fn create(
         ),
         None => None,
     };
+    let region = body
+        .region
+        .as_deref()
+        .map(grass_validator::normalize_region)
+        .transpose()
+        .map_err(|error| AppError::Validation {
+            op: OP,
+            message: format!("region: {error}"),
+        })?
+        .or_else(|| source.as_ref().map(|source| source.region.clone()))
+        .unwrap_or_else(|| "default".to_owned());
+
+    if let Some(source) = source.as_ref()
+        && region != source.region
+    {
+        return Err(AppError::Validation {
+            op: OP,
+            message: format!(
+                "region must match the host source region ({})",
+                source.region
+            ),
+        });
+    }
 
     // Custom hosts require the team group policy to allow them; hosts under
     // a platform source must live under that source's base domain.
@@ -234,7 +352,8 @@ pub async fn create(
         }
     };
 
-    let service = HostBindingService::new(db, cache);
+    let platform_secret = state.config.read().unwrap().secrets.secret_key.clone();
+    let service = HostBindingService::new(db, cache, &platform_secret);
     let binding = service
         .bind_host(
             OP,
@@ -243,6 +362,7 @@ pub async fn create(
                 team: &access.team,
                 source: source.as_ref(),
                 host,
+                region,
                 kind: if source.is_some() {
                     HostBindingKind::Platform
                 } else {
@@ -256,7 +376,8 @@ pub async fn create(
         )
         .await?;
 
-    Ok(ok_response(json!({ "host": binding_view(&binding) })))
+    let view = attach_ingress_guidance(&state, db, &binding, binding_view(&binding), OP).await?;
+    Ok(ok_response(json!({ "host": view })))
 }
 
 #[derive(Deserialize)]
@@ -265,6 +386,89 @@ pub struct UpdateHostRequest {
     pub environment: Option<String>,
     #[serde(default)]
     pub status: Option<String>,
+}
+
+/// POST /api/v1/projects/{project_id}/hosts/{host_id}/verify
+pub async fn verify(
+    State(state): State<ControlApiState>,
+    session: Session,
+    Path((project_id, host_id)): Path<(Uuid, Uuid)>,
+) -> Result<impl IntoResponse, AppError> {
+    const OP: &str = "projects.hosts.verify";
+    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    access.require_member(OP)?;
+    let db = super::database(&state, OP)?;
+    let binding = load_binding(db, &access, host_id, OP).await?;
+    if !matches!(binding.kind, HostBindingKind::Custom) {
+        return Err(AppError::Conflict {
+            op: OP,
+            message: "platform domains do not require ownership verification".to_owned(),
+        });
+    }
+    let secret_key = state.config.read().unwrap().secrets.secret_key.clone();
+    let expected = ingress::dns_verification_token(&secret_key, binding.id, &binding.host);
+    let result = ingress::verify_dns_txt(&binding.host, &expected)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let transaction = db
+        .begin()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let binding = hosts::get_binding_by_id_for_update(&transaction, host_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .filter(|binding| binding.project_id == project_id)
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "host binding no longer exists".to_owned(),
+        })?;
+    let mut active: project_host_binding::ActiveModel = binding.clone().into();
+    active.ownership_checked_at = sea_orm::ActiveValue::Set(Some(OffsetDateTime::now_utc()));
+    match result {
+        ingress::DnsVerification::Verified => {
+            active.ownership_status = sea_orm::ActiveValue::Set("verified".to_owned());
+            active.ownership_error = sea_orm::ActiveValue::Set(None);
+            if matches!(binding.review_status, HostReviewStatus::Approved) {
+                active.status = sea_orm::ActiveValue::Set(HostBindingStatus::Active);
+            }
+        }
+        ingress::DnsVerification::Missing => {
+            active.ownership_status = sea_orm::ActiveValue::Set("failed".to_owned());
+            active.ownership_error =
+                sea_orm::ActiveValue::Set(Some("TXT ownership record was not found".to_owned()));
+            active.status = sea_orm::ActiveValue::Set(HostBindingStatus::Pending);
+        }
+        ingress::DnsVerification::Mismatch => {
+            active.ownership_status = sea_orm::ActiveValue::Set("failed".to_owned());
+            active.ownership_error =
+                sea_orm::ActiveValue::Set(Some("TXT ownership record did not match".to_owned()));
+            active.status = sea_orm::ActiveValue::Set(HostBindingStatus::Pending);
+        }
+    }
+    if matches!(binding.status, HostBindingStatus::Disabled) {
+        active.status = sea_orm::ActiveValue::Set(HostBindingStatus::Disabled);
+    }
+    let updated = active
+        .update(&transaction)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let view = attach_ingress_guidance(&state, db, &updated, binding_view(&updated), OP).await?;
+    Ok(ok_response(
+        json!({ "host": view, "verified": result == ingress::DnsVerification::Verified }),
+    ))
 }
 
 /// PATCH /api/v1/projects/{project_id}/hosts/{host_id}
@@ -308,7 +512,8 @@ pub async fn update(
             source: source.into(),
         })?;
 
-    Ok(ok_response(json!({ "host": binding_view(&binding) })))
+    let view = attach_ingress_guidance(&state, db, &binding, binding_view(&binding), OP).await?;
+    Ok(ok_response(json!({ "host": view })))
 }
 
 /// DELETE /api/v1/projects/{project_id}/hosts/{host_id}
@@ -357,7 +562,8 @@ pub async fn remove(
             .await
             .map_err(|source| AppError::Infrastructure { op: OP, source })?
     {
-        let _ = HostBindingService::new(db, cache)
+        let platform_secret = state.config.read().unwrap().secrets.secret_key.clone();
+        let _ = HostBindingService::new(db, cache, &platform_secret)
             .deprovision(OP, &binding, &source)
             .await?;
     }
@@ -439,13 +645,15 @@ pub async fn provision(
             message: "host source not found".to_owned(),
         })?;
 
-    let service = HostBindingService::new(db, cache);
+    let platform_secret = state.config.read().unwrap().secrets.secret_key.clone();
+    let service = HostBindingService::new(db, cache, &platform_secret);
     let binding = service.provision(OP, binding, &source).await?;
 
-    Ok(ok_response(json!({ "host": binding_view(&binding) })))
+    let view = attach_ingress_guidance(&state, db, &binding, binding_view(&binding), OP).await?;
+    Ok(ok_response(json!({ "host": view })))
 }
 
-async fn load_binding(
+pub(super) async fn load_binding(
     db: &sea_orm::DatabaseConnection,
     access: &super::ProjectAccess,
     host_id: Uuid,
@@ -482,6 +690,7 @@ mod tests {
             team_id: Uuid::now_v7(),
             host_source_id: None,
             host: "manual.example.test".to_owned(),
+            region: "default".to_owned(),
             kind: HostBindingKind::Custom,
             environment: HostBindingEnvironment::Production,
             status: HostBindingStatus::Pending,
@@ -491,6 +700,9 @@ mod tests {
             reviewed_by_user_id: Some(reviewer_id),
             reviewed_at: Some(OffsetDateTime::UNIX_EPOCH),
             review_reason: Some("Ownership could not be verified".to_owned()),
+            ownership_status: "pending".to_owned(),
+            ownership_checked_at: None,
+            ownership_error: None,
             deleted_at: None,
             created_at: OffsetDateTime::UNIX_EPOCH,
             updated_at: OffsetDateTime::UNIX_EPOCH,

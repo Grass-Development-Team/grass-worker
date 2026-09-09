@@ -13,7 +13,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 
-use super::HostProvisionError;
+use super::{HostProvisionError, same_dns_name, same_record_value, send_dns_request};
 use crate::infra::database::entity::host_source;
 
 pub const PROVIDER_NAME: &str = "cloudflare";
@@ -22,7 +22,7 @@ const DEFAULT_BASE_URL: &str = "https://api.cloudflare.com/client/v4";
 const RECORD_EXISTS_CODES: [i64; 2] = [81_057, 81_053];
 
 /// Parsed view of a Cloudflare host source `config` object.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CloudflareConfig {
     pub api_token: String,
     pub zone_id: String,
@@ -38,6 +38,14 @@ pub struct CloudflareConfig {
 impl CloudflareConfig {
     pub fn from_source(source: &host_source::Model) -> Result<Self, String> {
         Self::from_json(&source.config)
+    }
+
+    pub fn for_txt(&self, value: &str) -> Self {
+        let mut config = self.clone();
+        config.record_type = "TXT".to_owned();
+        config.record_value = value.to_owned();
+        config.proxied = false;
+        config
     }
 
     pub fn from_json(config: &serde_json::Value) -> Result<Self, String> {
@@ -107,6 +115,12 @@ struct ApiEnvelope<T> {
     #[serde(default)]
     errors: Vec<ApiErrorEntry>,
     result: Option<T>,
+    result_info: Option<ResultInfo>,
+}
+
+#[derive(Deserialize)]
+struct ResultInfo {
+    total_pages: u64,
 }
 
 #[derive(Deserialize)]
@@ -126,6 +140,8 @@ pub struct DnsRecord {
     pub content: String,
     #[serde(default)]
     pub proxied: bool,
+    #[serde(default)]
+    pub ttl: Option<u32>,
 }
 
 #[derive(Debug)]
@@ -196,16 +212,40 @@ impl CloudflareDns {
         }
     }
 
+    pub async fn ensure_txt_record(
+        &self,
+        config: &CloudflareConfig,
+        name: &str,
+        value: &str,
+    ) -> Result<EnsuredRecord, HostProvisionError> {
+        self.ensure_record(&config.for_txt(value), name).await
+    }
+
+    pub async fn remove_txt_record(
+        &self,
+        config: &CloudflareConfig,
+        name: &str,
+        value: &str,
+    ) -> Result<Option<String>, HostProvisionError> {
+        self.remove_record(&config.for_txt(value), name).await
+    }
+
     async fn parse<T: DeserializeOwned>(
         response: reqwest::Response,
     ) -> Result<ApiEnvelope<T>, HostProvisionError> {
-        response
+        let status = response.status();
+        let body = response
             .json::<ApiEnvelope<T>>()
             .await
-            .map_err(request_error)
+            .map_err(request_error)?;
+        if !status.is_success() && body.success {
+            return Err(HostProvisionError::Provider(format!(
+                "cloudflare returned HTTP {status} with an inconsistent success response"
+            )));
+        }
+        Ok(body)
     }
 
-    /// Create the record for `host`, or reconcile with an existing one.
     pub async fn ensure_record(
         &self,
         config: &CloudflareConfig,
@@ -217,14 +257,19 @@ impl CloudflareDns {
                 updated: false,
             }),
             CreateOutcome::AlreadyExists => {
-                let existing = self.find_record(config, host).await?.ok_or_else(|| {
+                let existing = self.find_record(config, host, config.record_type == "TXT").await?.ok_or_else(|| {
                     HostProvisionError::Provider(format!(
                         "cloudflare reports an existing record for {host}, but none was found in the zone"
                     ))
                 })?;
                 let matches = existing.record_type == config.record_type
-                    && existing.content == config.record_value
-                    && existing.proxied == config.proxied;
+                    && same_record_value(
+                        &config.record_type,
+                        &existing.content,
+                        &config.record_value,
+                    )
+                    && existing.proxied == config.proxied
+                    && existing.ttl.is_none_or(|ttl| ttl == config.ttl);
                 if matches {
                     Ok(EnsuredRecord {
                         id: existing.id,
@@ -248,21 +293,25 @@ impl CloudflareDns {
         config: &CloudflareConfig,
         host: &str,
     ) -> Result<Option<String>, HostProvisionError> {
-        let Some(existing) = self.find_record(config, host).await? else {
+        let Some(existing) = self.find_record(config, host, true).await? else {
             return Ok(None);
         };
-        let response = http_client()
-            .delete(format!(
-                "{}/zones/{}/dns_records/{}",
-                self.base_url, config.zone_id, existing.id
-            ))
-            .bearer_auth(&config.api_token)
-            .send()
-            .await
-            .map_err(request_error)?;
+        let response = send_dns_request(
+            http_client()
+                .delete(format!(
+                    "{}/zones/{}/dns_records/{}",
+                    self.base_url, config.zone_id, existing.id
+                ))
+                .bearer_auth(&config.api_token),
+        )
+        .await
+        .map_err(request_error)?;
         let body: ApiEnvelope<serde_json::Value> = Self::parse(response).await?;
         if body.success {
             Ok(Some(existing.id))
+        } else if body.errors.iter().any(|error| error.code == 81_044) {
+            // A concurrent cleanup may already have deleted this exact id.
+            Ok(None)
         } else {
             Err(api_error("delete the DNS record", &body.errors))
         }
@@ -273,16 +322,17 @@ impl CloudflareDns {
         config: &CloudflareConfig,
         host: &str,
     ) -> Result<CreateOutcome, HostProvisionError> {
-        let response = http_client()
-            .post(format!(
-                "{}/zones/{}/dns_records",
-                self.base_url, config.zone_id
-            ))
-            .bearer_auth(&config.api_token)
-            .json(&record_body(config, host))
-            .send()
-            .await
-            .map_err(request_error)?;
+        let response = send_dns_request(
+            http_client()
+                .post(format!(
+                    "{}/zones/{}/dns_records",
+                    self.base_url, config.zone_id
+                ))
+                .bearer_auth(&config.api_token)
+                .json(&record_body(config, host)),
+        )
+        .await
+        .map_err(request_error)?;
         let body: ApiEnvelope<DnsRecord> = Self::parse(response).await?;
         if body.success {
             let record = body.result.ok_or_else(|| {
@@ -306,35 +356,59 @@ impl CloudflareDns {
         &self,
         config: &CloudflareConfig,
         host: &str,
+        exact_value: bool,
     ) -> Result<Option<DnsRecord>, HostProvisionError> {
-        let response = http_client()
-            .get(format!(
-                "{}/zones/{}/dns_records",
-                self.base_url, config.zone_id
-            ))
-            .query(&[("name", host)])
-            .bearer_auth(&config.api_token)
-            .send()
+        let mut page = 1_u64;
+        let mut fallback = None;
+        loop {
+            let response = send_dns_request(
+                http_client()
+                    .get(format!(
+                        "{}/zones/{}/dns_records",
+                        self.base_url, config.zone_id
+                    ))
+                    .query(&[
+                        ("name", host),
+                        ("type", &config.record_type),
+                        ("per_page", "100"),
+                        ("page", &page.to_string()),
+                    ])
+                    .bearer_auth(&config.api_token),
+            )
             .await
             .map_err(request_error)?;
-        let body: ApiEnvelope<Vec<DnsRecord>> = Self::parse(response).await?;
-        if !body.success {
-            return Err(api_error("list DNS records", &body.errors));
+            let body: ApiEnvelope<Vec<DnsRecord>> = Self::parse(response).await?;
+            if !body.success {
+                return Err(api_error("list DNS records", &body.errors));
+            }
+            let records = body.result.ok_or_else(|| {
+                HostProvisionError::Provider(
+                    "cloudflare returned a record list without a result".to_owned(),
+                )
+            })?;
+            // Only reconcile the configured type. A host may legitimately have
+            // TXT, MX, and address records together; falling back to the first
+            // same-name record could overwrite or delete an unrelated record.
+            for record in records.into_iter().filter(|record| {
+                same_dns_name(&record.name, host) && record.record_type == config.record_type
+            }) {
+                if same_record_value(&config.record_type, &record.content, &config.record_value) {
+                    return Ok(Some(record));
+                }
+                if !exact_value && fallback.is_none() {
+                    fallback = Some(record);
+                }
+            }
+            if body.result_info.is_none_or(|info| page >= info.total_pages) {
+                return Ok(fallback);
+            }
+            page += 1;
+            if page > 10_000 {
+                return Err(HostProvisionError::Provider(
+                    "cloudflare record pagination exceeded the safety limit".to_owned(),
+                ));
+            }
         }
-        let records = body.result.unwrap_or_default();
-        let mut matching: Vec<DnsRecord> = records
-            .into_iter()
-            .filter(|record| record.name == host)
-            .collect();
-        // Prefer a record of the configured type when several names match
-        // (e.g. an A and a TXT record on the same name).
-        if let Some(index) = matching
-            .iter()
-            .position(|record| record.record_type == config.record_type)
-        {
-            return Ok(Some(matching.swap_remove(index)));
-        }
-        Ok(matching.into_iter().next())
     }
 
     async fn update_record(
@@ -343,16 +417,17 @@ impl CloudflareDns {
         record_id: &str,
         host: &str,
     ) -> Result<DnsRecord, HostProvisionError> {
-        let response = http_client()
-            .put(format!(
-                "{}/zones/{}/dns_records/{}",
-                self.base_url, config.zone_id, record_id
-            ))
-            .bearer_auth(&config.api_token)
-            .json(&record_body(config, host))
-            .send()
-            .await
-            .map_err(request_error)?;
+        let response = send_dns_request(
+            http_client()
+                .put(format!(
+                    "{}/zones/{}/dns_records/{}",
+                    self.base_url, config.zone_id, record_id
+                ))
+                .bearer_auth(&config.api_token)
+                .json(&record_body(config, host)),
+        )
+        .await
+        .map_err(request_error)?;
         let body: ApiEnvelope<DnsRecord> = Self::parse(response).await?;
         if body.success {
             body.result.ok_or_else(|| {
@@ -548,5 +623,105 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(removed, None);
+    }
+
+    #[tokio::test]
+    async fn txt_reconciliation_and_cleanup_find_the_exact_value_across_pages() {
+        type Requests = Arc<Mutex<Vec<String>>>;
+        let requests = Requests::default();
+        let router = Router::new()
+            .route("/zones/zone1/dns_records", post(|| async {
+                Json(failure(81_057, "Record already exists."))
+            }).get(|State(requests): State<Requests>, axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>| async move {
+                let page = query.get("page").unwrap();
+                requests.lock().unwrap().push(format!("page-{page}"));
+                let records = if page == "1" {
+                    json!([
+                        {"id": "other-challenge", "type": "TXT", "name": "_acme-challenge.example.com", "content": "another-value"},
+                        {"id": "other-name", "type": "TXT", "name": "other.example.com", "content": "desired"},
+                        {"id": "other-type", "type": "A", "name": "_acme-challenge.example.com", "content": "desired"}
+                    ])
+                } else {
+                    json!([{"id": "desired-record", "type": "TXT", "name": "_ACME-CHALLENGE.example.com.", "content": "desired"}])
+                };
+                Json(json!({"success": true, "result": records, "result_info": {"total_pages": 2}}))
+            }))
+            .route("/zones/zone1/dns_records/{id}", delete(|State(requests): State<Requests>, axum::extract::Path(id): axum::extract::Path<String>| async move {
+                requests.lock().unwrap().push(format!("delete-{id}"));
+                Json(envelope(json!({"id": id})))
+            }))
+            .with_state(requests.clone());
+        let dns = CloudflareDns::with_base_url(spawn(router).await);
+        let ensured = dns
+            .ensure_txt_record(&config(), "_acme-challenge.example.com", "desired")
+            .await
+            .unwrap();
+        assert_eq!(ensured.id, "desired-record");
+        assert!(!ensured.updated);
+        assert_eq!(
+            dns.remove_txt_record(&config(), "_acme-challenge.example.com", "desired")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("desired-record")
+        );
+        assert_eq!(
+            requests.lock().unwrap().as_slice(),
+            [
+                "page-1",
+                "page-2",
+                "page-1",
+                "page-2",
+                "delete-desired-record"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_txt_value_never_overwrites_or_deletes_another_challenge() {
+        let router = Router::new().route("/zones/zone1/dns_records", post(|| async {
+            Json(failure(81_057, "Record already exists."))
+        }).get(|| async { Json(envelope(json!([{
+            "id": "unrelated", "type": "TXT", "name": "_acme-challenge.example.com", "content": "keep-me"
+        }]))) }));
+        let dns = CloudflareDns::with_base_url(spawn(router).await);
+        assert!(
+            dns.ensure_txt_record(&config(), "_acme-challenge.example.com", "new-value")
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            dns.remove_txt_record(&config(), "_acme-challenge.example.com", "new-value")
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn create_retries_a_transient_response_and_uses_unproxied_txt_content() {
+        let calls = Arc::new(Mutex::new(0));
+        let router = Router::new().route("/zones/zone1/dns_records", post(|State(calls): State<Arc<Mutex<u32>>>, Json(body): Json<serde_json::Value>| async move {
+            let mut calls = calls.lock().unwrap();
+            *calls += 1;
+            if *calls == 1 {
+                return (axum::http::StatusCode::SERVICE_UNAVAILABLE, Json(failure(1000, "retry")));
+            }
+            assert_eq!(body["type"], "TXT");
+            assert_eq!(body["content"], "challenge");
+            assert_eq!(body["proxied"], false);
+            (axum::http::StatusCode::OK, Json(envelope(json!({"id": "created", "type": "TXT", "name": "_acme-challenge.example.com", "content": "challenge"}))))
+        })).with_state(calls.clone());
+        let mut config = config();
+        config.proxied = true;
+        assert_eq!(
+            CloudflareDns::with_base_url(spawn(router).await)
+                .ensure_txt_record(&config, "_acme-challenge.example.com", "challenge")
+                .await
+                .unwrap()
+                .id,
+            "created"
+        );
+        assert_eq!(*calls.lock().unwrap(), 2);
     }
 }

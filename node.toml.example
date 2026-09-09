@@ -2,6 +2,7 @@
 id = "local-node-1"
 control_api = "http://127.0.0.1:7817"
 node_token = "change-me"
+region = "default"
 work_root = "/data/node"
 
 [node.capabilities]
@@ -19,6 +20,13 @@ port = 8080
 public_base_url = "http://127.0.0.1:8080"
 metadata_cache_ttl_seconds = 30
 artifact_cache_root = "/data/node/artifacts"
+
+# Native HTTPS uses SNI-selected certificates synchronized from the Control API.
+# Enable this on every public regional entry Node. Keep public_base_url on the
+# private HTTP listener for Peer Hop traffic and internal health checks.
+[serve.tls]
+enabled = false
+port = 8443
 
 # SSR services start on the first request for their deployment and stop
 # again after sitting idle; 0 disables the idle stop.

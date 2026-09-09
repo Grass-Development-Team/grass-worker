@@ -64,6 +64,7 @@ pub async fn handler(
         db,
         CreateNodeParams {
             name: name.to_owned(),
+            region: "default".to_owned(),
             token_hash,
             storage_root: storage_root.clone(),
         },
@@ -103,6 +104,7 @@ pub async fn handler(
             &config_path,
             &crate::infra::node_manager::config_file::GenerateParams {
                 node_name: &node.name,
+                region: "default",
                 node_token: &token,
                 control_api_url,
                 storage_root: &storage_root,

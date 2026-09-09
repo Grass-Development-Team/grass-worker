@@ -3,12 +3,58 @@
 //! Callers describe the host they want; a provisioner decides how the DNS
 //! side is fulfilled. Wildcard sources only need the internal binding, the
 //! manual mode leaves configuration to an operator, and the DNS provider
-//! mode drives a real provider API (currently Cloudflare).
+//! mode drives a real provider API.
 
 pub mod cloudflare;
+pub mod credentials;
+pub mod dnspod;
+pub mod route53;
 pub mod service;
 
 use crate::infra::database::entity::{HostBindingStatus, HostSourceKind, host_source};
+
+/// DNS names are case-insensitive and an absolute trailing dot is optional.
+fn same_dns_name(left: &str, right: &str) -> bool {
+    left.trim_end_matches('.')
+        .eq_ignore_ascii_case(right.trim_end_matches('.'))
+}
+
+fn same_record_value(record_type: &str, left: &str, right: &str) -> bool {
+    if record_type == "CNAME" {
+        same_dns_name(left, right)
+    } else {
+        left == right
+    }
+}
+
+/// Retry explicit transient HTTP responses, with a small bounded backoff.
+/// Transport errors are returned to the caller: a timed-out mutation may
+/// already have succeeded and needs reconciliation before being repeated.
+async fn send_dns_request(
+    request: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, reqwest::Error> {
+    for attempt in 0..3 {
+        let Some(next) = request.try_clone() else {
+            return request.send().await;
+        };
+        let response = next.send().await?;
+        if attempt == 2
+            || !(response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
+                || response.status().is_server_error())
+        {
+            return Ok(response);
+        }
+        let delay = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(|seconds| std::time::Duration::from_secs(seconds.min(2)))
+            .unwrap_or_else(|| std::time::Duration::from_millis(100 << attempt));
+        tokio::time::sleep(delay).await;
+    }
+    unreachable!("the final attempt always returns")
+}
 
 pub struct ProvisionProjectHostInput<'a> {
     pub host: &'a str,
@@ -102,26 +148,115 @@ impl HostProvisioner for ManualHostProvisioner {
 }
 
 /// Creates one DNS record per provisioned host through the provider named
-/// on the source. Cloudflare is the supported provider; other names fail
-/// with a clear message so the binding records why it cannot resolve.
+/// on the source. Provider credentials remain write-only in the admin API.
 pub struct DnsProviderHostProvisioner {
     cloudflare: cloudflare::CloudflareDns,
+    dnspod: dnspod::DnsPod,
+    route53: route53::Route53,
 }
 
 impl DnsProviderHostProvisioner {
     pub fn new() -> Self {
         Self {
             cloudflare: cloudflare::CloudflareDns::new(),
+            dnspod: dnspod::DnsPod::new(),
+            route53: route53::Route53::new(),
         }
+    }
+
+    #[allow(dead_code)]
+    pub async fn ensure_txt_record(
+        &self,
+        provider: &str,
+        config: &serde_json::Value,
+        zone: &str,
+        name: &str,
+        value: &str,
+    ) -> Result<String, HostProvisionError> {
+        let result = match provider.trim().to_ascii_lowercase().as_str() {
+            cloudflare::PROVIDER_NAME => {
+                let parsed = cloudflare::CloudflareConfig::from_json(&txt_config(config, value))
+                    .map_err(HostProvisionError::Provider)?;
+                self.cloudflare
+                    .ensure_txt_record(&parsed, name, value)
+                    .await
+                    .map(|record| record.id)
+            }
+            dnspod::PROVIDER_NAME => {
+                let parsed = dnspod::DnsPodConfig::from_json(zone, &txt_config(config, value))
+                    .map_err(HostProvisionError::Provider)?;
+                self.dnspod
+                    .ensure_txt_record(&parsed, name, value)
+                    .await
+                    .map(|record| record.id)
+            }
+            route53::PROVIDER_NAME => {
+                let parsed = route53::Route53Config::from_json(&txt_config(config, value))
+                    .map_err(HostProvisionError::Provider)?;
+                self.route53
+                    .ensure_txt_record(&parsed, name, value)
+                    .await
+                    .map(|record| record.id)
+            }
+            other => Err(Self::unsupported(Some(other))),
+        };
+        result.map_err(|error| credentials::redact_error(config, error))
+    }
+
+    #[allow(dead_code)]
+    pub async fn remove_txt_record(
+        &self,
+        provider: &str,
+        config: &serde_json::Value,
+        zone: &str,
+        name: &str,
+        value: &str,
+    ) -> Result<Option<String>, HostProvisionError> {
+        let result = match provider.trim().to_ascii_lowercase().as_str() {
+            cloudflare::PROVIDER_NAME => {
+                let parsed = cloudflare::CloudflareConfig::from_json(&txt_config(config, value))
+                    .map_err(HostProvisionError::Provider)?;
+                self.cloudflare
+                    .remove_txt_record(&parsed, name, value)
+                    .await
+            }
+            dnspod::PROVIDER_NAME => {
+                let parsed = dnspod::DnsPodConfig::from_json(zone, &txt_config(config, value))
+                    .map_err(HostProvisionError::Provider)?;
+                self.dnspod.remove_txt_record(&parsed, name, value).await
+            }
+            route53::PROVIDER_NAME => {
+                let parsed = route53::Route53Config::from_json(&txt_config(config, value))
+                    .map_err(HostProvisionError::Provider)?;
+                self.route53.remove_txt_record(&parsed, name, value).await
+            }
+            other => Err(Self::unsupported(Some(other))),
+        };
+        result.map_err(|error| credentials::redact_error(config, error))
     }
 
     fn unsupported(provider: Option<&str>) -> HostProvisionError {
         HostProvisionError::UnsupportedSource(format!(
             "dns provider '{}' is not supported (supported: {})",
             provider.unwrap_or("none"),
-            cloudflare::PROVIDER_NAME,
+            supported_provider_names(),
         ))
     }
+}
+
+/// Add the record fields required by the provider parsers without requiring
+/// ACME configuration to contain a project-host record template.
+fn txt_config(config: &serde_json::Value, value: &str) -> serde_json::Value {
+    let mut object = config.as_object().cloned().unwrap_or_default();
+    // Provider parsers validate the base host-source template. The concrete
+    // TXT methods call `for_txt` after parsing and replace this placeholder.
+    object.insert("record_type".to_owned(), serde_json::json!("CNAME"));
+    object.insert("record_value".to_owned(), serde_json::json!(value));
+    serde_json::Value::Object(object)
+}
+
+pub fn supported_provider_names() -> &'static str {
+    "cloudflare, dnspod, route53"
 }
 
 impl Default for DnsProviderHostProvisioner {
@@ -160,6 +295,44 @@ impl HostProvisioner for DnsProviderHostProvisioner {
                     )),
                 })
             }
+            Some(dnspod::PROVIDER_NAME) => {
+                let config = dnspod::DnsPodConfig::from_source(input.source)
+                    .map_err(HostProvisionError::Provider)?;
+                let ensured = self.dnspod.ensure_record(&config, input.host).await?;
+                Ok(ProvisionedHost {
+                    status: HostBindingStatus::Active,
+                    provider_request_id: Some(ensured.id),
+                    message: Some(format!(
+                        "dnspod {} record for {} {}",
+                        config.record_type,
+                        input.host,
+                        if ensured.updated {
+                            "updated"
+                        } else {
+                            "created"
+                        },
+                    )),
+                })
+            }
+            Some(route53::PROVIDER_NAME) => {
+                let config = route53::Route53Config::from_source(input.source)
+                    .map_err(HostProvisionError::Provider)?;
+                let ensured = self.route53.ensure_record(&config, input.host).await?;
+                Ok(ProvisionedHost {
+                    status: HostBindingStatus::Active,
+                    provider_request_id: Some(ensured.id),
+                    message: Some(format!(
+                        "route53 {} record for {} {}",
+                        config.record_type,
+                        input.host,
+                        if ensured.updated {
+                            "updated"
+                        } else {
+                            "created"
+                        },
+                    )),
+                })
+            }
             other => Err(Self::unsupported(other)),
         }
     }
@@ -178,6 +351,18 @@ impl HostProvisioner for DnsProviderHostProvisioner {
                 let config = cloudflare::CloudflareConfig::from_source(input.source)
                     .map_err(HostProvisionError::Provider)?;
                 self.cloudflare.remove_record(&config, input.host).await?;
+                Ok(())
+            }
+            Some(dnspod::PROVIDER_NAME) => {
+                let config = dnspod::DnsPodConfig::from_source(input.source)
+                    .map_err(HostProvisionError::Provider)?;
+                self.dnspod.remove_record(&config, input.host).await?;
+                Ok(())
+            }
+            Some(route53::PROVIDER_NAME) => {
+                let config = route53::Route53Config::from_source(input.source)
+                    .map_err(HostProvisionError::Provider)?;
+                self.route53.remove_record(&config, input.host).await?;
                 Ok(())
             }
             other => Err(Self::unsupported(other)),
@@ -245,6 +430,7 @@ mod tests {
             kind,
             label: "test".to_owned(),
             base_domain: "grass.test".to_owned(),
+            region: "default".to_owned(),
             enabled: true,
             allows_auto_assign: true,
             is_default: true,
@@ -285,7 +471,7 @@ mod tests {
     #[tokio::test]
     async fn dns_provider_requires_a_supported_provider_name() {
         let mut unsupported = source(HostSourceKind::DnsProvider, serde_json::json!({}));
-        unsupported.provider = Some("route53".to_owned());
+        unsupported.provider = Some("unsupported".to_owned());
         let error = CompositeHostProvisioner::new()
             .provision_project_host(ProvisionProjectHostInput {
                 host: "demo.grass.test",
@@ -321,5 +507,17 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("api_token"), "{error}");
+    }
+
+    #[test]
+    fn acme_txt_config_keeps_provider_parsers_on_a_valid_base_template() {
+        let config = txt_config(
+            &serde_json::json!({ "api_token": "token", "zone_id": "zone" }),
+            "challenge",
+        );
+        let parsed = cloudflare::CloudflareConfig::from_json(&config).unwrap();
+
+        assert_eq!(parsed.record_type, "CNAME");
+        assert_eq!(parsed.record_value, "challenge");
     }
 }

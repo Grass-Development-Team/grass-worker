@@ -18,6 +18,7 @@ export type NodeStatus = "pending" | "active" | "draining" | "offline" | "disabl
 export interface AdminNode {
   id: string;
   name: string;
+  region: string;
   status: NodeStatus;
   healthy: boolean;
   build_enabled: boolean;
@@ -85,6 +86,7 @@ export interface AdminNodeConfigurationSync {
 export interface NodeConfiguration {
   node: {
     id: string;
+    region: string;
     control_api: string;
     work_root: string;
     capabilities: { build: boolean; serve: boolean };
@@ -100,6 +102,7 @@ export interface NodeConfiguration {
     public_base_url: string;
     metadata_cache_ttl_seconds: number;
     artifact_cache_root: string;
+    tls?: { enabled: boolean; port: number };
     capacity: AdminNodeResources;
     ssr: { idle_stop_seconds: number; startup_timeout_seconds: number };
   };
@@ -112,6 +115,7 @@ export interface NodeConfiguration {
     resources: { cpu_limit: number; memory_mb: number };
   };
   security: {
+    gateway_authentication: "token" | "none";
     private_repository_targets: Array<{ host: string; ip: string; port: number }>;
   };
   development: { verbose_build_log: boolean };
@@ -180,12 +184,47 @@ export interface AdminHostSource {
   kind: HostSourceKind;
   label: string;
   base_domain: string;
+  region: string;
   enabled: boolean;
   allows_auto_assign: boolean;
   is_default: boolean;
   provider: string | null;
   config_keys: string[];
   created_at: string;
+}
+
+export interface AdminRegionalIngress {
+  id: string;
+  region: string;
+  hostname: string;
+  enabled: boolean;
+  health_check_path: string;
+  health_check_interval_seconds: number;
+  origin_host_preservation: boolean;
+  tls_enabled: boolean;
+  certificate_issuer: "letsencrypt" | "zerossl" | "manual";
+  certificate_auto_renew: boolean;
+  certificate_status: "pending" | "issuing" | "active" | "expiring" | "failed" | "disabled";
+  certificate_expires_at: string | null;
+  certificate_issued_at?: string | null;
+  certificate_revision?: string | null;
+  certificate_retry_at?: string | null;
+  node_statuses?: Array<{
+    node_id: string;
+    tls_ready: boolean;
+    challenge_revision: string;
+    checked_at: string | null;
+    certificate_revision: string | null;
+  }>;
+  certificate_error: string | null;
+  dns_challenge_provider: string | null;
+  dns_challenge_config_keys: string[];
+  dns_challenge_status: "not_configured" | "pending" | "valid" | "failed";
+  dns_challenge_record_name: string | null;
+  dns_challenge_record_value: string | null;
+  healthy_nodes: Array<{ node_id: string; base_url: string; priority: number }>;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface AdminUser {
@@ -686,6 +725,7 @@ export const adminApi = {
     label: string;
     kind: HostSourceKind;
     base_domain: string;
+    region?: string;
     is_default?: boolean;
     provider?: string;
     config?: Record<string, unknown>;
@@ -698,7 +738,7 @@ export const adminApi = {
   updateHostSource: (
     sourceId: string,
     input: Partial<
-      Pick<AdminHostSource, "label" | "enabled" | "allows_auto_assign" | "is_default">
+      Pick<AdminHostSource, "label" | "region" | "enabled" | "allows_auto_assign" | "is_default">
     > & {
       provider?: string;
       /** Shallow-merged server side; a null value deletes the key. */
@@ -713,10 +753,69 @@ export const adminApi = {
   removeHostSource: (sourceId: string) =>
     request<{ ok: true }>(`/api/v1/admin/host-sources/${sourceId}`, { method: "DELETE" }),
 
+  listRegionalIngresses: () =>
+    request<{ regional_ingresses: AdminRegionalIngress[] }>("/api/v1/admin/regional-ingresses"),
+
+  createRegionalIngress: (input: {
+    region: string;
+    hostname: string;
+    health_check_path?: string;
+    health_check_interval_seconds?: number;
+    tls_enabled?: boolean;
+    certificate_issuer?: AdminRegionalIngress["certificate_issuer"];
+    certificate_auto_renew?: boolean;
+    dns_challenge_provider?: string;
+    dns_challenge_config?: Record<string, unknown>;
+  }) =>
+    request<{ regional_ingress: AdminRegionalIngress }>("/api/v1/admin/regional-ingresses", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  updateRegionalIngress: (
+    ingressId: string,
+    input: Partial<
+      Pick<
+        AdminRegionalIngress,
+        | "hostname"
+        | "enabled"
+        | "health_check_path"
+        | "health_check_interval_seconds"
+        | "origin_host_preservation"
+        | "tls_enabled"
+        | "certificate_issuer"
+        | "certificate_auto_renew"
+        | "dns_challenge_provider"
+      >
+    > & { dns_challenge_config?: Record<string, unknown> },
+  ) =>
+    request<{ regional_ingress: AdminRegionalIngress }>(
+      `/api/v1/admin/regional-ingresses/${ingressId}`,
+      { method: "PATCH", body: JSON.stringify(input) },
+    ),
+
+  removeRegionalIngress: (ingressId: string) =>
+    request<{ ok: true }>(`/api/v1/admin/regional-ingresses/${ingressId}`, { method: "DELETE" }),
+
+  renewRegionalIngressCertificate: (ingressId: string) =>
+    request<{ regional_ingress: AdminRegionalIngress }>(
+      `/api/v1/admin/regional-ingresses/${ingressId}/certificate/renew`,
+      { method: "POST" },
+    ),
+
+  importRegionalIngressCertificate: (
+    ingressId: string,
+    input: { certificate_pem: string; private_key_pem: string },
+  ) =>
+    request<{ regional_ingress: AdminRegionalIngress }>(
+      `/api/v1/admin/regional-ingresses/${ingressId}/certificate/import`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+
   listNodes: () =>
     request<{ nodes: AdminNode[]; local_process: AdminLocalProcessInfo }>("/api/v1/admin/nodes"),
 
-  createNode: (input: { name: string; start_local?: boolean }) =>
+  createNode: (input: { name: string; region?: string; start_local?: boolean }) =>
     request<{
       node: AdminNode;
       token: string;

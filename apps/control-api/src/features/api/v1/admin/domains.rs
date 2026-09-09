@@ -154,7 +154,7 @@ async fn decide(
     let reason = optional_reason(reason);
     let DomainDecision::Apply {
         review_status: new_review_status,
-        binding_status: new_binding_status,
+        binding_status: mut new_binding_status,
     } = domain_decision(&binding.review_status, approved)
     else {
         return Err(AppError::Conflict {
@@ -162,6 +162,12 @@ async fn decide(
             message: "domain review has already been decided".to_owned(),
         });
     };
+    if approved && binding.ownership_status != "verified" {
+        new_binding_status = HostBindingStatus::Pending;
+    }
+    if matches!(binding.status, HostBindingStatus::Disabled) {
+        new_binding_status = HostBindingStatus::Disabled;
+    }
     let before = json!({ "review_status": review_status(&binding.review_status), "status": binding_status(&binding.status) });
     let mut active: project_host_binding::ActiveModel = binding.clone().into();
     active.review_status = Set(new_review_status);
@@ -294,7 +300,8 @@ pub async fn remove(
             .await
             .map_err(|source| AppError::Infrastructure { op: OP, source })?
     {
-        let _ = HostBindingService::new(db, cache)
+        let platform_secret = state.config.read().unwrap().secrets.secret_key.clone();
+        let _ = HostBindingService::new(db, cache, &platform_secret)
             .deprovision(OP, &binding, &source)
             .await?;
     }

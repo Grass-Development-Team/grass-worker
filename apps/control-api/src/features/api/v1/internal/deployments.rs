@@ -1479,6 +1479,7 @@ mod tests {
             id: Uuid::now_v7(),
             project_id,
             team_id,
+            region: "default".to_owned(),
             build_node_id: None,
             serve_node_id: None,
             environment: DeploymentEnvironment::Preview,
@@ -1580,6 +1581,7 @@ mod tests {
         let authenticated_node = node::Model {
             id: node_id,
             name: "build-1".to_owned(),
+            region: "default".to_owned(),
             token_hash: "unused".to_owned(),
             status: NodeStatus::Active,
             build_enabled: true,

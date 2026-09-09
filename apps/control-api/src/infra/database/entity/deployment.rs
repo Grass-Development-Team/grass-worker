@@ -13,6 +13,7 @@ pub struct Model {
     pub id: Uuid,
     pub project_id: Uuid,
     pub team_id: Uuid,
+    pub region: String,
     pub build_node_id: Option<Uuid>,
     pub serve_node_id: Option<Uuid>,
     pub environment: DeploymentEnvironment,

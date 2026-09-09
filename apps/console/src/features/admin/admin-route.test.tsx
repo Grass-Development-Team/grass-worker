@@ -77,6 +77,7 @@ it("lists nodes with health state for administrators", async () => {
           {
             id: "node-1",
             name: "build-node-1",
+            region: "default",
             status: "active",
             healthy: true,
             build_enabled: true,

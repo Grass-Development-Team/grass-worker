@@ -26,6 +26,7 @@ export const adminSections: AdminSection[] = [
   { to: "/admin/projects", label: "Projects", icon: FolderGitIcon },
   { to: "/admin/nodes", label: "Nodes", icon: ServerIcon },
   { to: "/admin/host-sources", label: "Host sources", icon: GlobeIcon },
+  { to: "/admin/regional-ingresses", label: "Regional ingresses", icon: GlobeIcon },
   { to: "/admin/quota-plans", label: "Quota plans", icon: GaugeIcon },
   { to: "/admin/team-groups", label: "Team groups", icon: LayersIcon },
   { to: "/admin/users", label: "Users", icon: UserIcon },

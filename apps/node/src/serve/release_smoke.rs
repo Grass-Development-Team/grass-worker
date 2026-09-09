@@ -332,9 +332,11 @@ async fn checks_out_builds_packages_stages_and_serves_vite() -> anyhow::Result<(
             revision: "release-smoke-v1".to_owned(),
             routes: vec![ServeRoute {
                 host: FIXTURE_HOST.to_owned(),
+                region: "default".to_owned(),
                 deployment_id,
                 target_node_id: node_id,
                 target_base_url: "http://127.0.0.1:1".to_owned(),
+                gateway_authentication: Default::default(),
                 resources,
                 access: ServeAccess::Public,
             }],
@@ -347,7 +349,7 @@ async fn checks_out_builds_packages_stages_and_serves_vite() -> anyhow::Result<(
     let state = Arc::new(ServeState::new(
         client,
         node_id,
-        "release-smoke-gateway-token".to_owned(),
+        Some("release-smoke-gateway-token".to_owned()),
         routes,
         &config,
         ssr,

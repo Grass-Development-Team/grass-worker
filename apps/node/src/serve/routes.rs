@@ -168,9 +168,11 @@ mod tests {
     fn route(host: &str, deployment_id: Uuid) -> ServeRoute {
         ServeRoute {
             host: host.to_owned(),
+            region: "default".to_owned(),
             deployment_id,
             target_node_id: Uuid::now_v7(),
             target_base_url: "http://node-a:8080".to_owned(),
+            gateway_authentication: Default::default(),
             resources: ServeResources {
                 cpu_millicores: 50,
                 memory_mb: 64,

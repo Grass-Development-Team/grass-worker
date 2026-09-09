@@ -11,9 +11,11 @@ pub mod enums;
 pub mod host_policy;
 pub mod host_provision_event;
 pub mod host_source;
+pub mod managed_certificate;
 pub mod node;
 pub mod node_deletion_job;
 pub mod node_deployment_migration;
+pub mod node_ingress_status;
 pub mod project;
 pub mod project_host_binding;
 pub mod project_source_credential;
@@ -21,6 +23,8 @@ pub mod quota_event;
 pub mod quota_limit;
 pub mod quota_plan;
 pub mod quota_usage_counter;
+pub mod regional_ingress;
+pub mod regional_ingress_health;
 pub mod registration_email_allowlist;
 pub mod release;
 pub mod source_credential;
@@ -90,6 +94,8 @@ pub use quota_limit::Entity as QuotaLimit;
 pub use quota_plan::Entity as QuotaPlan;
 #[allow(unused_imports)]
 pub use quota_usage_counter::Entity as QuotaUsageCounter;
+#[allow(unused_imports)]
+pub use regional_ingress::Entity as RegionalIngress;
 #[allow(unused_imports)]
 pub use registration_email_allowlist::Entity as RegistrationEmailAllowlist;
 #[allow(unused_imports)]

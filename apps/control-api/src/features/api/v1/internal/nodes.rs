@@ -1,6 +1,7 @@
 use axum::{Extension, Json, extract::State, response::IntoResponse};
 use grass_node_protocol::{
-    HeartbeatRequest, HeartbeatResponse, NodeCapabilities, RegisterRequest, RegisterResponse,
+    GatewayAuthenticationMode, HeartbeatRequest, HeartbeatResponse, NodeCapabilities,
+    RegisterRequest, RegisterResponse,
 };
 use serde_json::json;
 
@@ -30,6 +31,12 @@ pub async fn register(
         op: OP,
         message: message.to_owned(),
     })?;
+    validate_existing_policy(&body, nodes::gateway_authentication(&node)).map_err(|message| {
+        AppError::Validation {
+            op: OP,
+            message: message.to_owned(),
+        }
+    })?;
     let build_enabled = body.capabilities.build;
     let serve_enabled = body.capabilities.serve;
 
@@ -44,6 +51,12 @@ pub async fn register(
         node,
         RegisterNodeParams {
             name,
+            region: grass_validator::normalize_region(&body.region).map_err(|error| {
+                AppError::Validation {
+                    op: OP,
+                    message: format!("region: {error}"),
+                }
+            })?,
             version: body.version,
             build_enabled: body.capabilities.build,
             serve_enabled: body.capabilities.serve,
@@ -74,6 +87,8 @@ pub async fn register(
     )
     .await;
 
+    // Inbound policy does not determine outbound credentials: a trusted-network
+    // entry still needs a token when its destination requires authentication.
     let gateway_token = serve_enabled
         .then(|| nodes::gateway_token(&state.config.read().unwrap().secrets.secret_key));
     Ok(ok_response(RegisterResponse {
@@ -84,10 +99,23 @@ pub async fn register(
             serve: serve_enabled,
         },
         gateway_token,
+        gateway_authentication: body.gateway_authentication,
     }))
 }
 
 fn validate_registration(body: &RegisterRequest) -> Result<(), &'static str> {
+    match &body.effective_config {
+        Some(config) if config.security.gateway_authentication != body.gateway_authentication => {
+            return Err("gateway authentication must match the effective configuration");
+        }
+        None if matches!(body.gateway_authentication, GatewayAuthenticationMode::None) => {
+            return Err("effective configuration is required for no-token gateways");
+        }
+        _ => {}
+    }
+    if grass_validator::normalize_region(&body.region).is_err() {
+        return Err("region is invalid");
+    }
     if !body.capabilities.build && !body.capabilities.serve {
         return Err("node must enable build or serve");
     }
@@ -127,6 +155,16 @@ fn validate_registration(body: &RegisterRequest) -> Result<(), &'static str> {
     Ok(())
 }
 
+fn validate_existing_policy(
+    body: &RegisterRequest,
+    persisted: GatewayAuthenticationMode,
+) -> Result<(), &'static str> {
+    if body.effective_config.is_none() && body.gateway_authentication != persisted {
+        return Err("effective configuration is required when changing gateway authentication");
+    }
+    Ok(())
+}
+
 /// POST /api/v1/internal/nodes/heartbeat
 pub async fn heartbeat(
     State(state): State<ControlApiState>,
@@ -159,6 +197,7 @@ mod tests {
             name: "node-a".to_owned(),
             version: "0.1.0".to_owned(),
             capabilities: NodeCapabilities { build, serve },
+            region: "default".to_owned(),
             build_concurrency: u16::from(build),
             serve_base_url: serve.then(|| "http://node-a:8080".to_owned()),
             resources: serve.then_some(grass_node_protocol::NodeResources {
@@ -170,6 +209,7 @@ mod tests {
             config_revision: 0,
             effective_config: None,
             node_token_configured: false,
+            gateway_authentication: GatewayAuthenticationMode::Token,
         }
     }
 
@@ -181,6 +221,27 @@ mod tests {
         );
         assert!(validate_registration(&request(true, false)).is_ok());
         assert!(validate_registration(&request(false, true)).is_ok());
+    }
+
+    #[test]
+    fn no_token_registration_requires_persistable_effective_policy() {
+        let mut body = request(false, true);
+        body.gateway_authentication = GatewayAuthenticationMode::None;
+        assert_eq!(
+            validate_registration(&body),
+            Err("effective configuration is required for no-token gateways")
+        );
+    }
+
+    #[test]
+    fn legacy_registration_cannot_reuse_a_stale_no_token_policy() {
+        let body = request(false, true);
+        assert!(validate_registration(&body).is_ok());
+        assert!(validate_existing_policy(&body, GatewayAuthenticationMode::Token).is_ok());
+        assert_eq!(
+            validate_existing_policy(&body, GatewayAuthenticationMode::None),
+            Err("effective configuration is required when changing gateway authentication")
+        );
     }
 
     #[test]

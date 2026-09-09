@@ -9,11 +9,11 @@ use grass_config::{
 };
 use grass_git_source::PrivateTargetException;
 use grass_node_protocol::{
-    NodeBuildConfiguration, NodeCapabilities, NodeConfiguration, NodeDevelopmentConfiguration,
-    NodeIdentityConfiguration, NodeLogConfiguration, NodeLogFormat,
+    GatewayAuthenticationMode, NodeBuildConfiguration, NodeCapabilities, NodeConfiguration,
+    NodeDevelopmentConfiguration, NodeIdentityConfiguration, NodeLogConfiguration, NodeLogFormat,
     NodePrivateRepositoryTargetConfiguration, NodeRuntimeConfiguration,
     NodeRuntimeResourcesConfiguration, NodeSecurityConfiguration, NodeServeCapacityConfiguration,
-    NodeServeConfiguration, NodeSsrConfiguration,
+    NodeServeConfiguration, NodeSsrConfiguration, NodeTlsConfiguration,
 };
 use serde::{Deserialize, Serialize};
 use tracing_subscriber::{EnvFilter, fmt};
@@ -51,6 +51,8 @@ pub struct NodeIdentityConfig {
     pub control_api: String,
     #[serde(default = "default_node_token")]
     pub node_token: String,
+    #[serde(default = "default_node_region")]
+    pub region: String,
     #[serde(default = "default_node_work_root")]
     pub work_root: String,
     #[serde(default)]
@@ -63,6 +65,7 @@ impl Default for NodeIdentityConfig {
             id: default_node_id(),
             control_api: default_control_api(),
             node_token: default_node_token(),
+            region: default_node_region(),
             work_root: default_node_work_root(),
             capabilities: NodeCapabilitiesConfig::default(),
         }
@@ -122,6 +125,8 @@ pub struct ServeConfig {
     pub capacity: ServeCapacityConfig,
     #[serde(default)]
     pub ssr: SsrServeConfig,
+    #[serde(default)]
+    pub tls: NodeTlsConfiguration,
 }
 
 impl Default for ServeConfig {
@@ -134,6 +139,7 @@ impl Default for ServeConfig {
             artifact_cache_root: default_artifact_cache_root(),
             capacity: ServeCapacityConfig::default(),
             ssr: SsrServeConfig::default(),
+            tls: NodeTlsConfiguration::default(),
         }
     }
 }
@@ -239,6 +245,9 @@ pub struct PrivateRepositoryTargetConfig {
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SecurityConfig {
+    /// Authentication required for Serve-to-Serve gateway requests.
+    #[serde(default)]
+    pub gateway_authentication: GatewayAuthenticationMode,
     #[serde(default)]
     pub private_repository_targets: Vec<PrivateRepositoryTargetConfig>,
 }
@@ -306,6 +315,7 @@ impl NodeConfig {
                 id: self.node.id.clone(),
                 control_api: self.node.control_api.clone(),
                 work_root: self.node.work_root.clone(),
+                region: self.node.region.clone(),
                 capabilities: NodeCapabilities {
                     build: self.node.capabilities.build,
                     serve: self.node.capabilities.serve,
@@ -332,6 +342,7 @@ impl NodeConfig {
                     idle_stop_seconds: self.serve.ssr.idle_stop_seconds,
                     startup_timeout_seconds: self.serve.ssr.startup_timeout_seconds,
                 },
+                tls: self.serve.tls,
             },
             runtime: NodeRuntimeConfiguration {
                 backend: self.runtime.backend.clone(),
@@ -345,6 +356,7 @@ impl NodeConfig {
                 },
             },
             security: NodeSecurityConfiguration {
+                gateway_authentication: self.security.gateway_authentication,
                 private_repository_targets: self
                     .security
                     .private_repository_targets
@@ -373,6 +385,7 @@ impl NodeConfig {
         self.node.id.clone_from(&desired.node.id);
         self.node.control_api.clone_from(&desired.node.control_api);
         self.node.work_root.clone_from(&desired.node.work_root);
+        self.node.region.clone_from(&desired.node.region);
         self.node.capabilities.build = desired.node.capabilities.build;
         self.node.capabilities.serve = desired.node.capabilities.serve;
         self.build.concurrency = desired.build.concurrency;
@@ -397,6 +410,7 @@ impl NodeConfig {
         self.serve.capacity.max_deployments = desired.serve.capacity.max_deployments;
         self.serve.ssr.idle_stop_seconds = desired.serve.ssr.idle_stop_seconds;
         self.serve.ssr.startup_timeout_seconds = desired.serve.ssr.startup_timeout_seconds;
+        self.serve.tls = desired.serve.tls;
         self.runtime.backend.clone_from(&desired.runtime.backend);
         self.runtime.socket.clone_from(&desired.runtime.socket);
         self.runtime
@@ -423,6 +437,7 @@ impl NodeConfig {
                 })
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
+        self.security.gateway_authentication = desired.security.gateway_authentication;
         self.development.verbose_build_log = desired.development.verbose_build_log;
         self.log.level.clone_from(&desired.log.level);
         self.log.format = match desired.log.format {
@@ -465,6 +480,8 @@ impl NodeConfig {
 
     pub fn validate(&self) -> anyhow::Result<()> {
         let capabilities = &self.node.capabilities;
+        grass_validator::normalize_region(&self.node.region)
+            .map_err(|error| anyhow::anyhow!("invalid node region: {error}"))?;
         if !capabilities.build && !capabilities.serve {
             anyhow::bail!("node must enable build or serve");
         }
@@ -472,6 +489,11 @@ impl NodeConfig {
             anyhow::bail!("build concurrency must be positive when build capability is enabled");
         }
         if capabilities.serve {
+            if self.serve.tls.enabled
+                && (self.serve.tls.port == 0 || self.serve.tls.port == self.serve.port)
+            {
+                anyhow::bail!("serve TLS port must be positive and different from the HTTP port");
+            }
             let base_url = url::Url::parse(&self.serve.public_base_url)
                 .context("serve public_base_url must be an absolute HTTP(S) URL")?;
             if !matches!(base_url.scheme(), "http" | "https") || !base_url.has_host() {
@@ -486,7 +508,14 @@ fn apply_env(config: &mut NodeConfig) -> Result<(), ConfigError> {
     overlay_string("GWNODE_ID", &mut config.node.id);
     overlay_string("GWNODE_CONTROL_API", &mut config.node.control_api);
     overlay_string("GWNODE_NODE_TOKEN", &mut config.node.node_token);
+    overlay_string("GWNODE_REGION", &mut config.node.region);
     overlay_string("GWNODE_WORK_ROOT", &mut config.node.work_root);
+    if let Ok(value) = std::env::var("GWNODE_GATEWAY_AUTHENTICATION") {
+        config.security.gateway_authentication =
+            parse_gateway_authentication(&value).map_err(|error| {
+                ConfigError::Invalid(format!("GWNODE_GATEWAY_AUTHENTICATION: {error}"))
+            })?;
+    }
     overlay_u16("GWNODE_BUILD_CONCURRENCY", &mut config.build.concurrency)?;
     overlay_u64(
         "GWNODE_BUILD_COMMAND_TIMEOUT_SECONDS",
@@ -521,6 +550,14 @@ fn parse_listen(name: &'static str, value: &str) -> Result<SocketAddr, ConfigErr
     })
 }
 
+fn parse_gateway_authentication(value: &str) -> Result<GatewayAuthenticationMode, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "token" => Ok(GatewayAuthenticationMode::Token),
+        "none" => Ok(GatewayAuthenticationMode::None),
+        other => Err(format!("expected 'token' or 'none', got '{other}'")),
+    }
+}
+
 fn default_log_level() -> String {
     "info".to_owned()
 }
@@ -535,6 +572,10 @@ fn default_control_api() -> String {
 
 fn default_node_token() -> String {
     "change-me".to_owned()
+}
+
+fn default_node_region() -> String {
+    "default".to_owned()
 }
 
 fn default_node_work_root() -> String {
@@ -638,6 +679,25 @@ mod tests {
     }
 
     #[test]
+    fn tls_defaults_preserve_existing_configs_and_reject_listener_conflicts() {
+        let legacy: NodeConfig = toml::from_str("[serve]\nport = 8080\n").unwrap();
+        assert!(!legacy.serve.tls.enabled);
+        assert_eq!(legacy.serve.tls.port, 8443);
+        let mut enabled: NodeConfig = toml::from_str("[serve.tls]\nenabled = true\n").unwrap();
+        assert!(enabled.serve.tls.enabled);
+        assert_eq!(enabled.serve.tls.port, 8443);
+        enabled.validate().unwrap();
+        let mut desired = enabled.sync_configuration();
+        desired.serve.tls.port = 9443;
+        enabled.apply_sync_configuration(&desired).unwrap();
+        assert_eq!(enabled.serve.tls.port, 9443);
+        enabled.serve.tls.port = enabled.serve.port;
+        assert!(enabled.validate().is_err());
+        enabled.serve.tls.port = 0;
+        assert!(enabled.validate().is_err());
+    }
+
+    #[test]
     fn private_repository_exceptions_require_exact_host_ip_and_port() {
         let config: NodeConfig = toml::from_str(
             r#"
@@ -655,6 +715,26 @@ mod tests {
         assert_eq!(exceptions[0].host, "git.internal");
         assert_eq!(exceptions[0].ip.to_string(), "10.0.0.8");
         assert_eq!(exceptions[0].port, 2222);
+    }
+
+    #[test]
+    fn gateway_authentication_defaults_to_token_and_accepts_none_override() {
+        let default_config = NodeConfig::default();
+        assert_eq!(
+            default_config.security.gateway_authentication,
+            GatewayAuthenticationMode::Token
+        );
+        let config: NodeConfig = toml::from_str(
+            r#"
+            [security]
+            gateway_authentication = "none"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.security.gateway_authentication,
+            GatewayAuthenticationMode::None
+        );
     }
 
     #[test]

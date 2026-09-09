@@ -27,6 +27,7 @@ GROUP BY d.serve_node_id
 const ELIGIBLE_CANDIDATES_SQL: &str = r#"
 SELECT
     n.id AS node_id,
+    n.region,
     n.capacity_cpu_millicores,
     n.capacity_memory_mb,
     n.capacity_disk_mb,
@@ -83,6 +84,7 @@ pub struct NodeUsage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
     pub node_id: Uuid,
+    pub region: String,
     pub capacity: NodeResources,
     pub usage: NodeUsage,
 }
@@ -93,9 +95,10 @@ pub enum PlacementMode {
     Manual,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placement {
     pub node_id: Uuid,
+    pub region: String,
     pub overcommitted: bool,
     pub mode: PlacementMode,
 }
@@ -104,6 +107,8 @@ pub struct Placement {
 pub enum ScheduleError {
     #[error("no serve node has enough capacity")]
     NoCapacity,
+    #[error("no healthy serve node is available in region '{0}'")]
+    NoCapacityInRegion(String),
     #[error("selected serve node is unavailable")]
     SelectedNodeUnavailable,
     #[error("selected serve node has no remaining capacity")]
@@ -194,6 +199,29 @@ pub fn choose_candidate(
     )
 }
 
+pub fn choose_candidate_in_region(
+    candidates: &[Candidate],
+    requested: ServeResources,
+    region: Option<&str>,
+    selected_node_id: Option<Uuid>,
+) -> Result<Placement, ScheduleError> {
+    let filtered = region
+        .map(|region| {
+            candidates
+                .iter()
+                .filter(|candidate| candidate.region == region)
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| candidates.to_vec());
+    if let Some(region) = region
+        && filtered.is_empty()
+    {
+        return Err(ScheduleError::NoCapacityInRegion(region.to_owned()));
+    }
+    choose_candidate(&filtered, requested, selected_node_id)
+}
+
 pub fn choose_candidate_with_rng<R: Rng + ?Sized>(
     candidates: &[Candidate],
     requested: ServeResources,
@@ -212,6 +240,7 @@ pub fn choose_candidate_with_rng<R: Rng + ?Sized>(
         }
         return Ok(Placement {
             node_id: candidate.node_id,
+            region: candidate.region.clone(),
             overcommitted: !candidate.projected(requested).all_at_most_one(),
             mode: PlacementMode::Manual,
         });
@@ -229,6 +258,7 @@ pub fn choose_candidate_with_rng<R: Rng + ?Sized>(
     ) {
         return Ok(Placement {
             node_id: candidate.node_id,
+            region: candidate.region.clone(),
             overcommitted: false,
             mode: PlacementMode::Automatic,
         });
@@ -241,6 +271,7 @@ pub fn choose_candidate_with_rng<R: Rng + ?Sized>(
     )
     .map(|candidate| Placement {
         node_id: candidate.node_id,
+        region: candidate.region.clone(),
         overcommitted: true,
         mode: PlacementMode::Automatic,
     })
@@ -273,14 +304,15 @@ where
     tied.choose(rng).copied()
 }
 
-pub async fn place_deployment(
+pub async fn place_deployment_in_region(
     transaction: &DatabaseTransaction,
     requested: ServeResources,
     selected_node_id: Option<Uuid>,
+    region: Option<&str>,
 ) -> Result<Placement, ScheduleError> {
     lock_placement(transaction).await?;
     let candidates = eligible_candidates(transaction).await?;
-    choose_candidate(&candidates, requested, selected_node_id)
+    choose_candidate_in_region(&candidates, requested, region, selected_node_id)
 }
 
 /// Serializes operations that can change whether a Serve Node has room for
@@ -328,6 +360,7 @@ pub async fn eligible_candidates<C: ConnectionTrait>(
 #[derive(Debug, FromQueryResult)]
 struct CandidateRow {
     node_id: Uuid,
+    region: String,
     capacity_cpu_millicores: i64,
     capacity_memory_mb: i64,
     capacity_disk_mb: i64,
@@ -378,6 +411,7 @@ impl TryFrom<CandidateRow> for Candidate {
     fn try_from(row: CandidateRow) -> Result<Self, Self::Error> {
         Ok(Self {
             node_id: row.node_id,
+            region: row.region,
             capacity: NodeResources {
                 cpu_millicores: row
                     .capacity_cpu_millicores
@@ -448,6 +482,7 @@ mod tests {
     ) -> Candidate {
         Candidate {
             node_id: Uuid::from_u128(id),
+            region: "default".to_owned(),
             capacity: NodeResources {
                 cpu_millicores: capacity.0,
                 memory_mb: capacity.1,
@@ -481,6 +516,57 @@ mod tests {
         assert_eq!(placement.node_id, normal.node_id);
         assert!(!placement.overcommitted);
         assert_eq!(placement.mode, PlacementMode::Automatic);
+    }
+
+    #[test]
+    fn regional_candidates_are_limited_to_the_requested_region() {
+        let candidates = vec![
+            candidate_in_region(1, "us-east"),
+            candidate_in_region(2, "eu-west"),
+        ];
+
+        let placement =
+            choose_candidate_in_region(&candidates, request(), Some("eu-west"), None).unwrap();
+
+        assert_eq!(placement.node_id, Uuid::from_u128(2));
+    }
+
+    fn candidate_in_region(id: u128, region: &str) -> Candidate {
+        let mut candidate = candidate(id, (2_000, 2_000, 10_000, 10), (0, 0, 0, 0));
+        candidate.region = region.to_owned();
+        candidate
+    }
+
+    #[test]
+    fn regional_placement_never_falls_back_or_accepts_a_foreign_manual_node() {
+        let candidates = vec![
+            candidate_in_region(1, "us-east"),
+            candidate_in_region(2, "eu-west"),
+        ];
+        assert!(matches!(
+            choose_candidate_in_region(&candidates, request(), Some("ap-east"), None),
+            Err(ScheduleError::NoCapacityInRegion(_))
+        ));
+        assert!(matches!(
+            choose_candidate_in_region(
+                &candidates,
+                request(),
+                Some("eu-west"),
+                Some(Uuid::from_u128(1))
+            ),
+            Err(ScheduleError::SelectedNodeUnavailable)
+        ));
+        let mut full = candidate_in_region(3, "eu-west");
+        full.usage.disk_mb = full.capacity.disk_mb;
+        assert!(
+            choose_candidate_in_region(
+                &[candidates[0].clone(), full],
+                request(),
+                Some("eu-west"),
+                None
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -95,7 +95,11 @@ async fn main() -> anyhow::Result<()> {
         });
 
     let mut ssr_manager_for_shutdown = None;
-    let (artifact_sync, route_refresh, ssr_reaper, serve_task) = if config.node.capabilities.serve {
+    let (artifact_sync, route_refresh, certificate_sync, ssr_reaper, serve_task) = if config
+        .node
+        .capabilities
+        .serve
+    {
         let ssr_manager = Arc::new(serve::ssr::SsrManager::with_client(
             runtime,
             node_id,
@@ -114,9 +118,7 @@ async fn main() -> anyhow::Result<()> {
         let serve_state = Arc::new(serve::ServeState::new(
             client.clone(),
             node_id,
-            gateway_token
-                .clone()
-                .expect("Serve registration requires a gateway token"),
+            gateway_token.clone(),
             route_table,
             &config,
             ssr_manager,
@@ -125,14 +127,20 @@ async fn main() -> anyhow::Result<()> {
             client.clone(),
             std::path::PathBuf::from(&config.serve.artifact_cache_root),
         );
+        if let Err(error) = serve_state.ingress.restore().await {
+            tracing::warn!(operation = "node.serve.certificates.restore_failed", %error, "certificate cache could not be restored");
+        }
+        let certificate_sync =
+            serve::certificates::spawn(client.clone(), serve_state.ingress.clone());
         (
             Some(artifact_sync),
             Some(route_refresh),
+            Some(certificate_sync),
             Some(ssr_reaper),
             Some(serve::spawn(serve_state, &config)),
         )
     } else {
-        (None, None, None, None)
+        (None, None, None, None, None)
     };
 
     wait_for_shutdown().await;
@@ -145,6 +153,9 @@ async fn main() -> anyhow::Result<()> {
     }
     if let Some(route_refresh) = route_refresh {
         route_refresh.abort();
+    }
+    if let Some(certificate_sync) = certificate_sync {
+        certificate_sync.abort();
     }
     if let Some(ssr_reaper) = ssr_reaper {
         ssr_reaper.abort();

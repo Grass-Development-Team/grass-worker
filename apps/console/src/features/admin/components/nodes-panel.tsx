@@ -336,6 +336,7 @@ export function NodesPanel() {
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
+                <TableHead>Region</TableHead>
                 <TableHead>Health</TableHead>
                 <TableHead>Capabilities</TableHead>
                 <TableHead>Serve load</TableHead>
@@ -373,6 +374,9 @@ export function NodesPanel() {
                         {node.deletion.error}
                       </p>
                     )}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline">{node.region}</Badge>
                   </TableCell>
                   <TableCell>{healthBadge(node)}</TableCell>
                   <TableCell>
@@ -692,7 +696,7 @@ function EditConfigurationDialog({ node }: { node: AdminNode }) {
       const targets = current.security.private_repository_targets.map((target, targetIndex) =>
         targetIndex === index ? { ...target, [key]: value } : target,
       );
-      return { ...current, security: { private_repository_targets: targets } };
+      return { ...current, security: { ...current.security, private_repository_targets: targets } };
     });
   };
 
@@ -767,6 +771,16 @@ function EditConfigurationDialog({ node }: { node: AdminNode }) {
                         onChange={(id) =>
                           setConfiguration((current) =>
                             current ? { ...current, node: { ...current.node, id } } : current,
+                          )
+                        }
+                      />
+                      <ConfigurationTextField
+                        id={`node-${node.id}-config-region`}
+                        label="Region"
+                        value={configuration.node.region}
+                        onChange={(region) =>
+                          setConfiguration((current) =>
+                            current ? { ...current, node: { ...current.node, region } } : current,
                           )
                         }
                       />
@@ -961,6 +975,50 @@ function EditConfigurationDialog({ node }: { node: AdminNode }) {
                         }
                       />
                     </div>
+                  </FieldSet>
+
+                  <FieldSet className="gap-4">
+                    <FieldLegend>HTTPS</FieldLegend>
+                    <FieldGroup>
+                      <ConfigurationSwitch
+                        id={`node-${node.id}-tls-enabled`}
+                        label="Native HTTPS"
+                        checked={configuration.serve.tls?.enabled ?? false}
+                        onCheckedChange={(enabled) =>
+                          setConfiguration((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  serve: {
+                                    ...current.serve,
+                                    tls: { port: current.serve.tls?.port ?? 8443, enabled },
+                                  },
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                      <ConfigurationNumberField
+                        id={`node-${node.id}-tls-port`}
+                        label="HTTPS port"
+                        min={1}
+                        max={65535}
+                        value={configuration.serve.tls?.port ?? 8443}
+                        onChange={(port) =>
+                          setConfiguration((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  serve: {
+                                    ...current.serve,
+                                    tls: { enabled: current.serve.tls?.enabled ?? false, port },
+                                  },
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                    </FieldGroup>
                   </FieldSet>
 
                   <FieldSet className="gap-4">
@@ -1221,6 +1279,35 @@ function EditConfigurationDialog({ node }: { node: AdminNode }) {
                 <FieldGroup className="gap-5">
                   <FieldSet className="gap-4">
                     <FieldLegend>Authentication</FieldLegend>
+                    <Field>
+                      <FieldLabel htmlFor={`node-${node.id}-gateway-authentication`}>
+                        Gateway authentication
+                      </FieldLabel>
+                      <Select
+                        value={configuration.security.gateway_authentication ?? "token"}
+                        onValueChange={(gateway_authentication: "token" | "none") =>
+                          setConfiguration((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  security: { ...current.security, gateway_authentication },
+                                }
+                              : current,
+                          )
+                        }
+                      >
+                        <SelectTrigger id={`node-${node.id}-gateway-authentication`}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="token">Gateway token</SelectItem>
+                          <SelectItem value="none">Private network (no token)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FieldDescription>
+                        No-token mode still requires the exact single-hop gateway header.
+                      </FieldDescription>
+                    </Field>
                     <Field orientation="horizontal">
                       <FieldTitle>Node token</FieldTitle>
                       <Badge
@@ -1319,6 +1406,7 @@ function EditConfigurationDialog({ node }: { node: AdminNode }) {
                                           ? {
                                               ...current,
                                               security: {
+                                                ...current.security,
                                                 private_repository_targets:
                                                   current.security.private_repository_targets.filter(
                                                     (_, targetIndex) => targetIndex !== index,
@@ -1350,6 +1438,7 @@ function EditConfigurationDialog({ node }: { node: AdminNode }) {
                             ? {
                                 ...current,
                                 security: {
+                                  ...current.security,
                                   private_repository_targets: [
                                     ...current.security.private_repository_targets,
                                     { host: "", ip: "", port: 443 },
@@ -1437,13 +1526,15 @@ function CreateNodeDialog({
 }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
+  const [region, setRegion] = useState("default");
   const [startLocal, setStartLocal] = useState(defaultStartLocal);
 
   const createMutation = useMutation({
-    mutationFn: () => adminApi.createNode({ name, start_local: startLocal }),
+    mutationFn: () => adminApi.createNode({ name, region, start_local: startLocal }),
     onSuccess: ({ token, warnings }) => {
       setOpen(false);
       setName("");
+      setRegion("default");
       onCreated(token, warnings ?? []);
     },
   });
@@ -1476,6 +1567,16 @@ function CreateNodeDialog({
               placeholder="build-node-1"
               value={name}
               onChange={(event) => setName(event.target.value)}
+              required
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="node-region">Region</FieldLabel>
+            <Input
+              id="node-region"
+              placeholder="default"
+              value={region}
+              onChange={(event) => setRegion(event.target.value)}
               required
             />
           </Field>

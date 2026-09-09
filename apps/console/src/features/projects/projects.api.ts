@@ -43,6 +43,7 @@ export interface ProjectHost {
   id: string;
   project_id: string;
   host: string;
+  region?: string;
   kind: "platform" | "custom";
   environment: HostEnvironment;
   status: HostStatus;
@@ -52,6 +53,49 @@ export interface ProjectHost {
   serving?: boolean;
   created_at: string;
   provision_events?: ProvisionEvent[];
+  ingress?: ProjectHostIngress | null;
+  ownership_status?: "pending" | "verified" | "failed" | "not_required";
+  ownership_checked_at?: string | null;
+  ownership_error?: string | null;
+  certificate?: DomainCertificate | null;
+}
+
+export interface DomainCertificate {
+  status: "pending" | "issuing" | "active" | "expiring" | "failed" | "disabled";
+  issuer: "letsencrypt" | "zerossl" | "manual";
+  regional_issuer: "letsencrypt" | "zerossl" | "manual";
+  challenge_method: "http01" | "dns01";
+  auto_renew: boolean;
+  issued_at: string | null;
+  expires_at: string | null;
+  error: string | null;
+  retry_at: string | null;
+  revision: string | null;
+  dns_delegation_name: string | null;
+  dns_delegation_target: string | null;
+}
+
+export interface ProjectHostIngress {
+  region: string;
+  cname: { record_type: "CNAME"; name: string; target: string };
+  txt: { record_type: "TXT"; name: string; value: string };
+  origin_host_preservation: boolean;
+  health_check: { path: string; interval_seconds: number };
+  entrance_nodes: Array<{ node_id: string; base_url: string; priority: number }>;
+  certificate: {
+    enabled: boolean;
+    issuer: "letsencrypt" | "zerossl" | "manual";
+    auto_renew: boolean;
+    status: "pending" | "issuing" | "active" | "expiring" | "failed" | "disabled";
+    expires_at: string | null;
+    error: string | null;
+  };
+  dns_challenge: {
+    provider: string | null;
+    status: "not_configured" | "pending" | "valid" | "failed";
+    record_name: string | null;
+    record_value: string | null;
+  };
 }
 
 export interface CreateProjectInput {
@@ -138,7 +182,10 @@ export const projectsApi = {
   listHosts: (projectId: string) =>
     request<{ hosts: ProjectHost[] }>(`/api/v1/projects/${projectId}/hosts`),
 
-  createHost: (projectId: string, input: { host: string; environment?: HostEnvironment }) =>
+  createHost: (
+    projectId: string,
+    input: { host: string; region?: string; environment?: HostEnvironment },
+  ) =>
     request<{ host: ProjectHost }>(`/api/v1/projects/${projectId}/hosts`, {
       method: "POST",
       body: JSON.stringify(input),
@@ -156,4 +203,40 @@ export const projectsApi = {
     request<{ host: ProjectHost }>(`/api/v1/projects/${projectId}/hosts/${hostId}/provision`, {
       method: "POST",
     }),
+
+  verifyHost: (projectId: string, hostId: string) =>
+    request<{ host: ProjectHost; verified: boolean }>(
+      `/api/v1/projects/${projectId}/hosts/${hostId}/verify`,
+      { method: "POST" },
+    ),
+
+  updateHostCertificate: (
+    projectId: string,
+    hostId: string,
+    input: {
+      challenge_method?: "http01" | "dns01";
+      certificate_auto_renew?: boolean;
+      certificate_issuer?: DomainCertificate["issuer"];
+    },
+  ) =>
+    request<{ certificate: DomainCertificate }>(
+      `/api/v1/projects/${projectId}/hosts/${hostId}/certificate`,
+      { method: "PATCH", body: JSON.stringify(input) },
+    ),
+
+  renewHostCertificate: (projectId: string, hostId: string) =>
+    request<{ certificate: DomainCertificate }>(
+      `/api/v1/projects/${projectId}/hosts/${hostId}/certificate/renew`,
+      { method: "POST" },
+    ),
+
+  importHostCertificate: (
+    projectId: string,
+    hostId: string,
+    input: { certificate_pem: string; private_key_pem: string },
+  ) =>
+    request<{ certificate: DomainCertificate }>(
+      `/api/v1/projects/${projectId}/hosts/${hostId}/certificate/import`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
 };

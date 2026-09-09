@@ -20,6 +20,7 @@ toml.workspace = true
 grass-node-protocol.workspace = true
 hex.workspace = true
 image.workspace = true
+instant-acme = { version = "0.8.5", default-features = true, features = ["rcgen"] }
 lettre.workspace = true
 jsonwebtoken.workspace = true
 sha2.workspace = true
@@ -30,12 +31,15 @@ grass-token.workspace = true
 grass-validator.workspace = true
 futures-util.workspace = true
 object_store.workspace = true
+quick-xml.workspace = true
 grass-assets.workspace = true
 subtle = "2"
 mime_guess.workspace = true
 rand.workspace = true
 reqwest.workspace = true
 ring.workspace = true
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pemfile = "2"
 sea-orm.workspace = true
 sea-orm-migration.workspace = true
 serde.workspace = true
@@ -51,9 +55,12 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
 uuid.workspace = true
+x509-parser = "0.16"
 webp.workspace = true
 walkdir.workspace = true
 
 [dev-dependencies]
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+rcgen = { version = "0.14", features = ["x509-parser"] }
 sea-orm = { workspace = true, features = ["mock"] }
 tower = { version = "0.5", features = ["util"] }

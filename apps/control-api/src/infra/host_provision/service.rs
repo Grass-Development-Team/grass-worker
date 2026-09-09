@@ -23,6 +23,7 @@ use crate::{
 
 use super::{
     CompositeHostProvisioner, HostProvisionError, HostProvisioner, ProvisionProjectHostInput,
+    credentials,
 };
 
 pub struct BindHostRequest<'a> {
@@ -30,6 +31,7 @@ pub struct BindHostRequest<'a> {
     pub team: &'a team::Model,
     pub source: Option<&'a host_source::Model>,
     pub host: String,
+    pub region: String,
     pub kind: HostBindingKind,
     pub environment: HostBindingEnvironment,
     pub is_primary: bool,
@@ -43,12 +45,14 @@ pub enum DeprovisionOutcome {
     Failed,
 }
 
-fn custom_binding_status(review_status: &HostReviewStatus) -> HostBindingStatus {
-    match review_status {
-        HostReviewStatus::Approved => HostBindingStatus::Active,
-        HostReviewStatus::NotRequired | HostReviewStatus::Pending | HostReviewStatus::Rejected => {
-            HostBindingStatus::Pending
-        }
+fn custom_binding_status(
+    review_status: &HostReviewStatus,
+    ownership_status: &str,
+) -> HostBindingStatus {
+    match (review_status, ownership_status) {
+        (HostReviewStatus::Approved, "verified") => HostBindingStatus::Active,
+        (HostReviewStatus::Rejected, _) => HostBindingStatus::Disabled,
+        _ => HostBindingStatus::Pending,
     }
 }
 
@@ -56,14 +60,16 @@ pub struct HostBindingService<'a> {
     db: &'a DatabaseConnection,
     cache: &'a CacheStore,
     provisioner: CompositeHostProvisioner,
+    credential_key: [u8; 32],
 }
 
 impl<'a> HostBindingService<'a> {
-    pub fn new(db: &'a DatabaseConnection, cache: &'a CacheStore) -> Self {
+    pub fn new(db: &'a DatabaseConnection, cache: &'a CacheStore, platform_secret: &str) -> Self {
         Self {
             db,
             cache,
             provisioner: CompositeHostProvisioner::new(),
+            credential_key: credentials::encryption_key(platform_secret),
         }
     }
 
@@ -104,6 +110,7 @@ impl<'a> HostBindingService<'a> {
                 team_id: request.team.id,
                 host_source_id: request.source.map(|source| source.id),
                 host: request.host.clone(),
+                region: request.region.clone(),
                 kind: request.kind,
                 environment: request.environment,
                 status: HostBindingStatus::Pending,
@@ -137,7 +144,8 @@ impl<'a> HostBindingService<'a> {
             // Custom-host DNS is user-managed, but manual review still gates
             // whether the binding can become serving/active.
             None => {
-                let status = custom_binding_status(&binding.review_status);
+                let status =
+                    custom_binding_status(&binding.review_status, &binding.ownership_status);
                 hosts::update_binding_status(self.db, binding, status, None)
                     .await
                     .map_err(|source| AppError::Infrastructure { op, source })?
@@ -155,14 +163,19 @@ impl<'a> HostBindingService<'a> {
         binding: &project_host_binding::Model,
         source: &host_source::Model,
     ) -> Result<DeprovisionOutcome, AppError> {
-        if let Err(error) = self
-            .provisioner
-            .deprovision_project_host(super::DeprovisionProjectHostInput {
-                host: &binding.host,
-                source,
-            })
-            .await
+        let result = match credentials::runtime_source(self.db, &self.credential_key, source).await
         {
+            Ok(runtime) => self
+                .provisioner
+                .deprovision_project_host(super::DeprovisionProjectHostInput {
+                    host: &binding.host,
+                    source: &runtime,
+                })
+                .await
+                .map_err(|error| credentials::redact_error(&runtime.config, error)),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = result {
             tracing::warn!(operation = op, %error, host = %binding.host, "deprovision failed");
             hosts::record_provision_event(
                 self.db,
@@ -192,13 +205,18 @@ impl<'a> HostBindingService<'a> {
         binding: project_host_binding::Model,
         source: &host_source::Model,
     ) -> Result<project_host_binding::Model, AppError> {
-        let result = self
-            .provisioner
-            .provision_project_host(ProvisionProjectHostInput {
-                host: &binding.host,
-                source,
-            })
-            .await;
+        let result = match credentials::runtime_source(self.db, &self.credential_key, source).await
+        {
+            Ok(runtime) => self
+                .provisioner
+                .provision_project_host(ProvisionProjectHostInput {
+                    host: &binding.host,
+                    source: &runtime,
+                })
+                .await
+                .map_err(|error| credentials::redact_error(&runtime.config, error)),
+            Err(error) => Err(error),
+        };
 
         let (status, event_status, request_id, message) = match &result {
             Ok(provisioned) => (
@@ -266,16 +284,16 @@ mod tests {
     #[test]
     fn custom_binding_only_activates_after_automatic_approval() {
         assert_eq!(
-            custom_binding_status(&HostReviewStatus::Approved),
+            custom_binding_status(&HostReviewStatus::Approved, "verified"),
             HostBindingStatus::Active
         );
         assert_eq!(
-            custom_binding_status(&HostReviewStatus::Pending),
+            custom_binding_status(&HostReviewStatus::Pending, "pending"),
             HostBindingStatus::Pending
         );
         assert_eq!(
-            custom_binding_status(&HostReviewStatus::Rejected),
-            HostBindingStatus::Pending
+            custom_binding_status(&HostReviewStatus::Rejected, "pending"),
+            HostBindingStatus::Disabled
         );
     }
 
@@ -287,6 +305,7 @@ mod tests {
             kind: HostSourceKind::DnsProvider,
             label: "unsupported provider".to_owned(),
             base_domain: "example.invalid".to_owned(),
+            region: "default".to_owned(),
             enabled: true,
             allows_auto_assign: true,
             is_default: true,
@@ -302,6 +321,7 @@ mod tests {
             team_id: Uuid::now_v7(),
             host_source_id: Some(source.id),
             host: "site.example.invalid".to_owned(),
+            region: "default".to_owned(),
             kind: HostBindingKind::Platform,
             environment: HostBindingEnvironment::Production,
             status: HostBindingStatus::Active,
@@ -311,6 +331,9 @@ mod tests {
             reviewed_by_user_id: None,
             reviewed_at: None,
             review_reason: None,
+            ownership_status: "pending".to_owned(),
+            ownership_checked_at: None,
+            ownership_error: None,
             deleted_at: Some(now),
             created_at: now,
             updated_at: now,
@@ -332,7 +355,7 @@ mod tests {
             .into_connection();
         let cache = grass_cache::CacheStore::Moka(grass_cache::MokaCache::connect());
 
-        let outcome = HostBindingService::new(&db, &cache)
+        let outcome = HostBindingService::new(&db, &cache, "test-platform-key")
             .deprovision("test.host.deprovision", &binding, &source)
             .await
             .expect("the provider failure should be recorded");

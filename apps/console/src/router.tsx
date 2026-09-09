@@ -91,6 +91,11 @@ const HostSourcesPanel = lazy(() =>
     default: HostSourcesPanel,
   })),
 );
+const RegionalIngressesPanel = lazy(() =>
+  import("@/features/admin/components/regional-ingresses-panel").then(
+    ({ RegionalIngressesPanel }) => ({ default: RegionalIngressesPanel }),
+  ),
+);
 const QuotaPlansPanel = lazy(() =>
   import("@/features/admin/components/quota-plans-panel").then(({ QuotaPlansPanel }) => ({
     default: QuotaPlansPanel,
@@ -336,6 +341,7 @@ export function Router() {
             <Route path="projects/:projectId" element={<ProjectGovernancePage />} />
             <Route path="nodes" element={<NodesPanel />} />
             <Route path="host-sources" element={<HostSourcesPanel />} />
+            <Route path="regional-ingresses" element={<RegionalIngressesPanel />} />
             <Route path="quota-plans" element={<QuotaPlansPanel />} />
             <Route path="team-groups" element={<TeamGroupsPanel />} />
             <Route path="users" element={<UsersPanel />} />

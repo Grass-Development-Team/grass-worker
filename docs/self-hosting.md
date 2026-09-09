@@ -266,6 +266,12 @@ socket = "unix:///run/user/1000/podman/podman.sock"
 default_build_image = "docker.io/library/node:22"
 ```
 
+Nodes are assigned to the `default` region unless `node.region` (or
+`GWNODE_REGION`) is set to another region slug. Deployments can request a
+region and the scheduler will only place them on healthy Serve Nodes in that
+region. Keep the same region on every Node that should accept those
+deployments.
+
 ```sh
 just run node         # or: grass-node --config node.toml
 ```
@@ -311,6 +317,27 @@ machine:
 [serve]
 public_base_url = "http://serve-a.internal:8080"
 ```
+
+Serve-to-Serve gateway requests use a shared token by default. For Nodes that
+can reach one another only through a trusted private network or firewall, set
+the gateway authentication mode to `none`:
+
+```toml
+[security]
+gateway_authentication = "none"
+```
+
+The no-token mode still requires the gateway hop marker and rejects requests
+that would be proxied more than once. Use the Administration → Nodes
+configuration editor to change this setting on a managed Node; the process
+applies it after the next configuration restart. Token mode is recommended
+when Serve listeners are reachable from an untrusted network.
+
+For public HTTPS, enable the Node's native TLS listener and put the regional
+load balancer in TCP passthrough mode. Keep `serve.public_base_url` on private
+HTTP: it addresses the Node for Peer Hop requests, whose Host belongs to the
+site. See [Regional ingress and HTTPS](regional-ingress.md) for complete Node,
+DNS, certificate, health-check, and two-entry load-balancer configuration.
 
 ### Configure Serve scheduling capacity
 
@@ -382,18 +409,53 @@ assigned Node through one authenticated peer hop. Make every
 `serve.public_base_url` reachable from every Serve Node and the Control API,
 and allow the serve port through internal firewalls.
 
-Without wildcard DNS, add a **DNS provider (Cloudflare)** source instead:
-provide an API token with the Zone / DNS / Edit permission, the zone ID,
-and the record the platform should create for every domain (type `A`,
-`AAAA`, or `CNAME` plus the node address as the value). Each provisioned
-domain then becomes one DNS record created through the Cloudflare API;
-bindings turn `failed` with the provider message when the API rejects a
-request and can be retried from the project's Domains page. Credentials
-are write-only: the API returns configured key names, never values, and
-editing a source only overwrites the fields you fill in.
+Without wildcard DNS, add a **DNS provider** source instead. Cloudflare,
+DNSPod, and Route53 are supported:
+
+- **Cloudflare**: provide an API token with the Zone / DNS / Edit permission,
+  the zone ID, and an `A`, `AAAA`, or `CNAME` record value.
+- **DNSPod**: provide a Tencent Cloud `secret_id` and `secret_key`, the
+  `A`, `AAAA`, or `CNAME` record value, and (when needed) the DNSPod record
+  line. The host source base domain is used as the DNSPod domain.
+- **Route53**: provide an IAM access key pair, hosted zone ID, signing region,
+  and an `A`, `AAAA`, or `CNAME` record value. The hosted zone ID may be
+  entered as either `Z123...` or `/hostedzone/Z123...`.
+
+Each provisioned domain then becomes one record created through the selected
+provider API; bindings turn `failed` with the provider message when the API
+rejects a request and can be retried from the project's Domains page.
+Provisioning is idempotent. Re-running it reconciles only the configured
+record type and value, and deprovisioning never removes unrelated TXT or MX
+records. Credentials are write-only: the API returns configured key names,
+never values, and editing a source only overwrites the fields you fill in.
 
 A **Manual** source assigns domains without touching DNS; bindings stay
 `pending` until an operator creates the record and re-runs provisioning.
+
+### Regional CNAME ingress and certificates
+
+Platform administrators can create one ingress hostname per region under
+**Administration → Regional ingresses**. A project custom domain then shows a
+CNAME target for that region and a TXT ownership record named
+`_grass.<domain>`. Publish both records before serving traffic. The Control
+API derives the TXT value from its secret key and the binding id, so it is
+stable for retries but cannot be guessed from the hostname alone.
+
+Ingress guidance also lists the same-region Serve Nodes with a fresh heartbeat,
+the configured health-check path and interval, and whether the original Host
+header is preserved when traffic reaches the deployment. Disabled or stale
+nodes are omitted; keep at least two healthy Serve Nodes in a production
+region when failover is required.
+
+Regional ingresses and custom domains support Let's Encrypt, ZeroSSL and
+manual certificates. Enable `[serve.tls]` on each public entry Node and use
+TCP passthrough at the regional load balancer. Nodes select certificates by
+SNI, enforce the original Host, and hot-reload validated renewals. Keep
+`serve.public_base_url` on private HTTP for Peer Hop and health checks.
+Custom domains require TXT ownership plus review, default to HTTP-01, and
+support delegated DNS-01; regional certificates use DNS-01. The Console
+reports issuance, expiry, retries and actual Node certificate revisions.
+See [Regional ingress and HTTPS](regional-ingress.md) for complete configuration.
 
 Custom domains use the Domain Review Policy configured under Administration
 settings. The platform default is `auto`; a Team Group can override it with

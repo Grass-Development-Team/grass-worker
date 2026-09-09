@@ -1,6 +1,7 @@
 pub mod create;
 pub mod deployments;
 pub mod detail;
+pub mod host_certificates;
 pub mod hosts;
 pub mod lifecycle;
 pub mod list;
@@ -63,6 +64,22 @@ pub fn router() -> Router<ControlApiState> {
         .route(
             "/projects/{project_id}/hosts/{host_id}/primary",
             post(hosts::set_primary),
+        )
+        .route(
+            "/projects/{project_id}/hosts/{host_id}/verify",
+            post(hosts::verify),
+        )
+        .route(
+            "/projects/{project_id}/hosts/{host_id}/certificate",
+            get(host_certificates::get).patch(host_certificates::update),
+        )
+        .route(
+            "/projects/{project_id}/hosts/{host_id}/certificate/renew",
+            post(host_certificates::renew),
+        )
+        .route(
+            "/projects/{project_id}/hosts/{host_id}/certificate/import",
+            post(host_certificates::import),
         )
         .route(
             "/projects/{project_id}/hosts/{host_id}/provision",
