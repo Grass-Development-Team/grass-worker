@@ -9,9 +9,9 @@ use grass_node_protocol::{
     ClaimResponse, ExchangePreviewCodeRequest, ExchangePreviewCodeResponse, HeartbeatRequest,
     HeartbeatResponse, ObserveSshHostKeyRequest, ObserveSshHostKeyResponse,
     RedeemGitCredentialRequest, RedeemGitCredentialResponse, RegisterRequest, RegisterResponse,
-    ReportServeStatusRequest, ReportServeStatusResponse, ResolveHostResponse,
-    RouteSnapshotResponse, ServeAssignment, ServeAssignmentsResponse, SsrLeaseResponse,
-    StageRequest, StageResponse, StartPreviewAuthorizationRequest,
+    ReportIngressStatusRequest, ReportServeStatusRequest, ReportServeStatusResponse,
+    ResolveHostResponse, RouteSnapshotResponse, ServeAssignment, ServeAssignmentsResponse,
+    SsrLeaseResponse, StageRequest, StageResponse, StartPreviewAuthorizationRequest,
     StartPreviewAuthorizationResponse, UploadArtifactResponse, VerifyPreviewGrantRequest,
     VerifyPreviewGrantResponse, artifact_headers,
 };
@@ -459,15 +459,36 @@ impl ControlApiClient {
             .map_err(RouteSnapshotError::Infrastructure)
     }
 
-    pub async fn certificate_bundles(&self) -> anyhow::Result<CertificateBundlesResponse> {
+    pub async fn certificate_bundles(
+        &self,
+    ) -> Result<CertificateBundlesResponse, RouteSnapshotError> {
         let response = self
             .http
             .get(self.url("/serve/certificates"))
             .bearer_auth(&self.token)
             .send()
             .await
-            .context("serve.certificates: request failed")?;
-        Self::unwrap_envelope(response, "serve.certificates").await
+            .context("serve.certificates: request failed")
+            .map_err(RouteSnapshotError::Infrastructure)?;
+        if matches!(
+            response.status(),
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        ) {
+            return Err(RouteSnapshotError::AuthorizationRevoked);
+        }
+        Self::unwrap_envelope(response, "serve.certificates")
+            .await
+            .map_err(RouteSnapshotError::Infrastructure)
+    }
+
+    pub async fn report_ingress_status(
+        &self,
+        request: &ReportIngressStatusRequest,
+    ) -> anyhow::Result<()> {
+        let _: serde_json::Value = self
+            .post_json("/serve/ingress-status", request, "serve.ingress_status")
+            .await?;
+        Ok(())
     }
 
     #[allow(dead_code)] // Wired by the serve resolver in Milestone 10.

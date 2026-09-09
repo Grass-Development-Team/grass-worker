@@ -11,11 +11,13 @@ pub mod routes;
 pub mod ssr;
 pub mod static_files;
 pub mod sync;
+pub mod tls;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use axum::{
@@ -23,8 +25,9 @@ use axum::{
     body::Body,
     extract::{ConnectInfo, Request, State},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{any, post},
+    routing::{any, get, post},
 };
 use grass_node_protocol::{GatewayAuthenticationMode, ServeAccess, ServeRoute};
 use serde::Deserialize;
@@ -72,6 +75,7 @@ pub struct ServeState {
     /// Proxy client for peer Nodes and SSR upstreams: connect timeout only,
     /// so streamed responses are never cut off by a total timeout.
     proxy: reqwest::Client,
+    pub ingress: Arc<certificates::IngressState>,
 }
 
 impl ServeState {
@@ -96,6 +100,7 @@ impl ServeState {
             ),
             preview_grants: Mutex::new(HashMap::new()),
             ssr,
+            ingress: Arc::new(certificates::IngressState::new(config, node_id)),
             proxy: reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(5))
                 // A site's Location belongs to its client. Following it here
@@ -109,12 +114,96 @@ impl ServeState {
 
 fn serve_router(state: Arc<ServeState>) -> axum::Router {
     axum::Router::new()
+        .route("/_grass/health", get(health))
         .route(ROUTE_INVALIDATION_PATH, post(invalidate_routes))
         .route(PEER_PROXY_PREFIX, any(handle_peer_proxy))
         .route("/_grass/internal/proxy/", any(handle_peer_proxy))
         .route("/_grass/internal/proxy/{*path}", any(handle_peer_proxy))
         .fallback(route_public_request)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            ingress_request,
+        ))
         .with_state(state)
+}
+
+async fn health(State(state): State<Arc<ServeState>>) -> Response {
+    let ready = state.ingress.listeners_ready() && state.routes.revision().await.is_some();
+    (
+        if ready {
+            StatusCode::OK
+        } else {
+            StatusCode::SERVICE_UNAVAILABLE
+        },
+        Json(serde_json::json!({ "ready": ready })),
+    )
+        .into_response()
+}
+
+/// Handles the two reserved public ingress endpoints before Host deployment
+/// resolution. HTTPS still requires exact agreement between SNI and HTTP Host.
+async fn ingress_request(
+    State(state): State<Arc<ServeState>>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    if let Some(authority) = request.uri().authority() {
+        let Ok(authority_host) = grass_validator::normalize_host(authority.host()) else {
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        if request.headers().contains_key(header::HOST) {
+            if host_from_headers(request.headers()).as_deref() != Some(authority_host.as_str()) {
+                return StatusCode::MISDIRECTED_REQUEST.into_response();
+            }
+        } else {
+            let Ok(value) = HeaderValue::from_str(authority.as_str()) else {
+                return StatusCode::BAD_REQUEST.into_response();
+            };
+            request.headers_mut().insert(header::HOST, value);
+        }
+    }
+    if let Some(connection) = request.extensions().get::<tls::TlsConnection>() {
+        let sni = grass_validator::normalize_host(&connection.server_name).ok();
+        if sni.is_none()
+            || host_from_headers(request.headers()) != sni
+            || !sni
+                .as_deref()
+                .is_some_and(|hostname| state.ingress.certificate_for(hostname).is_some())
+        {
+            return StatusCode::MISDIRECTED_REQUEST.into_response();
+        }
+    }
+    if let Some(token) = request
+        .uri()
+        .path()
+        .strip_prefix(certificates::CHALLENGE_PREFIX)
+    {
+        if !matches!(
+            *request.method(),
+            axum::http::Method::GET | axum::http::Method::HEAD
+        ) {
+            return StatusCode::METHOD_NOT_ALLOWED.into_response();
+        }
+        let Some(host) = host_from_headers(request.headers()) else {
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        let Some(authorization) = state.ingress.challenge(&host, token) else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        return (
+            [
+                (header::CONTENT_TYPE, "text/plain"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            if request.method() == axum::http::Method::HEAD {
+                String::new()
+            } else {
+                authorization
+            },
+        )
+            .into_response();
+    }
+    next.run(request).await
 }
 
 #[derive(Deserialize)]
@@ -164,8 +253,13 @@ async fn invalidate_routes(
 
 pub fn spawn(state: Arc<ServeState>, config: &NodeConfig) -> tokio::task::JoinHandle<()> {
     let addr = std::net::SocketAddr::new(config.serve.host, config.serve.port);
+    let tls_addr = config
+        .serve
+        .tls
+        .enabled
+        .then(|| std::net::SocketAddr::new(config.serve.host, config.serve.tls.port));
     tokio::spawn(async move {
-        let app = serve_router(state);
+        let app = serve_router(state.clone());
         let listener = match tokio::net::TcpListener::bind(addr).await {
             Ok(listener) => listener,
             Err(error) => {
@@ -173,13 +267,39 @@ pub fn spawn(state: Arc<ServeState>, config: &NodeConfig) -> tokio::task::JoinHa
                 return;
             }
         };
+        let tls_listener = match tls_addr {
+            Some(addr) => match tokio::net::TcpListener::bind(addr).await {
+                Ok(listener) => Some(listener),
+                Err(error) => {
+                    warn!(operation = "node.serve.tls.bind", %error, %addr, "HTTPS listener bind failed");
+                    return;
+                }
+            },
+            None => None,
+        };
+        state.ingress.http_ready.store(true, Ordering::Release);
+        state
+            .ingress
+            .tls_ready
+            .store(tls_listener.is_some(), Ordering::Release);
         info!(operation = "node.serve.start", %addr, "public serve listener started");
-        if let Err(error) = axum::serve(
+        let http = axum::serve(
             listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        {
+            app.clone()
+                .into_make_service_with_connect_info::<SocketAddr>(),
+        );
+        let result = if let Some(listener) = tls_listener {
+            info!(operation = "node.serve.tls.start", addr = ?tls_addr, "HTTPS listener started");
+            tokio::select! {
+                result = std::future::IntoFuture::into_future(http) => result.map_err(anyhow::Error::from),
+                result = tls::serve(listener, app, state.ingress.clone()) => result,
+            }
+        } else {
+            http.await.map_err(anyhow::Error::from)
+        };
+        state.ingress.http_ready.store(false, Ordering::Release);
+        state.ingress.tls_ready.store(false, Ordering::Release);
+        if let Err(error) = result {
             warn!(operation = "node.serve.stopped", %error, "serve listener stopped");
         }
     })
@@ -354,6 +474,9 @@ fn route_action(
 }
 
 fn host_from_headers(headers: &HeaderMap) -> Option<String> {
+    if headers.get_all(header::HOST).iter().count() != 1 {
+        return None;
+    }
     let raw = headers.get(header::HOST)?.to_str().ok()?;
     let without_port = raw.rsplit_once(':').map_or(raw, |(host, port)| {
         if port.chars().all(|character| character.is_ascii_digit()) {
@@ -935,7 +1058,14 @@ async fn forward_to_ssr(
     }
     if matches!(origin, GatewayOrigin::External) {
         builder = builder
-            .header("x-forwarded-proto", "http")
+            .header(
+                "x-forwarded-proto",
+                if parts.extensions.get::<tls::TlsConnection>().is_some() {
+                    "https"
+                } else {
+                    "http"
+                },
+            )
             .header("x-forwarded-for", client_addr.ip().to_string());
         if let Some(host) = parts.headers.get(header::HOST) {
             builder = builder.header("x-forwarded-host", host);
@@ -1000,7 +1130,14 @@ async fn forward_to_gateway(
     }
     builder = builder
         .header("x-forwarded-for", client_addr.ip().to_string())
-        .header("x-forwarded-proto", "http");
+        .header(
+            "x-forwarded-proto",
+            if parts.extensions.get::<tls::TlsConnection>().is_some() {
+                "https"
+            } else {
+                "http"
+            },
+        );
     if let Some(host) = parts.headers.get(header::HOST) {
         builder = builder.header("x-forwarded-host", host);
     }

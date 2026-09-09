@@ -38,6 +38,8 @@ mime_guess.workspace = true
 rand.workspace = true
 reqwest.workspace = true
 ring.workspace = true
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pemfile = "2"
 sea-orm.workspace = true
 sea-orm-migration.workspace = true
 serde.workspace = true
@@ -58,5 +60,7 @@ webp.workspace = true
 walkdir.workspace = true
 
 [dev-dependencies]
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+rcgen = { version = "0.14", features = ["x509-parser"] }
 sea-orm = { workspace = true, features = ["mock"] }
 tower = { version = "0.5", features = ["util"] }

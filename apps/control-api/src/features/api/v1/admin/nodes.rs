@@ -355,6 +355,9 @@ fn validate_node_configuration(
     if serve.port == 0 {
         return Err("serve port must be greater than zero".to_owned());
     }
+    if serve.tls.enabled && (serve.tls.port == 0 || serve.tls.port == serve.port) {
+        return Err("serve TLS port must be positive and different from the HTTP port".to_owned());
+    }
     if !validate_http_url(serve.public_base_url.trim()) {
         return Err("serve public base URL must be an absolute HTTP(S) URL".to_owned());
     }
@@ -1094,6 +1097,20 @@ mod tests {
     fn node_configuration_validation_rejects_unsafe_or_unusable_values() {
         let mut configuration = configurable_node();
         assert!(validate_node_configuration(&configuration).is_ok());
+
+        configuration.serve.tls.enabled = true;
+        assert!(validate_node_configuration(&configuration).is_ok());
+        configuration.serve.tls.port = 0;
+        assert_eq!(
+            validate_node_configuration(&configuration).unwrap_err(),
+            "serve TLS port must be positive and different from the HTTP port"
+        );
+        configuration.serve.tls.port = configuration.serve.port;
+        assert_eq!(
+            validate_node_configuration(&configuration).unwrap_err(),
+            "serve TLS port must be positive and different from the HTTP port"
+        );
+        configuration = configurable_node();
 
         configuration.node.capabilities.build = false;
         configuration.node.capabilities.serve = false;

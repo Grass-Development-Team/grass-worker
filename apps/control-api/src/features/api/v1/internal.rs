@@ -61,6 +61,7 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
         )
         .route("/serve/routes", get(serve::routes))
         .route("/serve/certificates", get(serve::certificates))
+        .route("/serve/ingress-status", post(serve::ingress_status))
         .route("/serve/resolve-host", get(serve::resolve_host))
         .route("/serve/preview/authorize", post(super::preview_auth::start))
         .route(

@@ -333,6 +333,12 @@ configuration editor to change this setting on a managed Node; the process
 applies it after the next configuration restart. Token mode is recommended
 when Serve listeners are reachable from an untrusted network.
 
+For public HTTPS, enable the Node's native TLS listener and put the regional
+load balancer in TCP passthrough mode. Keep `serve.public_base_url` on private
+HTTP: it addresses the Node for Peer Hop requests, whose Host belongs to the
+site. See [Regional ingress and HTTPS](regional-ingress.md) for complete Node,
+DNS, certificate, health-check, and two-entry load-balancer configuration.
+
 ### Configure Serve scheduling capacity
 
 By default a Serve Node reports 80% of its logical CPU capacity, 75% of total
@@ -441,16 +447,15 @@ header is preserved when traffic reaches the deployment. Disabled or stale
 nodes are omitted; keep at least two healthy Serve Nodes in a production
 region when failover is required.
 
-Regional ingress records expose certificate controls for Let's Encrypt,
-ZeroSSL, or manual certificates. The `certificate_status`, expiry, and error
-fields are the source of truth for the configured ACME/DNS-01 reconciler. For
-Let's Encrypt or ZeroSSL, configure a supported DNS-01 provider and grant the
-Control API only the zone permissions needed to create and remove the
-challenge TXT record. The ingress hostname remains an ordinary HTTP(S)
-endpoint in this release: terminate TLS at the regional proxy or load
-balancer, and use the status fields and TXT record guidance to coordinate
-certificate issuance and renewal there. Do not mark a certificate active until
-the proxy has installed the renewed certificate.
+Regional ingresses and custom domains support Let's Encrypt, ZeroSSL and
+manual certificates. Enable `[serve.tls]` on each public entry Node and use
+TCP passthrough at the regional load balancer. Nodes select certificates by
+SNI, enforce the original Host, and hot-reload validated renewals. Keep
+`serve.public_base_url` on private HTTP for Peer Hop and health checks.
+Custom domains require TXT ownership plus review, default to HTTP-01, and
+support delegated DNS-01; regional certificates use DNS-01. The Console
+reports issuance, expiry, retries and actual Node certificate revisions.
+See [Regional ingress and HTTPS](regional-ingress.md) for complete configuration.
 
 Custom domains use the Domain Review Policy configured under Administration
 settings. The platform default is `auto`; a Team Group can override it with

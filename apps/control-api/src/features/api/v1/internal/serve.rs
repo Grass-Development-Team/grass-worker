@@ -6,10 +6,10 @@ use axum::{
     response::IntoResponse,
 };
 use grass_node_protocol::{
-    CertificateBundle, CertificateBundlesResponse, ReportServeStatusRequest,
-    ReportServeStatusResponse, ReportedServeStatus, ResolveHostResponse, RouteSnapshotResponse,
-    ServeAccess, ServeArtifact, ServeAssignment, ServeAssignmentStatus, ServeAssignmentsResponse,
-    ServeResources, ServeRoute, SsrLeaseResponse,
+    ReportIngressStatusRequest, ReportServeStatusRequest, ReportServeStatusResponse,
+    ReportedServeStatus, ResolveHostResponse, RouteSnapshotResponse, ServeAccess, ServeArtifact,
+    ServeAssignment, ServeAssignmentStatus, ServeAssignmentsResponse, ServeResources, ServeRoute,
+    SsrLeaseResponse,
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
@@ -552,7 +552,8 @@ pub async fn routes(
         })?;
     let mut hosts_by_project = HashMap::<Uuid, Vec<String>>::new();
     for binding in bindings {
-        if matches!(binding.kind, HostBindingKind::Custom) && binding.ownership_status != "verified"
+        if matches!(binding.kind, HostBindingKind::Custom)
+            && !crate::domain::certificates::binding_eligible(&binding)
         {
             continue;
         }
@@ -654,31 +655,67 @@ pub async fn certificates(
     const OP: &str = "internal.serve.certificates";
     ensure_serve_node(&node, OP)?;
     let db = super::database(&state, OP)?;
-    let ingresses = crate::domain::ingress::list(db)
+    let platform_secret = state.config.read().unwrap().secrets.secret_key.clone();
+    let snapshot = crate::domain::certificates::snapshot(db, &node.region, &platform_secret)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    let platform_secret = state.config.read().unwrap().secrets.secret_key.clone();
-    let mut bundles = Vec::new();
-    for ingress in ingresses.into_iter().filter(|item| {
-        item.enabled && item.region == node.region && item.certificate_status == "active"
-    }) {
-        let Some(bundle) = crate::domain::acme::decrypt_bundle(&ingress, &platform_secret)
-            .await
-            .map_err(|source| AppError::Infrastructure { op: OP, source })?
-        else {
-            continue;
-        };
-        bundles.push(CertificateBundle {
-            ingress_id: ingress.id,
-            hostname: ingress.hostname,
-            certificate_pem: bundle.certificate_pem,
-            private_key_pem: bundle.private_key_pem,
-            issued_at_unix: ingress
-                .certificate_issued_at
-                .map(|value| value.unix_timestamp()),
+    Ok(ok_response(snapshot))
+}
+
+/// POST /api/v1/internal/serve/ingress-status
+pub async fn ingress_status(
+    State(state): State<ControlApiState>,
+    Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
+    Json(body): Json<ReportIngressStatusRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    use crate::infra::database::entity::node_ingress_status as status;
+    use sea_orm::{Set, sea_query::OnConflict};
+    const OP: &str = "internal.serve.ingress_status";
+    ensure_serve_node(&node, OP)?;
+    let revision_valid = |s: &str| {
+        s.len() == 64
+            && s.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    };
+    if body.certificates.len() > 4096
+        || (!body.challenge_revision.is_empty() && !revision_valid(&body.challenge_revision))
+        || body
+            .certificates
+            .iter()
+            .any(|c| !revision_valid(&c.revision))
+    {
+        return Err(AppError::Validation {
+            op: OP,
+            message: "ingress status requires bounded SHA256 revisions".to_owned(),
         });
     }
-    Ok(ok_response(CertificateBundlesResponse { bundles }))
+    let db = super::database(&state, OP)?;
+    status::Entity::insert(status::ActiveModel {
+        node_id: Set(node.id),
+        certificates: Set(
+            serde_json::to_value(body.certificates).expect("certificate status serializes")
+        ),
+        challenge_revision: Set(body.challenge_revision),
+        tls_ready: Set(body.tls_ready),
+        checked_at: Set(time::OffsetDateTime::now_utc()),
+    })
+    .on_conflict(
+        OnConflict::column(status::Column::NodeId)
+            .update_columns([
+                status::Column::Certificates,
+                status::Column::ChallengeRevision,
+                status::Column::TlsReady,
+                status::Column::CheckedAt,
+            ])
+            .to_owned(),
+    )
+    .exec(db)
+    .await
+    .map_err(|source| AppError::Infrastructure {
+        op: OP,
+        source: source.into(),
+    })?;
+    Ok(ok_response(serde_json::json!({"ok":true})))
 }
 
 async fn artifact_available(
@@ -724,6 +761,14 @@ pub async fn resolve_host(
             return Err(AppError::NotFound {
                 op: OP,
                 message: "host binding is not active".to_owned(),
+            });
+        }
+        if matches!(binding.kind, HostBindingKind::Custom)
+            && !crate::domain::certificates::binding_eligible(&binding)
+        {
+            return Err(AppError::NotFound {
+                op: OP,
+                message: "host ownership or review is not approved".to_owned(),
             });
         }
         if matches!(binding.environment, HostBindingEnvironment::Preview) {
@@ -814,6 +859,62 @@ mod tests {
         deployments, migration_allows_artifact_download, migration_is_shadow_assignment,
         route_revision, validate_status_report,
     };
+
+    #[tokio::test]
+    async fn ingress_status_http_route_accepts_authenticated_node_and_rejects_unbounded_revisions()
+    {
+        use crate::{
+            infra::{
+                config::ControlApiConfig, database::entity::node_ingress_status,
+                http::middlewares::node_auth::AuthenticatedNode,
+            },
+            state::ControlApiState,
+        };
+        use axum::{
+            Extension, Router,
+            body::Body,
+            http::{Request, StatusCode},
+            routing::post,
+        };
+        use tower::ServiceExt;
+        let node = crate::domain::ingress::tests::node_fixture();
+        let state = ControlApiState::new(ControlApiConfig::default(), "unused-test-config");
+        let revision = "a".repeat(64);
+        let status = node_ingress_status::Model {
+            node_id: node.id,
+            certificates: serde_json::json!([]),
+            challenge_revision: revision.clone(),
+            tls_ready: true,
+            checked_at: time::OffsetDateTime::now_utc(),
+        };
+        state
+            .database
+            .set(
+                sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+                    .append_query_results([vec![status]])
+                    .into_connection(),
+            )
+            .unwrap();
+        let app = Router::new()
+            .route("/ingress-status", post(super::ingress_status))
+            .layer(Extension(AuthenticatedNode(node)))
+            .with_state(state);
+        let request = |revision: String| {
+            Request::builder().method("POST").uri("/ingress-status").header("content-type","application/json").body(Body::from(serde_json::json!({"certificates":[],"challenge_revision":revision,"tls_ready":true}).to_string())).unwrap()
+        };
+        assert_eq!(
+            app.clone()
+                .oneshot(request("invalid".to_owned()))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            app.oneshot(request(revision)).await.unwrap().status(),
+            StatusCode::OK
+        );
+    }
 
     #[test]
     fn ready_shadow_assignments_remain_authorized_until_atomic_cutover() {

@@ -20,6 +20,7 @@ grass-git-source.workspace = true
 grass-node-protocol.workspace = true
 grass-validator.workspace = true
 hex.workspace = true
+hyper-util.workspace = true
 mime_guess.workspace = true
 sha2.workspace = true
 subtle = "2"
@@ -29,12 +30,20 @@ toml.workspace = true
 url.workspace = true
 walkdir.workspace = true
 reqwest.workspace = true
+rustls.workspace = true
+rustls-pemfile.workspace = true
 tempfile = "3"
 serde.workspace = true
 serde_json.workspace = true
 tokio-tungstenite.workspace = true
+tokio-rustls.workspace = true
 tokio = { workspace = true, features = ["fs", "io-std", "io-util", "macros", "process", "rt-multi-thread", "signal", "net", "sync", "time"] }
 tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+x509-parser.workspace = true
+
+[dev-dependencies]
+rcgen = "0.14"
+time.workspace = true

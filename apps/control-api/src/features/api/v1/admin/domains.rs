@@ -165,6 +165,9 @@ async fn decide(
     if approved && binding.ownership_status != "verified" {
         new_binding_status = HostBindingStatus::Pending;
     }
+    if matches!(binding.status, HostBindingStatus::Disabled) {
+        new_binding_status = HostBindingStatus::Disabled;
+    }
     let before = json!({ "review_status": review_status(&binding.review_status), "status": binding_status(&binding.status) });
     let mut active: project_host_binding::ActiveModel = binding.clone().into();
     active.review_status = Set(new_review_status);

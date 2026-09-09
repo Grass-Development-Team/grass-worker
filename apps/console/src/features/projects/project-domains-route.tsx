@@ -4,7 +4,7 @@ import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Field, FieldLabel } from "@/components/ui/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -19,6 +19,7 @@ import { canContributeToProjects } from "@/features/teams/team-permissions";
 
 import { projectsApi, type HostStatus } from "./projects.api";
 import { useProject } from "./project-layout";
+import { DomainCertificateControls } from "./domain-certificate-controls";
 
 export function hostStatusVariant(
   status: HostStatus,
@@ -46,6 +47,7 @@ export function ProjectDomainsRoute() {
   const hostsQuery = useQuery({
     queryKey: ["project-hosts", projectId],
     queryFn: () => projectsApi.listHosts(projectId),
+    refetchInterval: 10_000,
   });
 
   const invalidate = () =>
@@ -71,14 +73,17 @@ export function ProjectDomainsRoute() {
     mutationFn: (hostId: string) => projectsApi.provisionHost(projectId, hostId),
     onSuccess: invalidate,
   });
+  const verifyMutation = useMutation({
+    mutationFn: (hostId: string) => projectsApi.verifyHost(projectId, hostId),
+    onSuccess: invalidate,
+  });
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
       <div>
         <h1 className="text-lg font-semibold">Domains</h1>
         <p className="text-sm text-muted-foreground">
-          Platform domains are assigned automatically; custom domains must point at the platform
-          nodes.
+          Point custom domains at their regional entry, verify ownership, and manage HTTPS.
         </p>
       </div>
 
@@ -90,26 +95,28 @@ export function ProjectDomainsRoute() {
             if (newHost.trim()) addMutation.mutate();
           }}
         >
-          <Field className="max-w-sm flex-1">
-            <FieldLabel htmlFor="new-host">Add domain</FieldLabel>
-            <Input
-              id="new-host"
-              placeholder="app.example.com"
-              value={newHost}
-              onChange={(event) => setNewHost(event.target.value)}
-            />
-          </Field>
-          <Field className="w-36">
-            <FieldLabel htmlFor="new-host-region">Region</FieldLabel>
-            <Input
-              id="new-host-region"
-              placeholder="default"
-              value={newRegion}
-              onChange={(event) => setNewRegion(event.target.value)}
-            />
-          </Field>
+          <FieldGroup className="max-w-lg">
+            <Field className="max-w-sm flex-1">
+              <FieldLabel htmlFor="new-host">Add domain</FieldLabel>
+              <Input
+                id="new-host"
+                placeholder="app.example.com"
+                value={newHost}
+                onChange={(event) => setNewHost(event.target.value)}
+              />
+            </Field>
+            <Field className="w-36">
+              <FieldLabel htmlFor="new-host-region">Region</FieldLabel>
+              <Input
+                id="new-host-region"
+                placeholder="default"
+                value={newRegion}
+                onChange={(event) => setNewRegion(event.target.value)}
+              />
+            </Field>
+          </FieldGroup>
           <Button type="submit" disabled={addMutation.isPending || !newHost.trim()}>
-            <PlusIcon /> Add
+            <PlusIcon data-icon="inline-start" /> Add
           </Button>
         </form>
       )}
@@ -130,6 +137,7 @@ export function ProjectDomainsRoute() {
                 <TableHead>Region</TableHead>
                 <TableHead>Environment</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>HTTPS</TableHead>
                 <TableHead>Serving</TableHead>
                 {canEdit && <TableHead className="text-right">Actions</TableHead>}
               </TableRow>
@@ -146,6 +154,20 @@ export function ProjectDomainsRoute() {
                     )}
                     {host.failure_reason && (
                       <p className="text-xs text-destructive">{host.failure_reason}</p>
+                    )}
+                    {host.kind === "custom" && (
+                      <div className="mt-1 flex flex-col gap-1">
+                        <Badge
+                          variant={host.ownership_status === "verified" ? "success" : "secondary"}
+                        >
+                          {host.ownership_status === "verified"
+                            ? "Ownership verified"
+                            : "Ownership verification required"}
+                        </Badge>
+                        {host.ownership_error && (
+                          <p className="text-xs text-destructive">{host.ownership_error}</p>
+                        )}
+                      </div>
                     )}
                     {host.ingress && (
                       <details className="mt-2 text-xs text-muted-foreground">
@@ -173,6 +195,16 @@ export function ProjectDomainsRoute() {
                     <Badge variant={hostStatusVariant(host.status)}>{host.status}</Badge>
                   </TableCell>
                   <TableCell>
+                    <DomainCertificateControls
+                      host={host}
+                      projectId={projectId}
+                      canEdit={canEdit}
+                      onChange={() => {
+                        void invalidate();
+                      }}
+                    />
+                  </TableCell>
+                  <TableCell>
                     <Badge variant={host.serving ? "success" : "secondary"}>
                       {host.serving
                         ? "Serving"
@@ -182,37 +214,49 @@ export function ProjectDomainsRoute() {
                     </Badge>
                   </TableCell>
                   {canEdit && (
-                    <TableCell className="space-x-1 text-right">
-                      {(host.status === "pending" || host.status === "failed") &&
-                        host.host_source_id && (
+                    <TableCell>
+                      <div className="flex flex-wrap justify-end gap-2">
+                        {host.kind === "custom" && (
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => provisionMutation.mutate(host.id)}
-                            disabled={provisionMutation.isPending}
+                            disabled={verifyMutation.isPending}
+                            onClick={() => verifyMutation.mutate(host.id)}
                           >
-                            Retry
+                            Verify domain
                           </Button>
                         )}
-                      {!host.is_primary && (
+                        {(host.status === "pending" || host.status === "failed") &&
+                          host.host_source_id && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => provisionMutation.mutate(host.id)}
+                              disabled={provisionMutation.isPending}
+                            >
+                              Retry
+                            </Button>
+                          )}
+                        {!host.is_primary && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => primaryMutation.mutate(host.id)}
+                            disabled={primaryMutation.isPending}
+                          >
+                            Make primary
+                          </Button>
+                        )}
                         <Button
                           size="sm"
-                          variant="outline"
-                          onClick={() => primaryMutation.mutate(host.id)}
-                          disabled={primaryMutation.isPending}
+                          variant="ghost"
+                          aria-label={`Remove ${host.host}`}
+                          onClick={() => removeMutation.mutate(host.id)}
+                          disabled={removeMutation.isPending}
                         >
-                          Make primary
+                          <Trash2Icon data-icon="inline-start" />
                         </Button>
-                      )}
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        aria-label={`Remove ${host.host}`}
-                        onClick={() => removeMutation.mutate(host.id)}
-                        disabled={removeMutation.isPending}
-                      >
-                        <Trash2Icon />
-                      </Button>
+                      </div>
                     </TableCell>
                   )}
                 </TableRow>

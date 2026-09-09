@@ -90,6 +90,27 @@ jobs:
       - name: Test Console workspace
         run: just test console
 
+      - name: Apply migrations to the disposable CI database
+        run: cargo run -p grass-control-api -- --config "$RUNNER_TEMP/grass-migration.toml" migrate
+        env:
+          GWAPI_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+
+      - name: Verify certificate database columns and constraints
+        run: >-
+          cargo test -p grass-control-api
+          infra::database::migration::m20260910_000032_managed_certificates::tests::managed_certificate_schema_matches_signed_lifecycle_and_ack_protocol
+          -- --ignored --exact
+        env:
+          GRASS_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+
+      - name: Verify regional ingress migration upgrade and rollback
+        run: >-
+          cargo test -p grass-control-api
+          infra::database::migrate::tests::postgres_regional_ingress_schema_matches_domain_and_is_reversible
+          -- --ignored --exact
+        env:
+          GRASS_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+
       - name: Check project license metadata
         run: just license-check
 

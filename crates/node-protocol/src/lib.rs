@@ -72,6 +72,24 @@ pub struct NodeServeConfiguration {
     pub artifact_cache_root: String,
     pub capacity: NodeServeCapacityConfiguration,
     pub ssr: NodeSsrConfiguration,
+    #[serde(default)]
+    pub tls: NodeTlsConfiguration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NodeTlsConfiguration {
+    pub enabled: bool,
+    pub port: u16,
+}
+
+impl Default for NodeTlsConfiguration {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: 8443,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -479,18 +497,60 @@ pub struct RouteSnapshotResponse {
 
 /// A certificate bundle that a Serve Node may install for a regional ingress.
 /// Private key material is sent only over the authenticated internal protocol.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CertificateBundle {
     pub ingress_id: Uuid,
     pub hostname: String,
     pub certificate_pem: String,
     pub private_key_pem: String,
     pub issued_at_unix: Option<i64>,
+    #[serde(default)]
+    pub revision: String,
+    #[serde(default)]
+    pub expires_at_unix: Option<i64>,
+}
+
+impl std::fmt::Debug for CertificateBundle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CertificateBundle")
+            .field("ingress_id", &self.ingress_id)
+            .field("hostname", &self.hostname)
+            .field("revision", &self.revision)
+            .field("issued_at_unix", &self.issued_at_unix)
+            .field("expires_at_unix", &self.expires_at_unix)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CertificateBundlesResponse {
+    pub bundles: Vec<CertificateBundle>,
+    #[serde(default)]
+    pub challenges: Vec<HttpChallenge>,
+    #[serde(default)]
+    pub challenge_revision: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CertificateBundlesResponse {
-    pub bundles: Vec<CertificateBundle>,
+pub struct HttpChallenge {
+    pub hostname: String,
+    pub token: String,
+    pub key_authorization: String,
+    pub expires_at_unix: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledCertificate {
+    pub ingress_id: Uuid,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReportIngressStatusRequest {
+    pub certificates: Vec<InstalledCertificate>,
+    pub challenge_revision: String,
+    pub tls_ready: bool,
 }
 
 fn default_region() -> String {

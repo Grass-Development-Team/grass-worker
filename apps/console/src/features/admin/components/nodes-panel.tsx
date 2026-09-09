@@ -978,6 +978,50 @@ function EditConfigurationDialog({ node }: { node: AdminNode }) {
                   </FieldSet>
 
                   <FieldSet className="gap-4">
+                    <FieldLegend>HTTPS</FieldLegend>
+                    <FieldGroup>
+                      <ConfigurationSwitch
+                        id={`node-${node.id}-tls-enabled`}
+                        label="Native HTTPS"
+                        checked={configuration.serve.tls?.enabled ?? false}
+                        onCheckedChange={(enabled) =>
+                          setConfiguration((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  serve: {
+                                    ...current.serve,
+                                    tls: { port: current.serve.tls?.port ?? 8443, enabled },
+                                  },
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                      <ConfigurationNumberField
+                        id={`node-${node.id}-tls-port`}
+                        label="HTTPS port"
+                        min={1}
+                        max={65535}
+                        value={configuration.serve.tls?.port ?? 8443}
+                        onChange={(port) =>
+                          setConfiguration((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  serve: {
+                                    ...current.serve,
+                                    tls: { enabled: current.serve.tls?.enabled ?? false, port },
+                                  },
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                    </FieldGroup>
+                  </FieldSet>
+
+                  <FieldSet className="gap-4">
                     <FieldLegend>Capacity</FieldLegend>
                     <div className="grid gap-4 md:grid-cols-2">
                       <ConfigurationNumberField

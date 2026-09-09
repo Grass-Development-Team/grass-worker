@@ -29,3 +29,4 @@ pub mod m20260808_000028_object_storage;
 pub mod m20260908_000029_regional_routing;
 pub mod m20260908_000030_regional_ingress;
 pub mod m20260909_000031_regional_ingress_lifecycle;
+pub mod m20260910_000032_managed_certificates;

@@ -54,6 +54,25 @@ export interface ProjectHost {
   created_at: string;
   provision_events?: ProvisionEvent[];
   ingress?: ProjectHostIngress | null;
+  ownership_status?: "pending" | "verified" | "failed" | "not_required";
+  ownership_checked_at?: string | null;
+  ownership_error?: string | null;
+  certificate?: DomainCertificate | null;
+}
+
+export interface DomainCertificate {
+  status: "pending" | "issuing" | "active" | "expiring" | "failed" | "disabled";
+  issuer: "letsencrypt" | "zerossl" | "manual";
+  regional_issuer: "letsencrypt" | "zerossl" | "manual";
+  challenge_method: "http01" | "dns01";
+  auto_renew: boolean;
+  issued_at: string | null;
+  expires_at: string | null;
+  error: string | null;
+  retry_at: string | null;
+  revision: string | null;
+  dns_delegation_name: string | null;
+  dns_delegation_target: string | null;
 }
 
 export interface ProjectHostIngress {
@@ -184,4 +203,40 @@ export const projectsApi = {
     request<{ host: ProjectHost }>(`/api/v1/projects/${projectId}/hosts/${hostId}/provision`, {
       method: "POST",
     }),
+
+  verifyHost: (projectId: string, hostId: string) =>
+    request<{ host: ProjectHost; verified: boolean }>(
+      `/api/v1/projects/${projectId}/hosts/${hostId}/verify`,
+      { method: "POST" },
+    ),
+
+  updateHostCertificate: (
+    projectId: string,
+    hostId: string,
+    input: {
+      challenge_method?: "http01" | "dns01";
+      certificate_auto_renew?: boolean;
+      certificate_issuer?: DomainCertificate["issuer"];
+    },
+  ) =>
+    request<{ certificate: DomainCertificate }>(
+      `/api/v1/projects/${projectId}/hosts/${hostId}/certificate`,
+      { method: "PATCH", body: JSON.stringify(input) },
+    ),
+
+  renewHostCertificate: (projectId: string, hostId: string) =>
+    request<{ certificate: DomainCertificate }>(
+      `/api/v1/projects/${projectId}/hosts/${hostId}/certificate/renew`,
+      { method: "POST" },
+    ),
+
+  importHostCertificate: (
+    projectId: string,
+    hostId: string,
+    input: { certificate_pem: string; private_key_pem: string },
+  ) =>
+    request<{ certificate: DomainCertificate }>(
+      `/api/v1/projects/${projectId}/hosts/${hostId}/certificate/import`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
 };
