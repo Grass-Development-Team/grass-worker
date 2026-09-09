@@ -98,6 +98,9 @@ impl ServeState {
             ssr,
             proxy: reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(5))
+                // A site's Location belongs to its client. Following it here
+                // could send gateway credentials outside the trusted peer.
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .expect("static reqwest options cannot fail"),
         }
@@ -108,6 +111,7 @@ fn serve_router(state: Arc<ServeState>) -> axum::Router {
     axum::Router::new()
         .route(ROUTE_INVALIDATION_PATH, post(invalidate_routes))
         .route(PEER_PROXY_PREFIX, any(handle_peer_proxy))
+        .route("/_grass/internal/proxy/", any(handle_peer_proxy))
         .route("/_grass/internal/proxy/{*path}", any(handle_peer_proxy))
         .fallback(route_public_request)
         .with_state(state)
@@ -323,7 +327,7 @@ fn gateway_origin(
             let token = token.to_str().map_err(|_| "invalid gateway token")?;
             let hop = hop.to_str().map_err(|_| "invalid gateway hop")?;
             let valid_token: bool = token.as_bytes().ct_eq(expected_token.as_bytes()).into();
-            if !valid_token {
+            if expected_token.is_empty() || !valid_token {
                 return Err("invalid gateway token");
             }
             if hop != "1" {
@@ -643,13 +647,19 @@ async fn route_public_request(
             "This host is not bound to any active deployment.",
         );
     };
+    if normalize_public_path(request.uri().path()).is_none() {
+        return error_page(
+            StatusCode::BAD_REQUEST,
+            "The requested path is not allowed.",
+        );
+    }
     match route_action(state.node_id, route.target_node_id, origin) {
         Ok(RouteAction::Proxy) => {
             return match forward_to_gateway(
                 &state.proxy,
                 &route.target_base_url,
                 state.gateway_token.as_deref().unwrap_or_default(),
-                state.gateway_authentication,
+                route.gateway_authentication,
                 client_addr,
                 request,
             )
@@ -957,11 +967,25 @@ async fn forward_to_gateway(
     client_addr: SocketAddr,
     request: Request,
 ) -> anyhow::Result<Response> {
+    if matches!(gateway_authentication, GatewayAuthenticationMode::Token)
+        && gateway_token.is_empty()
+    {
+        anyhow::bail!("destination gateway requires an outbound credential");
+    }
     let (parts, body) = request.into_parts();
+    // URL parsers resolve literal and encoded dot segments. Validate before
+    // adding credentials so a public path cannot escape the peer endpoint.
+    if normalize_public_path(parts.uri.path()).is_none() {
+        anyhow::bail!("invalid gateway request path");
+    }
     let mut url = url::Url::parse(target_base_url)
         .map_err(|error| anyhow::anyhow!("invalid target Serve Node URL: {error}"))?;
     url.set_path(&format!("{PEER_PROXY_PREFIX}{}", parts.uri.path()));
     url.set_query(parts.uri.query());
+    url.set_fragment(None);
+    if !url.path().starts_with(&format!("{PEER_PROXY_PREFIX}/")) {
+        anyhow::bail!("gateway request escaped the peer endpoint");
+    }
 
     let mut builder = proxy.request(parts.method, url);
     for (name, value) in &parts.headers {
@@ -1463,6 +1487,7 @@ mod tests {
                     deployment_id,
                     target_node_id: Uuid::now_v7(),
                     target_base_url: format!("http://{authority_address}"),
+                    gateway_authentication: Default::default(),
                     resources: grass_node_protocol::ServeResources {
                         cpu_millicores: 50,
                         memory_mb: 64,
@@ -1592,5 +1617,309 @@ mod tests {
         assert_eq!(authorized.status(), StatusCode::BAD_GATEWAY);
 
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn mixed_gateway_modes_deliver_bound_hosts_and_reject_second_hops() {
+        use grass_node_protocol::{RouteSnapshotResponse, ServeResources};
+        for source_mode in [
+            GatewayAuthenticationMode::Token,
+            GatewayAuthenticationMode::None,
+        ] {
+            for target_mode in [
+                GatewayAuthenticationMode::Token,
+                GatewayAuthenticationMode::None,
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                tokio::fs::write(directory.path().join("index.html"), "regional site")
+                    .await
+                    .unwrap();
+                let destination_id = Uuid::now_v7();
+                let deployment_id = Uuid::now_v7();
+                let destination_listener =
+                    tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let destination_url =
+                    format!("http://{}", destination_listener.local_addr().unwrap());
+                let route = ServeRoute {
+                    host: "app.example.com".to_owned(),
+                    region: "eu-west".to_owned(),
+                    deployment_id,
+                    target_node_id: destination_id,
+                    target_base_url: destination_url.clone(),
+                    gateway_authentication: target_mode,
+                    resources: ServeResources {
+                        cpu_millicores: 50,
+                        memory_mb: 64,
+                        disk_mb: 256,
+                    },
+                    access: ServeAccess::Public,
+                };
+                let make_state = |node_id, mode| {
+                    let mut config = NodeConfig::default();
+                    config.security.gateway_authentication = mode;
+                    Arc::new(ServeState::new(
+                        ControlApiClient::new("http://127.0.0.1:9", "node-token").unwrap(),
+                        node_id,
+                        Some("shared-gateway-token".to_owned()),
+                        Arc::new(routes::RouteTable::default()),
+                        &config,
+                        Arc::new(ssr::SsrManager::new(None, node_id, &config)),
+                    ))
+                };
+                let destination = make_state(destination_id, target_mode);
+                destination
+                    .routes
+                    .apply(RouteSnapshotResponse {
+                        revision: "target".to_owned(),
+                        routes: vec![route.clone()],
+                    })
+                    .await
+                    .unwrap();
+                destination.targets.lock().await.insert(
+                    deployment_id,
+                    ResolvedTarget::Static {
+                        static_dir: directory.path().to_owned(),
+                        spa_fallback: false,
+                        not_found: None,
+                    },
+                );
+                let destination_server = tokio::spawn(async move {
+                    axum::serve(
+                        destination_listener,
+                        serve_router(destination)
+                            .into_make_service_with_connect_info::<SocketAddr>(),
+                    )
+                    .await
+                    .unwrap();
+                });
+                let source = make_state(Uuid::now_v7(), source_mode);
+                source
+                    .routes
+                    .apply(RouteSnapshotResponse {
+                        revision: "source".to_owned(),
+                        routes: vec![route],
+                    })
+                    .await
+                    .unwrap();
+                let source_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let source_url = format!("http://{}", source_listener.local_addr().unwrap());
+                let source_server = tokio::spawn(async move {
+                    axum::serve(
+                        source_listener,
+                        serve_router(source).into_make_service_with_connect_info::<SocketAddr>(),
+                    )
+                    .await
+                    .unwrap();
+                });
+                let client = reqwest::Client::new();
+                let response = client
+                    .get(&source_url)
+                    .header(header::HOST, "app.example.com")
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status(),
+                    StatusCode::OK,
+                    "{source_mode:?} -> {target_mode:?}"
+                );
+                assert_eq!(response.text().await.unwrap(), "regional site");
+                let unbound = client
+                    .get(&source_url)
+                    .header(header::HOST, "unbound.example.com")
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(unbound.status(), StatusCode::NOT_FOUND);
+                let mut repeated = client
+                    .get(format!("{source_url}{PEER_PROXY_PREFIX}/"))
+                    .header(header::HOST, "app.example.com")
+                    .header(GATEWAY_HOP_HEADER, "1");
+                if source_mode == GatewayAuthenticationMode::Token {
+                    repeated = repeated.header(GATEWAY_TOKEN_HEADER, "shared-gateway-token");
+                }
+                assert_eq!(
+                    repeated.send().await.unwrap().status(),
+                    StatusCode::BAD_GATEWAY
+                );
+                source_server.abort();
+                destination_server.abort();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_outbound_token_fails_before_contacting_destination() {
+        let request = Request::builder()
+            .header(header::HOST, "app.example.com")
+            .body(Body::empty())
+            .unwrap();
+        let error = forward_to_gateway(
+            &reqwest::Client::new(),
+            "http://127.0.0.1:9",
+            "",
+            GatewayAuthenticationMode::Token,
+            "127.0.0.1:1234".parse().unwrap(),
+            request,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "destination gateway requires an outbound credential"
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(GATEWAY_TOKEN_HEADER, "".parse().unwrap());
+        headers.insert(GATEWAY_HOP_HEADER, "1".parse().unwrap());
+        assert!(gateway_origin(&headers, "", GatewayAuthenticationMode::Token).is_err());
+    }
+
+    #[tokio::test]
+    async fn gateway_redirects_and_traversal_never_send_credentials_to_other_endpoints() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let captured = Arc::new(AtomicUsize::new(0));
+        let capture_router = axum::Router::new().fallback({
+            let captured = captured.clone();
+            move || {
+                let captured = captured.clone();
+                async move {
+                    captured.fetch_add(1, Ordering::SeqCst);
+                    StatusCode::OK
+                }
+            }
+        });
+        let capture_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let capture_url = format!("http://{}/capture", capture_listener.local_addr().unwrap());
+        let capture_server = tokio::spawn(async move {
+            axum::serve(capture_listener, capture_router).await.unwrap();
+        });
+
+        let peer_requests = Arc::new(AtomicUsize::new(0));
+        let peer_router = axum::Router::new().fallback({
+            let destination = capture_url.clone();
+            let peer_requests = peer_requests.clone();
+            move |request: Request| {
+                let destination = destination.clone();
+                let peer_requests = peer_requests.clone();
+                async move {
+                    peer_requests.fetch_add(1, Ordering::SeqCst);
+                    assert_eq!(
+                        request.headers()[GATEWAY_TOKEN_HEADER],
+                        "shared-gateway-token"
+                    );
+                    assert_eq!(request.headers()[GATEWAY_HOP_HEADER], "1");
+                    assert_eq!(request.headers()[header::HOST], "app.example.com");
+                    assert!(request.uri().path().starts_with(PEER_PROXY_PREFIX));
+                    (StatusCode::FOUND, [(header::LOCATION, destination)])
+                }
+            }
+        });
+        let peer_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let peer_url = format!("http://{}", peer_listener.local_addr().unwrap());
+        let peer_server = tokio::spawn(async move {
+            axum::serve(peer_listener, peer_router).await.unwrap();
+        });
+
+        let mut config = NodeConfig::default();
+        config.security.gateway_authentication = GatewayAuthenticationMode::None;
+        let node_id = Uuid::now_v7();
+        let routes = Arc::new(routes::RouteTable::default());
+        routes
+            .apply(grass_node_protocol::RouteSnapshotResponse {
+                revision: "security".to_owned(),
+                routes: vec![ServeRoute {
+                    host: "app.example.com".to_owned(),
+                    region: "default".to_owned(),
+                    deployment_id: Uuid::now_v7(),
+                    target_node_id: Uuid::now_v7(),
+                    target_base_url: peer_url.clone(),
+                    gateway_authentication: GatewayAuthenticationMode::Token,
+                    resources: grass_node_protocol::ServeResources {
+                        cpu_millicores: 50,
+                        memory_mb: 64,
+                        disk_mb: 256,
+                    },
+                    access: ServeAccess::Public,
+                }],
+            })
+            .await
+            .unwrap();
+        let state = Arc::new(ServeState::new(
+            ControlApiClient::new("http://127.0.0.1:9", "node-token").unwrap(),
+            node_id,
+            Some("shared-gateway-token".to_owned()),
+            routes,
+            &config,
+            Arc::new(ssr::SsrManager::new(None, node_id, &config)),
+        ));
+        let source_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let source_address = source_listener.local_addr().unwrap();
+        let router = serve_router(state.clone());
+        let source_server = tokio::spawn(async move {
+            axum::serve(
+                source_listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        let browser = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let response = browser
+            .get(format!("http://{source_address}/redirect"))
+            .header(header::HOST, "app.example.com")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FOUND);
+        assert_eq!(response.headers()[header::LOCATION], capture_url);
+        assert_eq!(peer_requests.load(Ordering::SeqCst), 1);
+        assert_eq!(captured.load(Ordering::SeqCst), 0);
+
+        for path in [
+            "/../../../_grass/internal/routes/invalidate",
+            "/%2e%2e/%2e%2e/%2e%2e/_grass/internal/routes/invalidate",
+            "/.%2E/.%2E/.%2E/_grass/internal/routes/invalidate",
+            "/%5c../%5c../_grass/internal/routes/invalidate",
+        ] {
+            // Send raw HTTP to preserve the malicious path instead of the
+            // test HTTP client's own URL parser normalizing it in advance.
+            let mut stream = tokio::net::TcpStream::connect(source_address)
+                .await
+                .unwrap();
+            stream.write_all(format!("POST {path} HTTP/1.1\r\nHost: app.example.com\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+            let mut response = Vec::new();
+            stream.read_to_end(&mut response).await.unwrap();
+            assert!(
+                response.starts_with(b"HTTP/1.1 400"),
+                "{path}: {}",
+                String::from_utf8_lossy(&response)
+            );
+            let request = Request::builder()
+                .uri(path)
+                .header(header::HOST, "app.example.com")
+                .body(Body::empty())
+                .unwrap();
+            let error = forward_to_gateway(
+                &state.proxy,
+                &peer_url,
+                "shared-gateway-token",
+                GatewayAuthenticationMode::Token,
+                source_address,
+                request,
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.to_string(), "invalid gateway request path");
+        }
+        assert_eq!(peer_requests.load(Ordering::SeqCst), 1);
+        assert_eq!(captured.load(Ordering::SeqCst), 0);
+        source_server.abort();
+        peer_server.abort();
+        capture_server.abort();
     }
 }

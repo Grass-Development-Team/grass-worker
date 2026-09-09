@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use futures_util::future::join_all;
-use grass_node_protocol::{GatewayAuthenticationMode, NodeConfiguration};
+use grass_node_protocol::GatewayAuthenticationMode;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Serialize;
 use uuid::Uuid;
@@ -129,21 +129,18 @@ pub async fn invalidate_deployment(
         )
         .all(db)
         .await?;
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
     let gateway_token = nodes::gateway_token(secret_key);
     let endpoint_groups = |nodes: Vec<node::Model>| {
         let mut token = Vec::new();
         let mut none = Vec::new();
         for node in nodes {
+            let mode = nodes::gateway_authentication(&node);
             let Some(base_url) = node.base_url else {
                 continue;
             };
-            let mode = node
-                .effective_config
-                .as_ref()
-                .and_then(|value| serde_json::from_value::<NodeConfiguration>(value.clone()).ok())
-                .map(|config| config.security.gateway_authentication)
-                .unwrap_or_default();
             match mode {
                 GatewayAuthenticationMode::Token => token.push(base_url),
                 GatewayAuthenticationMode::None => none.push(base_url),

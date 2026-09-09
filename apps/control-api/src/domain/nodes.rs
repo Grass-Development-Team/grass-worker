@@ -1,4 +1,4 @@
-use grass_node_protocol::NodeResources;
+use grass_node_protocol::{GatewayAuthenticationMode, NodeConfiguration, NodeResources};
 use ring::hmac;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
@@ -13,6 +13,14 @@ use crate::infra::database::entity::{NodeConfigSyncStatus, NodeStatus, node};
 pub fn gateway_token(secret: &str) -> String {
     let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes());
     hex::encode(hmac::sign(&key, b"grass-node-gateway-v1").as_ref())
+}
+
+pub fn gateway_authentication(node: &node::Model) -> GatewayAuthenticationMode {
+    node.effective_config
+        .as_ref()
+        .and_then(|value| serde_json::from_value::<NodeConfiguration>(value.clone()).ok())
+        .map(|config| config.security.gateway_authentication)
+        .unwrap_or_default()
 }
 
 pub struct CreateNodeParams {

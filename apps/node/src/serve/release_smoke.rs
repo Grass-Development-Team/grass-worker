@@ -336,6 +336,7 @@ async fn checks_out_builds_packages_stages_and_serves_vite() -> anyhow::Result<(
                 deployment_id,
                 target_node_id: node_id,
                 target_base_url: "http://127.0.0.1:1".to_owned(),
+                gateway_authentication: Default::default(),
                 resources,
                 access: ServeAccess::Public,
             }],

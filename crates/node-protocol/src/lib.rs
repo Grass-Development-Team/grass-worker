@@ -464,6 +464,9 @@ pub struct ServeRoute {
     pub deployment_id: Uuid,
     pub target_node_id: Uuid,
     pub target_base_url: String,
+    /// Authentication required by the destination, independently of the entry Node.
+    #[serde(default)]
+    pub gateway_authentication: GatewayAuthenticationMode,
     pub resources: ServeResources,
     pub access: ServeAccess,
 }
@@ -766,6 +769,7 @@ mod tests {
             deployment_id: Uuid::nil(),
             target_node_id: Uuid::nil(),
             target_base_url: "http://node-1:8080".to_owned(),
+            gateway_authentication: Default::default(),
             resources,
             access: ServeAccess::TeamOrPlatformAdmin,
         };

@@ -31,6 +31,12 @@ pub async fn register(
         op: OP,
         message: message.to_owned(),
     })?;
+    validate_existing_policy(&body, nodes::gateway_authentication(&node)).map_err(|message| {
+        AppError::Validation {
+            op: OP,
+            message: message.to_owned(),
+        }
+    })?;
     let build_enabled = body.capabilities.build;
     let serve_enabled = body.capabilities.serve;
 
@@ -81,12 +87,10 @@ pub async fn register(
     )
     .await;
 
-    let gateway_token = (serve_enabled
-        && matches!(
-            body.gateway_authentication,
-            GatewayAuthenticationMode::Token
-        ))
-    .then(|| nodes::gateway_token(&state.config.read().unwrap().secrets.secret_key));
+    // Inbound policy does not determine outbound credentials: a trusted-network
+    // entry still needs a token when its destination requires authentication.
+    let gateway_token = serve_enabled
+        .then(|| nodes::gateway_token(&state.config.read().unwrap().secrets.secret_key));
     Ok(ok_response(RegisterResponse {
         node_id: node.id,
         name: node.name,
@@ -100,6 +104,15 @@ pub async fn register(
 }
 
 fn validate_registration(body: &RegisterRequest) -> Result<(), &'static str> {
+    match &body.effective_config {
+        Some(config) if config.security.gateway_authentication != body.gateway_authentication => {
+            return Err("gateway authentication must match the effective configuration");
+        }
+        None if matches!(body.gateway_authentication, GatewayAuthenticationMode::None) => {
+            return Err("effective configuration is required for no-token gateways");
+        }
+        _ => {}
+    }
     if grass_validator::normalize_region(&body.region).is_err() {
         return Err("region is invalid");
     }
@@ -138,6 +151,16 @@ fn validate_registration(body: &RegisterRequest) -> Result<(), &'static str> {
         }
     } else if body.serve_base_url.is_some() || body.resources.is_some() {
         return Err("serve settings are not allowed for a non-serve node");
+    }
+    Ok(())
+}
+
+fn validate_existing_policy(
+    body: &RegisterRequest,
+    persisted: GatewayAuthenticationMode,
+) -> Result<(), &'static str> {
+    if body.effective_config.is_none() && body.gateway_authentication != persisted {
+        return Err("effective configuration is required when changing gateway authentication");
     }
     Ok(())
 }
@@ -198,6 +221,27 @@ mod tests {
         );
         assert!(validate_registration(&request(true, false)).is_ok());
         assert!(validate_registration(&request(false, true)).is_ok());
+    }
+
+    #[test]
+    fn no_token_registration_requires_persistable_effective_policy() {
+        let mut body = request(false, true);
+        body.gateway_authentication = GatewayAuthenticationMode::None;
+        assert_eq!(
+            validate_registration(&body),
+            Err("effective configuration is required for no-token gateways")
+        );
+    }
+
+    #[test]
+    fn legacy_registration_cannot_reuse_a_stale_no_token_policy() {
+        let body = request(false, true);
+        assert!(validate_registration(&body).is_ok());
+        assert!(validate_existing_policy(&body, GatewayAuthenticationMode::Token).is_ok());
+        assert_eq!(
+            validate_existing_policy(&body, GatewayAuthenticationMode::None),
+            Err("effective configuration is required when changing gateway authentication")
+        );
     }
 
     #[test]
