@@ -318,6 +318,12 @@ machine:
 public_base_url = "http://serve-a.internal:8080"
 ```
 
+For public HTTPS, enable the Node's native TLS listener and put the regional
+load balancer in TCP passthrough mode. Keep `serve.public_base_url` on private
+HTTP: it addresses the Node for Peer Hop requests, whose Host belongs to the
+site. See [Regional ingress and HTTPS](regional-ingress.md) for complete Node,
+DNS, certificate, health-check, and two-entry load-balancer configuration.
+
 ### Configure Serve scheduling capacity
 
 By default a Serve Node reports 80% of its logical CPU capacity, 75% of total
