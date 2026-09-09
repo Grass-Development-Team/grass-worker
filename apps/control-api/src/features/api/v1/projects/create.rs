@@ -250,7 +250,8 @@ async fn auto_assign_host(
         }
     };
 
-    let service = HostBindingService::new(db, cache);
+    let platform_secret = state.config.read().unwrap().secrets.secret_key.clone();
+    let service = HostBindingService::new(db, cache, &platform_secret);
     let mut last_error: Option<AppError> = None;
     for attempt in 0..3u8 {
         let host = hosts::platform_host_candidate(&project.slug, &source.base_domain, attempt);

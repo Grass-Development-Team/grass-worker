@@ -148,6 +148,7 @@ pub(crate) async fn soft_delete_project_records<C: ConnectionTrait>(
 pub(crate) async fn finalize_deleted_project_resources(
     db: &sea_orm::DatabaseConnection,
     cache: &grass_cache::CacheStore,
+    platform_secret: &str,
     op: &'static str,
     project: &project::Model,
     bindings: &[project_host_binding::Model],
@@ -163,7 +164,7 @@ pub(crate) async fn finalize_deleted_project_resources(
                 && let Some(source) =
                     hosts::get_source_by_id_including_deleted(db, source_id).await?
             {
-                let outcome = HostBindingService::new(db, cache)
+                let outcome = HostBindingService::new(db, cache, platform_secret)
                     .deprovision(op, &binding, &source)
                     .await
                     .map_err(|_| anyhow::anyhow!("host deprovision did not complete"))?;
@@ -904,7 +905,16 @@ pub async fn delete(
         })?;
 
     let warnings = if deletion.newly_deleted {
-        finalize_deleted_project_resources(db, cache, OP, &project, &deletion.bindings).await?
+        let platform_secret = state.config.read().unwrap().secrets.secret_key.clone();
+        finalize_deleted_project_resources(
+            db,
+            cache,
+            &platform_secret,
+            OP,
+            &project,
+            &deletion.bindings,
+        )
+        .await?
     } else {
         release_deleted_project_quota(db, cache, OP, &project, &deletion.bindings).await?;
         Vec::new()

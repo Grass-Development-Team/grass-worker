@@ -335,7 +335,8 @@ pub async fn create(
         }
     };
 
-    let service = HostBindingService::new(db, cache);
+    let platform_secret = state.config.read().unwrap().secrets.secret_key.clone();
+    let service = HostBindingService::new(db, cache, &platform_secret);
     let binding = service
         .bind_host(
             OP,
@@ -519,7 +520,8 @@ pub async fn remove(
             .await
             .map_err(|source| AppError::Infrastructure { op: OP, source })?
     {
-        let _ = HostBindingService::new(db, cache)
+        let platform_secret = state.config.read().unwrap().secrets.secret_key.clone();
+        let _ = HostBindingService::new(db, cache, &platform_secret)
             .deprovision(OP, &binding, &source)
             .await?;
     }
@@ -601,7 +603,8 @@ pub async fn provision(
             message: "host source not found".to_owned(),
         })?;
 
-    let service = HostBindingService::new(db, cache);
+    let platform_secret = state.config.read().unwrap().secrets.secret_key.clone();
+    let service = HostBindingService::new(db, cache, &platform_secret);
     let binding = service.provision(OP, binding, &source).await?;
 
     let view = attach_ingress_guidance(&state, db, &binding, binding_view(&binding), OP).await?;

@@ -6,11 +6,55 @@
 //! mode drives a real provider API.
 
 pub mod cloudflare;
+pub mod credentials;
 pub mod dnspod;
 pub mod route53;
 pub mod service;
 
 use crate::infra::database::entity::{HostBindingStatus, HostSourceKind, host_source};
+
+/// DNS names are case-insensitive and an absolute trailing dot is optional.
+fn same_dns_name(left: &str, right: &str) -> bool {
+    left.trim_end_matches('.')
+        .eq_ignore_ascii_case(right.trim_end_matches('.'))
+}
+
+fn same_record_value(record_type: &str, left: &str, right: &str) -> bool {
+    if record_type == "CNAME" {
+        same_dns_name(left, right)
+    } else {
+        left == right
+    }
+}
+
+/// Retry explicit transient HTTP responses, with a small bounded backoff.
+/// Transport errors are returned to the caller: a timed-out mutation may
+/// already have succeeded and needs reconciliation before being repeated.
+async fn send_dns_request(
+    request: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, reqwest::Error> {
+    for attempt in 0..3 {
+        let Some(next) = request.try_clone() else {
+            return request.send().await;
+        };
+        let response = next.send().await?;
+        if attempt == 2
+            || !(response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
+                || response.status().is_server_error())
+        {
+            return Ok(response);
+        }
+        let delay = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(|seconds| std::time::Duration::from_secs(seconds.min(2)))
+            .unwrap_or_else(|| std::time::Duration::from_millis(100 << attempt));
+        tokio::time::sleep(delay).await;
+    }
+    unreachable!("the final attempt always returns")
+}
 
 pub struct ProvisionProjectHostInput<'a> {
     pub host: &'a str,
@@ -129,36 +173,34 @@ impl DnsProviderHostProvisioner {
         name: &str,
         value: &str,
     ) -> Result<String, HostProvisionError> {
-        match provider.trim().to_ascii_lowercase().as_str() {
+        let result = match provider.trim().to_ascii_lowercase().as_str() {
             cloudflare::PROVIDER_NAME => {
                 let parsed = cloudflare::CloudflareConfig::from_json(&txt_config(config, value))
                     .map_err(HostProvisionError::Provider)?;
-                Ok(self
-                    .cloudflare
+                self.cloudflare
                     .ensure_txt_record(&parsed, name, value)
-                    .await?
-                    .id)
+                    .await
+                    .map(|record| record.id)
             }
             dnspod::PROVIDER_NAME => {
                 let parsed = dnspod::DnsPodConfig::from_json(zone, &txt_config(config, value))
                     .map_err(HostProvisionError::Provider)?;
-                Ok(self
-                    .dnspod
+                self.dnspod
                     .ensure_txt_record(&parsed, name, value)
-                    .await?
-                    .id)
+                    .await
+                    .map(|record| record.id)
             }
             route53::PROVIDER_NAME => {
                 let parsed = route53::Route53Config::from_json(&txt_config(config, value))
                     .map_err(HostProvisionError::Provider)?;
-                Ok(self
-                    .route53
+                self.route53
                     .ensure_txt_record(&parsed, name, value)
-                    .await?
-                    .id)
+                    .await
+                    .map(|record| record.id)
             }
             other => Err(Self::unsupported(Some(other))),
-        }
+        };
+        result.map_err(|error| credentials::redact_error(config, error))
     }
 
     #[allow(dead_code)]
@@ -170,7 +212,7 @@ impl DnsProviderHostProvisioner {
         name: &str,
         value: &str,
     ) -> Result<Option<String>, HostProvisionError> {
-        match provider.trim().to_ascii_lowercase().as_str() {
+        let result = match provider.trim().to_ascii_lowercase().as_str() {
             cloudflare::PROVIDER_NAME => {
                 let parsed = cloudflare::CloudflareConfig::from_json(&txt_config(config, value))
                     .map_err(HostProvisionError::Provider)?;
@@ -189,7 +231,8 @@ impl DnsProviderHostProvisioner {
                 self.route53.remove_txt_record(&parsed, name, value).await
             }
             other => Err(Self::unsupported(Some(other))),
-        }
+        };
+        result.map_err(|error| credentials::redact_error(config, error))
     }
 
     fn unsupported(provider: Option<&str>) -> HostProvisionError {

@@ -297,7 +297,8 @@ pub async fn remove(
             .await
             .map_err(|source| AppError::Infrastructure { op: OP, source })?
     {
-        let _ = HostBindingService::new(db, cache)
+        let platform_secret = state.config.read().unwrap().secrets.secret_key.clone();
+        let _ = HostBindingService::new(db, cache, &platform_secret)
             .deprovision(OP, &binding, &source)
             .await?;
     }

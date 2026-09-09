@@ -23,6 +23,7 @@ use crate::{
 
 use super::{
     CompositeHostProvisioner, HostProvisionError, HostProvisioner, ProvisionProjectHostInput,
+    credentials,
 };
 
 pub struct BindHostRequest<'a> {
@@ -59,14 +60,16 @@ pub struct HostBindingService<'a> {
     db: &'a DatabaseConnection,
     cache: &'a CacheStore,
     provisioner: CompositeHostProvisioner,
+    credential_key: [u8; 32],
 }
 
 impl<'a> HostBindingService<'a> {
-    pub fn new(db: &'a DatabaseConnection, cache: &'a CacheStore) -> Self {
+    pub fn new(db: &'a DatabaseConnection, cache: &'a CacheStore, platform_secret: &str) -> Self {
         Self {
             db,
             cache,
             provisioner: CompositeHostProvisioner::new(),
+            credential_key: credentials::encryption_key(platform_secret),
         }
     }
 
@@ -160,14 +163,19 @@ impl<'a> HostBindingService<'a> {
         binding: &project_host_binding::Model,
         source: &host_source::Model,
     ) -> Result<DeprovisionOutcome, AppError> {
-        if let Err(error) = self
-            .provisioner
-            .deprovision_project_host(super::DeprovisionProjectHostInput {
-                host: &binding.host,
-                source,
-            })
-            .await
+        let result = match credentials::runtime_source(self.db, &self.credential_key, source).await
         {
+            Ok(runtime) => self
+                .provisioner
+                .deprovision_project_host(super::DeprovisionProjectHostInput {
+                    host: &binding.host,
+                    source: &runtime,
+                })
+                .await
+                .map_err(|error| credentials::redact_error(&runtime.config, error)),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = result {
             tracing::warn!(operation = op, %error, host = %binding.host, "deprovision failed");
             hosts::record_provision_event(
                 self.db,
@@ -197,13 +205,18 @@ impl<'a> HostBindingService<'a> {
         binding: project_host_binding::Model,
         source: &host_source::Model,
     ) -> Result<project_host_binding::Model, AppError> {
-        let result = self
-            .provisioner
-            .provision_project_host(ProvisionProjectHostInput {
-                host: &binding.host,
-                source,
-            })
-            .await;
+        let result = match credentials::runtime_source(self.db, &self.credential_key, source).await
+        {
+            Ok(runtime) => self
+                .provisioner
+                .provision_project_host(ProvisionProjectHostInput {
+                    host: &binding.host,
+                    source: &runtime,
+                })
+                .await
+                .map_err(|error| credentials::redact_error(&runtime.config, error)),
+            Err(error) => Err(error),
+        };
 
         let (status, event_status, request_id, message) = match &result {
             Ok(provisioned) => (
@@ -342,7 +355,7 @@ mod tests {
             .into_connection();
         let cache = grass_cache::CacheStore::Moka(grass_cache::MokaCache::connect());
 
-        let outcome = HostBindingService::new(&db, &cache)
+        let outcome = HostBindingService::new(&db, &cache, "test-platform-key")
             .deprovision("test.host.deprovision", &binding, &source)
             .await
             .expect("the provider failure should be recorded");

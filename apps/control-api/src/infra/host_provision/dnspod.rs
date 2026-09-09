@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
-use super::HostProvisionError;
+use super::{HostProvisionError, same_dns_name, same_record_value, send_dns_request};
 use crate::infra::database::entity::host_source;
 
 pub const PROVIDER_NAME: &str = "dnspod";
@@ -95,8 +95,15 @@ impl DnsPodConfig {
             .trim_end_matches('/')
             .to_owned();
         let endpoint_url = Url::parse(&endpoint).map_err(|_| "config.api_endpoint is invalid")?;
-        if !matches!(endpoint_url.scheme(), "http" | "https") || endpoint_url.host_str().is_none() {
-            return Err("config.api_endpoint must be an http(s) URL".to_owned());
+        if !matches!(endpoint_url.scheme(), "http" | "https")
+            || endpoint_url.host_str().is_none()
+            || !endpoint_url.username().is_empty()
+            || endpoint_url.password().is_some()
+            || endpoint_url.path() != "/"
+            || endpoint_url.query().is_some()
+            || endpoint_url.fragment().is_some()
+        {
+            return Err("config.api_endpoint must be an http(s) origin without credentials, path, query, or fragment".to_owned());
         }
 
         Ok(Self {
@@ -216,36 +223,6 @@ fn tc3_authorization(
     )
 }
 
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn tc3_signature_for_test(
-    secret_key: &str,
-    service: &str,
-    _host: &str,
-    method: &str,
-    uri: &str,
-    query: &str,
-    canonical_headers: &str,
-    signed_headers: &str,
-    body: &str,
-    timestamp: i64,
-) -> String {
-    let date = tc3_date(timestamp);
-    let canonical_request = format!(
-        "{method}\n{uri}\n{query}\n{canonical_headers}\n{signed_headers}\n{}",
-        sha256_hex(body),
-    );
-    let credential_scope = format!("{date}/{service}/tc3_request");
-    let string_to_sign = format!(
-        "TC3-HMAC-SHA256\n{timestamp}\n{credential_scope}\n{}",
-        sha256_hex(canonical_request),
-    );
-    let secret_date = hmac_bytes(format!("TC3{secret_key}").as_bytes(), &date);
-    let secret_service = hmac_bytes(&secret_date, service);
-    let secret_signing = hmac_bytes(&secret_service, "tc3_request");
-    hex::encode(hmac_bytes(&secret_signing, &string_to_sign))
-}
-
 fn api_error(action: &str, response: &Value) -> HostProvisionError {
     let error = response
         .get("Response")
@@ -261,21 +238,10 @@ fn api_error(action: &str, response: &Value) -> HostProvisionError {
     HostProvisionError::Provider(format!("dnspod could not {action}: {message} ({code})"))
 }
 
-async fn parse_response(
-    response: reqwest::Response,
-    action: &str,
-) -> Result<Value, HostProvisionError> {
-    let status = response.status();
-    let value = response.json::<Value>().await.map_err(request_error)?;
-    if !status.is_success()
-        || value
-            .get("Response")
-            .and_then(|response| response.get("Error"))
-            .is_some()
-    {
-        return Err(api_error(action, &value));
-    }
-    Ok(value)
+fn error_code(value: &Value) -> Option<&str> {
+    value
+        .pointer("/Response/Error/Code")
+        .and_then(Value::as_str)
 }
 
 fn record_from_value(value: &Value) -> Option<DnsRecord> {
@@ -340,29 +306,63 @@ impl DnsPod {
             config.endpoint.clone()
         };
         let host = endpoint_host(&endpoint)?;
-        let timestamp = OffsetDateTime::now_utc().unix_timestamp();
-        let authorization = tc3_authorization(
-            &config.secret_id,
-            &config.secret_key,
-            PROVIDER_NAME,
-            &host,
-            action,
-            &body,
-            timestamp,
-        );
-        let response = http_client()
-            .post(endpoint)
-            .header("content-type", "application/json; charset=utf-8")
-            .header("host", &host)
-            .header("x-tc-action", action)
-            .header("x-tc-version", API_VERSION)
-            .header("x-tc-timestamp", timestamp.to_string())
-            .header("authorization", authorization)
-            .body(body)
-            .send()
+        for attempt in 0..3 {
+            let timestamp = OffsetDateTime::now_utc().unix_timestamp();
+            let authorization = tc3_authorization(
+                &config.secret_id,
+                &config.secret_key,
+                PROVIDER_NAME,
+                &host,
+                action,
+                &body,
+                timestamp,
+            );
+            let response = send_dns_request(
+                http_client()
+                    .post(&endpoint)
+                    .header("content-type", "application/json; charset=utf-8")
+                    .header("host", &host)
+                    .header("x-tc-action", action)
+                    .header("x-tc-version", API_VERSION)
+                    .header("x-tc-timestamp", timestamp.to_string())
+                    .header("authorization", authorization)
+                    .body(body.clone()),
+            )
             .await
             .map_err(request_error)?;
-        parse_response(response, action).await
+            let status = response.status();
+            let value = response.json::<Value>().await.map_err(request_error)?;
+            let code = error_code(&value);
+            if action == "DescribeRecordList" && code == Some("ResourceNotFound.NoDataOfRecord") {
+                return Ok(json!({"Response": {"RecordList": []}}));
+            }
+            if action == "DeleteRecord"
+                && matches!(
+                    code,
+                    Some("ResourceNotFound.NoDataOfRecord" | "ResourceNotFound.RecordNotExist")
+                )
+            {
+                return Ok(json!({"Response": {}}));
+            }
+            if attempt < 2
+                && code.is_some_and(|code| {
+                    code.starts_with("RequestLimitExceeded") || code.starts_with("InternalError")
+                })
+            {
+                tokio::time::sleep(Duration::from_millis(100 << attempt)).await;
+                continue;
+            }
+            if !status.is_success() || code.is_some() {
+                return Err(api_error(action, &value));
+            }
+            if !value.get("Response").is_some_and(Value::is_object) {
+                return Err(HostProvisionError::Provider(
+                    "dnspod returned no response object".to_owned(),
+                ));
+            }
+            return Ok(value);
+        }
+        unreachable!("the final attempt always returns")
     }
 
     async fn list_records(
@@ -371,25 +371,48 @@ impl DnsPod {
         host: &str,
     ) -> Result<Vec<DnsRecord>, HostProvisionError> {
         let subdomain = subdomain(&config.domain, host).map_err(HostProvisionError::Provider)?;
-        let response = self
-            .call(
-                config,
-                "DescribeRecordList",
-                json!({
-                    "Domain": config.domain,
-                    "Subdomain": subdomain,
-                    "RecordType": config.record_type,
-                    "RecordLine": config.record_line,
-                    "Limit": 100,
-                }),
-            )
-            .await?;
-        Ok(response
-            .get("Response")
-            .and_then(|response| response.get("RecordList"))
-            .and_then(Value::as_array)
-            .map(|records| records.iter().filter_map(record_from_value).collect())
-            .unwrap_or_default())
+        let mut offset = 0_u64;
+        let mut records = Vec::new();
+        loop {
+            let response = self
+                .call(
+                    config,
+                    "DescribeRecordList",
+                    json!({
+                        "Domain": config.domain,
+                        "Subdomain": subdomain,
+                        "RecordType": config.record_type,
+                        "RecordLine": config.record_line,
+                        "Limit": 100,
+                        "Offset": offset,
+                        "ErrorOnEmpty": "no",
+                    }),
+                )
+                .await?;
+            let page = response
+                .pointer("/Response/RecordList")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    HostProvisionError::Provider("dnspod returned no record list".to_owned())
+                })?;
+            for record in page {
+                records.push(record_from_value(record).ok_or_else(|| {
+                    HostProvisionError::Provider("dnspod returned an invalid DNS record".to_owned())
+                })?);
+            }
+            offset += page.len() as u64;
+            // DNSPod ListCount counts this page, while TotalCount can count
+            // the whole domain. A short page is the reliable end condition
+            // for the filtered Subdomain/RecordType/RecordLine query.
+            if page.len() < 100 {
+                return Ok(records);
+            }
+            if offset >= 1_000_000 {
+                return Err(HostProvisionError::Provider(
+                    "dnspod record pagination exceeded the safety limit".to_owned(),
+                ));
+            }
+        }
     }
 
     async fn create_record(
@@ -480,23 +503,61 @@ impl DnsPod {
         config: &DnsPodConfig,
         host: &str,
     ) -> Result<EnsuredRecord, HostProvisionError> {
-        let existing = self
-            .list_records(config, host)
-            .await?
+        let subdomain = subdomain(&config.domain, host).map_err(HostProvisionError::Provider)?;
+        let records = self.list_records(config, host).await?;
+        let mut matching = records
             .into_iter()
-            .find(|record| {
+            .filter(|record| {
                 record.record_type == config.record_type
                     && record.line == config.record_line
-                    && (record.name == subdomain(&config.domain, host).unwrap_or_default()
-                        || record.name == host)
-            });
-        let Some(existing) = existing else {
-            return Ok(EnsuredRecord {
-                id: self.create_record(config, host).await?,
-                updated: false,
-            });
+                    && (same_dns_name(&record.name, &subdomain)
+                        || same_dns_name(&record.name, host))
+            })
+            .collect::<Vec<_>>();
+        let exact = matching.iter().position(|record| {
+            same_record_value(&config.record_type, &record.value, &config.record_value)
+        });
+        let existing = if let Some(index) = exact {
+            Some(matching.swap_remove(index))
+        } else if config.record_type == "TXT" {
+            None
+        } else {
+            matching.into_iter().next()
         };
-        if existing.value == config.record_value && existing.ttl == config.ttl {
+        let Some(existing) = existing else {
+            let id = match self.create_record(config, host).await {
+                Ok(id) => id,
+                Err(error) => {
+                    // A concurrent ensure or an ambiguous network failure can
+                    // leave the desired record present even if create failed.
+                    let recovered =
+                        self.list_records(config, host)
+                            .await
+                            .ok()
+                            .and_then(|records| {
+                                records.into_iter().find(|record| {
+                                    record.record_type == config.record_type
+                                        && record.line == config.record_line
+                                        && (same_dns_name(&record.name, &subdomain)
+                                            || same_dns_name(&record.name, host))
+                                        && same_record_value(
+                                            &config.record_type,
+                                            &record.value,
+                                            &config.record_value,
+                                        )
+                                })
+                            });
+                    match recovered {
+                        Some(record) => record.id,
+                        None => return Err(error),
+                    }
+                }
+            };
+            return Ok(EnsuredRecord { id, updated: false });
+        };
+        if same_record_value(&config.record_type, &existing.value, &config.record_value)
+            && (config.record_type == "TXT" || existing.ttl == config.ttl)
+        {
             return Ok(EnsuredRecord {
                 id: existing.id,
                 updated: false,
@@ -514,12 +575,14 @@ impl DnsPod {
         config: &DnsPodConfig,
         host: &str,
     ) -> Result<Option<String>, HostProvisionError> {
+        let subdomain = subdomain(&config.domain, host).map_err(HostProvisionError::Provider)?;
         let records = self.list_records(config, host).await?;
         let mut removed = None;
         for record in records.into_iter().filter(|record| {
             record.record_type == config.record_type
                 && record.line == config.record_line
-                && record.value == config.record_value
+                && (same_dns_name(&record.name, &subdomain) || same_dns_name(&record.name, host))
+                && same_record_value(&config.record_type, &record.value, &config.record_value)
         }) {
             let record_id = record.id.parse::<u64>().map_err(|_| {
                 HostProvisionError::Provider("dnspod returned an invalid record id".to_owned())
@@ -587,23 +650,21 @@ mod tests {
     #[test]
     fn tc3_signature_vector_is_stable() {
         assert_eq!(tc3_date(1_700_000_000), "2023-11-14");
-        let signature = tc3_signature_for_test(
+        // Fixture independently computed using Tencent's official SDK
+        // Sign.sign_tc3 derivation:
+        // https://github.com/TencentCloud/tencentcloud-sdk-python/blob/master/tencentcloud/common/sign.py
+        let authorization = tc3_authorization(
+            "secret-id",
             "secret-key",
             "dnspod",
             "dnspod.tencentcloudapi.com",
-            "POST",
-            "/",
-            "",
-            "content-type:application/json; charset=utf-8\nhost:dnspod.tencentcloudapi.com\n",
-            "content-type;host",
+            "DescribeRecordList",
             "{}",
             1_700_000_000,
         );
-        assert_eq!(signature.len(), 64);
-        assert!(
-            signature
-                .chars()
-                .all(|character| character.is_ascii_hexdigit())
+        assert_eq!(
+            authorization,
+            "TC3-HMAC-SHA256 Credential=secret-id/2023-11-14/dnspod/tc3_request, SignedHeaders=content-type;host, Signature=e8af04313eb582e6e69baaefec842657826d08500e725fd0e3c3f06d293ef580"
         );
     }
 
@@ -712,6 +773,153 @@ mod tests {
         assert_eq!(
             actions.lock().unwrap().as_slice(),
             ["DescribeRecordList", "DeleteRecord"]
+        );
+    }
+
+    #[tokio::test]
+    async fn txt_lifecycle_preserves_other_values_names_and_lines_across_pages() {
+        type Records = Arc<Mutex<Vec<Value>>>;
+        let mut initial = vec![
+            json!({"RecordId": 1, "Name": "_acme-challenge", "Type": "TXT", "Value": "other-challenge", "Line": "默认", "TTL": 600}),
+            json!({"RecordId": 2, "Name": "other", "Type": "TXT", "Value": "desired", "Line": "默认", "TTL": 600}),
+            json!({"RecordId": 3, "Name": "_acme-challenge", "Type": "TXT", "Value": "desired", "Line": "overseas", "TTL": 600}),
+        ];
+        initial.extend((0..97).map(|index| json!({"RecordId": 100 + index, "Name": "_acme-challenge", "Type": "TXT", "Value": format!("other-{index}"), "Line": "默认", "TTL": 600})));
+        let records = Arc::new(Mutex::new(initial.clone()));
+        let router = Router::new().route("/", post(|State(records): State<Records>, headers: HeaderMap, Json(body): Json<Value>| async move {
+            let mut records = records.lock().unwrap();
+            match headers["x-tc-action"].to_str().unwrap() {
+                "DescribeRecordList" => {
+                    let offset = body["Offset"].as_u64().unwrap() as usize;
+                    let page = records.iter().skip(offset).take(100).cloned().collect::<Vec<_>>();
+                    Json(json!({"Response": {"RecordCountInfo": {"ListCount": page.len(), "TotalCount": records.len()}, "RecordList": page}}))
+                }
+                "CreateRecord" => {
+                    assert_eq!(body["RecordType"], "TXT");
+                    assert_eq!(body["Value"], "desired");
+                    records.push(json!({"RecordId": 9, "Name": "_ACME-CHALLENGE", "Type": "TXT", "Value": "desired", "Line": "默认", "TTL": 600}));
+                    Json(json!({"Response": {"RecordId": 9}}))
+                }
+                "DeleteRecord" => {
+                    assert_eq!(body["RecordId"], 9);
+                    records.retain(|record| record["RecordId"] != 9);
+                    Json(json!({"Response": {}}))
+                }
+                action => panic!("unexpected mutation: {action}"),
+            }
+        })).with_state(records.clone());
+        let endpoint = spawn(router).await;
+        let dns = DnsPod::with_base_url(endpoint.clone());
+        let config = config(&endpoint);
+        assert_eq!(
+            dns.ensure_txt_record(&config, "_acme-challenge.example.com", "desired")
+                .await
+                .unwrap()
+                .id,
+            "9"
+        );
+        assert!(
+            !dns.ensure_txt_record(&config, "_acme-challenge.example.com", "desired")
+                .await
+                .unwrap()
+                .updated
+        );
+        assert_eq!(records.lock().unwrap().len(), 101);
+        assert_eq!(
+            dns.remove_txt_record(&config, "_acme-challenge.example.com", "desired")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("9")
+        );
+        assert_eq!(*records.lock().unwrap(), initial);
+        assert_eq!(
+            dns.remove_txt_record(&config, "_acme-challenge.example.com", "desired")
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn no_data_error_is_an_empty_zone_and_allows_initial_creation() {
+        let router = Router::new().route("/", post(|headers: HeaderMap| async move {
+            Json(if headers["x-tc-action"] == "DescribeRecordList" {
+                json!({"Response": {"Error": {"Code": "ResourceNotFound.NoDataOfRecord", "Message": "No records"}}})
+            } else {
+                assert_eq!(headers["x-tc-action"], "CreateRecord");
+                json!({"Response": {"RecordId": 5}})
+            })
+        }));
+        let endpoint = spawn(router).await;
+        let dns = DnsPod::with_base_url(endpoint.clone());
+        assert_eq!(
+            dns.ensure_txt_record(&config(&endpoint), "_acme-challenge.example.com", "value")
+                .await
+                .unwrap()
+                .id,
+            "5"
+        );
+        assert_eq!(
+            dns.remove_txt_record(&config(&endpoint), "_acme-challenge.example.com", "value")
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn retry_recovers_throttling_but_authentication_errors_are_returned() {
+        let calls = Arc::new(Mutex::new(0_u32));
+        let router = Router::new().route("/", post(|State(calls): State<Arc<Mutex<u32>>>| async move {
+            let mut calls = calls.lock().unwrap();
+            *calls += 1;
+            Json(if *calls == 1 {
+                json!({"Response": {"Error": {"Code": "RequestLimitExceeded", "Message": "retry later"}}})
+            } else {
+                json!({"Response": {"RecordList": []}})
+            })
+        })).with_state(calls.clone());
+        let endpoint = spawn(router).await;
+        let dns = DnsPod::with_base_url(endpoint.clone());
+        assert!(
+            dns.list_records(&config(&endpoint), "www.example.com")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(*calls.lock().unwrap(), 2);
+
+        let router = Router::new().route("/", post(|| async { Json(json!({"Response": {"Error": {"Code": "AuthFailure.SignatureFailure", "Message": "invalid signature"}}})) }));
+        let endpoint = spawn(router).await;
+        let error = DnsPod::with_base_url(endpoint.clone())
+            .list_records(&config(&endpoint), "www.example.com")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("AuthFailure.SignatureFailure"));
+    }
+
+    #[tokio::test]
+    async fn concurrent_creation_is_reconciled_to_the_exact_record() {
+        let created = Arc::new(Mutex::new(false));
+        let router = Router::new().route("/", post(|State(created): State<Arc<Mutex<bool>>>, headers: HeaderMap| async move {
+            let mut created = created.lock().unwrap();
+            Json(if headers["x-tc-action"] == "DescribeRecordList" {
+                json!({"Response": {"RecordList": if *created { vec![json!({"RecordId": 42, "Name": "_acme-challenge", "Type": "TXT", "Value": "desired", "Line": "默认", "TTL": 300})] } else { vec![] }}})
+            } else {
+                assert_eq!(headers["x-tc-action"], "CreateRecord");
+                *created = true;
+                json!({"Response": {"Error": {"Code": "InvalidParameterValue.RecordExists", "Message": "exists"}}})
+            })
+        })).with_state(created);
+        let endpoint = spawn(router).await;
+        assert_eq!(
+            DnsPod::with_base_url(endpoint.clone())
+                .ensure_txt_record(&config(&endpoint), "_acme-challenge.example.com", "desired")
+                .await
+                .unwrap()
+                .id,
+            "42"
         );
     }
 }

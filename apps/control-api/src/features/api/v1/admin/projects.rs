@@ -784,9 +784,11 @@ pub async fn remove(
             source: source.into(),
         })?;
     let warnings = if deletion.newly_deleted {
+        let platform_secret = state.config.read().unwrap().secrets.secret_key.clone();
         crate::features::api::v1::projects::lifecycle::finalize_deleted_project_resources(
             db,
             cache,
+            &platform_secret,
             OP,
             &project,
             &deletion.bindings,
