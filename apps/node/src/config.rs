@@ -13,7 +13,7 @@ use grass_node_protocol::{
     NodeIdentityConfiguration, NodeLogConfiguration, NodeLogFormat,
     NodePrivateRepositoryTargetConfiguration, NodeRuntimeConfiguration,
     NodeRuntimeResourcesConfiguration, NodeSecurityConfiguration, NodeServeCapacityConfiguration,
-    NodeServeConfiguration, NodeSsrConfiguration,
+    NodeServeConfiguration, NodeSsrConfiguration, NodeTlsConfiguration,
 };
 use serde::{Deserialize, Serialize};
 use tracing_subscriber::{EnvFilter, fmt};
@@ -125,6 +125,8 @@ pub struct ServeConfig {
     pub capacity: ServeCapacityConfig,
     #[serde(default)]
     pub ssr: SsrServeConfig,
+    #[serde(default)]
+    pub tls: NodeTlsConfiguration,
 }
 
 impl Default for ServeConfig {
@@ -137,6 +139,7 @@ impl Default for ServeConfig {
             artifact_cache_root: default_artifact_cache_root(),
             capacity: ServeCapacityConfig::default(),
             ssr: SsrServeConfig::default(),
+            tls: NodeTlsConfiguration::default(),
         }
     }
 }
@@ -336,6 +339,7 @@ impl NodeConfig {
                     idle_stop_seconds: self.serve.ssr.idle_stop_seconds,
                     startup_timeout_seconds: self.serve.ssr.startup_timeout_seconds,
                 },
+                tls: self.serve.tls,
             },
             runtime: NodeRuntimeConfiguration {
                 backend: self.runtime.backend.clone(),
@@ -402,6 +406,7 @@ impl NodeConfig {
         self.serve.capacity.max_deployments = desired.serve.capacity.max_deployments;
         self.serve.ssr.idle_stop_seconds = desired.serve.ssr.idle_stop_seconds;
         self.serve.ssr.startup_timeout_seconds = desired.serve.ssr.startup_timeout_seconds;
+        self.serve.tls = desired.serve.tls;
         self.runtime.backend.clone_from(&desired.runtime.backend);
         self.runtime.socket.clone_from(&desired.runtime.socket);
         self.runtime
@@ -479,6 +484,11 @@ impl NodeConfig {
             anyhow::bail!("build concurrency must be positive when build capability is enabled");
         }
         if capabilities.serve {
+            if self.serve.tls.enabled
+                && (self.serve.tls.port == 0 || self.serve.tls.port == self.serve.port)
+            {
+                anyhow::bail!("serve TLS port must be positive and different from the HTTP port");
+            }
             let base_url = url::Url::parse(&self.serve.public_base_url)
                 .context("serve public_base_url must be an absolute HTTP(S) URL")?;
             if !matches!(base_url.scheme(), "http" | "https") || !base_url.has_host() {
@@ -647,6 +657,25 @@ mod tests {
         assert_eq!(listen.ip().to_string(), "0.0.0.0");
         assert_eq!(listen.port(), 8080);
         assert!(parse_listen("GWNODE_SERVE_LISTEN", "localhost").is_err());
+    }
+
+    #[test]
+    fn tls_defaults_preserve_existing_configs_and_reject_listener_conflicts() {
+        let legacy: NodeConfig = toml::from_str("[serve]\nport = 8080\n").unwrap();
+        assert!(!legacy.serve.tls.enabled);
+        assert_eq!(legacy.serve.tls.port, 8443);
+        let mut enabled: NodeConfig = toml::from_str("[serve.tls]\nenabled = true\n").unwrap();
+        assert!(enabled.serve.tls.enabled);
+        assert_eq!(enabled.serve.tls.port, 8443);
+        enabled.validate().unwrap();
+        let mut desired = enabled.sync_configuration();
+        desired.serve.tls.port = 9443;
+        enabled.apply_sync_configuration(&desired).unwrap();
+        assert_eq!(enabled.serve.tls.port, 9443);
+        enabled.serve.tls.port = enabled.serve.port;
+        assert!(enabled.validate().is_err());
+        enabled.serve.tls.port = 0;
+        assert!(enabled.validate().is_err());
     }
 
     #[test]
