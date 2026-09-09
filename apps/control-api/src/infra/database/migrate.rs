@@ -2105,9 +2105,16 @@ ORDER BY conname
         );
         ensure!(constraints["ck_regional_ingresses_region_nonempty"].contains("char_length"));
         ensure!(constraints["ck_regional_ingresses_hostname_nonempty"].contains("char_length"));
-        ensure!(constraints["ck_regional_ingresses_health_path"].contains("LIKE '/%'"));
+        // PostgreSQL deparses LIKE and BETWEEN into their underlying operators.
         ensure!(
-            constraints["ck_regional_ingresses_health_interval"].contains("BETWEEN 5 AND 3600")
+            constraints["ck_regional_ingresses_health_path"]
+                .contains("health_check_path ~~ '/%'::text")
+        );
+        ensure!(
+            constraints["ck_regional_ingresses_health_interval"]
+                .contains("health_check_interval_seconds >= 5")
+                && constraints["ck_regional_ingresses_health_interval"]
+                    .contains("health_check_interval_seconds <= 3600")
         );
         ensure!(constraints["ck_regional_ingresses_certificate_issuer"].contains("letsencrypt"));
         ensure!(
