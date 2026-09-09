@@ -205,6 +205,71 @@ pub async fn ensure_record(
     Ok(item)
 }
 
+/// Upgrade local legacy state while holding the same ingress/certificate locks
+/// used by administrator edits. Only the ID comes from the sweep's earlier list.
+pub async fn prepare_regional_sweep(
+    db: &DatabaseConnection,
+    ingress_id: Uuid,
+    secret: &str,
+) -> anyhow::Result<Option<regional_ingress::Model>> {
+    let transaction = db.begin().await?;
+    let Some(mut ingress) = regional_ingress::Entity::find_by_id(ingress_id)
+        .lock_exclusive()
+        .one(&transaction)
+        .await?
+    else {
+        return Ok(None);
+    };
+    if ingress.dns_challenge_config.get("key_id").is_none() {
+        let sealed = seal_config(ingress.id, &ingress.dns_challenge_config, secret)?;
+        let mut active: regional_ingress::ActiveModel = ingress.into();
+        active.dns_challenge_config = Set(sealed);
+        ingress = active.update(&transaction).await?;
+    }
+    if ingress.enabled && ingress.tls_enabled && ingress.deleted_at.is_none() {
+        let regional = ensure_record_inner(&transaction, &ingress, None).await?;
+        // An in-flight order owns its status and material until it releases its lease.
+        if !regional
+            .lease_until
+            .is_some_and(|until| until > OffsetDateTime::now_utc())
+        {
+            let mut active: cert::ActiveModel = regional.clone().into();
+            let auto_renew = regional.issuer != "manual" && ingress.certificate_auto_renew;
+            let mut changed = regional.auto_renew != auto_renew;
+            if changed {
+                active.auto_renew = Set(auto_renew);
+            }
+            if regional.bundle.is_none()
+                && let Some(old) = &ingress.certificate_bundle
+            {
+                let restored = (|| -> anyhow::Result<_> {
+                    let bundle: PemBundle =
+                        serde_json::from_value(decrypt(secret, ingress.id, BUNDLE_KEY, old)?)?;
+                    validate_pem(&ingress.hostname, &bundle, OffsetDateTime::now_utc())
+                })();
+                match restored {
+                    Ok(validity) => {
+                        active.bundle = Set(Some(old.clone()));
+                        active.revision = Set(validity.revision);
+                        active.issued_at = Set(Some(validity.issued_at));
+                        active.expires_at = Set(Some(validity.expires_at));
+                        active.status = Set("active".to_owned());
+                        changed = true;
+                    }
+                    Err(_) => {
+                        tracing::warn!(operation="control_api.certificate.invalid_legacy_bundle",ingress_id=%ingress.id,"legacy certificate could not be restored; current certificate state is retained");
+                    }
+                }
+            }
+            if changed {
+                active.update(&transaction).await?;
+            }
+        }
+    }
+    transaction.commit().await?;
+    Ok(Some(ingress))
+}
+
 async fn ensure_record_inner<C: ConnectionTrait>(
     db: &C,
     ingress: &regional_ingress::Model,
@@ -461,6 +526,105 @@ pub async fn snapshot(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    #[tokio::test]
+    async fn sweep_preparation_preserves_locked_rotated_credentials_and_manual_certificate() {
+        let stale = ingress_fixture();
+        let mut current = stale.clone();
+        current.dns_challenge_config =
+            seal_config(current.id, &json!({"api_token":"rotated-token"}), "secret").unwrap();
+        // The certificate import has committed; its admin endpoint has not yet
+        // changed the ingress's old automatic-renewal preference.
+        let mut imported = certificate_fixture(&current);
+        imported.issuer = "manual".to_owned();
+        imported.auto_renew = false;
+        imported.bundle = Some(json!({"current_manual_material":true}));
+        imported.status = "active".to_owned();
+        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([vec![current.clone()]])
+            .append_query_results([vec![imported]])
+            .into_connection();
+        let prepared = prepare_regional_sweep(&db, stale.id, "secret")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            config(&prepared, "secret").unwrap(),
+            json!({"api_token":"rotated-token"})
+        );
+        let log = db.into_transaction_log();
+        assert_eq!(log.len(), 1);
+        assert_eq!(
+            log[0]
+                .statements()
+                .iter()
+                .filter(|s| s.sql.contains("FOR UPDATE"))
+                .count(),
+            2
+        );
+        assert!(
+            !log[0]
+                .statements()
+                .iter()
+                .any(|s| s.sql.starts_with("UPDATE "))
+        );
+    }
+
+    #[tokio::test]
+    async fn sweep_preparation_syncs_only_the_locked_current_renewal_preference() {
+        let stale = ingress_fixture();
+        let mut current = stale.clone();
+        current.certificate_auto_renew = false;
+        current.dns_challenge_config = seal_config(current.id, &json!({}), "secret").unwrap();
+        let old = certificate_fixture(&current);
+        let mut updated = old.clone();
+        updated.auto_renew = false;
+        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([vec![current]])
+            .append_query_results([vec![old], vec![updated]])
+            .into_connection();
+        assert!(
+            !prepare_regional_sweep(&db, stale.id, "secret")
+                .await
+                .unwrap()
+                .unwrap()
+                .certificate_auto_renew
+        );
+        let log = db.into_transaction_log();
+        let updates = log
+            .iter()
+            .flat_map(|t| t.statements())
+            .filter(|s| s.sql.starts_with("UPDATE "))
+            .collect::<Vec<_>>();
+        assert_eq!(updates.len(), 1);
+        assert!(updates[0].sql.contains("SET \"auto_renew\" ="));
+        assert_eq!(
+            updates[0].values.as_ref().unwrap().0[0],
+            sea_orm::Value::Bool(Some(false))
+        );
+    }
+
+    #[tokio::test]
+    async fn sweep_preparation_does_not_restore_legacy_material_over_an_in_flight_order() {
+        let mut ingress = ingress_fixture();
+        ingress.dns_challenge_config = seal_config(ingress.id, &json!({}), "secret").unwrap();
+        ingress.certificate_bundle = Some(json!({"old_envelope":"not-yet-read"}));
+        let mut current = certificate_fixture(&ingress);
+        current.status = "issuing".to_owned();
+        current.lease_until = Some(OffsetDateTime::now_utc() + time::Duration::minutes(1));
+        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([vec![ingress.clone()]])
+            .append_query_results([vec![current]])
+            .into_connection();
+        prepare_regional_sweep(&db, ingress.id, "secret")
+            .await
+            .unwrap();
+        assert!(
+            !db.into_transaction_log()
+                .iter()
+                .flat_map(|t| t.statements())
+                .any(|s| s.sql.starts_with("UPDATE "))
+        );
+    }
     #[tokio::test]
     async fn corrupt_bundle_does_not_block_another_domains_withdrawal() {
         let ingress = ingress_fixture();

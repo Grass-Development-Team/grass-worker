@@ -10,8 +10,8 @@ use instant_acme::{
     Identifier, LetsEncrypt, NewAccount, NewOrder, OrderStatus, RetryPolicy, ZeroSsl,
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter,
-    QuerySelect, Set, TransactionTrait, sea_query::Expr,
+    ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect, Set,
+    TransactionTrait, sea_query::Expr,
 };
 use serde_json::{Value, json};
 use time::{Duration, OffsetDateTime};
@@ -458,71 +458,53 @@ async fn reconcile_record(
 
 pub async fn sweep(db: &DatabaseConnection, secret: &str) -> anyhow::Result<()> {
     let ingresses = regional_ingress::Entity::find().all(db).await?;
-    for mut ingress in ingresses {
-        if ingress.dns_challenge_config.get("key_id").is_none() {
-            let sealed =
-                certificates::seal_config(ingress.id, &ingress.dns_challenge_config, secret)?;
-            let mut active: regional_ingress::ActiveModel = ingress.into();
-            active.dns_challenge_config = Set(sealed);
-            ingress = active.update(db).await?;
+    for ingress in ingresses {
+        if sweep_ingress(db, ingress.id, secret).await.is_err() {
+            tracing::warn!(operation="control_api.acme.ingress_sweep_failed",ingress_id=%ingress.id,"regional certificate sweep failed; other regions will continue");
         }
-        if ingress.enabled && ingress.tls_enabled && ingress.deleted_at.is_none() {
-            let mut regional = certificates::ensure_record(db, &ingress, None).await?;
-            // Import old encrypted material once, measuring its signed validity.
-            if regional.bundle.is_none()
-                && let Some(old) = &ingress.certificate_bundle
-            {
-                let decoded = certificates::decrypt(secret, ingress.id, BUNDLE_KEY, old)?;
-                if let Ok(bundle) = serde_json::from_value::<PemBundle>(decoded)
-                    && let Ok(validity) = certificates::validate_pem(
-                        &ingress.hostname,
-                        &bundle,
-                        OffsetDateTime::now_utc(),
-                    )
-                {
-                    let mut active: cert::ActiveModel = regional.into();
-                    active.bundle = Set(Some(old.clone()));
-                    active.revision = Set(validity.revision);
-                    active.issued_at = Set(Some(validity.issued_at));
-                    active.expires_at = Set(Some(validity.expires_at));
-                    active.status = Set("active".to_owned());
-                    regional = active.update(db).await?;
-                }
-            }
-            let mut active: cert::ActiveModel = regional.into();
-            active.auto_renew = Set(ingress.certificate_auto_renew);
-            active.update(db).await?;
-            let bindings = project_host_binding::Entity::find()
-                .filter(project_host_binding::Column::Region.eq(&ingress.region))
-                .filter(project_host_binding::Column::DeletedAt.is_null())
-                .all(db)
-                .await?;
-            for binding in bindings
-                .iter()
-                .filter(|b| certificates::binding_eligible(b))
-            {
-                certificates::ensure_record(db, &ingress, Some(binding)).await?;
-            }
-        }
-        let items = cert::Entity::find()
-            .filter(cert::Column::IngressId.eq(ingress.id))
+    }
+    Ok(())
+}
+
+async fn sweep_ingress(
+    db: &DatabaseConnection,
+    ingress_id: Uuid,
+    secret: &str,
+) -> anyhow::Result<()> {
+    let Some(ingress) = certificates::prepare_regional_sweep(db, ingress_id, secret).await? else {
+        return Ok(());
+    };
+    if ingress.enabled && ingress.tls_enabled && ingress.deleted_at.is_none() {
+        let bindings = project_host_binding::Entity::find()
+            .filter(project_host_binding::Column::Region.eq(&ingress.region))
+            .filter(project_host_binding::Column::DeletedAt.is_null())
             .all(db)
             .await?;
-        for item in items {
-            if !item
-                .lease_until
-                .is_some_and(|until| until > OffsetDateTime::now_utc())
+        for binding in bindings
+            .iter()
+            .filter(|b| certificates::binding_eligible(b))
+        {
+            certificates::ensure_record(db, &ingress, Some(binding)).await?;
+        }
+    }
+    let items = cert::Entity::find()
+        .filter(cert::Column::IngressId.eq(ingress.id))
+        .all(db)
+        .await?;
+    for item in items {
+        if !item
+            .lease_until
+            .is_some_and(|until| until > OffsetDateTime::now_utc())
+        {
+            // Recover challenges after process interruption or domain/ingress removal.
+            if (item.dns_record_name.is_some() || item.challenge_token.is_some())
+                && cleanup(db, &item, secret).await.is_err()
             {
-                // Recover challenges after process interruption or domain/ingress removal.
-                if (item.dns_record_name.is_some() || item.challenge_token.is_some())
-                    && cleanup(db, &item, secret).await.is_err()
-                {
-                    continue;
-                }
+                continue;
             }
-            if let Err(_error) = reconcile_record(db, &item, &ingress, secret).await {
-                tracing::warn!(operation="control_api.acme.reconcile_failed",certificate_id=%item.id,"certificate reconciliation failed; state retained for retry");
-            }
+        }
+        if let Err(_error) = reconcile_record(db, &item, &ingress, secret).await {
+            tracing::warn!(operation="control_api.acme.reconcile_failed",certificate_id=%item.id,"certificate reconciliation failed; state retained for retry");
         }
     }
     Ok(())
@@ -531,6 +513,81 @@ pub async fn sweep(db: &DatabaseConnection, secret: &str) -> anyhow::Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn malformed_legacy_bundle_does_not_block_other_regions() {
+        let mut first = certificates::tests::ingress_fixture();
+        first.certificate_issuer = "manual".to_owned();
+        first.certificate_auto_renew = false;
+        first.dns_challenge_config =
+            certificates::seal_config(first.id, &json!({}), "secret").unwrap();
+        first.certificate_bundle = Some(json!({"invalid_old_envelope":true}));
+        let mut second = certificates::tests::ingress_fixture();
+        second.region = "us".to_owned();
+        second.hostname = "us.example.org".to_owned();
+        second.certificate_issuer = "manual".to_owned();
+        second.certificate_auto_renew = false;
+        second.dns_challenge_config =
+            certificates::seal_config(second.id, &json!({}), "secret").unwrap();
+        let manual = |ingress: &regional_ingress::Model| {
+            let mut item = certificates::tests::certificate_fixture(ingress);
+            item.issuer = "manual".to_owned();
+            item.auto_renew = false;
+            item
+        };
+        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([vec![first.clone(), second.clone()], vec![first.clone()]])
+            .append_query_results([vec![manual(&first)]])
+            .append_query_results([Vec::<project_host_binding::Model>::new()])
+            .append_query_results([Vec::<cert::Model>::new()])
+            .append_query_results([vec![second.clone()]])
+            .append_query_results([vec![manual(&second)]])
+            .append_query_results([Vec::<project_host_binding::Model>::new()])
+            .append_query_results([Vec::<cert::Model>::new()])
+            .into_connection();
+        sweep(&db, "secret").await.unwrap();
+        let log = db.into_transaction_log();
+        assert_eq!(
+            log.iter()
+                .flat_map(|t| t.statements())
+                .filter(|s| s.sql.contains("FROM \"project_host_bindings\""))
+                .count(),
+            2
+        );
+        assert!(
+            !log.iter()
+                .flat_map(|t| t.statements())
+                .any(|s| s.sql.starts_with("UPDATE "))
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_legacy_provider_config_is_isolated_to_its_region() {
+        let mut broken = certificates::tests::ingress_fixture();
+        broken.dns_challenge_config = json!(false);
+        let mut healthy = certificates::tests::ingress_fixture();
+        healthy.enabled = false;
+        healthy.dns_challenge_config =
+            certificates::seal_config(healthy.id, &json!({}), "secret").unwrap();
+        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([
+                vec![broken.clone(), healthy.clone()],
+                vec![broken],
+                vec![healthy.clone()],
+            ])
+            .append_query_results([Vec::<cert::Model>::new()])
+            .into_connection();
+        sweep(&db, "secret").await.unwrap();
+        let healthy_id: sea_orm::Value = healthy.id.into();
+        assert!(
+            db.into_transaction_log()
+                .iter()
+                .flat_map(|t| t.statements())
+                .any(|s| s.sql.contains("FROM \"managed_certificates\"")
+                    && s.values
+                        .as_ref()
+                        .is_some_and(|values| values.0.contains(&healthy_id)))
+        );
+    }
     #[tokio::test]
     async fn http_validation_waits_for_every_eligible_entry_revision() {
         use crate::infra::database::entity::regional_ingress_health;
