@@ -155,3 +155,32 @@ jobs:
         env:
           GRASS_NODE_SMOKE_IMAGE: grass-build:smoke
           GRASS_NODE_SMOKE_SOCKET: unix:///var/run/docker.sock
+
+  release-images:
+    name: Release images
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build release runtime variants
+        uses: docker/bake-action@v6
+        with:
+          files: docker-bake.hcl
+          load: true
+        env:
+          TAGS_DEBIAN: grass-worker:ci-debian
+          TAGS_SLIM: grass-worker:ci-slim
+          TAGS_ALPINE: grass-worker:ci-alpine
+
+      - name: Check packaged binaries
+        run: |
+          for variant in debian slim alpine; do
+            docker run --rm --network none "grass-worker:ci-${variant}" grass-control-api --version
+            docker run --rm --network none "grass-worker:ci-${variant}" grass-node --version
+          done
