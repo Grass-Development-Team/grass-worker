@@ -140,3 +140,5 @@ pub use user_password_credential::Entity as UserPasswordCredential;
 pub use user_password_history::Entity as UserPasswordHistory;
 
 pub mod region;
+
+pub mod domain_onboarding;

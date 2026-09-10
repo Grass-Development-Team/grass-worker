@@ -25,6 +25,7 @@ import { Switch } from "@/components/ui/switch";
 import { useBranding } from "@/features/branding/branding-context";
 
 import { adminApi, type AdminSettings } from "../admin.api";
+import { DomainHttpsSettingsPanel } from "./domain-https-settings-panel";
 import { RegionsPanel } from "@/features/regions/regions-panel";
 import { StorageSettingsPanel } from "./storage-settings-panel";
 
@@ -673,6 +674,7 @@ function SettingsForm({ initial, section }: { initial: AdminSettings; section: S
 
       <SettingsSectionView section={section} visible="infrastructure">
         <RegionsPanel />
+        <DomainHttpsSettingsPanel />
         <StorageSettingsPanel />
       </SettingsSectionView>
 

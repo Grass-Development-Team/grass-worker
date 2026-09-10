@@ -28,3 +28,7 @@ pub mod teams;
 pub mod users;
 
 pub mod regions;
+
+pub mod certificate_settings;
+pub mod domain_dns;
+pub mod domain_onboarding;

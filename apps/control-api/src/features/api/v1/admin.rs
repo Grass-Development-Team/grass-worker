@@ -4,6 +4,7 @@ pub mod batch;
 pub mod build_logs;
 pub mod codes;
 pub mod deployments;
+pub mod domain_https;
 pub mod domains;
 pub mod host_sources;
 pub mod identity_providers;
@@ -72,12 +73,8 @@ pub fn router() -> Router<ControlApiState> {
             patch(regional_ingresses::update).delete(regional_ingresses::remove),
         )
         .route(
-            "/regional-ingresses/{ingress_id}/certificate/renew",
-            post(regional_ingresses::renew_certificate),
-        )
-        .route(
-            "/regional-ingresses/{ingress_id}/certificate/import",
-            post(regional_ingresses::import_certificate),
+            "/domain-https",
+            get(domain_https::get).patch(domain_https::update),
         )
         .route("/audit-events", get(audit_events::list))
         .route(

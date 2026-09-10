@@ -32,3 +32,5 @@ pub mod m20260909_000031_regional_ingress_lifecycle;
 pub mod m20260910_000032_managed_certificates;
 
 pub mod m20260911_000033_regions;
+
+pub mod m20260911_000034_domain_onboarding;

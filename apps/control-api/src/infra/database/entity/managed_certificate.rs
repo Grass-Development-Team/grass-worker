@@ -9,6 +9,7 @@ pub struct Model {
     pub host_binding_id: Option<Uuid>,
     pub hostname: String,
     pub issuer: String,
+    pub contact_email: String,
     pub challenge_method: String,
     pub auto_renew: bool,
     pub status: String,
@@ -25,9 +26,6 @@ pub struct Model {
     pub challenge_token: Option<String>,
     pub challenge_value: Option<String>,
     pub challenge_expires_at: Option<TimeDateTimeWithTimeZone>,
-    pub dns_record_name: Option<String>,
-    pub dns_record_value: Option<String>,
-    pub dns_cleanup: Option<Json>,
     pub updated_at: TimeDateTimeWithTimeZone,
 }
 

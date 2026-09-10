@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, State},
     response::IntoResponse,
 };
-use sea_orm::{ActiveModelTrait, EntityTrait, TransactionTrait};
+use sea_orm::{EntityTrait, TransactionTrait};
 use serde::Deserialize;
 use serde_json::json;
 use time::OffsetDateTime;
@@ -63,83 +63,132 @@ async fn attach_ingress_guidance(
     mut view: serde_json::Value,
     op: &'static str,
 ) -> Result<serde_json::Value, AppError> {
+    use crate::infra::database::entity::{
+        managed_certificate, node_ingress_status, regional_ingress,
+    };
+    use sea_orm::{ColumnTrait, QueryFilter};
     if !matches!(binding.kind, HostBindingKind::Custom) {
         return Ok(view);
     }
-    let Some(regional_ingress) = ingress::get_enabled_by_region(db, &binding.region)
+    let connection = crate::domain::domain_onboarding::get(db, binding.id)
         .await
-        .map_err(|source| AppError::Infrastructure { op, source })?
+        .map_err(|source| AppError::Infrastructure { op, source })?;
+    view["onboarding"] = connection
+        .as_ref()
+        .map(crate::domain::domain_onboarding::view)
+        .unwrap_or(serde_json::Value::Null);
+    view["connection_state"] = json!("entry_unavailable");
+    let Some(entry) = regional_ingress::Entity::find()
+        .filter(regional_ingress::Column::Region.eq(&binding.region))
+        .filter(regional_ingress::Column::DeletedAt.is_null())
+        .one(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op,
+            source: source.into(),
+        })?
     else {
         return Ok(view);
     };
-    let candidates = ingress::healthy_serve_nodes(db, &binding.region, OffsetDateTime::now_utc())
+    let now = OffsetDateTime::now_utc();
+    let candidates = ingress::healthy_serve_nodes(db, &binding.region, now)
         .await
         .map_err(|source| AppError::Infrastructure { op, source })?;
-    let secret_key = state.config.read().unwrap().secrets.secret_key.clone();
-    let verification_value =
-        ingress::dns_verification_token(&secret_key, binding.id, &binding.host);
+    let secret = state.config.read().unwrap().secrets.secret_key.clone();
+    let issuer = crate::domain::certificate_settings::issuer(db)
+        .await
+        .map_err(|source| AppError::Infrastructure { op, source })?;
+    let record = managed_certificate::Entity::find_by_id(binding.id)
+        .one(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op,
+            source: source.into(),
+        })?;
+    let mut installed = 0;
+    if let Some(record) = &record {
+        for candidate in &candidates {
+            let node_id =
+                Uuid::parse_str(&candidate.node_id).map_err(|source| AppError::Infrastructure {
+                    op,
+                    source: source.into(),
+                })?;
+            let status = node_ingress_status::Entity::find_by_id(node_id)
+                .one(db)
+                .await
+                .map_err(|source| AppError::Infrastructure {
+                    op,
+                    source: source.into(),
+                })?;
+            if status.as_ref().is_some_and(|s| {
+                s.tls_ready
+                    && now - s.checked_at < time::Duration::seconds(30)
+                    && s.certificates.as_array().is_some_and(|certs| {
+                        certs.iter().any(|c| {
+                            c["ingress_id"] == json!(record.id) && c["revision"] == record.revision
+                        })
+                    })
+            }) {
+                installed += 1;
+            }
+        }
+    }
+    let https_ready = entry.enabled
+        && certificates::binding_eligible(binding)
+        && !candidates.is_empty()
+        && installed == candidates.len()
+        && record.as_ref().is_some_and(|c| {
+            !c.revision.is_empty() && c.expires_at.is_some_and(|expiry| expiry > now)
+        });
+    let mut certificate = certificates::view(record.as_ref(), &entry, &issuer);
+    certificate["https_ready"] = json!(https_ready);
+    certificate["installed_nodes"] = json!(installed);
+    certificate["required_nodes"] = json!(candidates.len());
+    view["certificate"] = certificate.clone();
     let guidance = ingress::cname_guidance(ingress::CnameGuidanceInput {
         host: &binding.host,
         region: &binding.region,
-        ingress_hostname: &regional_ingress.hostname,
+        ingress_hostname: &entry.hostname,
         verification_name: &format!("_grass.{}", binding.host),
-        verification_value: &verification_value,
-        origin_host_preservation: regional_ingress.origin_host_preservation,
+        verification_value: &ingress::dns_verification_token(&secret, binding.id, &binding.host),
+        origin_host_preservation: true,
     });
     view["ingress"] = json!({
-        "region": guidance.region,
-        "cname": {
-            "record_type": guidance.record_type,
-            "name": guidance.name,
-            "target": guidance.target,
-        },
-        "txt": {
-            "record_type": "TXT",
-            "name": guidance.verification_name,
-            "value": guidance.verification_value,
-        },
-        "origin_host_preservation": guidance.origin_host_preservation,
-        "health_check": {
-            "path": regional_ingress.health_check_path,
-            "interval_seconds": regional_ingress.health_check_interval_seconds,
-        },
-        "entrance_nodes": candidates.iter().map(|candidate| json!({
-            "node_id": candidate.node_id,
-            "base_url": candidate.base_url,
-            "priority": candidate.priority,
-        })).collect::<Vec<_>>(),
-        "certificate": {
-            "enabled": regional_ingress.tls_enabled,
-            "issuer": regional_ingress.certificate_issuer,
-            "auto_renew": regional_ingress.certificate_auto_renew,
-            "status": regional_ingress.certificate_status,
-            "expires_at": ts(regional_ingress.certificate_expires_at),
-            "error": regional_ingress.certificate_error,
-        },
-        "dns_challenge": {
-            "provider": regional_ingress.dns_challenge_provider,
-            "status": regional_ingress.dns_challenge_status,
-            "record_name": regional_ingress.dns_challenge_record_name,
-            "record_value": regional_ingress.dns_challenge_record_value,
-        },
+        "region":guidance.region,"enabled":entry.enabled,
+        "cname":{"record_type":guidance.record_type,"name":guidance.name,"target":guidance.target},
+        "txt":{"record_type":"TXT","name":guidance.verification_name,"value":guidance.verification_value},
+        "origin_host_preservation":guidance.origin_host_preservation,
+        "health_check":{"path":entry.health_check_path,"interval_seconds":entry.health_check_interval_seconds},
+        "entrance_nodes":candidates.iter().map(|n|json!({"node_id":n.node_id,"base_url":n.base_url,"priority":n.priority})).collect::<Vec<_>>(),
+        "certificate":certificate,
     });
-    let record =
-        crate::infra::database::entity::managed_certificate::Entity::find_by_id(binding.id)
-            .one(db)
-            .await
-            .map_err(|source| AppError::Infrastructure {
-                op,
-                source: source.into(),
-            })?;
-    let mut certificate = certificates::view(record.as_ref(), &regional_ingress);
-    certificate["dns_delegation_name"] = json!(format!("_acme-challenge.{}", binding.host));
-    certificate["dns_delegation_target"] = json!(format!(
-        "_acme-{}.{}",
-        binding.id.simple(),
-        regional_ingress.hostname
-    ));
-    view["certificate"] = certificate.clone();
-    view["ingress"]["certificate"] = certificate;
+    view["connection_state"] = json!(if binding.status == HostBindingStatus::Disabled {
+        "disabled"
+    } else if !entry.enabled {
+        "entry_unavailable"
+    } else if connection.is_none() {
+        "contact_missing"
+    } else if let Some(connection) = connection.as_ref().filter(|c| c.dns_status != "ready") {
+        connection.dns_status.as_str()
+    } else if binding.ownership_status != "verified" {
+        "ownership_pending"
+    } else if !matches!(
+        binding.review_status,
+        HostReviewStatus::Approved | HostReviewStatus::NotRequired
+    ) {
+        "review_pending"
+    } else if candidates.is_empty() {
+        "entry_unavailable"
+    } else if https_ready {
+        "ready"
+    } else {
+        match record.as_ref().map(|c| c.status.as_str()) {
+            Some("issuing") => "issuing",
+            Some("active") => "installing",
+            Some("failed") => "certificate_failed",
+            _ => "certificate_pending",
+        }
+    });
     Ok(view)
 }
 
@@ -305,6 +354,15 @@ pub async fn create(
         });
     }
 
+    crate::domain::regions::require(db, &region, OP).await?;
+    if source.is_none()
+        && ingress::get_enabled_by_region(db, &region)
+            .await
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?
+            .is_none()
+    {
+        return Err(AppError::Validation { op: OP, message: "This region has no enabled CNAME entry. Select an available region or contact a platform administrator.".to_owned() });
+    }
     // Custom hosts require the team group policy to allow them; hosts under
     // a platform source must live under that source's base domain.
     let policy = hosts::policy_for_team_group(db, access.team.group_id)
@@ -376,6 +434,20 @@ pub async fn create(
         )
         .await?;
 
+    if binding.kind == HostBindingKind::Custom
+        && crate::domain::domain_onboarding::run_check(db, binding.id, &platform_secret, true)
+            .await
+            .is_err()
+    {
+        tracing::warn!(operation="projects.hosts.initial_check", binding_id=%binding.id, "Initial domain check will retry in the background");
+    }
+    let binding = hosts::get_binding_by_id(db, binding.id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .ok_or_else(|| AppError::NotFound {
+            op: OP,
+            message: "Domain binding was removed".to_owned(),
+        })?;
     let view = attach_ingress_guidance(&state, db, &binding, binding_view(&binding), OP).await?;
     Ok(ok_response(json!({ "host": view })))
 }
@@ -405,69 +477,14 @@ pub async fn verify(
             message: "platform domains do not require ownership verification".to_owned(),
         });
     }
-    let secret_key = state.config.read().unwrap().secrets.secret_key.clone();
-    let expected = ingress::dns_verification_token(&secret_key, binding.id, &binding.host);
-    let result = ingress::verify_dns_txt(&binding.host, &expected)
+    let secret = state.config.read().unwrap().secrets.secret_key.clone();
+    crate::domain::domain_onboarding::run_check(db, host_id, &secret, true)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    let transaction = db
-        .begin()
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
-    let binding = hosts::get_binding_by_id_for_update(&transaction, host_id)
-        .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?
-        .filter(|binding| binding.project_id == project_id)
-        .ok_or_else(|| AppError::NotFound {
-            op: OP,
-            message: "host binding no longer exists".to_owned(),
-        })?;
-    let mut active: project_host_binding::ActiveModel = binding.clone().into();
-    active.ownership_checked_at = sea_orm::ActiveValue::Set(Some(OffsetDateTime::now_utc()));
-    match result {
-        ingress::DnsVerification::Verified => {
-            active.ownership_status = sea_orm::ActiveValue::Set("verified".to_owned());
-            active.ownership_error = sea_orm::ActiveValue::Set(None);
-            if matches!(binding.review_status, HostReviewStatus::Approved) {
-                active.status = sea_orm::ActiveValue::Set(HostBindingStatus::Active);
-            }
-        }
-        ingress::DnsVerification::Missing => {
-            active.ownership_status = sea_orm::ActiveValue::Set("failed".to_owned());
-            active.ownership_error =
-                sea_orm::ActiveValue::Set(Some("TXT ownership record was not found".to_owned()));
-            active.status = sea_orm::ActiveValue::Set(HostBindingStatus::Pending);
-        }
-        ingress::DnsVerification::Mismatch => {
-            active.ownership_status = sea_orm::ActiveValue::Set("failed".to_owned());
-            active.ownership_error =
-                sea_orm::ActiveValue::Set(Some("TXT ownership record did not match".to_owned()));
-            active.status = sea_orm::ActiveValue::Set(HostBindingStatus::Pending);
-        }
-    }
-    if matches!(binding.status, HostBindingStatus::Disabled) {
-        active.status = sea_orm::ActiveValue::Set(HostBindingStatus::Disabled);
-    }
-    let updated = active
-        .update(&transaction)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
-    transaction
-        .commit()
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
+    let updated = load_binding(db, &access, host_id, OP).await?;
     let view = attach_ingress_guidance(&state, db, &updated, binding_view(&updated), OP).await?;
     Ok(ok_response(
-        json!({ "host": view, "verified": result == ingress::DnsVerification::Verified }),
+        json!({"host":view,"verified":updated.ownership_status == "verified"}),
     ))
 }
 

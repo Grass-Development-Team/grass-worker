@@ -58,21 +58,30 @@ export interface ProjectHost {
   ownership_checked_at?: string | null;
   ownership_error?: string | null;
   certificate?: DomainCertificate | null;
+  connection_state?: string;
+  onboarding?: {
+    dns_status: string;
+    dns_error: string | null;
+    checked_at: string | null;
+    next_check_at: string;
+  } | null;
 }
 
 export interface DomainCertificate {
   status: "pending" | "issuing" | "active" | "expiring" | "failed" | "disabled";
   issuer: "letsencrypt" | "zerossl" | "manual";
-  regional_issuer: "letsencrypt" | "zerossl" | "manual";
-  challenge_method: "http01" | "dns01";
+  platform_issuer: "letsencrypt" | "zerossl";
+  // Installation progress is included in domain list and connection-check responses.
+  https_ready?: boolean;
+  installed_nodes?: number;
+  required_nodes?: number;
+  challenge_method: "http01";
   auto_renew: boolean;
   issued_at: string | null;
   expires_at: string | null;
   error: string | null;
   retry_at: string | null;
   revision: string | null;
-  dns_delegation_name: string | null;
-  dns_delegation_target: string | null;
 }
 
 export interface ProjectHostIngress {
@@ -89,12 +98,6 @@ export interface ProjectHostIngress {
     status: "pending" | "issuing" | "active" | "expiring" | "failed" | "disabled";
     expires_at: string | null;
     error: string | null;
-  };
-  dns_challenge: {
-    provider: string | null;
-    status: "not_configured" | "pending" | "valid" | "failed";
-    record_name: string | null;
-    record_value: string | null;
   };
 }
 

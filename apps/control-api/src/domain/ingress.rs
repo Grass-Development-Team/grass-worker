@@ -89,17 +89,6 @@ pub async fn list<C: ConnectionTrait>(db: &C) -> anyhow::Result<Vec<regional_ing
         .map_err(Into::into)
 }
 
-pub async fn get_by_id<C: ConnectionTrait>(
-    db: &C,
-    id: Uuid,
-) -> anyhow::Result<Option<regional_ingress::Model>> {
-    regional_ingress::Entity::find_by_id(id)
-        .filter(regional_ingress::Column::DeletedAt.is_null())
-        .one(db)
-        .await
-        .map_err(Into::into)
-}
-
 pub async fn get_enabled_by_region<C: ConnectionTrait>(
     db: &C,
     region: &str,
@@ -128,7 +117,7 @@ pub async fn healthy_serve_nodes<C: ConnectionTrait>(
         .as_ref()
         .map(|item| health_check_freshness_seconds(item.health_check_interval_seconds))
         .unwrap_or(120);
-    let tls_required = ingress.as_ref().is_some_and(|i| i.tls_enabled);
+    let tls_required = ingress.is_some();
     let health = if let Some(ingress) = ingress {
         regional_ingress_health::Entity::find()
             .filter(regional_ingress_health::Column::IngressId.eq(ingress.id))
@@ -260,6 +249,41 @@ pub async fn probe_regional_ingress(
     if !health_check_due(last_checked, ingress.health_check_interval_seconds, now) {
         return Ok(());
     }
+    if ingress
+        .dns_checked_at
+        .is_none_or(|at| now - at >= time::Duration::seconds(60))
+    {
+        let result = super::domain_dns::Resolver::new()?
+            .addresses(&ingress.hostname)
+            .await;
+        let mut active: regional_ingress::ActiveModel = ingress.clone().into();
+        active.dns_checked_at = Set(Some(now));
+        match result {
+            Ok(addresses) if !addresses.is_empty() => {
+                active.dns_status = Set("resolved".to_owned());
+                active.dns_error = Set(None);
+            }
+            Ok(_) => {
+                active.dns_status = Set("unresolved".to_owned());
+                active.dns_error = Set(Some(
+                    "Add DNS address records for this CNAME target at your DNS provider."
+                        .to_owned(),
+                ));
+            }
+            Err(_) => {
+                active.dns_status = Set("error".to_owned());
+                active.dns_error = Set(Some(
+                    "Public DNS could not be checked; automatic retry is scheduled.".to_owned(),
+                ));
+            }
+        }
+        // A concurrent hostname edit must not receive a result for the old hostname.
+        regional_ingress::Entity::update(active)
+            .validate()?
+            .filter(regional_ingress::Column::Hostname.eq(&ingress.hostname))
+            .exec(db)
+            .await?;
+    }
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(std::time::Duration::from_secs(3))
@@ -313,19 +337,6 @@ pub enum DnsVerification {
     Verified,
     Missing,
     Mismatch,
-}
-
-pub async fn verify_dns_txt(host: &str, expected: &str) -> anyhow::Result<DnsVerification> {
-    verify_dns_txt_at(
-        &reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(5))
-            .timeout(std::time::Duration::from_secs(10))
-            .build()?,
-        "https://cloudflare-dns.com/dns-query",
-        host,
-        expected,
-    )
-    .await
 }
 
 pub async fn verify_dns_txt_at(

@@ -3,7 +3,9 @@
 //! and provision event recording.
 
 use grass_cache::CacheStore;
-use sea_orm::DatabaseConnection;
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect, TransactionTrait,
+};
 use uuid::Uuid;
 
 use crate::{
@@ -103,24 +105,47 @@ impl<'a> HostBindingService<'a> {
             )
             .await?;
 
-        let binding = match hosts::create_binding(
-            self.db,
-            CreateBindingParams {
-                project_id: request.project.id,
-                team_id: request.team.id,
-                host_source_id: request.source.map(|source| source.id),
-                host: request.host.clone(),
-                region: request.region.clone(),
-                kind: request.kind,
-                environment: request.environment,
-                status: HostBindingStatus::Pending,
-                failure_reason: None,
-                is_primary: request.is_primary,
-                review_status: request.review_status,
-            },
-        )
-        .await
-        {
+        let created: anyhow::Result<project_host_binding::Model> = async {
+            let transaction = self.db.begin().await?;
+            if request.kind == HostBindingKind::Custom {
+                use crate::infra::database::entity::regional_ingress;
+                let entry = regional_ingress::Entity::find()
+                    .filter(regional_ingress::Column::Region.eq(&request.region))
+                    .filter(regional_ingress::Column::Enabled.eq(true))
+                    .filter(regional_ingress::Column::DeletedAt.is_null())
+                    .lock_shared()
+                    .one(&transaction)
+                    .await?;
+                anyhow::ensure!(entry.is_some(), "This region has no enabled entry");
+            }
+            let binding = hosts::create_binding(
+                &transaction,
+                CreateBindingParams {
+                    project_id: request.project.id,
+                    team_id: request.team.id,
+                    host_source_id: request.source.map(|source| source.id),
+                    host: request.host.clone(),
+                    region: request.region.clone(),
+                    kind: request.kind.clone(),
+                    environment: request.environment,
+                    status: HostBindingStatus::Pending,
+                    failure_reason: None,
+                    is_primary: request.is_primary,
+                    review_status: request.review_status,
+                },
+            )
+            .await?;
+            if request.kind == HostBindingKind::Custom {
+                let actor = request.actor_user_id.ok_or_else(|| {
+                    anyhow::anyhow!("A user account is required to add custom domains")
+                })?;
+                crate::domain::domain_onboarding::create(&transaction, &binding, actor).await?;
+            }
+            transaction.commit().await?;
+            Ok(binding)
+        }
+        .await;
+        let binding = match created {
             Ok(binding) => binding,
             Err(source) => {
                 quota.rollback(reservation).await;

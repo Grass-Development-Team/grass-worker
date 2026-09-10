@@ -201,27 +201,15 @@ export interface AdminRegionalIngress {
   health_check_path: string;
   health_check_interval_seconds: number;
   origin_host_preservation: boolean;
-  tls_enabled: boolean;
-  certificate_issuer: "letsencrypt" | "zerossl" | "manual";
-  certificate_auto_renew: boolean;
-  certificate_status: "pending" | "issuing" | "active" | "expiring" | "failed" | "disabled";
-  certificate_expires_at: string | null;
-  certificate_issued_at?: string | null;
-  certificate_revision?: string | null;
-  certificate_retry_at?: string | null;
-  node_statuses?: Array<{
+  dns_status: "pending" | "resolved" | "unresolved" | "error";
+  dns_checked_at: string | null;
+  dns_error: string | null;
+  node_statuses: Array<{
     node_id: string;
     tls_ready: boolean;
-    challenge_revision: string;
+    health_status: string;
     checked_at: string | null;
-    certificate_revision: string | null;
   }>;
-  certificate_error: string | null;
-  dns_challenge_provider: string | null;
-  dns_challenge_config_keys: string[];
-  dns_challenge_status: "not_configured" | "pending" | "valid" | "failed";
-  dns_challenge_record_name: string | null;
-  dns_challenge_record_value: string | null;
   healthy_nodes: Array<{ node_id: string; base_url: string; priority: number }>;
   created_at: string;
   updated_at: string;
@@ -759,58 +747,29 @@ export const adminApi = {
   createRegionalIngress: (input: {
     region: string;
     hostname: string;
+    enabled?: boolean;
     health_check_path?: string;
     health_check_interval_seconds?: number;
-    tls_enabled?: boolean;
-    certificate_issuer?: AdminRegionalIngress["certificate_issuer"];
-    certificate_auto_renew?: boolean;
-    dns_challenge_provider?: string;
-    dns_challenge_config?: Record<string, unknown>;
   }) =>
     request<{ regional_ingress: AdminRegionalIngress }>("/api/v1/admin/regional-ingresses", {
       method: "POST",
       body: JSON.stringify(input),
     }),
-
   updateRegionalIngress: (
-    ingressId: string,
+    id: string,
     input: Partial<
       Pick<
         AdminRegionalIngress,
-        | "hostname"
-        | "enabled"
-        | "health_check_path"
-        | "health_check_interval_seconds"
-        | "origin_host_preservation"
-        | "tls_enabled"
-        | "certificate_issuer"
-        | "certificate_auto_renew"
-        | "dns_challenge_provider"
+        "hostname" | "enabled" | "health_check_path" | "health_check_interval_seconds"
       >
-    > & { dns_challenge_config?: Record<string, unknown> },
+    >,
   ) =>
-    request<{ regional_ingress: AdminRegionalIngress }>(
-      `/api/v1/admin/regional-ingresses/${ingressId}`,
-      { method: "PATCH", body: JSON.stringify(input) },
-    ),
-
-  removeRegionalIngress: (ingressId: string) =>
-    request<{ ok: true }>(`/api/v1/admin/regional-ingresses/${ingressId}`, { method: "DELETE" }),
-
-  renewRegionalIngressCertificate: (ingressId: string) =>
-    request<{ regional_ingress: AdminRegionalIngress }>(
-      `/api/v1/admin/regional-ingresses/${ingressId}/certificate/renew`,
-      { method: "POST" },
-    ),
-
-  importRegionalIngressCertificate: (
-    ingressId: string,
-    input: { certificate_pem: string; private_key_pem: string },
-  ) =>
-    request<{ regional_ingress: AdminRegionalIngress }>(
-      `/api/v1/admin/regional-ingresses/${ingressId}/certificate/import`,
-      { method: "POST", body: JSON.stringify(input) },
-    ),
+    request<{ regional_ingress: AdminRegionalIngress }>(`/api/v1/admin/regional-ingresses/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+  removeRegionalIngress: (id: string) =>
+    request<{ ok: true }>(`/api/v1/admin/regional-ingresses/${id}`, { method: "DELETE" }),
 
   listNodes: () =>
     request<{ nodes: AdminNode[]; local_process: AdminLocalProcessInfo }>("/api/v1/admin/nodes"),

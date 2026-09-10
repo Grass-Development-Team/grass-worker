@@ -393,6 +393,30 @@ fn spawn_regional_ingress_health_sweep(state: ControlApiState) {
 }
 
 fn spawn_regional_ingress_certificate_sweep(state: ControlApiState) {
+    let connection_state = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            let Some(db) = connection_state.try_database() else {
+                continue;
+            };
+            let secret = connection_state
+                .config
+                .read()
+                .unwrap()
+                .secrets
+                .secret_key
+                .clone();
+            if domain::domain_onboarding::sweep(db, &secret).await.is_err() {
+                tracing::warn!(
+                    operation = "control_api.domain_connection_sweep",
+                    "Domain connection checks will retry"
+                );
+            }
+        }
+    });
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
