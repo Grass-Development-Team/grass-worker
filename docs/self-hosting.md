@@ -53,6 +53,11 @@ docker build --target runtime-slim -t grass-worker:slim .
 docker build --target runtime-alpine -t grass-worker:alpine .
 ```
 
+The Quality workflow builds all three release variants on pull requests and
+checks that the packaged Control API and Node binaries can start. These
+validation images stay local to the runner; the Release workflow publishes
+the branch and version tags.
+
 ## 2. Start the Control API
 
 Copy `config.toml.example` to `config.toml` and set at least the database

@@ -7,11 +7,12 @@
 # --- Console build -----------------------------------------------------------
 FROM oven/bun:1.3 AS console-builder
 WORKDIR /app
+ENV PATH="/root/.local/share/vite-plus/bin:${PATH}"
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl unzip ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL https://vite.plus | bash
-ENV PATH="/root/.vite-plus/bin:${PATH}"
+RUN vp --version
 COPY apps/console/package.json apps/console/bun.lock apps/console/
 WORKDIR /app/apps/console
 RUN vp install --frozen-lockfile
