@@ -26,3 +26,5 @@ pub mod storage_migrations;
 pub mod storage_settings;
 pub mod teams;
 pub mod users;
+
+pub mod regions;

@@ -138,3 +138,5 @@ pub use user_notification::Entity as UserNotification;
 pub use user_password_credential::Entity as UserPasswordCredential;
 #[allow(unused_imports)]
 pub use user_password_history::Entity as UserPasswordHistory;
+
+pub mod region;

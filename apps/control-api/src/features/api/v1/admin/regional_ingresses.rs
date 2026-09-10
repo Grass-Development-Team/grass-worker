@@ -286,6 +286,7 @@ pub async fn create(
         body.health_check_interval_seconds,
         OP,
     )?;
+    crate::domain::regions::require(db, &region, OP).await?;
     let certificate_issuer = parse_issuer(&body.certificate_issuer, OP)?;
     let dns_challenge_config = if body.dns_challenge_config.is_null() {
         json!({})

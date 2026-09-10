@@ -520,6 +520,7 @@ pub async fn update_configuration(
             op: OP,
             message: "node not found".to_owned(),
         })?;
+    crate::domain::regions::require(&transaction, &configuration.node.region, OP).await?;
     let usage = scheduler::node_usage(&transaction)
         .await
         .map_err(|source| AppError::Infrastructure {
@@ -745,6 +746,7 @@ pub async fn create(
             message: format!("region: {error}"),
         })?;
 
+    crate::domain::regions::require(db, &region, OP).await?;
     let token = grass_token::generate_token();
     let node = nodes::create_node(
         db,

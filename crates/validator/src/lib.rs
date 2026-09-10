@@ -88,7 +88,20 @@ pub fn normalize_slug(value: &str) -> Result<String, SlugError> {
 }
 
 pub fn normalize_region(value: &str) -> Result<String, SlugError> {
-    let normalized = normalize_slug(value)?;
+    let normalized = value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-")
+        .to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Err(SlugError::Empty);
+    }
+    if !normalized
+        .bytes()
+        .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+    {
+        return Err(SlugError::InvalidCharacter);
+    }
     if normalized.len() > 64 {
         return Err(SlugError::TooLong);
     }
@@ -204,7 +217,9 @@ mod tests {
 
     #[test]
     fn normalizes_regions_with_a_stable_short_slug() {
-        assert_eq!(normalize_region(" EU_West 1 ").unwrap(), "eu-west-1");
+        assert_eq!(normalize_region("hk_1").unwrap(), "hk_1");
+        assert_eq!(normalize_region("hk_frick").unwrap(), "hk_frick");
+        assert_eq!(normalize_region(" EU_West 1 ").unwrap(), "eu_west-1");
         assert_eq!(normalize_region(&"a".repeat(65)), Err(SlugError::TooLong));
     }
 

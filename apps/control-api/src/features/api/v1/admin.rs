@@ -11,6 +11,7 @@ pub mod nodes;
 pub mod projects;
 pub mod quota_plans;
 pub mod regional_ingresses;
+pub mod regions;
 pub mod registration;
 pub mod reviews;
 pub mod settings;
@@ -34,6 +35,11 @@ use crate::{
 pub fn router() -> Router<ControlApiState> {
     Router::new()
         .route("/status", get(status))
+        .route("/regions", get(regions::list).post(regions::create))
+        .route(
+            "/regions/{code}",
+            patch(regions::rename).delete(regions::remove),
+        )
         .route("/codes", get(codes::list).post(codes::generate))
         .route("/codes/{code_id}/revoke", post(codes::revoke))
         .route(

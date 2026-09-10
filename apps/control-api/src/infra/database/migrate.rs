@@ -44,6 +44,7 @@ impl MigratorTrait for Migrator {
             Box::new(migration::m20260908_000030_regional_ingress::Migration),
             Box::new(migration::m20260909_000031_regional_ingress_lifecycle::Migration),
             Box::new(migration::m20260910_000032_managed_certificates::Migration),
+            Box::new(migration::m20260911_000033_regions::Migration),
         ]
     }
 }
@@ -150,11 +151,39 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    #[ignore = "requires GRASS_TEST_DATABASE_URL"]
+    async fn postgres_region_catalog_backfills_and_enforces_references() -> anyhow::Result<()> {
+        let _guard = MIGRATION_TEST_LOCK.lock().await;
+        let database_url = std::env::var("GRASS_TEST_DATABASE_URL")?;
+        let database = PostgresMigrationDatabase::start(&database_url).await?;
+        let result: anyhow::Result<()> = async {
+            Migrator::up(&database.db, Some(32)).await?;
+            database.db.execute_unprepared("INSERT INTO regional_ingresses (id, region, hostname, created_at, updated_at) VALUES ('00000000-0000-0000-0000-000000000101', 'hk_1', 'hk.entry.example.com', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)").await?;
+            Migrator::up(&database.db, Some(1)).await?;
+            let rows = database.db.query_all_raw(Statement::from_string(DatabaseBackend::Postgres, "SELECT code FROM regions ORDER BY code".to_owned())).await?;
+            let codes = rows.iter().map(|r| r.try_get::<String>("", "code")).collect::<Result<Vec<_>, _>>()?;
+            ensure!(codes == vec!["default", "hk_1"]);
+            let foreign_keys = object_count(&database.db, "SELECT count(*) AS count FROM pg_constraint WHERE contype = 'f' AND confrelid = 'regions'::regclass").await?;
+            ensure!(foreign_keys == 5);
+            ensure!(database.db.execute_unprepared("DELETE FROM regions WHERE code = 'hk_1'").await.is_err());
+            ensure!(database.db.execute_unprepared("INSERT INTO regions (code, name) VALUES ('hk_1', 'duplicate')").await.is_err());
+            ensure!(database.db.execute_unprepared("INSERT INTO regional_ingresses (id, region, hostname, created_at, updated_at) VALUES ('00000000-0000-0000-0000-000000000102', 'unknown', 'unknown.entry.example.com', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)").await.is_err());
+            ensure!(database.db.execute_unprepared("INSERT INTO regional_ingresses (id, region, hostname, created_at, updated_at) VALUES ('00000000-0000-0000-0000-000000000103', 'hk_1', 'second.entry.example.com', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)").await.is_err());
+            let columns = query_column_shapes(&database.db, "regions").await?;
+            ensure!(columns.iter().any(|c| c.name == "code" && c.nullable == "NO" && c.udt_name == "text"));
+            ensure!(columns.iter().any(|c| c.name == "name" && c.nullable == "NO"));
+            Ok(())
+        }.await;
+        database.cleanup().await?;
+        result
+    }
+
     #[test]
     fn registers_audit_foundation_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 32);
+        assert_eq!(migrations.len(), 33);
         assert_eq!(
             migrations.get(11).expect("twelfth migration").name(),
             "m20260729_000012_audit_foundation"
@@ -183,7 +212,7 @@ mod tests {
     fn registers_team_group_review_policy_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 32);
+        assert_eq!(migrations.len(), 33);
         assert_eq!(
             migrations.get(12).expect("thirteenth migration").name(),
             "m20260729_000013_team_group_review_policy"
@@ -194,7 +223,7 @@ mod tests {
     fn registers_node_config_sync_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 32);
+        assert_eq!(migrations.len(), 33);
         assert_eq!(
             migrations.get(13).expect("fourteenth migration").name(),
             "m20260729_000014_node_config_sync"
@@ -205,7 +234,7 @@ mod tests {
     fn registers_node_deletion_queue_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 32);
+        assert_eq!(migrations.len(), 33);
         assert_eq!(
             migrations.get(14).expect("fifteenth migration").name(),
             "m20260729_000015_node_deletion_queue"
@@ -216,7 +245,7 @@ mod tests {
     fn registers_domain_review_policy_after_node_deletion_queue() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 32);
+        assert_eq!(migrations.len(), 33);
         assert_eq!(
             migrations.get(14).expect("fifteenth migration").name(),
             "m20260729_000015_node_deletion_queue"
@@ -231,7 +260,7 @@ mod tests {
     fn registers_project_notifications_after_domain_review_policy() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 32);
+        assert_eq!(migrations.len(), 33);
         assert_eq!(
             migrations.get(15).expect("sixteenth migration").name(),
             "m20260730_000016_domain_review_policy"
@@ -254,7 +283,7 @@ mod tests {
     fn registers_scoped_codes_after_authentication_migrations() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 32);
+        assert_eq!(migrations.len(), 33);
         assert_eq!(
             migrations.get(23).expect("twenty-fourth migration").name(),
             "m20260806_000024_scoped_codes"
@@ -265,7 +294,7 @@ mod tests {
     fn registers_registration_allowlist_after_scoped_codes() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 32);
+        assert_eq!(migrations.len(), 33);
         assert_eq!(
             migrations.get(24).expect("twenty-fifth migration").name(),
             "m20260806_000025_registration_allowlist"
@@ -276,7 +305,7 @@ mod tests {
     fn registers_avatar_versions_after_registration_allowlist() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 32);
+        assert_eq!(migrations.len(), 33);
         assert_eq!(
             migrations.get(25).expect("twenty-sixth migration").name(),
             "m20260807_000026_avatars"
@@ -287,7 +316,7 @@ mod tests {
     fn registers_object_storage_after_deployment_screenshots() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 32);
+        assert_eq!(migrations.len(), 33);
         assert_eq!(
             migrations.get(26).expect("twenty-seventh migration").name(),
             "m20260807_000027_deployment_screenshots"
@@ -298,7 +327,7 @@ mod tests {
         );
         assert_eq!(
             migrations.last().expect("last migration").name(),
-            "m20260910_000032_managed_certificates"
+            "m20260911_000033_regions"
         );
     }
 

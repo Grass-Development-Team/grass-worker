@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Globe2Icon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
 import { useId, useState } from "react";
 
+import { RegionSelect } from "@/features/regions/region-select";
 import { CertificateImportDialog } from "@/components/certificate-import-dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -313,7 +314,7 @@ function RegionalIngressDialog({
 
 function IngressForm({ item, onSaved }: { item?: AdminRegionalIngress; onSaved: () => void }) {
   const id = useId();
-  const [region, setRegion] = useState(item?.region ?? "default");
+  const [region, setRegion] = useState(item?.region ?? "");
   const [hostname, setHostname] = useState(item?.hostname ?? "");
   const [healthPath, setHealthPath] = useState(item?.health_check_path ?? "/_grass/health");
   const [healthInterval, setHealthInterval] = useState(
@@ -377,12 +378,12 @@ function IngressForm({ item, onSaved }: { item?: AdminRegionalIngress; onSaved: 
       <FieldGroup>
         <Field>
           <FieldLabel htmlFor={id + "-region"}>Region</FieldLabel>
-          <Input
+          <RegionSelect
             id={id + "-region"}
             value={region}
-            onChange={(event) => setRegion(event.target.value)}
+            onChange={setRegion}
+            unusedOnly={!item}
             disabled={!!item}
-            required
           />
         </Field>
         <Field>
