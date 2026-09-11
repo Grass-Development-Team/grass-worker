@@ -73,6 +73,9 @@ async fn rooted_tar(
     tokio::task::spawn_blocking(move || {
         let mut builder = tar::Builder::new(Vec::new());
         builder.follow_symlinks(false);
+        // Docker's archive upload rejects GNU sparse headers (type 'S').
+        // Send the complete logical contents as ordinary file entries instead.
+        builder.sparse(false);
         builder
             .append_dir_all(root_name, &dir)
             .map_err(|error| runtime_error("workspace archive", error))?;
@@ -568,6 +571,72 @@ impl super::ContainerRuntime for SocketRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn upload_archives_preserve_sparse_files_as_regular_entries() {
+        use std::io::{Read, Seek, SeekFrom, Write};
+
+        let source = tempfile::tempdir().unwrap();
+        let mut file = std::fs::File::create(source.path().join("sparse.bin")).unwrap();
+        let mut expected = vec![0; 1024 * 1024 + 4];
+        expected[..4].copy_from_slice(b"head");
+        expected[1024 * 1024..].copy_from_slice(b"tail");
+        file.write_all(b"head").unwrap();
+        file.seek(SeekFrom::Start(1024 * 1024)).unwrap();
+        file.write_all(b"tail").unwrap();
+        file.sync_all().unwrap();
+        std::fs::write(source.path().join("ordinary.txt"), b"ordinary contents").unwrap();
+
+        for root in ["workspace", "app"] {
+            let bytes = rooted_tar(root, source.path().to_owned()).await.unwrap();
+            let mut archive = tar::Archive::new(bytes.as_slice());
+            let mut files = HashMap::new();
+            for entry in archive.entries().unwrap() {
+                let mut entry = entry.unwrap();
+                if entry.header().entry_type().is_dir() {
+                    continue;
+                }
+                assert_eq!(entry.header().entry_type(), tar::EntryType::Regular);
+                let path = entry.path().unwrap().into_owned();
+                let mut contents = Vec::new();
+                entry.read_to_end(&mut contents).unwrap();
+                files.insert(path, contents);
+            }
+            assert_eq!(files.len(), 2);
+            assert_eq!(files[&Path::new(root).join("sparse.bin")], expected);
+            assert_eq!(
+                files[&Path::new(root).join("ordinary.txt")],
+                b"ordinary contents"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn upload_archives_preserve_symlinks_without_reading_their_targets() {
+        let source = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(outside.path(), b"outside workspace").unwrap();
+        std::os::unix::fs::symlink(outside.path(), source.path().join("link")).unwrap();
+
+        let bytes = rooted_tar("workspace", source.path().to_owned())
+            .await
+            .unwrap();
+        let mut archive = tar::Archive::new(bytes.as_slice());
+        let mut links = 0;
+        for entry in archive.entries().unwrap() {
+            let entry = entry.unwrap();
+            if entry.header().entry_type().is_dir() {
+                continue;
+            }
+            assert_eq!(entry.header().entry_type(), tar::EntryType::Symlink);
+            assert_eq!(entry.path().unwrap(), Path::new("workspace/link"));
+            assert_eq!(entry.link_name().unwrap().unwrap(), outside.path());
+            assert_eq!(entry.size(), 0);
+            links += 1;
+        }
+        assert_eq!(links, 1);
+    }
 
     #[test]
     fn service_cpu_millicores_convert_to_docker_nano_cpus() {
