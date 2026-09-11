@@ -10,19 +10,17 @@ use instant_acme::{
     Identifier, LetsEncrypt, NewAccount, NewOrder, OrderStatus, RetryPolicy, ZeroSsl,
 };
 use sea_orm::{
-    ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect, Set,
-    TransactionTrait, sea_query::Expr,
+    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect, Set, TransactionTrait,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
 use super::certificates::{self, ACCOUNT_KEY, BUNDLE_KEY, PemBundle};
-use crate::infra::{
-    database::entity::{
-        managed_certificate as cert, node_ingress_status, project_host_binding, regional_ingress,
-    },
-    host_provision::DnsProviderHostProvisioner,
+use crate::infra::database::entity::{
+    managed_certificate as cert, node_ingress_status, project_host_binding, regional_ingress,
 };
 
 const LEASE_SECONDS: i64 = 600;
@@ -87,12 +85,17 @@ async fn account(
     // Staging CA endpoints are an operator runtime choice, never tenant-controlled API input.
     let directory =
         std::env::var("GRASS_ACME_DIRECTORY_URL").unwrap_or_else(|_| directory.to_owned());
-    let contact = config
-        .get("contact_email")
-        .and_then(Value::as_str)
-        .map(|v| format!("mailto:{v}"));
-    let contacts = contact.iter().map(String::as_str).collect::<Vec<_>>();
-    let eab = external_account_key(config)?;
+    ensure!(
+        !item.contact_email.trim().is_empty(),
+        "The adding user's contact email is required"
+    );
+    let contact = format!("mailto:{}", item.contact_email);
+    let contacts = [contact.as_str()];
+    let eab = if item.issuer == "zerossl" {
+        external_account_key(config)?
+    } else {
+        None
+    };
     ensure!(
         item.issuer != "zerossl" || eab.is_some(),
         "ZeroSSL requires eab_kid and eab_hmac_key"
@@ -119,7 +122,7 @@ async fn account(
     Ok(account)
 }
 
-fn external_account_key(config: &Value) -> anyhow::Result<Option<ExternalAccountKey>> {
+pub(super) fn external_account_key(config: &Value) -> anyhow::Result<Option<ExternalAccountKey>> {
     let Some(kid) = config.get("eab_kid").and_then(Value::as_str) else {
         return Ok(None);
     };
@@ -185,32 +188,6 @@ async fn regional_challenge_acknowledged(
     Ok(true)
 }
 
-async fn wait_dns(name: &str, value: &str) -> anyhow::Result<()> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()?;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
-    loop {
-        if super::ingress::verify_dns_record_at(
-            &client,
-            "https://cloudflare-dns.com/dns-query",
-            name,
-            "TXT",
-            value,
-        )
-        .await?
-            == super::ingress::DnsVerification::Verified
-        {
-            return Ok(());
-        }
-        ensure!(
-            tokio::time::Instant::now() < deadline,
-            "DNS challenge has not propagated within 120 seconds"
-        );
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-    }
-}
-
 async fn issue(
     db: &DatabaseConnection,
     item: &cert::Model,
@@ -219,14 +196,13 @@ async fn issue(
     secret: &str,
 ) -> anyhow::Result<PemBundle> {
     let account = account(db, item, config, secret).await?;
-    issue_order(db, item, ingress, config, secret, &account).await
+    issue_order(db, item, ingress, secret, &account).await
 }
 
 async fn issue_order(
     db: &DatabaseConnection,
     item: &cert::Model,
     ingress: &regional_ingress::Model,
-    config: &Value,
     secret: &str,
     account: &Account,
 ) -> anyhow::Result<PemBundle> {
@@ -239,75 +215,17 @@ async fn issue_order(
             if authorization.status == AuthorizationStatus::Valid {
                 continue;
             }
-            let challenge_type = if item.challenge_method == "http01" {
-                ChallengeType::Http01
-            } else {
-                ChallengeType::Dns01
-            };
             let mut challenge = authorization
-                .challenge(challenge_type)
-                .context("ACME order does not offer the configured challenge method")?;
+                .challenge(ChallengeType::Http01)
+                .context("ACME order does not offer HTTP validation")?;
             let mut active: cert::ActiveModel = current(db, item).await?.into();
-            if item.challenge_method == "http01" {
-                active.challenge_token = Set(Some(challenge.token.clone()));
-                active.challenge_value =
-                    Set(Some(challenge.key_authorization().as_str().to_owned()));
-                active.challenge_expires_at = Set(Some(
-                    OffsetDateTime::now_utc() + Duration::seconds(CHALLENGE_SECONDS),
-                ));
-                save_current(db, item, active).await?;
-                wait_http_ack(db, item, ingress, secret).await?;
-            } else {
-                let provider = ingress
-                    .dns_challenge_provider
-                    .as_deref()
-                    .context("DNS challenge provider is not configured")?;
-                let zone = config
-                    .get("zone")
-                    .or_else(|| config.get("domain"))
-                    .and_then(Value::as_str)
-                    .unwrap_or(&ingress.hostname);
-                let source_name = format!("_acme-challenge.{}", item.hostname);
-                let name = if item.host_binding_id.is_some() {
-                    let name = certificates::delegation_target(item, ingress);
-                    let client = reqwest::Client::builder()
-                        .timeout(std::time::Duration::from_secs(10))
-                        .build()?;
-                    ensure!(
-                        super::ingress::verify_dns_record_at(
-                            &client,
-                            "https://cloudflare-dns.com/dns-query",
-                            &source_name,
-                            "CNAME",
-                            &name
-                        )
-                        .await?
-                            == super::ingress::DnsVerification::Verified,
-                        "custom domain must delegate its ACME CNAME to the displayed regional challenge target"
-                    );
-                    name
-                } else {
-                    source_name.clone()
-                };
-                let value = challenge.key_authorization().dns_value();
-                // Persist before creating DNS so crash recovery can clean this exact TXT value.
-                active.dns_record_name = Set(Some(name.clone()));
-                active.dns_record_value = Set(Some(value.clone()));
-                active.dns_cleanup = Set(Some(certificates::encrypt(
-                    secret,
-                    item.id,
-                    "dns-cleanup-v1",
-                    &json!({"provider":provider,"config":config,"zone":zone}),
-                )?));
-                save_current(db, item, active).await?;
-                DnsProviderHostProvisioner::new()
-                    .ensure_txt_record(provider, config, zone, &name, &value)
-                    .await
-                    .map_err(|_| {
-                        anyhow::anyhow!("DNS provider could not create the challenge record")
-                    })?;
-                wait_dns(&source_name, &value).await?;
-            }
+            active.challenge_token = Set(Some(challenge.token.clone()));
+            active.challenge_value = Set(Some(challenge.key_authorization().as_str().to_owned()));
+            active.challenge_expires_at = Set(Some(
+                OffsetDateTime::now_utc() + Duration::seconds(CHALLENGE_SECONDS),
+            ));
+            save_current(db, item, active).await?;
+            wait_http_ack(db, item, ingress, secret).await?;
             let fresh = current(db, item).await?;
             ensure!(
                 certificates::eligible(db, &fresh, ingress).await?,
@@ -331,37 +249,13 @@ async fn issue_order(
     })
 }
 
-async fn cleanup(db: &DatabaseConnection, item: &cert::Model, secret: &str) -> anyhow::Result<()> {
+async fn cleanup(db: &DatabaseConnection, item: &cert::Model) -> anyhow::Result<()> {
     let fresh = current(db, item).await?;
-    let mut dns_clean = true;
-    if let (Some(name), Some(value), Some(cleanup)) = (
-        &fresh.dns_record_name,
-        &fresh.dns_record_value,
-        &fresh.dns_cleanup,
-    ) {
-        let cleanup = certificates::decrypt(secret, item.id, "dns-cleanup-v1", cleanup)?;
-        let provider = cleanup["provider"]
-            .as_str()
-            .context("stored cleanup provider missing")?;
-        let zone = cleanup["zone"]
-            .as_str()
-            .context("stored cleanup zone missing")?;
-        dns_clean = DnsProviderHostProvisioner::new()
-            .remove_txt_record(provider, &cleanup["config"], zone, name, value)
-            .await
-            .is_ok();
-    }
     let mut active: cert::ActiveModel = fresh.into();
     active.challenge_token = Set(None);
     active.challenge_value = Set(None);
     active.challenge_expires_at = Set(None);
-    if dns_clean {
-        active.dns_record_name = Set(None);
-        active.dns_record_value = Set(None);
-        active.dns_cleanup = Set(None);
-    }
     save_current(db, item, active).await?;
-    ensure!(dns_clean, "DNS challenge cleanup will be retried");
     Ok(())
 }
 
@@ -378,29 +272,48 @@ async fn reconcile_record(
         .await?
         .context("regional ingress no longer exists")?;
     let now = OffsetDateTime::now_utc();
-    if !due(item, now) || !certificates::eligible(&transaction, item, &ingress).await? {
+    let fresh = cert::Entity::find_by_id(item.id)
+        .lock_exclusive()
+        .one(&transaction)
+        .await?
+        .context("Certificate no longer exists")?;
+    if fresh.generation != item.generation
+        || !due(&fresh, now)
+        || !certificates::eligible(&transaction, &fresh, &ingress).await?
+    {
         return Ok(());
     }
-    let lock = cert::Entity::update_many()
-        .col_expr(
-            cert::Column::LeaseUntil,
-            Expr::value(now + Duration::seconds(LEASE_SECONDS)),
-        )
-        .col_expr(cert::Column::Status, Expr::value("issuing"))
-        .filter(cert::Column::Id.eq(item.id))
-        .filter(cert::Column::Generation.eq(item.generation))
-        .filter(
-            Condition::any()
-                .add(cert::Column::LeaseUntil.is_null())
-                .add(cert::Column::LeaseUntil.lte(now)),
-        )
-        .exec(&transaction)
-        .await?;
+    let Some(binding_id) = fresh.host_binding_id else {
+        return Ok(());
+    };
+    let Some(connection) = super::domain_onboarding::get(&transaction, binding_id).await? else {
+        return Ok(());
+    };
+    if !super::domain_onboarding::ready_for_issuance(&connection, now)
+        || super::ingress::healthy_serve_nodes(&transaction, &ingress.region, now)
+            .await?
+            .is_empty()
+    {
+        return Ok(());
+    }
+    let settings = super::certificate_settings::load(&transaction, secret).await?;
+    let mut active: cert::ActiveModel = fresh.clone().into();
+    active.lease_until = Set(Some(now + Duration::seconds(LEASE_SECONDS)));
+    active.status = Set("issuing".to_owned());
+    active.generation = Set(Uuid::now_v7());
+    if fresh.contact_email != connection.contact_email {
+        active.acme_account = Set(None);
+    }
+    active.contact_email = Set(connection.contact_email);
+    if fresh.issuer != settings.issuer {
+        active.issuer = Set(settings.issuer);
+        active.acme_account = Set(None);
+        active.generation = Set(Uuid::now_v7());
+    }
+    let locked = sea_orm::ActiveModelTrait::update(active, &transaction).await?;
     transaction.commit().await?;
-    if lock.rows_affected == 0 {
-        return Ok(());
-    }
-    let config = certificates::config(&ingress, secret)?;
+    let item = &locked;
+    let config = settings.eab;
     let result = match tokio::time::timeout(
         std::time::Duration::from_secs(ATTEMPT_SECONDS),
         issue(db, item, &ingress, &config, secret),
@@ -410,7 +323,7 @@ async fn reconcile_record(
         Ok(result) => result,
         Err(_) => Err(anyhow::anyhow!("certificate issuance timed out")),
     };
-    let cleanup_result = cleanup(db, item, secret).await;
+    let cleanup_result = cleanup(db, item).await;
     let fresh = current(db, item).await?;
     let result = result.and_then(|bundle| {
         certificates::validate_pem(&item.hostname, &bundle, OffsetDateTime::now_utc())
@@ -437,32 +350,40 @@ async fn reconcile_record(
             active.status = Set("active".to_owned());
             active.error = Set(cleanup_result
                 .err()
-                .map(|_| "DNS cleanup is pending; it will be retried".to_owned()));
+                .map(|_| "HTTP challenge cleanup is pending; it will be retried".to_owned()));
             active.retry_at = Set(None);
             active.failure_count = Set(0);
         }
         Err(_error) => {
             // ACME/provider errors may contain challenge/account material; expose bounded diagnostics.
             active.status = Set("failed".to_owned());
-            active.error=Set(Some("Certificate issuance failed; check DNS delegation, regional entry acknowledgements and ACME account configuration. Automatic retry is scheduled.".to_owned()));
+            active.error=Set(Some("Certificate issuance failed; check public HTTP access on port 80, entry acknowledgements and certificate authority settings. Automatic retry is scheduled.".to_owned()));
             active.retry_at = Set(Some(
                 OffsetDateTime::now_utc() + retry_delay(item.failure_count),
             ));
             active.failure_count = Set(item.failure_count.saturating_add(1));
         }
     }
-    let updated = save_current(db, item, active).await?;
-    certificates::sync_regional_status(db, &updated).await?;
+    save_current(db, item, active).await?;
     Ok(())
 }
 
 pub async fn sweep(db: &DatabaseConnection, secret: &str) -> anyhow::Result<()> {
     let ingresses = regional_ingress::Entity::find().all(db).await?;
+    let mut tasks = tokio::task::JoinSet::new();
     for ingress in ingresses {
-        if sweep_ingress(db, ingress.id, secret).await.is_err() {
-            tracing::warn!(operation="control_api.acme.ingress_sweep_failed",ingress_id=%ingress.id,"regional certificate sweep failed; other regions will continue");
+        let db = db.clone();
+        let secret = secret.to_owned();
+        tasks.spawn(async move {
+            if sweep_ingress(&db, ingress.id, &secret).await.is_err() {
+                tracing::warn!(operation="control_api.acme.ingress_sweep_failed",ingress_id=%ingress.id,"regional certificate sweep failed; other regions will continue");
+            }
+        });
+        if tasks.len() >= 4 {
+            let _ = tasks.join_next().await;
         }
     }
+    while tasks.join_next().await.is_some() {}
     Ok(())
 }
 
@@ -471,10 +392,13 @@ async fn sweep_ingress(
     ingress_id: Uuid,
     secret: &str,
 ) -> anyhow::Result<()> {
-    let Some(ingress) = certificates::prepare_regional_sweep(db, ingress_id, secret).await? else {
+    let Some(ingress) = regional_ingress::Entity::find_by_id(ingress_id)
+        .one(db)
+        .await?
+    else {
         return Ok(());
     };
-    if ingress.enabled && ingress.tls_enabled && ingress.deleted_at.is_none() {
+    if ingress.enabled && ingress.deleted_at.is_none() {
         let bindings = project_host_binding::Entity::find()
             .filter(project_host_binding::Column::Region.eq(&ingress.region))
             .filter(project_host_binding::Column::DeletedAt.is_null())
@@ -491,103 +415,40 @@ async fn sweep_ingress(
         .filter(cert::Column::IngressId.eq(ingress.id))
         .all(db)
         .await?;
+    let mut tasks = tokio::task::JoinSet::new();
     for item in items {
-        if !item
-            .lease_until
-            .is_some_and(|until| until > OffsetDateTime::now_utc())
-        {
-            // Recover challenges after process interruption or domain/ingress removal.
-            if (item.dns_record_name.is_some() || item.challenge_token.is_some())
-                && cleanup(db, &item, secret).await.is_err()
+        let db = db.clone();
+        let secret = secret.to_owned();
+        let ingress = ingress.clone();
+        tasks.spawn(async move {
+            if !item
+                .lease_until
+                .is_some_and(|until| until > OffsetDateTime::now_utc())
             {
-                continue;
+                // Recover challenges after process interruption or domain/ingress removal.
+                if item.challenge_token.is_some() && cleanup(&db, &item).await.is_err() {
+                    return;
+                }
             }
-        }
-        if let Err(_error) = reconcile_record(db, &item, &ingress, secret).await {
-            tracing::warn!(operation="control_api.acme.reconcile_failed",certificate_id=%item.id,"certificate reconciliation failed; state retained for retry");
+            if let Err(_error) = reconcile_record(&db, &item, &ingress, &secret).await {
+                tracing::warn!(
+                    operation = "control_api.acme.reconcile_failed",
+                    certificate_id = %item.id,
+                    "certificate reconciliation failed; state retained for retry"
+                );
+            }
+        });
+        if tasks.len() >= 8 {
+            let _ = tasks.join_next().await;
         }
     }
+    while tasks.join_next().await.is_some() {}
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[tokio::test]
-    async fn malformed_legacy_bundle_does_not_block_other_regions() {
-        let mut first = certificates::tests::ingress_fixture();
-        first.certificate_issuer = "manual".to_owned();
-        first.certificate_auto_renew = false;
-        first.dns_challenge_config =
-            certificates::seal_config(first.id, &json!({}), "secret").unwrap();
-        first.certificate_bundle = Some(json!({"invalid_old_envelope":true}));
-        let mut second = certificates::tests::ingress_fixture();
-        second.region = "us".to_owned();
-        second.hostname = "us.example.org".to_owned();
-        second.certificate_issuer = "manual".to_owned();
-        second.certificate_auto_renew = false;
-        second.dns_challenge_config =
-            certificates::seal_config(second.id, &json!({}), "secret").unwrap();
-        let manual = |ingress: &regional_ingress::Model| {
-            let mut item = certificates::tests::certificate_fixture(ingress);
-            item.issuer = "manual".to_owned();
-            item.auto_renew = false;
-            item
-        };
-        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
-            .append_query_results([vec![first.clone(), second.clone()], vec![first.clone()]])
-            .append_query_results([vec![manual(&first)]])
-            .append_query_results([Vec::<project_host_binding::Model>::new()])
-            .append_query_results([Vec::<cert::Model>::new()])
-            .append_query_results([vec![second.clone()]])
-            .append_query_results([vec![manual(&second)]])
-            .append_query_results([Vec::<project_host_binding::Model>::new()])
-            .append_query_results([Vec::<cert::Model>::new()])
-            .into_connection();
-        sweep(&db, "secret").await.unwrap();
-        let log = db.into_transaction_log();
-        assert_eq!(
-            log.iter()
-                .flat_map(|t| t.statements())
-                .filter(|s| s.sql.contains("FROM \"project_host_bindings\""))
-                .count(),
-            2
-        );
-        assert!(
-            !log.iter()
-                .flat_map(|t| t.statements())
-                .any(|s| s.sql.starts_with("UPDATE "))
-        );
-    }
-
-    #[tokio::test]
-    async fn malformed_legacy_provider_config_is_isolated_to_its_region() {
-        let mut broken = certificates::tests::ingress_fixture();
-        broken.dns_challenge_config = json!(false);
-        let mut healthy = certificates::tests::ingress_fixture();
-        healthy.enabled = false;
-        healthy.dns_challenge_config =
-            certificates::seal_config(healthy.id, &json!({}), "secret").unwrap();
-        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
-            .append_query_results([
-                vec![broken.clone(), healthy.clone()],
-                vec![broken],
-                vec![healthy.clone()],
-            ])
-            .append_query_results([Vec::<cert::Model>::new()])
-            .into_connection();
-        sweep(&db, "secret").await.unwrap();
-        let healthy_id: sea_orm::Value = healthy.id.into();
-        assert!(
-            db.into_transaction_log()
-                .iter()
-                .flat_map(|t| t.statements())
-                .any(|s| s.sql.contains("FROM \"managed_certificates\"")
-                    && s.values
-                        .as_ref()
-                        .is_some_and(|values| values.0.contains(&healthy_id)))
-        );
-    }
     #[tokio::test]
     async fn http_validation_waits_for_every_eligible_entry_revision() {
         use crate::infra::database::entity::regional_ingress_health;
@@ -762,7 +623,7 @@ mod tests {
             .from_credentials(credentials)
             .await
             .unwrap();
-        let bundle = issue_order(&db, &item, &ingress, &json!({}), "test-key", &account)
+        let bundle = issue_order(&db, &item, &ingress, "test-key", &account)
             .await
             .unwrap();
         let validity =

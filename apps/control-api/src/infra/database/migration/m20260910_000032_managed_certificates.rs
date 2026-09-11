@@ -67,7 +67,7 @@ mod tests {
 
     /// Read-only inspection of an already migrated, operator-provided database.
     #[tokio::test]
-    #[ignore = "requires GRASS_TEST_DATABASE_URL pointing to a database migrated through managed certificates"]
+    #[ignore = "requires GRASS_TEST_DATABASE_URL pointing to a database with all current migrations applied"]
     async fn managed_certificate_schema_matches_signed_lifecycle_and_ack_protocol()
     -> anyhow::Result<()> {
         let url = std::env::var("GRASS_TEST_DATABASE_URL")
@@ -116,9 +116,9 @@ mod tests {
         }
         for (table, name, kind, nullable) in [
             ("managed_certificates", "bundle", "jsonb", "YES"),
-            ("managed_certificates", "dns_cleanup", "jsonb", "YES"),
+            ("managed_certificates", "contact_email", "text", "NO"),
             ("managed_certificates", "generation", "uuid", "NO"),
-            ("managed_certificates", "host_binding_id", "uuid", "YES"),
+            ("managed_certificates", "host_binding_id", "uuid", "NO"),
             ("node_ingress_status", "certificates", "jsonb", "NO"),
             ("node_ingress_status", "tls_ready", "bool", "NO"),
             ("node_ingress_status", "checked_at", "timestamptz", "NO"),
@@ -138,8 +138,8 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()?
             .join("\n");
         ensure!(
-            indexes.contains("UNIQUE INDEX ux_managed_certificates_regional")
-                && indexes.contains("host_binding_id IS NULL")
+            indexes.contains("UNIQUE INDEX managed_certificates_host_binding_id_key")
+                && !indexes.contains("ux_managed_certificates_regional")
                 && indexes.contains("ix_managed_certificates_retry"),
             "certificate uniqueness/retry indexes missing"
         );
@@ -154,7 +154,6 @@ mod tests {
             "REFERENCES project_host_bindings(id)",
             "REFERENCES nodes(id)",
             "http01",
-            "dns01",
             "letsencrypt",
             "zerossl",
             "manual",

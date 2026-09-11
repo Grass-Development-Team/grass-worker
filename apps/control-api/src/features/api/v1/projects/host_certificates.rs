@@ -56,8 +56,12 @@ fn require_eligible(
     ingress: &regional_ingress::Model,
     op: &'static str,
 ) -> Result<(), AppError> {
-    if !certificates::binding_eligible(binding) || !ingress.tls_enabled {
-        return Err(AppError::Conflict{op,message:"verify TXT ownership, complete domain review and enable the binding and regional TLS first".to_owned()});
+    if !certificates::binding_eligible(binding) || !ingress.enabled {
+        return Err(AppError::Conflict {
+            op,
+            message: "verify domain ownership, complete domain review and enable the binding first"
+                .to_owned(),
+        });
     }
     Ok(())
 }
@@ -68,7 +72,7 @@ pub async fn get(
     Path((project_id, host_id)): Path<(Uuid, Uuid)>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "projects.hosts.certificate.get";
-    let (binding, ingress) =
+    let (_binding, ingress) =
         binding_and_ingress(&state, &session, project_id, host_id, false, OP).await?;
     let db = super::database(&state, OP)?;
     let item = managed_certificate::Entity::find_by_id(host_id)
@@ -78,17 +82,12 @@ pub async fn get(
             op: OP,
             source: source.into(),
         })?;
-    let mut view = certificates::view(item.as_ref(), &ingress);
-    view["dns_delegation_name"] = json!(format!("_acme-challenge.{}", binding.host));
-    view["dns_delegation_target"] = json!(format!(
-        "_acme-{}.{}",
-        binding.id.simple(),
-        ingress.hostname
-    ));
+    let view = certificate_view(db, item.as_ref(), &ingress, OP).await?;
     Ok(ok_response(json!({"certificate":view})))
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateRequest {
     pub challenge_method: Option<String>,
     pub certificate_auto_renew: Option<bool>,
@@ -111,10 +110,10 @@ pub async fn update(
     let mut active: managed_certificate::ActiveModel = item.clone().into();
     let mut restart = false;
     if let Some(method) = body.challenge_method {
-        if !matches!(method.as_str(), "http01" | "dns01") {
+        if method != "http01" {
             return Err(AppError::Validation {
                 op: OP,
-                message: "challenge_method must be http01 or dns01".to_owned(),
+                message: "Custom domains use HTTP validation (http01)".to_owned(),
             });
         }
         restart |= method != item.challenge_method;
@@ -124,10 +123,16 @@ pub async fn update(
         active.auto_renew = Set(value);
     }
     if let Some(issuer) = body.certificate_issuer {
-        if issuer != "manual" && issuer != ingress.certificate_issuer {
+        if issuer != "manual"
+            && issuer
+                != crate::domain::certificate_settings::issuer(db)
+                    .await
+                    .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        {
             return Err(AppError::Validation {
                 op: OP,
-                message: "automatic issuer must match the regional ingress account".to_owned(),
+                message: "automatic issuer must match the platform certificate authority"
+                    .to_owned(),
             });
         }
         restart |= issuer != item.issuer;
@@ -165,12 +170,19 @@ pub async fn update(
         )
         .exec(db)
         .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
+        .map_err(|source| match source {
+            sea_orm::DbErr::RecordNotUpdated => AppError::Conflict {
+                op: OP,
+                message: "Certificate changed or issuance is in progress. Refresh and try again."
+                    .to_owned(),
+            },
+            source => AppError::Infrastructure {
+                op: OP,
+                source: source.into(),
+            },
         })?;
     Ok(ok_response(
-        json!({"certificate":certificates::view(Some(&item),&ingress)}),
+        json!({"certificate":certificate_view(db, Some(&item), &ingress, OP).await?}),
     ))
 }
 
@@ -194,7 +206,7 @@ pub async fn renew(
             message: source.to_string(),
         })?;
     Ok(ok_response(
-        json!({"certificate":certificates::view(Some(&item),&ingress)}),
+        json!({"certificate":certificate_view(db, Some(&item), &ingress, OP).await?}),
     ))
 }
 
@@ -220,6 +232,18 @@ pub async fn import(
             message: source.to_string(),
         })?;
     Ok(ok_response(
-        json!({"certificate":certificates::view(Some(&item),&ingress)}),
+        json!({"certificate":certificate_view(db, Some(&item), &ingress, OP).await?}),
     ))
+}
+
+async fn certificate_view(
+    db: &sea_orm::DatabaseConnection,
+    item: Option<&managed_certificate::Model>,
+    ingress: &regional_ingress::Model,
+    op: &'static str,
+) -> Result<serde_json::Value, AppError> {
+    let issuer = crate::domain::certificate_settings::issuer(db)
+        .await
+        .map_err(|source| AppError::Infrastructure { op, source })?;
+    Ok(certificates::view(item, ingress, &issuer))
 }

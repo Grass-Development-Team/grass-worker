@@ -1,3 +1,4 @@
+import { RegionSelect } from "@/features/regions/region-select";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { GlobeIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { useState } from "react";
@@ -643,13 +644,7 @@ function CreateHostSourceDialog({ onCreated }: { onCreated: () => void }) {
           </Field>
           <Field>
             <FieldLabel htmlFor="source-region">Region</FieldLabel>
-            <Input
-              id="source-region"
-              placeholder="default"
-              value={region}
-              onChange={(event) => setRegion(event.target.value)}
-              required
-            />
+            <RegionSelect id="source-region" value={region} onChange={setRegion} />
           </Field>
           <Field>
             <FieldLabel htmlFor="source-kind">Kind</FieldLabel>
@@ -816,12 +811,7 @@ function EditHostSourceDialog({
           </Field>
           <Field>
             <FieldLabel htmlFor={`edit-region-${source.id}`}>Region</FieldLabel>
-            <Input
-              id={`edit-region-${source.id}`}
-              value={region}
-              onChange={(event) => setRegion(event.target.value)}
-              required
-            />
+            <RegionSelect id={`edit-region-${source.id}`} value={region} onChange={setRegion} />
           </Field>
           <label className="flex items-center gap-2 text-sm">
             <Checkbox

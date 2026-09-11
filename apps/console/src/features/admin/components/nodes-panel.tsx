@@ -10,6 +10,7 @@ import {
   Trash2Icon,
 } from "lucide-react";
 import { useState } from "react";
+import { RegionSelect } from "@/features/regions/region-select";
 
 import {
   AlertDialog,
@@ -774,16 +775,19 @@ function EditConfigurationDialog({ node }: { node: AdminNode }) {
                           )
                         }
                       />
-                      <ConfigurationTextField
-                        id={`node-${node.id}-config-region`}
-                        label="Region"
-                        value={configuration.node.region}
-                        onChange={(region) =>
-                          setConfiguration((current) =>
-                            current ? { ...current, node: { ...current.node, region } } : current,
-                          )
-                        }
-                      />
+                      <Field>
+                        <FieldLabel htmlFor={`node-${node.id}-config-region`}>Region</FieldLabel>
+                        <RegionSelect
+                          id={`node-${node.id}-config-region`}
+                          value={configuration.node.region}
+                          allowCreate
+                          onChange={(region) =>
+                            setConfiguration((current) =>
+                              current ? { ...current, node: { ...current.node, region } } : current,
+                            )
+                          }
+                        />
+                      </Field>
                       <ConfigurationTextField
                         id={`node-${node.id}-control-api`}
                         label="Control API URL"
@@ -1572,13 +1576,7 @@ function CreateNodeDialog({
           </Field>
           <Field>
             <FieldLabel htmlFor="node-region">Region</FieldLabel>
-            <Input
-              id="node-region"
-              placeholder="default"
-              value={region}
-              onChange={(event) => setRegion(event.target.value)}
-              required
-            />
+            <RegionSelect id="node-region" value={region} onChange={setRegion} allowCreate />
           </Field>
           <label className="flex items-center gap-2 text-sm">
             <input

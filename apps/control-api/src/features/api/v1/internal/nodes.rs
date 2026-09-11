@@ -37,6 +37,22 @@ pub async fn register(
             message: message.to_owned(),
         }
     })?;
+    let region =
+        grass_validator::normalize_region(&body.region).map_err(|e| AppError::Validation {
+            op: OP,
+            message: e.to_string(),
+        })?;
+    crate::domain::regions::require(db, &region, OP).await?;
+    if body
+        .effective_config
+        .as_ref()
+        .is_some_and(|c| c.node.region != region)
+    {
+        return Err(AppError::Validation {
+            op: OP,
+            message: "Node region must match its effective configuration".to_owned(),
+        });
+    }
     let build_enabled = body.capabilities.build;
     let serve_enabled = body.capabilities.serve;
 

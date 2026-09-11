@@ -4,6 +4,7 @@ pub mod batch;
 pub mod build_logs;
 pub mod codes;
 pub mod deployments;
+pub mod domain_https;
 pub mod domains;
 pub mod host_sources;
 pub mod identity_providers;
@@ -11,6 +12,7 @@ pub mod nodes;
 pub mod projects;
 pub mod quota_plans;
 pub mod regional_ingresses;
+pub mod regions;
 pub mod registration;
 pub mod reviews;
 pub mod settings;
@@ -34,6 +36,11 @@ use crate::{
 pub fn router() -> Router<ControlApiState> {
     Router::new()
         .route("/status", get(status))
+        .route("/regions", get(regions::list).post(regions::create))
+        .route(
+            "/regions/{code}",
+            patch(regions::rename).delete(regions::remove),
+        )
         .route("/codes", get(codes::list).post(codes::generate))
         .route("/codes/{code_id}/revoke", post(codes::revoke))
         .route(
@@ -66,12 +73,8 @@ pub fn router() -> Router<ControlApiState> {
             patch(regional_ingresses::update).delete(regional_ingresses::remove),
         )
         .route(
-            "/regional-ingresses/{ingress_id}/certificate/renew",
-            post(regional_ingresses::renew_certificate),
-        )
-        .route(
-            "/regional-ingresses/{ingress_id}/certificate/import",
-            post(regional_ingresses::import_certificate),
+            "/domain-https",
+            get(domain_https::get).patch(domain_https::update),
         )
         .route("/audit-events", get(audit_events::list))
         .route(

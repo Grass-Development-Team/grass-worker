@@ -19,7 +19,6 @@ use crate::infra::database::entity::{
 
 pub const ACCOUNT_KEY: &str = "regional-ingress-acme-account-v1";
 pub const BUNDLE_KEY: &str = "regional-ingress-certificate-v1";
-const CONFIG_KEY: &str = "regional-ingress-provider-v1";
 
 pub fn encrypt(secret: &str, id: Uuid, key: &str, value: &Value) -> anyhow::Result<Value> {
     Ok(serde_json::to_value(grass_crypto::encrypt_secret(
@@ -39,47 +38,6 @@ pub fn decrypt(secret: &str, id: Uuid, key: &str, value: &Value) -> anyhow::Resu
         format!("grass-regional-ingress:{key}:{id}").as_bytes(),
     )?;
     Ok(serde_json::from_slice(&plaintext)?)
-}
-
-pub fn config(ingress: &regional_ingress::Model, secret: &str) -> anyhow::Result<Value> {
-    if ingress.dns_challenge_config.get("key_id").is_some() {
-        decrypt(
-            secret,
-            ingress.id,
-            CONFIG_KEY,
-            &ingress.dns_challenge_config,
-        )
-    } else {
-        // Previous releases stored plaintext. The certificate sweep upgrades it in place.
-        Ok(ingress.dns_challenge_config.clone())
-    }
-}
-
-pub fn seal_config(id: Uuid, value: &Value, secret: &str) -> anyhow::Result<Value> {
-    ensure!(value.is_object(), "DNS configuration must be an object");
-    ensure!(
-        serde_json::to_vec(value)?.len() <= 16_384,
-        "DNS configuration exceeds 16 KiB"
-    );
-    encrypt(secret, id, CONFIG_KEY, value)
-}
-
-pub fn merge_config(mut previous: Value, patch: &Value) -> anyhow::Result<Value> {
-    let previous = previous
-        .as_object_mut()
-        .context("stored DNS configuration is invalid")?;
-    for (key, value) in patch
-        .as_object()
-        .context("DNS configuration must be an object")?
-    {
-        ensure!(key.len() <= 128, "DNS configuration key exceeds 128 bytes");
-        if value.is_null() {
-            previous.remove(key);
-        } else if value.as_str() != Some("") {
-            previous.insert(key.clone(), value.clone());
-        }
-    }
-    Ok(Value::Object(previous.clone()))
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -168,11 +126,7 @@ pub async fn eligible<C: ConnectionTrait>(
     else {
         return Ok(false);
     };
-    if !ingress.enabled
-        || !ingress.tls_enabled
-        || ingress.deleted_at.is_some()
-        || item.ingress_id != ingress.id
-    {
+    if !ingress.enabled || ingress.deleted_at.is_some() || item.ingress_id != ingress.id {
         return Ok(false);
     }
     if let Some(id) = item.host_binding_id {
@@ -185,7 +139,7 @@ pub async fn eligible<C: ConnectionTrait>(
                     && binding.region == ingress.region
             }))
     } else {
-        Ok(item.hostname == ingress.hostname)
+        Ok(false)
     }
 }
 
@@ -205,93 +159,32 @@ pub async fn ensure_record(
     Ok(item)
 }
 
-/// Upgrade local legacy state while holding the same ingress/certificate locks
-/// used by administrator edits. Only the ID comes from the sweep's earlier list.
-pub async fn prepare_regional_sweep(
-    db: &DatabaseConnection,
-    ingress_id: Uuid,
-    secret: &str,
-) -> anyhow::Result<Option<regional_ingress::Model>> {
-    let transaction = db.begin().await?;
-    let Some(mut ingress) = regional_ingress::Entity::find_by_id(ingress_id)
-        .lock_exclusive()
-        .one(&transaction)
-        .await?
-    else {
-        return Ok(None);
-    };
-    if ingress.dns_challenge_config.get("key_id").is_none() {
-        let sealed = seal_config(ingress.id, &ingress.dns_challenge_config, secret)?;
-        let mut active: regional_ingress::ActiveModel = ingress.into();
-        active.dns_challenge_config = Set(sealed);
-        ingress = active.update(&transaction).await?;
-    }
-    if ingress.enabled && ingress.tls_enabled && ingress.deleted_at.is_none() {
-        let regional = ensure_record_inner(&transaction, &ingress, None).await?;
-        // An in-flight order owns its status and material until it releases its lease.
-        if !regional
-            .lease_until
-            .is_some_and(|until| until > OffsetDateTime::now_utc())
-        {
-            let mut active: cert::ActiveModel = regional.clone().into();
-            let auto_renew = regional.issuer != "manual" && ingress.certificate_auto_renew;
-            let mut changed = regional.auto_renew != auto_renew;
-            if changed {
-                active.auto_renew = Set(auto_renew);
-            }
-            if regional.bundle.is_none()
-                && let Some(old) = &ingress.certificate_bundle
-            {
-                let restored = (|| -> anyhow::Result<_> {
-                    let bundle: PemBundle =
-                        serde_json::from_value(decrypt(secret, ingress.id, BUNDLE_KEY, old)?)?;
-                    validate_pem(&ingress.hostname, &bundle, OffsetDateTime::now_utc())
-                })();
-                match restored {
-                    Ok(validity) => {
-                        active.bundle = Set(Some(old.clone()));
-                        active.revision = Set(validity.revision);
-                        active.issued_at = Set(Some(validity.issued_at));
-                        active.expires_at = Set(Some(validity.expires_at));
-                        active.status = Set("active".to_owned());
-                        changed = true;
-                    }
-                    Err(_) => {
-                        tracing::warn!(operation="control_api.certificate.invalid_legacy_bundle",ingress_id=%ingress.id,"legacy certificate could not be restored; current certificate state is retained");
-                    }
-                }
-            }
-            if changed {
-                active.update(&transaction).await?;
-            }
-        }
-    }
-    transaction.commit().await?;
-    Ok(Some(ingress))
-}
-
 async fn ensure_record_inner<C: ConnectionTrait>(
     db: &C,
     ingress: &regional_ingress::Model,
     binding: Option<&project_host_binding::Model>,
 ) -> anyhow::Result<cert::Model> {
-    let id = binding.map_or(ingress.id, |b| b.id);
-    let hostname = binding.map_or(&ingress.hostname, |b| &b.host);
+    let binding = binding.context("Certificates require a custom domain binding")?;
+    let id = binding.id;
+    let hostname = &binding.host;
     if let Some(item) = cert::Entity::find_by_id(id)
         .lock_exclusive()
         .one(db)
         .await?
     {
-        let changed = item.hostname != *hostname
-            || item.ingress_id != ingress.id
-            || (item.issuer != "manual" && item.issuer != ingress.certificate_issuer);
+        let changed = item.hostname != *hostname || item.ingress_id != ingress.id;
         if !changed {
             return Ok(item);
         }
         let mut active: cert::ActiveModel = item.clone().into();
         active.hostname = Set(hostname.clone());
         active.ingress_id = Set(ingress.id);
-        active.issuer = Set(ingress.certificate_issuer.clone());
+        ensure!(
+            !item
+                .lease_until
+                .is_some_and(|at| at > OffsetDateTime::now_utc()),
+            "Certificate issuance is in progress"
+        );
         active.acme_account = Set(None);
         active.status = Set("pending".to_owned());
         active.error = Set(None);
@@ -310,14 +203,19 @@ async fn ensure_record_inner<C: ConnectionTrait>(
         }
         return Ok(active.update(db).await?);
     }
+    let issuer = super::certificate_settings::issuer(db).await?;
+    let connection = super::domain_onboarding::get(db, id)
+        .await?
+        .context("Domain contact is missing. Re-add this domain with a user account.")?;
     let active = cert::ActiveModel {
         id: Set(id),
         ingress_id: Set(ingress.id),
-        host_binding_id: Set(binding.map(|b| b.id)),
+        host_binding_id: Set(Some(id)),
         hostname: Set(hostname.clone()),
-        issuer: Set(ingress.certificate_issuer.clone()),
-        challenge_method: Set(if binding.is_some() { "http01" } else { "dns01" }.to_owned()),
-        auto_renew: Set(ingress.certificate_auto_renew),
+        issuer: Set(issuer),
+        contact_email: Set(connection.contact_email),
+        challenge_method: Set("http01".to_owned()),
+        auto_renew: Set(true),
         generation: Set(Uuid::now_v7()),
         ..Default::default()
     };
@@ -404,49 +302,20 @@ pub async fn import(
     active.challenge_expires_at = Set(None);
     let updated = active.update(&transaction).await?;
     transaction.commit().await?;
-    sync_regional_status(db, &updated).await?;
     Ok(updated)
 }
 
-pub async fn sync_regional_status(
-    db: &DatabaseConnection,
-    item: &cert::Model,
-) -> anyhow::Result<()> {
-    if item.host_binding_id.is_some() {
-        return Ok(());
-    }
-    if let Some(ingress) = regional_ingress::Entity::find_by_id(item.ingress_id)
-        .one(db)
-        .await?
-    {
-        if ingress.hostname != item.hostname {
-            return Ok(());
-        }
-        let mut active: regional_ingress::ActiveModel = ingress.into();
-        active.certificate_status = Set(item.status.clone());
-        active.certificate_error = Set(item.error.clone());
-        active.certificate_issued_at = Set(item.issued_at);
-        active.certificate_expires_at = Set(item.expires_at);
-        active.update(db).await?;
-    }
-    Ok(())
-}
-
-pub fn delegation_target(item: &cert::Model, ingress: &regional_ingress::Model) -> String {
-    format!("_acme-{}.{}", item.id.simple(), ingress.hostname)
-}
-
-pub fn view(item: Option<&cert::Model>, ingress: &regional_ingress::Model) -> Value {
+pub fn view(item: Option<&cert::Model>, ingress: &regional_ingress::Model, issuer: &str) -> Value {
     let mut view = match item {
         Some(item) => {
-            json!({ "enabled": ingress.enabled && ingress.tls_enabled, "status": item.status, "issuer": item.issuer, "challenge_method": item.challenge_method, "auto_renew": item.auto_renew, "issued_at": crate::infra::http::timestamps::ts(item.issued_at), "expires_at": crate::infra::http::timestamps::ts(item.expires_at), "error": item.error, "retry_at": crate::infra::http::timestamps::ts(item.retry_at), "revision": item.revision, "dns_delegation_name": format!("_acme-challenge.{}", item.hostname), "dns_delegation_target": delegation_target(item, ingress) })
+            json!({"enabled":ingress.enabled,"status":item.status,"issuer":item.issuer,"challenge_method":"http01","auto_renew":item.auto_renew,"issued_at":crate::infra::http::timestamps::ts(item.issued_at),"expires_at":crate::infra::http::timestamps::ts(item.expires_at),"error":item.error,"retry_at":crate::infra::http::timestamps::ts(item.retry_at),"revision":item.revision})
         }
         None => {
-            json!({"enabled": ingress.enabled && ingress.tls_enabled, "status":"pending", "issuer":ingress.certificate_issuer, "challenge_method":"http01", "auto_renew":ingress.certificate_auto_renew, "issued_at":null, "expires_at":null, "error":null, "retry_at":null, "revision":"", "dns_delegation_name":null, "dns_delegation_target":null})
+            json!({"enabled":ingress.enabled,"status":"pending","issuer":issuer,"challenge_method":"http01","auto_renew":true,"issued_at":null,"expires_at":null,"error":null,"retry_at":null,"revision":""})
         }
     };
-    view["regional_issuer"] = json!(ingress.certificate_issuer);
-    if !ingress.enabled || !ingress.tls_enabled || ingress.deleted_at.is_some() {
+    view["platform_issuer"] = json!(issuer);
+    if !ingress.enabled || ingress.deleted_at.is_some() {
         view["status"] = json!("disabled");
     }
     view
@@ -527,105 +396,6 @@ pub async fn snapshot(
 pub(crate) mod tests {
     use super::*;
     #[tokio::test]
-    async fn sweep_preparation_preserves_locked_rotated_credentials_and_manual_certificate() {
-        let stale = ingress_fixture();
-        let mut current = stale.clone();
-        current.dns_challenge_config =
-            seal_config(current.id, &json!({"api_token":"rotated-token"}), "secret").unwrap();
-        // The certificate import has committed; its admin endpoint has not yet
-        // changed the ingress's old automatic-renewal preference.
-        let mut imported = certificate_fixture(&current);
-        imported.issuer = "manual".to_owned();
-        imported.auto_renew = false;
-        imported.bundle = Some(json!({"current_manual_material":true}));
-        imported.status = "active".to_owned();
-        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
-            .append_query_results([vec![current.clone()]])
-            .append_query_results([vec![imported]])
-            .into_connection();
-        let prepared = prepare_regional_sweep(&db, stale.id, "secret")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            config(&prepared, "secret").unwrap(),
-            json!({"api_token":"rotated-token"})
-        );
-        let log = db.into_transaction_log();
-        assert_eq!(log.len(), 1);
-        assert_eq!(
-            log[0]
-                .statements()
-                .iter()
-                .filter(|s| s.sql.contains("FOR UPDATE"))
-                .count(),
-            2
-        );
-        assert!(
-            !log[0]
-                .statements()
-                .iter()
-                .any(|s| s.sql.starts_with("UPDATE "))
-        );
-    }
-
-    #[tokio::test]
-    async fn sweep_preparation_syncs_only_the_locked_current_renewal_preference() {
-        let stale = ingress_fixture();
-        let mut current = stale.clone();
-        current.certificate_auto_renew = false;
-        current.dns_challenge_config = seal_config(current.id, &json!({}), "secret").unwrap();
-        let old = certificate_fixture(&current);
-        let mut updated = old.clone();
-        updated.auto_renew = false;
-        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
-            .append_query_results([vec![current]])
-            .append_query_results([vec![old], vec![updated]])
-            .into_connection();
-        assert!(
-            !prepare_regional_sweep(&db, stale.id, "secret")
-                .await
-                .unwrap()
-                .unwrap()
-                .certificate_auto_renew
-        );
-        let log = db.into_transaction_log();
-        let updates = log
-            .iter()
-            .flat_map(|t| t.statements())
-            .filter(|s| s.sql.starts_with("UPDATE "))
-            .collect::<Vec<_>>();
-        assert_eq!(updates.len(), 1);
-        assert!(updates[0].sql.contains("SET \"auto_renew\" ="));
-        assert_eq!(
-            updates[0].values.as_ref().unwrap().0[0],
-            sea_orm::Value::Bool(Some(false))
-        );
-    }
-
-    #[tokio::test]
-    async fn sweep_preparation_does_not_restore_legacy_material_over_an_in_flight_order() {
-        let mut ingress = ingress_fixture();
-        ingress.dns_challenge_config = seal_config(ingress.id, &json!({}), "secret").unwrap();
-        ingress.certificate_bundle = Some(json!({"old_envelope":"not-yet-read"}));
-        let mut current = certificate_fixture(&ingress);
-        current.status = "issuing".to_owned();
-        current.lease_until = Some(OffsetDateTime::now_utc() + time::Duration::minutes(1));
-        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
-            .append_query_results([vec![ingress.clone()]])
-            .append_query_results([vec![current]])
-            .into_connection();
-        prepare_regional_sweep(&db, ingress.id, "secret")
-            .await
-            .unwrap();
-        assert!(
-            !db.into_transaction_log()
-                .iter()
-                .flat_map(|t| t.statements())
-                .any(|s| s.sql.starts_with("UPDATE "))
-        );
-    }
-    #[tokio::test]
     async fn corrupt_bundle_does_not_block_another_domains_withdrawal() {
         let ingress = ingress_fixture();
         let mut corrupt = certificate_fixture(&ingress);
@@ -692,20 +462,9 @@ pub(crate) mod tests {
             health_check_path: "/_grass/health".to_owned(),
             health_check_interval_seconds: 30,
             origin_host_preservation: true,
-            tls_enabled: true,
-            certificate_issuer: "letsencrypt".to_owned(),
-            certificate_auto_renew: true,
-            certificate_status: "pending".to_owned(),
-            certificate_expires_at: None,
-            certificate_error: None,
-            dns_challenge_provider: None,
-            dns_challenge_config: json!({}),
-            dns_challenge_status: "not_configured".to_owned(),
-            dns_challenge_record_name: None,
-            dns_challenge_record_value: None,
-            acme_account: None,
-            certificate_bundle: None,
-            certificate_issued_at: None,
+            dns_status: "resolved".to_owned(),
+            dns_checked_at: Some(OffsetDateTime::now_utc()),
+            dns_error: None,
             deleted_at: None,
             created_at: OffsetDateTime::now_utc(),
             updated_at: OffsetDateTime::now_utc(),
@@ -718,7 +477,8 @@ pub(crate) mod tests {
             host_binding_id: None,
             hostname: ingress.hostname.clone(),
             issuer: "letsencrypt".to_owned(),
-            challenge_method: "dns01".to_owned(),
+            contact_email: "owner@example.org".to_owned(),
+            challenge_method: "http01".to_owned(),
             auto_renew: true,
             status: "pending".to_owned(),
             error: None,
@@ -734,9 +494,6 @@ pub(crate) mod tests {
             challenge_token: None,
             challenge_value: None,
             challenge_expires_at: None,
-            dns_record_name: None,
-            dns_record_value: None,
-            dns_cleanup: None,
             updated_at: OffsetDateTime::now_utc(),
         }
     }
@@ -787,13 +544,17 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn failed_renewal_keeps_valid_certificate_and_expired_challenges_are_withdrawn() {
         let ingress = ingress_fixture();
+        let binding = binding_fixture();
         let mut item = certificate_fixture(&ingress);
-        let generated = rcgen::generate_simple_self_signed(vec![ingress.hostname.clone()]).unwrap();
+        item.id = binding.id;
+        item.host_binding_id = Some(binding.id);
+        item.hostname = binding.host.clone();
+        let generated = rcgen::generate_simple_self_signed(vec![binding.host.clone()]).unwrap();
         let bundle = PemBundle {
             certificate_pem: generated.cert.pem(),
             private_key_pem: generated.signing_key.serialize_pem(),
         };
-        let validity = validate_pem(&ingress.hostname, &bundle, OffsetDateTime::now_utc()).unwrap();
+        let validity = validate_pem(&binding.host, &bundle, OffsetDateTime::now_utc()).unwrap();
         item.bundle = Some(
             encrypt(
                 "secret",
@@ -812,6 +573,7 @@ pub(crate) mod tests {
             .append_query_results([vec![ingress.clone()]])
             .append_query_results([vec![item]])
             .append_query_results([vec![ingress]])
+            .append_query_results([vec![binding]])
             .into_connection();
         let snapshot = snapshot(&db, "eu", "secret").await.unwrap();
         assert_eq!(snapshot.bundles.len(), 1);
@@ -886,23 +648,6 @@ pub(crate) mod tests {
         );
         let log = format!("{:?}", db.into_transaction_log());
         assert!(log.contains("generation"));
-    }
-    #[test]
-    fn provider_config_is_encrypted_bound_and_patchable() {
-        let id = Uuid::now_v7();
-        let value = json!({"api_token":"secret", "zone":"example.org"});
-        let sealed = seal_config(id, &value, "key").unwrap();
-        assert!(!sealed.to_string().contains("secret"));
-        assert_eq!(decrypt("key", id, CONFIG_KEY, &sealed).unwrap(), value);
-        assert!(decrypt("key", Uuid::now_v7(), CONFIG_KEY, &sealed).is_err());
-        assert_eq!(
-            merge_config(
-                value,
-                &json!({"api_token":"", "zone":null, "contact_email":"a@example.org"})
-            )
-            .unwrap(),
-            json!({"api_token":"secret","contact_email":"a@example.org"})
-        );
     }
     #[test]
     fn certificate_name_key_and_signed_expiry_are_validated() {

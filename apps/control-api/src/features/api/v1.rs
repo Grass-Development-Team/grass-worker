@@ -7,6 +7,7 @@ pub mod me;
 pub mod notifications;
 pub mod preview_auth;
 pub mod projects;
+pub mod regions;
 pub mod setup;
 pub mod site_config;
 pub mod teams;
@@ -30,6 +31,7 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
 
     Router::new()
         .route("/site-config", get(site_config::get))
+        .route("/regions", get(regions::list))
         .nest(
             "/setup",
             setup::router().layer(middleware::from_fn_with_state(

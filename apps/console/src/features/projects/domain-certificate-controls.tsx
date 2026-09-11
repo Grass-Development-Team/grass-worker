@@ -1,20 +1,11 @@
 import { useMutation } from "@tanstack/react-query";
 import { useId } from "react";
-
 import { CertificateImportDialog } from "@/components/certificate-import-dialog";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-
 import { projectsApi, type DomainCertificate, type ProjectHost } from "./projects.api";
 
 export function DomainCertificateControls({
@@ -30,14 +21,12 @@ export function DomainCertificateControls({
 }) {
   const id = useId();
   const certificate = host.certificate;
-  const verified = host.ownership_status === "verified";
   const renew = useMutation({
     mutationFn: () => projectsApi.renewHostCertificate(projectId, host.id),
     onSuccess: onChange,
   });
   const configure = useMutation({
     mutationFn: (input: {
-      challenge_method?: "http01" | "dns01";
       certificate_auto_renew?: boolean;
       certificate_issuer?: DomainCertificate["issuer"];
     }) => projectsApi.updateHostCertificate(projectId, host.id, input),
@@ -48,14 +37,18 @@ export function DomainCertificateControls({
     <div className="flex max-w-sm flex-col gap-2">
       <Badge
         variant={
-          certificate?.status === "active"
+          certificate?.https_ready
             ? "success"
-            : certificate?.status === "failed" || certificate?.status === "expiring"
+            : certificate?.status === "failed"
               ? "destructive"
               : "secondary"
         }
       >
-        {certificate?.status ?? "Awaiting verification"}
+        {certificate?.https_ready
+          ? "HTTPS ready"
+          : certificate?.status === "active"
+            ? "Installing certificate"
+            : (certificate?.status ?? "Waiting for connection")}
       </Badge>
       {certificate?.expires_at && (
         <p className="text-xs">Expires {new Date(certificate.expires_at).toLocaleString()}</p>
@@ -66,57 +59,28 @@ export function DomainCertificateControls({
           Next attempt {new Date(certificate.retry_at).toLocaleString()}
         </p>
       )}
+      {(renew.isError || configure.isError) && (
+        <Alert variant="destructive">
+          <AlertDescription>{renew.error?.message ?? configure.error?.message}</AlertDescription>
+        </Alert>
+      )}
       {certificate && (
         <details>
           <summary className="cursor-pointer text-xs">Certificate settings</summary>
           <FieldGroup className="mt-2">
-            <Field>
-              <FieldLabel htmlFor={id + "-method"}>Certificate validation</FieldLabel>
-              {canEdit ? (
-                <Select
-                  value={certificate.challenge_method}
-                  disabled={configure.isPending}
-                  onValueChange={(value) =>
-                    configure.mutate({ challenge_method: value as "http01" | "dns01" })
-                  }
-                >
-                  <SelectTrigger id={id + "-method"}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectItem value="http01">HTTP validation</SelectItem>
-                      <SelectItem value="dns01">DNS delegation</SelectItem>
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              ) : (
-                <p>
-                  {certificate.challenge_method === "dns01" ? "DNS delegation" : "HTTP validation"}
-                </p>
-              )}
-              <FieldDescription>
-                {certificate.challenge_method === "http01"
-                  ? "The domain must point at the regional entry and accept HTTP traffic on port 80."
-                  : "Publish the validation CNAME below. The platform manages challenge TXT records in its own zone."}
-              </FieldDescription>
-            </Field>
-            {certificate.challenge_method === "dns01" &&
-              certificate.dns_delegation_name &&
-              certificate.dns_delegation_target && (
-                <p className="break-all font-mono text-xs">
-                  CNAME {certificate.dns_delegation_name} → {certificate.dns_delegation_target}
-                </p>
-              )}
             <p className="text-xs text-muted-foreground">
               Certificate authority: {certificate.issuer}
             </p>
+            <FieldDescription>
+              Issued automatically after DNS and ownership verification. Keep public port 80
+              reachable for validation and renewal.
+            </FieldDescription>
             {canEdit && certificate.issuer !== "manual" && (
               <Field orientation="horizontal">
                 <Checkbox
                   id={id + "-renew"}
                   checked={certificate.auto_renew}
-                  disabled={configure.isPending}
+                  disabled={configure.isPending || certificate.status === "issuing"}
                   onCheckedChange={(value) =>
                     configure.mutate({ certificate_auto_renew: value === true })
                   }
@@ -124,44 +88,41 @@ export function DomainCertificateControls({
                 <FieldLabel htmlFor={id + "-renew"}>Automatic renewal</FieldLabel>
               </Field>
             )}
+            {canEdit && host.ownership_status === "verified" && (
+              <div className="flex flex-wrap gap-2">
+                {certificate.issuer === "manual" ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={configure.isPending}
+                    onClick={() =>
+                      configure.mutate({
+                        certificate_issuer: certificate.platform_issuer,
+                        certificate_auto_renew: true,
+                      })
+                    }
+                  >
+                    Use managed certificate
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={renew.isPending || certificate.status === "issuing"}
+                    onClick={() => renew.mutate()}
+                  >
+                    Renew certificate
+                  </Button>
+                )}
+                <CertificateImportDialog
+                  hostname={host.host}
+                  onImport={(input) => projectsApi.importHostCertificate(projectId, host.id, input)}
+                  onImported={onChange}
+                />
+              </div>
+            )}
           </FieldGroup>
         </details>
-      )}
-      {canEdit && verified && (
-        <div className="flex flex-wrap gap-2">
-          {certificate?.issuer === "manual" &&
-            certificate.regional_issuer &&
-            certificate.regional_issuer !== "manual" && (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={configure.isPending}
-                onClick={() =>
-                  configure.mutate({
-                    certificate_issuer: certificate.regional_issuer,
-                    certificate_auto_renew: true,
-                  })
-                }
-              >
-                Use managed certificate
-              </Button>
-            )}
-          {certificate?.issuer !== "manual" && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={renew.isPending}
-              onClick={() => renew.mutate()}
-            >
-              Renew certificate
-            </Button>
-          )}
-          <CertificateImportDialog
-            hostname={host.host}
-            onImport={(input) => projectsApi.importHostCertificate(projectId, host.id, input)}
-            onImported={onChange}
-          />
-        </div>
       )}
     </div>
   );

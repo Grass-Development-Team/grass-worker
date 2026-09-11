@@ -2,6 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { GlobeIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { useState } from "react";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { RegionSelect } from "@/features/regions/region-select";
+import { regionsApi } from "@/features/regions/regions.api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
@@ -42,8 +45,13 @@ export function ProjectDomainsRoute() {
   const canEdit = canContributeToProjects(role);
   const queryClient = useQueryClient();
   const [newHost, setNewHost] = useState("");
-  const [newRegion, setNewRegion] = useState("default");
+  const [newRegion, setNewRegion] = useState("");
 
+  const regionsQuery = useQuery({ queryKey: ["regions"], queryFn: regionsApi.list });
+  const regionAvailable =
+    regionsQuery.data?.regions.some(
+      (region) => region.code === newRegion && region.ingress_hostname && region.ingress_enabled,
+    ) ?? false;
   const hostsQuery = useQuery({
     queryKey: ["project-hosts", projectId],
     queryFn: () => projectsApi.listHosts(projectId),
@@ -57,7 +65,7 @@ export function ProjectDomainsRoute() {
     mutationFn: () => projectsApi.createHost(projectId, { host: newHost, region: newRegion }),
     onSuccess: () => {
       setNewHost("");
-      setNewRegion("default");
+      setNewRegion("");
       invalidate();
     },
   });
@@ -83,7 +91,8 @@ export function ProjectDomainsRoute() {
       <div>
         <h1 className="text-lg font-semibold">Domains</h1>
         <p className="text-sm text-muted-foreground">
-          Point custom domains at their regional entry, verify ownership, and manage HTTPS.
+          Add your DNS records. The server checks the connection every 1–2 minutes and sets up HTTPS
+          automatically.
         </p>
       </div>
 
@@ -92,7 +101,7 @@ export function ProjectDomainsRoute() {
           className="flex flex-wrap items-end gap-2"
           onSubmit={(event) => {
             event.preventDefault();
-            if (newHost.trim()) addMutation.mutate();
+            if (newHost.trim() && regionAvailable) addMutation.mutate();
           }}
         >
           <FieldGroup className="max-w-lg">
@@ -105,20 +114,36 @@ export function ProjectDomainsRoute() {
                 onChange={(event) => setNewHost(event.target.value)}
               />
             </Field>
-            <Field className="w-36">
+            <Field className="max-w-sm">
               <FieldLabel htmlFor="new-host-region">Region</FieldLabel>
-              <Input
+              <RegionSelect
                 id="new-host-region"
-                placeholder="default"
                 value={newRegion}
-                onChange={(event) => setNewRegion(event.target.value)}
+                onChange={setNewRegion}
+                requireIngress
               />
             </Field>
           </FieldGroup>
-          <Button type="submit" disabled={addMutation.isPending || !newHost.trim()}>
+          <Button
+            type="submit"
+            disabled={addMutation.isPending || !newHost.trim() || !regionAvailable}
+          >
             <PlusIcon data-icon="inline-start" /> Add
           </Button>
         </form>
+      )}
+      {(addMutation.isError ||
+        removeMutation.isError ||
+        verifyMutation.isError ||
+        hostsQuery.isError) && (
+        <Alert variant="destructive">
+          <AlertDescription>
+            {addMutation.error?.message ??
+              removeMutation.error?.message ??
+              verifyMutation.error?.message ??
+              "Domains could not be loaded."}
+          </AlertDescription>
+        </Alert>
       )}
       {hostsQuery.isLoading && <Skeleton className="h-40 w-full" aria-busy="true" />}
       {hostsQuery.data &&
@@ -158,14 +183,33 @@ export function ProjectDomainsRoute() {
                     {host.kind === "custom" && (
                       <div className="mt-1 flex flex-col gap-1">
                         <Badge
-                          variant={host.ownership_status === "verified" ? "success" : "secondary"}
+                          variant={host.connection_state === "ready" ? "success" : "secondary"}
                         >
-                          {host.ownership_status === "verified"
-                            ? "Ownership verified"
-                            : "Ownership verification required"}
+                          {connectionLabel(host.connection_state)}
                         </Badge>
+                        {host.onboarding?.dns_error && (
+                          <p className="text-xs text-destructive">{host.onboarding.dns_error}</p>
+                        )}
                         {host.ownership_error && (
-                          <p className="text-xs text-destructive">{host.ownership_error}</p>
+                          <p className="text-xs text-muted-foreground">{host.ownership_error}</p>
+                        )}
+                        {host.onboarding?.checked_at && (
+                          <p className="text-xs text-muted-foreground">
+                            Last checked {new Date(host.onboarding.checked_at).toLocaleString()}
+                          </p>
+                        )}
+                        {host.onboarding?.next_check_at && host.connection_state !== "ready" && (
+                          <p className="text-xs text-muted-foreground">
+                            Next check{" "}
+                            {new Date(host.onboarding.next_check_at).toLocaleTimeString()}. Checks
+                            continue when this page is closed.
+                          </p>
+                        )}
+                        {host.connection_state === "entry_unavailable" && (
+                          <p className="text-xs text-muted-foreground">
+                            The platform entry is not ready. Contact an administrator; checks resume
+                            automatically when it is available.
+                          </p>
                         )}
                       </div>
                     )}
@@ -181,9 +225,8 @@ export function ProjectDomainsRoute() {
                           </span>
                         </div>
                         <p className="mt-1 font-sans">
-                          TLS {host.ingress.certificate.status} · DNS-01{" "}
-                          {host.ingress.dns_challenge.status} · {host.ingress.entrance_nodes.length}{" "}
-                          healthy entrance node{host.ingress.entrance_nodes.length === 1 ? "" : "s"}
+                          Keep these records for automatic certificate renewal. Root domains require
+                          CNAME flattening or an equivalent DNS feature.
                         </p>
                       </details>
                     )}
@@ -223,7 +266,7 @@ export function ProjectDomainsRoute() {
                             disabled={verifyMutation.isPending}
                             onClick={() => verifyMutation.mutate(host.id)}
                           >
-                            Verify domain
+                            Check now
                           </Button>
                         )}
                         {(host.status === "pending" || host.status === "failed") &&
@@ -266,4 +309,24 @@ export function ProjectDomainsRoute() {
         ))}
     </div>
   );
+}
+
+function connectionLabel(state?: string): string {
+  const labels: Record<string, string> = {
+    pending: "Checking DNS",
+    unresolved: "DNS record missing",
+    mismatch: "Incorrect DNS target",
+    error: "DNS check will retry",
+    entry_unavailable: "Platform entry not ready",
+    ownership_pending: "Waiting for ownership TXT",
+    review_pending: "Waiting for domain review",
+    certificate_pending: "Waiting for certificate",
+    issuing: "Issuing certificate",
+    installing: "Installing certificate",
+    ready: "Connected",
+    certificate_failed: "Certificate retry scheduled",
+    disabled: "Disabled",
+    contact_missing: "Re-add domain to set its contact account",
+  };
+  return labels[state ?? "pending"] ?? "Checking connection";
 }

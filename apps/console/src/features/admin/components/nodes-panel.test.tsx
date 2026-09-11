@@ -112,6 +112,13 @@ it("edits the complete non-secret desired Node configuration", async () => {
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       calls.push({ url, init });
+      if (url.endsWith("/regions"))
+        return jsonResponse({
+          regions: [
+            { code: "default", name: "default" },
+            { code: "hk_1", name: "hk_1" },
+          ],
+        });
       if (init?.method === "PUT") return jsonResponse({ node: nodeFixture });
       return jsonResponse({
         nodes: [nodeFixture],
@@ -136,6 +143,9 @@ it("edits the complete non-secret desired Node configuration", async () => {
 
   expect(await screen.findByText("Applied · r3")).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Edit configuration for serve-node-1" }));
+  await waitFor(() => expect(screen.getByLabelText("Region")).toBeEnabled());
+  await user.click(screen.getByLabelText("Region"));
+  await user.click(screen.getByRole("option", { name: "hk_1" }));
   const concurrencyInput = screen.getByLabelText("Build concurrency");
   await user.clear(concurrencyInput);
   await user.type(concurrencyInput, "4");
@@ -153,6 +163,7 @@ it("edits the complete non-secret desired Node configuration", async () => {
     );
     expect(update).toBeDefined();
     const payload = JSON.parse(String(update!.init!.body));
+    expect(payload.node.region).toBe("hk_1");
     expect(payload.build.concurrency).toBe(4);
     expect(payload.serve.capacity.max_deployments).toBe(10);
     expect(payload.serve.tls).toEqual({ enabled: true, port: 9443 });

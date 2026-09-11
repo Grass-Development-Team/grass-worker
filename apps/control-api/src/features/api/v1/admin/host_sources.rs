@@ -216,6 +216,7 @@ pub async fn create(
             message: format!("region: {error}"),
         })?;
 
+    crate::domain::regions::require(db, &region, OP).await?;
     let provider = body
         .provider
         .as_deref()
@@ -312,6 +313,9 @@ pub async fn update(
             op: OP,
             message: format!("region: {error}"),
         })?;
+    if let Some(region) = region.as_deref() {
+        crate::domain::regions::require(db, region, OP).await?;
+    }
     let key = credentials::encryption_key(&state.config.read().unwrap().secrets.secret_key);
     let plaintext = credentials::decrypt_config(
         &key,
@@ -459,6 +463,12 @@ mod tests {
                 .unwrap(),
         );
         let db = MockDatabase::new(DbBackend::Postgres)
+            .append_query_results([[crate::infra::database::entity::region::Model {
+                code: "default".into(),
+                name: "Default".into(),
+                created_at: time::OffsetDateTime::UNIX_EPOCH,
+                updated_at: time::OffsetDateTime::UNIX_EPOCH,
+            }]])
             .append_query_results([[stored]])
             .into_connection();
         let db_log = db.clone();
