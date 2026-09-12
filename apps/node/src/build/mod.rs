@@ -18,9 +18,7 @@ use crate::{
     client::ControlApiClient,
     config::NodeConfig,
     output,
-    runtime::{
-        BuildRuntime, ContainerRuntime, ContainerRuntimeError, PrepareImageInput, RunBuildInput,
-    },
+    runtime::{BuildRuntime, ContainerRuntime, ContainerRuntimeError, RunBuildInput},
 };
 
 const CLAIM_INTERVAL: Duration = Duration::from_secs(5);
@@ -428,7 +426,7 @@ async fn run_pipeline(
         }
     });
     runtime
-        .prepare_image(PrepareImageInput { image: &image }, log_tx.clone())
+        .prepare_image(&image, log_tx.clone())
         .await
         .map_err(|error| BuildFailure::new("image_pull_failed", error.to_string()))?;
     drop(log_tx);

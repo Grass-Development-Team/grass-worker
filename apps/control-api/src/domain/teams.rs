@@ -302,7 +302,6 @@ pub async fn update(
     active.update(db).await.map_err(Into::into)
 }
 
-#[allow(dead_code)]
 pub async fn soft_delete(db: &DatabaseConnection, team_id: Uuid) -> anyhow::Result<()> {
     let team = get_by_id(db, team_id)
         .await?

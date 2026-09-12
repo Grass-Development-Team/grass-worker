@@ -60,7 +60,6 @@ tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "signal",
 tokio-util = { version = "0.7", features = ["io"] }
 totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
 toml = { version = "0.8" }
-tower-http = { version = "0.6", features = ["cors", "compression-full", "trace"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "json"] }
 url = "2.5.4"

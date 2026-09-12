@@ -76,7 +76,6 @@ pub enum DeploymentStateError {
     #[error("invalid release status transition from {from} to {to}")]
     InvalidReleaseTransition { from: String, to: String },
     #[error("invalid serve status transition from {from} to {to}")]
-    #[allow(dead_code)] // Constructed by the P3.2 Serve status endpoint.
     InvalidServeTransition { from: String, to: String },
     #[error("only ready deployments can enter the release flow")]
     BuildNotReady,
@@ -401,7 +400,6 @@ pub async fn list_for_project<C: ConnectionTrait>(
         .map_err(Into::into)
 }
 
-#[allow(dead_code)] // Wired by the serve resolve API in Milestone 6.
 pub async fn find_active<C: ConnectionTrait>(
     db: &C,
     project_id: Uuid,
@@ -417,7 +415,6 @@ pub async fn find_active<C: ConnectionTrait>(
         .map_err(Into::into)
 }
 
-#[allow(dead_code)] // Wired by the serve resolve API in Milestone 6.
 pub async fn find_by_preview_host<C: ConnectionTrait>(
     db: &C,
     host: &str,
@@ -453,14 +450,12 @@ pub struct BuildTransition {
     pub build_node_id: Option<Uuid>,
 }
 
-#[allow(dead_code)] // Constructed by the P3.2 Serve status endpoint.
 pub struct ServeTransition {
     pub to: DeploymentServeStatus,
     pub failure_code: Option<String>,
     pub failure_message: Option<String>,
 }
 
-#[allow(dead_code)] // Called by the P3.2 Serve status endpoint.
 pub async fn transition_serve<C: ConnectionTrait>(
     db: &C,
     deployment: deployment::Model,
@@ -579,7 +574,6 @@ pub async fn transition_build<C: ConnectionTrait>(
 
 /// Updates only the build stage without changing status; used for progress
 /// reporting between status transitions.
-#[allow(dead_code)] // Wired by the Node stage API in Milestone 6.
 pub async fn update_stage<C: ConnectionTrait>(
     db: &C,
     deployment: deployment::Model,
@@ -714,19 +708,6 @@ pub fn release_reason_value(reason: &ReleaseReason) -> &'static str {
         ReleaseReason::Promote => "promote",
         ReleaseReason::Rollback => "rollback",
     }
-}
-
-#[allow(dead_code)] // Wired by the deployment timeline in Milestone 11.
-pub async fn list_releases_for_project<C: ConnectionTrait>(
-    db: &C,
-    project_id: Uuid,
-) -> anyhow::Result<Vec<release::Model>> {
-    release::Entity::find()
-        .filter(release::Column::ProjectId.eq(project_id))
-        .order_by_desc(release::Column::CreatedAt)
-        .all(db)
-        .await
-        .map_err(Into::into)
 }
 
 /// Whether this deployment was ever active, which is what makes it a valid

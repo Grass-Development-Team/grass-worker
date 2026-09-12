@@ -457,8 +457,9 @@ manual certificates. Enable `[serve.tls]` on each public entry Node and use
 TCP passthrough at the regional load balancer. Nodes select certificates by
 SNI, enforce the original Host, and hot-reload validated renewals. Keep
 `serve.public_base_url` on private HTTP for Peer Hop and health checks.
-Custom domains require TXT ownership plus review, default to HTTP-01, and
-support delegated DNS-01; regional certificates use DNS-01. The Console
+Custom domains require TXT ownership plus review. Automatic regional and
+custom-domain certificates use HTTP-01, so public port 80 must remain reachable
+for issuance and renewal. The Console
 reports issuance, expiry, retries and actual Node certificate revisions.
 See [Regional ingress and HTTPS](regional-ingress.md) for complete configuration.
 

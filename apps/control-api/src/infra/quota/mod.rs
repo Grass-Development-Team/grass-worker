@@ -33,7 +33,6 @@ const STATIC_COUNTER_TTL: Duration = Duration::from_secs(60 * 60 * 24 * 30);
 const MONTHLY_COUNTER_TTL: Duration = Duration::from_secs(60 * 60 * 24 * 40);
 /// A concurrent-build slot must be refreshed by the heartbeat of the running
 /// build; expired slots free themselves after a crashed Node stops renewing.
-#[allow(dead_code)] // Wired by the Node claim flow in Milestone 6.
 pub const BUILD_SLOT_TTL: Duration = Duration::from_secs(60 * 30);
 
 pub struct QuotaCharge {
@@ -49,7 +48,6 @@ impl QuotaCharge {
         }
     }
 
-    #[allow(dead_code)] // Wired by build-minute and storage charges in Milestone 7.
     pub fn amount(dimension: QuotaDimension, amount: i64) -> Self {
         Self { dimension, amount }
     }
@@ -337,7 +335,6 @@ impl<'a> QuotaService<'a> {
 
     /// Reads a scalar (non-counted) limit such as the build timeout or the
     /// per-artifact size limit. `None` means unlimited.
-    #[allow(dead_code)] // Wired by build and artifact limits in Milestones 6 and 7.
     pub async fn scalar_limit(
         &self,
         op: &'static str,
@@ -353,7 +350,6 @@ impl<'a> QuotaService<'a> {
     /// Acquires one concurrent-build slot for a team. Returns whether the
     /// slot was acquired. Slots expire after [`BUILD_SLOT_TTL`] unless
     /// refreshed, so crashed Nodes cannot pin slots forever.
-    #[allow(dead_code)] // Wired by the Node claim flow in Milestone 6.
     pub async fn acquire_build_slot(
         &self,
         op: &'static str,
@@ -385,7 +381,6 @@ impl<'a> QuotaService<'a> {
         Ok(acquired)
     }
 
-    #[allow(dead_code)] // Wired by the Node claim flow in Milestone 6.
     pub async fn release_build_slot(&self, team_id: Uuid) {
         if let Err(error) = self.cache.release_slot(&slot_key(team_id)).await {
             tracing::warn!(
@@ -414,7 +409,6 @@ impl<'a> QuotaService<'a> {
 
     /// Refreshes the TTL of a team's build-slot counter while a build is
     /// still running.
-    #[allow(dead_code)] // Wired by the Node stage flow in Milestone 6.
     pub async fn refresh_build_slot(&self, team_id: Uuid) {
         let key = slot_key(team_id);
         if let Ok(Some(value)) = self.cache.get(&key).await {
@@ -423,22 +417,6 @@ impl<'a> QuotaService<'a> {
                 .update_if_present(&key, &value, BUILD_SLOT_TTL)
                 .await;
         }
-    }
-
-    /// Rebuilds a team's cache counters from the durable usage counters.
-    #[allow(dead_code)] // Wired by the calibration task in Milestone 6.
-    pub async fn recalibrate_team(&self, team_id: Uuid) -> anyhow::Result<()> {
-        for dimension in QuotaDimension::ALL {
-            if !dimension.is_counted() {
-                continue;
-            }
-            let usage = quotas::effective_usage(self.db, team_id, *dimension).await?;
-            let key = counter_key(team_id, *dimension);
-            self.cache
-                .set(&key, &usage.to_string(), counter_ttl(*dimension))
-                .await?;
-        }
-        Ok(())
     }
 
     async fn seed_counter(
@@ -542,7 +520,6 @@ fn counter_key(team_id: Uuid, dimension: QuotaDimension) -> String {
     }
 }
 
-#[allow(dead_code)] // Wired by the Node claim flow in Milestone 6.
 fn slot_key(team_id: Uuid) -> String {
     format!("quota:team:{team_id}:concurrent_builds")
 }

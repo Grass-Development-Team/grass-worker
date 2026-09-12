@@ -40,14 +40,6 @@ impl CloudflareConfig {
         Self::from_json(&source.config)
     }
 
-    pub fn for_txt(&self, value: &str) -> Self {
-        let mut config = self.clone();
-        config.record_type = "TXT".to_owned();
-        config.record_value = value.to_owned();
-        config.proxied = false;
-        config
-    }
-
     pub fn from_json(config: &serde_json::Value) -> Result<Self, String> {
         let object = config
             .as_object()
@@ -212,24 +204,6 @@ impl CloudflareDns {
         }
     }
 
-    pub async fn ensure_txt_record(
-        &self,
-        config: &CloudflareConfig,
-        name: &str,
-        value: &str,
-    ) -> Result<EnsuredRecord, HostProvisionError> {
-        self.ensure_record(&config.for_txt(value), name).await
-    }
-
-    pub async fn remove_txt_record(
-        &self,
-        config: &CloudflareConfig,
-        name: &str,
-        value: &str,
-    ) -> Result<Option<String>, HostProvisionError> {
-        self.remove_record(&config.for_txt(value), name).await
-    }
-
     async fn parse<T: DeserializeOwned>(
         response: reqwest::Response,
     ) -> Result<ApiEnvelope<T>, HostProvisionError> {
@@ -257,7 +231,7 @@ impl CloudflareDns {
                 updated: false,
             }),
             CreateOutcome::AlreadyExists => {
-                let existing = self.find_record(config, host, config.record_type == "TXT").await?.ok_or_else(|| {
+                let existing = self.find_record(config, host, false).await?.ok_or_else(|| {
                     HostProvisionError::Provider(format!(
                         "cloudflare reports an existing record for {host}, but none was found in the zone"
                     ))
@@ -626,80 +600,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn txt_reconciliation_and_cleanup_find_the_exact_value_across_pages() {
-        type Requests = Arc<Mutex<Vec<String>>>;
-        let requests = Requests::default();
-        let router = Router::new()
-            .route("/zones/zone1/dns_records", post(|| async {
-                Json(failure(81_057, "Record already exists."))
-            }).get(|State(requests): State<Requests>, axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>| async move {
-                let page = query.get("page").unwrap();
-                requests.lock().unwrap().push(format!("page-{page}"));
-                let records = if page == "1" {
-                    json!([
-                        {"id": "other-challenge", "type": "TXT", "name": "_acme-challenge.example.com", "content": "another-value"},
-                        {"id": "other-name", "type": "TXT", "name": "other.example.com", "content": "desired"},
-                        {"id": "other-type", "type": "A", "name": "_acme-challenge.example.com", "content": "desired"}
-                    ])
-                } else {
-                    json!([{"id": "desired-record", "type": "TXT", "name": "_ACME-CHALLENGE.example.com.", "content": "desired"}])
-                };
-                Json(json!({"success": true, "result": records, "result_info": {"total_pages": 2}}))
-            }))
-            .route("/zones/zone1/dns_records/{id}", delete(|State(requests): State<Requests>, axum::extract::Path(id): axum::extract::Path<String>| async move {
-                requests.lock().unwrap().push(format!("delete-{id}"));
-                Json(envelope(json!({"id": id})))
-            }))
-            .with_state(requests.clone());
-        let dns = CloudflareDns::with_base_url(spawn(router).await);
-        let ensured = dns
-            .ensure_txt_record(&config(), "_acme-challenge.example.com", "desired")
-            .await
-            .unwrap();
-        assert_eq!(ensured.id, "desired-record");
-        assert!(!ensured.updated);
-        assert_eq!(
-            dns.remove_txt_record(&config(), "_acme-challenge.example.com", "desired")
-                .await
-                .unwrap()
-                .as_deref(),
-            Some("desired-record")
-        );
-        assert_eq!(
-            requests.lock().unwrap().as_slice(),
-            [
-                "page-1",
-                "page-2",
-                "page-1",
-                "page-2",
-                "delete-desired-record"
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn missing_txt_value_never_overwrites_or_deletes_another_challenge() {
-        let router = Router::new().route("/zones/zone1/dns_records", post(|| async {
-            Json(failure(81_057, "Record already exists."))
-        }).get(|| async { Json(envelope(json!([{
-            "id": "unrelated", "type": "TXT", "name": "_acme-challenge.example.com", "content": "keep-me"
-        }]))) }));
-        let dns = CloudflareDns::with_base_url(spawn(router).await);
-        assert!(
-            dns.ensure_txt_record(&config(), "_acme-challenge.example.com", "new-value")
-                .await
-                .is_err()
-        );
-        assert_eq!(
-            dns.remove_txt_record(&config(), "_acme-challenge.example.com", "new-value")
-                .await
-                .unwrap(),
-            None
-        );
-    }
-
-    #[tokio::test]
-    async fn create_retries_a_transient_response_and_uses_unproxied_txt_content() {
+    async fn create_retries_a_transient_response_and_preserves_record_configuration() {
         let calls = Arc::new(Mutex::new(0));
         let router = Router::new().route("/zones/zone1/dns_records", post(|State(calls): State<Arc<Mutex<u32>>>, Json(body): Json<serde_json::Value>| async move {
             let mut calls = calls.lock().unwrap();
@@ -707,16 +608,16 @@ mod tests {
             if *calls == 1 {
                 return (axum::http::StatusCode::SERVICE_UNAVAILABLE, Json(failure(1000, "retry")));
             }
-            assert_eq!(body["type"], "TXT");
-            assert_eq!(body["content"], "challenge");
-            assert_eq!(body["proxied"], false);
-            (axum::http::StatusCode::OK, Json(envelope(json!({"id": "created", "type": "TXT", "name": "_acme-challenge.example.com", "content": "challenge"}))))
+            assert_eq!(body["type"], "A");
+            assert_eq!(body["content"], "203.0.113.7");
+            assert_eq!(body["proxied"], true);
+            (axum::http::StatusCode::OK, Json(envelope(json!({"id": "created", "type": "A", "name": "www.example.com", "content": "203.0.113.7"}))))
         })).with_state(calls.clone());
         let mut config = config();
         config.proxied = true;
         assert_eq!(
             CloudflareDns::with_base_url(spawn(router).await)
-                .ensure_txt_record(&config, "_acme-challenge.example.com", "challenge")
+                .ensure_record(&config, "www.example.com")
                 .await
                 .unwrap()
                 .id,

@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+#[cfg(test)]
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -27,10 +28,6 @@ pub enum ContainerRuntimeError {
     Timeout(u64),
     #[error("container runtime request failed: {0}")]
     Runtime(String),
-}
-
-pub struct PrepareImageInput<'a> {
-    pub image: &'a str,
 }
 
 pub struct RunBuildInput {
@@ -95,7 +92,7 @@ pub trait ContainerRuntime: Send + Sync {
     /// Ensures the build image exists locally, pulling it when missing.
     fn prepare_image(
         &self,
-        input: PrepareImageInput<'_>,
+        image: &str,
         logs: mpsc::Sender<String>,
     ) -> impl Future<Output = Result<(), ContainerRuntimeError>> + Send;
 
@@ -136,17 +133,16 @@ pub use socket::SocketRuntime;
 pub enum BuildRuntime {
     Socket(SocketRuntime),
     /// Deterministic in-process fake used by tests.
-    #[allow(dead_code)]
+    #[cfg(test)]
     Fake(FakeRuntime),
 }
 
 impl BuildRuntime {
     pub fn from_config(config: &RuntimeConfig) -> Result<Self, ContainerRuntimeError> {
         match config.backend.as_str() {
-            "docker-socket" | "podman-socket" => Ok(Self::Socket(SocketRuntime::connect(
-                &config.backend,
-                &config.socket,
-            )?)),
+            "docker-socket" | "podman-socket" => {
+                Ok(Self::Socket(SocketRuntime::connect(&config.socket)?))
+            }
             backend @ ("apple-container" | "jail") => Err(
                 ContainerRuntimeError::BackendNotImplemented(backend.to_owned()),
             ),
@@ -158,12 +154,13 @@ impl BuildRuntime {
 impl ContainerRuntime for BuildRuntime {
     async fn prepare_image(
         &self,
-        input: PrepareImageInput<'_>,
+        image: &str,
         logs: mpsc::Sender<String>,
     ) -> Result<(), ContainerRuntimeError> {
         match self {
-            Self::Socket(runtime) => runtime.prepare_image(input, logs).await,
-            Self::Fake(runtime) => runtime.prepare_image(input, logs).await,
+            Self::Socket(runtime) => runtime.prepare_image(image, logs).await,
+            #[cfg(test)]
+            Self::Fake(runtime) => runtime.prepare_image(image, logs).await,
         }
     }
 
@@ -175,6 +172,7 @@ impl ContainerRuntime for BuildRuntime {
     ) -> Result<BuildExecutionResult, ContainerRuntimeError> {
         match self {
             Self::Socket(runtime) => runtime.run_build(input, logs, cancel).await,
+            #[cfg(test)]
             Self::Fake(runtime) => runtime.run_build(input, logs, cancel).await,
         }
     }
@@ -185,6 +183,7 @@ impl ContainerRuntime for BuildRuntime {
     ) -> Result<RunningService, ContainerRuntimeError> {
         match self {
             Self::Socket(runtime) => runtime.run_service(input).await,
+            #[cfg(test)]
             Self::Fake(runtime) => runtime.run_service(input).await,
         }
     }
@@ -192,6 +191,7 @@ impl ContainerRuntime for BuildRuntime {
     async fn stop_service(&self, service_id: &str) -> Result<(), ContainerRuntimeError> {
         match self {
             Self::Socket(runtime) => runtime.stop_service(service_id).await,
+            #[cfg(test)]
             Self::Fake(runtime) => runtime.stop_service(service_id).await,
         }
     }
@@ -202,6 +202,7 @@ impl ContainerRuntime for BuildRuntime {
     ) -> Result<Vec<ServiceContainer>, ContainerRuntimeError> {
         match self {
             Self::Socket(runtime) => runtime.list_services(prefix).await,
+            #[cfg(test)]
             Self::Fake(runtime) => runtime.list_services(prefix).await,
         }
     }
@@ -209,6 +210,7 @@ impl ContainerRuntime for BuildRuntime {
 
 /// Test backend: scripts map to canned exit codes and output lines, letting
 /// pipeline tests run without a container engine.
+#[cfg(test)]
 #[derive(Default)]
 pub struct FakeRuntime {
     /// Exit code returned for scripts containing the key; unmatched scripts
@@ -221,10 +223,11 @@ pub struct FakeRuntime {
     services: Mutex<HashMap<String, HashMap<String, String>>>,
 }
 
+#[cfg(test)]
 impl ContainerRuntime for FakeRuntime {
     async fn prepare_image(
         &self,
-        _input: PrepareImageInput<'_>,
+        _image: &str,
         _logs: mpsc::Sender<String>,
     ) -> Result<(), ContainerRuntimeError> {
         Ok(())

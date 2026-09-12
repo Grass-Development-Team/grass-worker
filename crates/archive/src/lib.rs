@@ -127,11 +127,6 @@ pub fn unpack_zip(archive_path: &Path, destination: &Path) -> anyhow::Result<Unp
     unpack_zip_reader(file, destination)
 }
 
-/// Unpacks zip bytes into `destination` with the same entry validation.
-pub fn unpack_zip_bytes(bytes: &[u8], destination: &Path) -> anyhow::Result<UnpackedArchive> {
-    unpack_zip_reader(std::io::Cursor::new(bytes), destination)
-}
-
 /// Upper bounds that keep a hostile archive from exhausting disk. A single
 /// build artifact is expected to be far below these; they exist so a
 /// decompression bomb fails loudly instead of filling the host.
