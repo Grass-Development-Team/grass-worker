@@ -2,7 +2,7 @@ use crate::{
     domain::regions,
     infra::{
         error::{AppError, ok_response},
-        http::extractors::Session,
+        http::{database, extractors::Session},
     },
     state::ControlApiState,
 };
@@ -13,7 +13,7 @@ pub async fn list(
     _session: Session,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "regions.list";
-    let db = super::admin::database(&state, OP)?;
+    let db = database(&state, OP)?;
     Ok(ok_response(regions::available(db).await.map_err(
         |source| AppError::Infrastructure { op: OP, source },
     )?))

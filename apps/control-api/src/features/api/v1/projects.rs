@@ -1,3 +1,5 @@
+use crate::infra::http::{cache, database};
+
 pub mod create;
 pub mod deployments;
 pub mod detail;
@@ -11,7 +13,6 @@ use axum::{
     Router,
     routing::{get, post},
 };
-use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 
 use crate::infra::http::timestamps::ts;
@@ -236,26 +237,6 @@ pub(crate) async fn project_access(
         project,
         team,
         role,
-    })
-}
-
-pub(crate) fn database<'a>(
-    state: &'a ControlApiState,
-    op: &'static str,
-) -> Result<&'a DatabaseConnection, AppError> {
-    state.try_database().ok_or_else(|| AppError::Internal {
-        op,
-        message: "database not available".to_owned(),
-    })
-}
-
-pub(crate) fn cache<'a>(
-    state: &'a ControlApiState,
-    op: &'static str,
-) -> Result<&'a grass_cache::CacheStore, AppError> {
-    state.try_cache().ok_or_else(|| AppError::Internal {
-        op,
-        message: "cache not available".to_owned(),
     })
 }
 

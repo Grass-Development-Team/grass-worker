@@ -1,3 +1,5 @@
+use crate::infra::http::{cache, database};
+
 pub mod deployments;
 pub mod log_stream;
 pub mod nodes;
@@ -8,10 +10,7 @@ use axum::{
     routing::{get, post, put},
 };
 
-use crate::{
-    infra::{error::AppError, http::middlewares::node_auth},
-    state::ControlApiState,
-};
+use crate::{infra::http::middlewares::node_auth, state::ControlApiState};
 
 pub fn router(state: ControlApiState) -> Router<ControlApiState> {
     Router::new()
@@ -74,26 +73,6 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
             state,
             node_auth::node_auth_middleware,
         ))
-}
-
-pub(crate) fn database<'a>(
-    state: &'a ControlApiState,
-    op: &'static str,
-) -> Result<&'a sea_orm::DatabaseConnection, AppError> {
-    state.try_database().ok_or_else(|| AppError::Internal {
-        op,
-        message: "database not available".to_owned(),
-    })
-}
-
-pub(crate) fn cache<'a>(
-    state: &'a ControlApiState,
-    op: &'static str,
-) -> Result<&'a grass_cache::CacheStore, AppError> {
-    state.try_cache().ok_or_else(|| AppError::Internal {
-        op,
-        message: "cache not available".to_owned(),
-    })
 }
 
 pub(crate) fn storage(state: &ControlApiState) -> crate::infra::storage::StorageManager {

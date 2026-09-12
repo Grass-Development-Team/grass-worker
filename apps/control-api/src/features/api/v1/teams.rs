@@ -1,3 +1,5 @@
+use crate::infra::http::{cache, database};
+
 pub mod audit;
 pub mod create;
 pub mod detail;
@@ -13,7 +15,6 @@ use axum::{
     Router,
     routing::{get, patch, post},
 };
-use sea_orm::DatabaseConnection;
 
 use crate::{infra::error::AppError, state::ControlApiState};
 
@@ -60,26 +61,6 @@ pub fn router() -> Router<ControlApiState> {
             get(invitations::candidates),
         )
         .route("/teams/{team_id}/invitations", post(invitations::create))
-}
-
-pub(crate) fn database<'a>(
-    state: &'a ControlApiState,
-    op: &'static str,
-) -> Result<&'a DatabaseConnection, AppError> {
-    state.try_database().ok_or_else(|| AppError::Internal {
-        op,
-        message: "database not available".to_owned(),
-    })
-}
-
-pub(crate) fn cache<'a>(
-    state: &'a ControlApiState,
-    op: &'static str,
-) -> Result<&'a grass_cache::CacheStore, AppError> {
-    state.try_cache().ok_or_else(|| AppError::Internal {
-        op,
-        message: "cache not available".to_owned(),
-    })
 }
 
 pub(crate) fn validate_required(value: &str, op: &'static str, name: &str) -> Result<(), AppError> {

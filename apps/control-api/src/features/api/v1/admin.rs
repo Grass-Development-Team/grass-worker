@@ -1,3 +1,5 @@
+use crate::infra::http::{cache, database};
+
 pub mod announcements;
 pub mod audit_events;
 pub mod batch;
@@ -28,10 +30,7 @@ use axum::{
 };
 use serde_json::json;
 
-use crate::{
-    infra::error::{AppError, ok_response},
-    state::ControlApiState,
-};
+use crate::{infra::error::ok_response, state::ControlApiState};
 
 pub fn router() -> Router<ControlApiState> {
     Router::new()
@@ -201,26 +200,6 @@ pub fn router() -> Router<ControlApiState> {
             axum::routing::put(nodes::update_configuration),
         )
         .route("/nodes/{node_id}/rotate-token", post(nodes::rotate_token))
-}
-
-pub(crate) fn database<'a>(
-    state: &'a ControlApiState,
-    op: &'static str,
-) -> Result<&'a sea_orm::DatabaseConnection, AppError> {
-    state.try_database().ok_or_else(|| AppError::Internal {
-        op,
-        message: "database not available".to_owned(),
-    })
-}
-
-pub(crate) fn cache<'a>(
-    state: &'a ControlApiState,
-    op: &'static str,
-) -> Result<&'a grass_cache::CacheStore, AppError> {
-    state.try_cache().ok_or_else(|| AppError::Internal {
-        op,
-        message: "cache not available".to_owned(),
-    })
 }
 
 async fn status() -> impl IntoResponse {

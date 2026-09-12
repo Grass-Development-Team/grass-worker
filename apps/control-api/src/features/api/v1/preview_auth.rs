@@ -451,8 +451,8 @@ pub async fn start(
     Json(body): Json<StartPreviewAuthorizationRequest>,
 ) -> Result<Response, AppError> {
     const OP: &str = "internal.serve.preview_authorize";
-    let db = super::internal::database(&state, OP)?;
-    let cache = super::internal::cache(&state, OP)?;
+    let db = crate::infra::http::database(&state, OP)?;
+    let cache = crate::infra::http::cache(&state, OP)?;
     let binding = resolve_preview_binding(db, &body.host, OP).await?;
     let return_to = validate_return_to(&body.return_to).map_err(|error| AppError::Validation {
         op: OP,
@@ -574,8 +574,8 @@ pub async fn exchange(
     Json(body): Json<ExchangePreviewCodeRequest>,
 ) -> Result<Response, AppError> {
     const OP: &str = "internal.serve.preview_exchange";
-    let db = super::internal::database(&state, OP)?;
-    let cache = super::internal::cache(&state, OP)?;
+    let db = crate::infra::http::database(&state, OP)?;
+    let cache = crate::infra::http::cache(&state, OP)?;
     let host =
         grass_validator::normalize_host(&body.host).map_err(|error| AppError::Validation {
             op: OP,
@@ -648,8 +648,8 @@ pub async fn verify(
     Json(body): Json<VerifyPreviewGrantRequest>,
 ) -> Result<Response, AppError> {
     const OP: &str = "internal.serve.preview_verify";
-    let db = super::internal::database(&state, OP)?;
-    let cache = super::internal::cache(&state, OP)?;
+    let db = crate::infra::http::database(&state, OP)?;
+    let cache = crate::infra::http::cache(&state, OP)?;
     let host =
         grass_validator::normalize_host(&body.host).map_err(|error| AppError::Validation {
             op: OP,
