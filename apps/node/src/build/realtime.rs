@@ -12,22 +12,22 @@ use tracing::{debug, warn};
 
 #[derive(Clone)]
 pub struct RealtimePublisher {
-    sender: mpsc::UnboundedSender<LogStreamMessage>,
+    sender: mpsc::Sender<LogStreamMessage>,
 }
 
 impl RealtimePublisher {
     /// Spawns the websocket forwarder and returns the publish handle. The
     /// task ends when every publisher clone is dropped.
-    pub fn start(control_api: &str, token: &str) -> Self {
-        let (sender, receiver) = mpsc::unbounded_channel();
+    pub fn start(control_api: &str, token: &str) -> (Self, tokio::task::JoinHandle<()>) {
+        let (sender, receiver) = mpsc::channel(256);
         let url = websocket_url(control_api);
         let token = token.to_owned();
-        tokio::spawn(forward(url, token, receiver));
-        Self { sender }
+        let task = tokio::spawn(forward(url, token, receiver));
+        (Self { sender }, task)
     }
 
     pub fn publish(&self, message: LogStreamMessage) {
-        let _ = self.sender.send(message);
+        let _ = self.sender.try_send(message);
     }
 }
 
@@ -43,11 +43,7 @@ fn websocket_url(control_api: &str) -> String {
     format!("{ws_base}/api/v1/internal/log-stream")
 }
 
-async fn forward(
-    url: String,
-    token: String,
-    mut receiver: mpsc::UnboundedReceiver<LogStreamMessage>,
-) {
+async fn forward(url: String, token: String, mut receiver: mpsc::Receiver<LogStreamMessage>) {
     let mut socket = None;
 
     while let Some(message) = receiver.recv().await {
@@ -109,10 +105,19 @@ async fn connect(
         header,
     );
 
-    match tokio_tungstenite::connect_async(request).await {
-        Ok((socket, _)) => Some(socket),
-        Err(error) => {
-            warn!(operation = "node.realtime.connect", %error, "websocket connect failed");
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio_tungstenite::connect_async(request),
+    )
+    .await
+    {
+        Ok(Ok((socket, _))) => Some(socket),
+        error => {
+            warn!(
+                operation = "node.realtime.connect",
+                ?error,
+                "websocket connect failed"
+            );
             None
         }
     }

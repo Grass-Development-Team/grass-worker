@@ -42,13 +42,28 @@ pub fn pack_dir(source_dir: &Path, destination: &Path) -> anyhow::Result<PackedA
         .compression_method(zip::CompressionMethod::Deflated)
         .unix_permissions(0o644);
 
-    let mut entries: Vec<PathBuf> = walkdir::WalkDir::new(source_dir)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file())
-        .map(|entry| entry.into_path())
-        .collect();
+    let mut entries: Vec<PathBuf> = Vec::new();
+    let mut source_bytes = 0u64;
+    let mut name_bytes = 0usize;
+    for entry in walkdir::WalkDir::new(source_dir).follow_links(false) {
+        let entry = entry?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let bytes = entry.metadata()?.len();
+        name_bytes = name_bytes
+            .checked_add(entry.path().as_os_str().as_encoded_bytes().len())
+            .ok_or_else(|| anyhow::anyhow!("archive path size overflow"))?;
+        if entries.len() >= MAX_ENTRIES
+            || bytes > MAX_ENTRY_UNPACKED_BYTES
+            || bytes > MAX_TOTAL_UNPACKED_BYTES.saturating_sub(source_bytes)
+            || name_bytes > 16 * 1024 * 1024
+        {
+            anyhow::bail!("archive source exceeds packing limits");
+        }
+        source_bytes += bytes;
+        entries.push(entry.into_path());
+    }
     entries.sort();
 
     let mut file_count = 0;
@@ -65,9 +80,13 @@ pub fn pack_dir(source_dir: &Path, destination: &Path) -> anyhow::Result<PackedA
 
         writer.start_file(&name, options)?;
         let mut source = File::open(&path)?;
-        unpacked_size_bytes = unpacked_size_bytes
-            .checked_add(std::io::copy(&mut source, &mut writer)?)
-            .ok_or_else(|| anyhow::anyhow!("archive unpacked size overflow"))?;
+        let remaining = MAX_ENTRY_UNPACKED_BYTES
+            .min(MAX_TOTAL_UNPACKED_BYTES.saturating_sub(unpacked_size_bytes));
+        let copied = std::io::copy(&mut (&mut source).take(remaining + 1), &mut writer)?;
+        if copied > remaining {
+            anyhow::bail!("archive source grew beyond packing limits");
+        }
+        unpacked_size_bytes += copied;
         file_count += 1;
     }
 

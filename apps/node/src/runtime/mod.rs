@@ -125,6 +125,7 @@ pub trait ContainerRuntime: Send + Sync {
     ) -> impl Future<Output = Result<(), ContainerRuntimeError>> + Send;
 }
 
+mod archive;
 mod socket;
 pub use socket::SocketRuntime;
 

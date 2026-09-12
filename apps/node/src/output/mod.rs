@@ -408,8 +408,23 @@ fn generate_ssr_output(
 }
 
 fn copy_dir(source: &Path, target: &Path) -> std::io::Result<()> {
-    for entry in walkdir::WalkDir::new(source).follow_links(false) {
+    use std::io::{Read, Write};
+    let mut remaining = 4 * 1024 * 1024 * 1024u64;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
+    let mut buffer = [0u8; 64 * 1024];
+    // A root-level static site can contain the output directory we are creating.
+    for (count, entry) in walkdir::WalkDir::new(source)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| !entry.path().starts_with(target))
+        .enumerate()
+    {
         let entry = entry.map_err(std::io::Error::other)?;
+        if count >= 50_000 || std::time::Instant::now() >= deadline {
+            return Err(std::io::Error::other(
+                "output copy exceeds its resource budget",
+            ));
+        }
         let relative = entry
             .path()
             .strip_prefix(source)
@@ -421,10 +436,41 @@ fn copy_dir(source: &Path, target: &Path) -> std::io::Result<()> {
         if entry.file_type().is_dir() {
             std::fs::create_dir_all(&destination)?;
         } else if entry.file_type().is_file() {
+            let length = entry.metadata().map_err(std::io::Error::other)?.len();
+            if length > 2 * 1024 * 1024 * 1024 || length > remaining {
+                return Err(std::io::Error::other(
+                    "output file exceeds its resource budget",
+                ));
+            }
             if let Some(parent) = destination.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            std::fs::copy(entry.path(), &destination)?;
+            let mut input = std::fs::File::open(entry.path())?;
+            let mut output = std::fs::File::create(&destination)?;
+            let mut copied = 0u64;
+            loop {
+                let bytes = input.read(&mut buffer)?;
+                if bytes == 0 {
+                    break;
+                }
+                if bytes as u64 > remaining
+                    || bytes as u64 > length.saturating_sub(copied)
+                    || std::time::Instant::now() >= deadline
+                {
+                    return Err(std::io::Error::other(
+                        "output copy exceeds its resource budget",
+                    ));
+                }
+                output.write_all(&buffer[..bytes])?;
+                remaining -= bytes as u64;
+                copied += bytes as u64;
+            }
+            output.set_permissions(
+                entry
+                    .metadata()
+                    .map_err(std::io::Error::other)?
+                    .permissions(),
+            )?;
         }
         // Symlinks are skipped: artifacts must not capture host files.
     }
@@ -433,6 +479,7 @@ fn copy_dir(source: &Path, target: &Path) -> std::io::Result<()> {
 
 fn write_checksums(static_dir: &Path, destination: &Path) -> std::io::Result<()> {
     use sha2::{Digest, Sha256};
+    use std::io::Read;
 
     let mut lines = vec!["[files]".to_owned()];
     let mut entries: Vec<_> = walkdir::WalkDir::new(static_dir)
@@ -449,7 +496,17 @@ fn write_checksums(static_dir: &Path, destination: &Path) -> std::io::Result<()>
             .strip_prefix(static_dir)
             .map_err(std::io::Error::other)?;
         let name = relative.to_string_lossy().replace('\\', "/");
-        let digest = hex::encode(Sha256::digest(std::fs::read(&path)?));
+        let mut file = std::fs::File::open(&path)?;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            let count = file.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            hasher.update(&buffer[..count]);
+        }
+        let digest = hex::encode(hasher.finalize());
         lines.push(format!("\"{name}\" = \"{digest}\""));
     }
 
@@ -846,5 +903,18 @@ mod tests {
         assert!(generated.output_root.join("static/index.html").is_file());
 
         std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn root_output_copy_excludes_its_own_destination() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("index.html"), "hello").unwrap();
+        let target = root.path().join(".grass/output/static");
+        std::fs::create_dir_all(&target).unwrap();
+        copy_dir(root.path(), &target).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(target.join("index.html")).unwrap(),
+            "hello"
+        );
+        assert!(!target.join(".grass/output/static").exists());
     }
 }
