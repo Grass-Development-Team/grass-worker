@@ -216,3 +216,31 @@ describe("authApi.register", () => {
     );
   });
 });
+
+describe("authApi.changePassword", () => {
+  afterEach(() => {
+    setCsrfToken(null);
+    vi.restoreAllMocks();
+  });
+  it("clears authentication after a successful password change", async () => {
+    setCsrfToken("old-csrf");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(response({ changed: true }));
+    const event = vi.fn();
+    window.addEventListener(API_UNAUTHORIZED_EVENT, event);
+    try {
+      await authApi.changePassword("old-password", "new-password");
+      expect(getCsrfToken()).toBeNull();
+      expect(event).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener(API_UNAUTHORIZED_EVENT, event);
+    }
+  });
+  it("keeps authentication when a password change is rejected", async () => {
+    setCsrfToken("old-csrf");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ code: 400, message: "password rejected" }), { status: 400 }),
+    );
+    await expect(authApi.changePassword("old-password", "invalid")).rejects.toThrow();
+    expect(getCsrfToken()).toBe("old-csrf");
+  });
+});

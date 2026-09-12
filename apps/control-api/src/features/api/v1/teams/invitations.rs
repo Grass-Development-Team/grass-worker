@@ -409,6 +409,7 @@ mod tests {
         request.extensions_mut().insert(Some((
             "test-session".to_owned(),
             grass_session::SessionData {
+                auth_version: 1,
                 user_id,
                 created_at: now,
                 last_accessed_at: now,
@@ -448,6 +449,7 @@ mod tests {
     fn active_user(email: &str, display_name: Option<&str>) -> user::Model {
         let now = OffsetDateTime::now_utc();
         user::Model {
+            auth_version: 1,
             id: Uuid::now_v7(),
             email: email.to_owned(),
             display_name: display_name.map(str::to_owned),

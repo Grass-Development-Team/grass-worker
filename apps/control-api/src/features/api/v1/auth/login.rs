@@ -159,7 +159,7 @@ pub(crate) async fn create_authenticated_session(
             Duration::from_secs(config.session.session_ttl_seconds),
         )
     };
-    let session_id = grass_session::create_session(cache, user.id, session_ttl)
+    let session_id = grass_session::create_session(cache, user.id, user.auth_version, session_ttl)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: "auth.login.create_session",

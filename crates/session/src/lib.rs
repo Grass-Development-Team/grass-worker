@@ -10,6 +10,9 @@ const SESSION_KEY_PREFIX: &str = "session";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionData {
     pub user_id: Uuid,
+    /// Missing versions identify pre-revocation sessions and must not authenticate.
+    #[serde(default)]
+    pub auth_version: i64,
     pub created_at: OffsetDateTime,
     pub last_accessed_at: OffsetDateTime,
 }
@@ -21,12 +24,14 @@ fn session_key(session_id: &str) -> String {
 pub async fn create_session(
     cache: &impl grass_cache::Cache,
     user_id: Uuid,
+    auth_version: i64,
     absolute_ttl: Duration,
 ) -> anyhow::Result<String> {
     let session_id = grass_token::generate_token();
     let now = OffsetDateTime::now_utc();
     let data = SessionData {
         user_id,
+        auth_version,
         created_at: now,
         last_accessed_at: now,
     };
@@ -112,7 +117,7 @@ mod tests {
     #[tokio::test]
     async fn session_can_be_created_validated_and_revoked() {
         let cache = MokaCache::connect();
-        let session_id = create_session(&cache, Uuid::now_v7(), Duration::from_secs(60))
+        let session_id = create_session(&cache, Uuid::now_v7(), 1, Duration::from_secs(60))
             .await
             .unwrap();
 
@@ -144,7 +149,7 @@ mod tests {
     #[tokio::test]
     async fn refresh_does_not_recreate_a_concurrently_revoked_session() {
         let cache = DeleteAfterReadCache::default();
-        let session_id = create_session(&cache, Uuid::now_v7(), Duration::from_secs(60))
+        let session_id = create_session(&cache, Uuid::now_v7(), 1, Duration::from_secs(60))
             .await
             .unwrap();
 

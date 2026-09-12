@@ -633,6 +633,7 @@ mod tests {
     async fn seed_delivery_fixture(db: &DatabaseConnection) -> DeliveryFixture {
         let now = OffsetDateTime::now_utc();
         let user = user::ActiveModel {
+            auth_version: Set(1),
             id: Set(Uuid::now_v7()),
             email: Set(format!("{}@example.test", Uuid::now_v7().simple())),
             display_name: Set(Some("Delivery Tester".to_owned())),
@@ -1263,6 +1264,7 @@ mod tests {
             State(state),
             Session {
                 data: grass_session::SessionData {
+                    auth_version: 1,
                     user_id: fixture.user.id,
                     created_at: now,
                     last_accessed_at: now,
@@ -1380,6 +1382,7 @@ CREATE TRIGGER reject_queued_release_audit
             State(state),
             Session {
                 data: grass_session::SessionData {
+                    auth_version: 1,
                     user_id: fixture.user.id,
                     created_at: now,
                     last_accessed_at: now,
@@ -1568,6 +1571,7 @@ CREATE TRIGGER reject_queued_release_audit
             State(state),
             Session {
                 data: grass_session::SessionData {
+                    auth_version: 1,
                     user_id: fixture.user.id,
                     created_at: now,
                     last_accessed_at: now,

@@ -3,10 +3,7 @@
 //! Podman exposes a Docker-compatible API on its socket, so both backends
 //! share this implementation; only the socket path differs.
 
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, path::Path};
 
 use bollard::Docker;
 use bollard::models::{
@@ -19,6 +16,9 @@ use bollard::query_parameters::{
 };
 use futures_util::StreamExt;
 use tokio::sync::{mpsc, watch};
+
+use super::archive::{self, Budget, LIMITS, TransferControl};
+use tokio_util::io::ReaderStream;
 
 use super::{
     BuildExecutionResult, ContainerRuntimeError, RunBuildInput, RunServiceInput, RunningService,
@@ -56,26 +56,13 @@ impl SocketRuntime {
     }
 }
 
-/// Packs a local directory as a tar rooted at `root_name` for upload.
+#[cfg(test)]
 async fn rooted_tar(
     root_name: &'static str,
-    dir: PathBuf,
-) -> Result<Vec<u8>, ContainerRuntimeError> {
-    tokio::task::spawn_blocking(move || {
-        let mut builder = tar::Builder::new(Vec::new());
-        builder.follow_symlinks(false);
-        // Docker's archive upload rejects GNU sparse headers (type 'S').
-        // Send the complete logical contents as ordinary file entries instead.
-        builder.sparse(false);
-        builder
-            .append_dir_all(root_name, &dir)
-            .map_err(|error| runtime_error("workspace archive", error))?;
-        builder
-            .into_inner()
-            .map_err(|error| runtime_error("workspace archive", error))
-    })
-    .await
-    .map_err(|error| runtime_error("workspace archive task", error))?
+    dir: std::path::PathBuf,
+) -> Result<tokio::fs::File, ContainerRuntimeError> {
+    let (_, cancel) = watch::channel(false);
+    archive::pack(root_name, dir, LIMITS, TransferControl::new(cancel)).await
 }
 
 /// Address of a service container as seen from this node process: the
@@ -102,27 +89,54 @@ fn service_memory_bytes(memory_mb: u64) -> i64 {
     memory_mb.saturating_mul(1024 * 1024).min(i64::MAX as u64) as i64
 }
 
-/// Unpacks an exported tar under `destination`; `unpack_in` rejects entries
-/// that would escape it.
-async fn unpack_export(destination: PathBuf, bytes: Vec<u8>) -> Result<(), ContainerRuntimeError> {
-    tokio::task::spawn_blocking(move || {
-        std::fs::create_dir_all(&destination)
-            .map_err(|error| runtime_error("export unpack", error))?;
-        let mut archive = tar::Archive::new(&bytes[..]);
-        archive.set_overwrite(true);
-        for entry in archive
-            .entries()
-            .map_err(|error| runtime_error("export unpack", error))?
-        {
-            let mut entry = entry.map_err(|error| runtime_error("export unpack", error))?;
-            entry
-                .unpack_in(&destination)
-                .map_err(|error| runtime_error("export unpack", error))?;
+/// Split before decoding or allocating a String. Raw chunks and final collector lines are bounded.
+async fn forward_logs<S, B, E>(
+    mut stream: S,
+    logs: mpsc::Sender<String>,
+    max_bytes: usize,
+) -> Result<(), ContainerRuntimeError>
+where
+    S: futures_util::Stream<Item = Result<B, E>> + Unpin,
+    B: AsRef<[u8]>,
+    E: std::fmt::Display,
+{
+    let mut remaining = max_bytes;
+    let mut pending = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| runtime_error("build log stream", error))?;
+        remaining = remaining
+            .checked_sub(chunk.as_ref().len())
+            .ok_or_else(|| runtime_error("build logs", "byte budget exceeded"))?;
+        for &byte in chunk.as_ref() {
+            if byte == b'\n' {
+                if pending.last() == Some(&b'\r') {
+                    pending.pop();
+                }
+                logs.send(String::from_utf8_lossy(&pending).into_owned())
+                    .await
+                    .map_err(|_| runtime_error("build logs", "consumer closed"))?;
+                pending.clear();
+            } else {
+                pending.push(byte);
+                if pending.len() >= crate::build::logs::MAX_LINE_BYTES / 3 {
+                    let length = match std::str::from_utf8(&pending) {
+                        Err(error) if error.error_len().is_none() => error.valid_up_to(),
+                        _ => pending.len(),
+                    };
+                    logs.send(String::from_utf8_lossy(&pending[..length]).into_owned())
+                        .await
+                        .map_err(|_| runtime_error("build logs", "consumer closed"))?;
+                    pending.drain(..length);
+                }
+            }
         }
-        Ok(())
-    })
-    .await
-    .map_err(|error| runtime_error("export unpack task", error))?
+    }
+    if !pending.is_empty() {
+        logs.send(String::from_utf8_lossy(&pending).into_owned())
+            .await
+            .map_err(|_| runtime_error("build logs", "consumer closed"))?;
+    }
+    Ok(())
 }
 
 impl super::ContainerRuntime for SocketRuntime {
@@ -217,24 +231,31 @@ impl super::ContainerRuntime for SocketRuntime {
         // Copy the workspace in instead of bind-mounting it: the engine may
         // live on another host (containerized Node), where host paths from
         // this process do not exist.
-        let tar_bytes = match rooted_tar("workspace", input.workspace.clone()).await {
+        let tar_bytes = match archive::pack(
+            "workspace",
+            input.workspace.clone(),
+            LIMITS,
+            TransferControl::new(cancel.clone()),
+        )
+        .await
+        {
             Ok(bytes) => bytes,
             Err(error) => {
                 self.remove_container(&name).await;
                 return Err(error);
             }
         };
-        if let Err(error) = self
-            .docker
-            .upload_to_container(
+        if let Err(error) = TransferControl::new(cancel.clone())
+            .run(self.docker.upload_to_container(
                 &name,
                 Some(UploadToContainerOptions {
                     path: "/".to_owned(),
                     ..Default::default()
                 }),
-                bollard::body_full(tar_bytes.into()),
-            )
+                bollard::body_try_stream(ReaderStream::with_capacity(tar_bytes, 64 * 1024)),
+            ))
             .await
+            .and_then(|result| result.map_err(|error| runtime_error("workspace upload", error)))
         {
             self.remove_container(&name).await;
             return Err(runtime_error("workspace upload", error));
@@ -252,132 +273,142 @@ impl super::ContainerRuntime for SocketRuntime {
         // Stream stdout/stderr lines while the build runs.
         let log_stream_docker = self.docker.clone();
         let log_stream_name = name.clone();
-        let log_task = tokio::spawn(async move {
-            let mut stream = log_stream_docker.logs(
-                &log_stream_name,
-                Some(LogsOptions {
-                    follow: true,
-                    stdout: true,
-                    stderr: true,
-                    ..Default::default()
-                }),
-            );
-            let mut pending = String::new();
-            while let Some(chunk) = stream.next().await {
-                let Ok(output) = chunk else { break };
-                let bytes = output.into_bytes();
-                pending.push_str(&String::from_utf8_lossy(&bytes));
-                while let Some(index) = pending.find('\n') {
-                    let line: String = pending.drain(..=index).collect();
-                    let _ = logs
-                        .send(line.trim_end_matches(['\n', '\r']).to_owned())
-                        .await;
-                }
-            }
-            if !pending.is_empty() {
-                let _ = logs.send(pending).await;
-            }
+        let mut log_task = tokio::spawn(async move {
+            let stream = log_stream_docker
+                .logs(
+                    &log_stream_name,
+                    Some(LogsOptions {
+                        follow: true,
+                        stdout: true,
+                        stderr: true,
+                        ..Default::default()
+                    }),
+                )
+                .map(|result| result.map(|output| output.into_bytes()));
+            forward_logs(stream, logs, 16 * 1024 * 1024).await
         });
-
         let mut wait = self
             .docker
             .wait_container(&name, None::<WaitContainerOptions>);
-
         let timeout_sleep = async {
             match input.timeout {
                 Some(timeout) => tokio::time::sleep(timeout).await,
                 None => std::future::pending::<()>().await,
             }
         };
-
-        let outcome = tokio::select! {
-            waited = wait.next() => {
-                match waited {
+        tokio::pin!(timeout_sleep);
+        let mut logs_finished = false;
+        let mut cancel_open = true;
+        let mut outcome = loop {
+            if *cancel.borrow() {
+                break Err(ContainerRuntimeError::Canceled);
+            }
+            tokio::select! {
+                waited = wait.next() => break match waited {
                     Some(Ok(body)) => Ok(BuildExecutionResult { exit_code: body.status_code }),
-                    // Non-zero exits surface as an error body with the code.
-                    Some(Err(bollard::errors::Error::DockerContainerWaitError { code, .. })) => {
-                        Ok(BuildExecutionResult { exit_code: code })
-                    }
+                    Some(Err(bollard::errors::Error::DockerContainerWaitError { code, .. })) => Ok(BuildExecutionResult { exit_code: code }),
                     Some(Err(error)) => Err(runtime_error("container wait", error)),
-                    None => Err(ContainerRuntimeError::Runtime(
-                        "container wait stream ended unexpectedly".to_owned(),
-                    )),
-                }
-            }
-            _ = timeout_sleep => {
-                let _ = self.docker
-                    .stop_container(&name, Some(StopContainerOptions { t: Some(5), ..Default::default() }))
-                    .await;
-                Err(ContainerRuntimeError::Timeout(
-                    input.timeout.map(|t| t.as_secs()).unwrap_or_default(),
-                ))
-            }
-            changed = cancel.changed() => {
-                if changed.is_ok() && *cancel.borrow() {
-                    let _ = self.docker
-                        .stop_container(&name, Some(StopContainerOptions { t: Some(5), ..Default::default() }))
-                        .await;
-                    Err(ContainerRuntimeError::Canceled)
-                } else {
-                    // Sender dropped without cancel: keep waiting.
-                    match wait.next().await {
-                        Some(Ok(body)) => Ok(BuildExecutionResult { exit_code: body.status_code }),
-                        Some(Err(bollard::errors::Error::DockerContainerWaitError { code, .. })) => {
-                            Ok(BuildExecutionResult { exit_code: code })
-                        }
-                        Some(Err(error)) => Err(runtime_error("container wait", error)),
-                        None => Err(ContainerRuntimeError::Runtime(
-                            "container wait stream ended unexpectedly".to_owned(),
-                        )),
+                    None => Err(runtime_error("container wait", "stream ended unexpectedly")),
+                },
+                logged = &mut log_task, if !logs_finished => {
+                    logs_finished = true;
+                    match logged {
+                        Ok(Ok(())) => {},
+                        Ok(Err(error)) => break Err(error),
+                        Err(error) => break Err(runtime_error("build log task", error)),
                     }
                 }
+                _ = &mut timeout_sleep => break Err(ContainerRuntimeError::Timeout(input.timeout.map(|t| t.as_secs()).unwrap_or_default())),
+                changed = cancel.changed(), if cancel_open => { if changed.is_err() { cancel_open = false; } }
             }
         };
-
-        // Give the log stream a moment to drain.
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), log_task).await;
-
-        // Copy requested outputs back out after a successful build. Missing
-        // paths are normal (framework candidates), so download errors skip.
-        if let Ok(result) = &outcome
-            && result.exit_code == 0
-        {
-            for relative in &input.export_paths {
-                let relative = relative.trim_matches('/');
-                if relative.is_empty() || relative.split('/').any(|part| part == "..") {
-                    continue;
+        if outcome.is_err() {
+            self.remove_container(&name).await;
+        }
+        if !logs_finished {
+            match tokio::time::timeout(std::time::Duration::from_secs(20), &mut log_task).await {
+                Ok(Ok(Ok(()))) => {}
+                Ok(Ok(Err(error))) if outcome.is_ok() => outcome = Err(error),
+                Ok(Err(error)) if outcome.is_ok() => {
+                    outcome = Err(runtime_error("build log task", error))
                 }
-                let mut stream = self.docker.download_from_container(
-                    &name,
-                    Some(DownloadFromContainerOptions {
-                        path: format!("{container_working_dir}/{relative}"),
-                    }),
-                );
-                let mut bytes = Vec::new();
-                let mut download_failed = false;
-                while let Some(chunk) = stream.next().await {
-                    match chunk {
-                        Ok(data) => bytes.extend_from_slice(&data),
-                        Err(_) => {
-                            download_failed = true;
-                            break;
-                        }
+                Err(_) => {
+                    log_task.abort();
+                    let _ = log_task.await;
+                    if outcome.is_ok() {
+                        outcome = Err(runtime_error("build logs", "drain timed out"));
                     }
                 }
-                if download_failed || bytes.is_empty() {
-                    continue;
+                _ => {}
+            }
+        }
+
+        // A shared budget spans all framework candidates, including SSR dependencies.
+        if outcome.as_ref().is_ok_and(|result| result.exit_code == 0) {
+            let exported = async {
+                let control = TransferControl::new(cancel.clone());
+                let mut budget = Budget::new(LIMITS);
+                for relative in &input.export_paths {
+                    let relative = relative.trim_matches('/');
+                    if relative.is_empty()
+                        || relative.split('/').any(|part| part == ".." || part == ".")
+                    {
+                        return Err(runtime_error("export path", "unsafe output path"));
+                    }
+                    let stream = self.docker.download_from_container(
+                        &name,
+                        Some(DownloadFromContainerOptions {
+                            path: format!("{container_working_dir}/{relative}"),
+                        }),
+                    );
+                    let Some(file) = archive::download(stream, &mut budget, &control).await? else {
+                        continue;
+                    };
+                    let root = Path::new(relative)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .ok_or_else(|| runtime_error("export path", "invalid output name"))?
+                        .to_owned();
+                    let staging = tempfile::tempdir_in(&input.workspace)
+                        .map_err(|error| runtime_error("export staging", error))?;
+                    budget = archive::unpack(
+                        file,
+                        staging.path().into(),
+                        root.clone(),
+                        budget,
+                        control.clone(),
+                    )
+                    .await?;
+                    let parent = Path::new(relative)
+                        .parent()
+                        .unwrap_or_else(|| Path::new(""));
+                    let mut target_parent = local_working_dir.clone();
+                    for component in parent.components() {
+                        target_parent.push(component);
+                        if std::fs::symlink_metadata(&target_parent)
+                            .is_ok_and(|metadata| metadata.is_symlink())
+                        {
+                            return Err(runtime_error(
+                                "export path",
+                                "output parent is a symbolic link",
+                            ));
+                        }
+                    }
+                    tokio::fs::create_dir_all(&target_parent)
+                        .await
+                        .map_err(|error| runtime_error("export parent", error))?;
+                    let target = local_working_dir.join(relative);
+                    let _ = tokio::fs::remove_dir_all(&target).await;
+                    let _ = tokio::fs::remove_file(&target).await;
+                    tokio::fs::rename(staging.path().join(root), target)
+                        .await
+                        .map_err(|error| runtime_error("export install", error))?;
                 }
-                let parent = Path::new(relative)
-                    .parent()
-                    .map(|parent| local_working_dir.join(parent))
-                    .unwrap_or_else(|| local_working_dir.clone());
-                let target = local_working_dir.join(relative);
-                let _ = tokio::fs::remove_dir_all(&target).await;
-                let _ = tokio::fs::remove_file(&target).await;
-                if let Err(error) = unpack_export(parent, bytes).await {
-                    self.remove_container(&name).await;
-                    return Err(error);
-                }
+                Ok::<(), ContainerRuntimeError>(())
+            }
+            .await;
+            if let Err(error) = exported {
+                outcome = Err(error);
             }
         }
 
@@ -458,24 +489,31 @@ impl super::ContainerRuntime for SocketRuntime {
             .await
             .map_err(|error| runtime_error("service create", error))?;
 
-        let tar_bytes = match rooted_tar("app", input.app_dir.clone()).await {
+        let tar_bytes = match archive::pack(
+            "app",
+            input.app_dir.clone(),
+            LIMITS,
+            TransferControl::new(watch::channel(false).1),
+        )
+        .await
+        {
             Ok(bytes) => bytes,
             Err(error) => {
                 self.remove_container(&input.name).await;
                 return Err(error);
             }
         };
-        if let Err(error) = self
-            .docker
-            .upload_to_container(
+        if let Err(error) = TransferControl::new(watch::channel(false).1)
+            .run(self.docker.upload_to_container(
                 &input.name,
                 Some(UploadToContainerOptions {
                     path: "/".to_owned(),
                     ..Default::default()
                 }),
-                bollard::body_full(tar_bytes.into()),
-            )
+                bollard::body_try_stream(ReaderStream::with_capacity(tar_bytes, 64 * 1024)),
+            ))
             .await
+            .and_then(|result| result.map_err(|error| runtime_error("service upload", error)))
         {
             self.remove_container(&input.name).await;
             return Err(runtime_error("service upload", error));
@@ -562,6 +600,94 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[ignore = "requires GRASS_TEST_DOCKER_SOCKET and a local alpine:3.22 image"]
+    async fn docker_build_exports_logs_and_failure_cleanup() -> anyhow::Result<()> {
+        use crate::runtime::ContainerRuntime;
+        use std::time::Duration;
+
+        let runtime = SocketRuntime::connect(&std::env::var("GRASS_TEST_DOCKER_SOCKET")?)?;
+        // A unique marker identifies only this test's containers if an assertion fails.
+        let marker = format!("GW_SECURITY_TEST_MARKER={}", uuid::Uuid::now_v7());
+        let result: anyhow::Result<()> = async {
+            for (scenario, script) in [
+                ("success", "mkdir -p dist .output/server; cp input.txt dist/index.html; printf 'server' > .output/server/index.mjs; echo built"),
+                ("log-limit", "head -c 17825792 /dev/zero | tr '\\000' x; sleep 30"),
+                ("timeout", "sleep 30"),
+                ("symlink", "ln -s /tmp dist"),
+            ] {
+                let workspace = tempfile::tempdir()?;
+                std::fs::write(workspace.path().join("input.txt"), b"site contents")?;
+                let (sender, mut receiver) = mpsc::channel::<String>(2);
+                let consumer = tokio::spawn(async move {
+                    let mut bytes = 0;
+                    while let Some(line) = receiver.recv().await {
+                        assert!(line.len() <= crate::build::logs::MAX_LINE_BYTES);
+                        bytes += line.len();
+                    }
+                    bytes
+                });
+                let (cancel_sender, cancel) = watch::channel(false);
+                // Closing the cancel channel must not disable the wall-clock deadline.
+                drop(cancel_sender);
+                let outcome = runtime.run_build(RunBuildInput {
+                    image: "alpine:3.22".into(),
+                    workspace: workspace.path().into(),
+                    working_dir: ".".into(),
+                    script: script.into(),
+                    env: vec![("GW_SECURITY_TEST_MARKER".into(), marker.split_once('=').unwrap().1.into())],
+                    cpu_limit: 1,
+                    memory_mb: 64,
+                    network: "none".into(),
+                    timeout: Some(if scenario == "timeout" { Duration::from_millis(100) } else { Duration::from_secs(15) }),
+                    export_paths: vec!["dist".into(), ".output".into(), "missing-output".into()],
+                }, sender, cancel).await;
+                let bytes = consumer.await?;
+                match scenario {
+                    "success" => {
+                        anyhow::ensure!(outcome?.exit_code == 0);
+                        anyhow::ensure!(std::fs::read(workspace.path().join("dist/index.html"))? == b"site contents");
+                        anyhow::ensure!(std::fs::read(workspace.path().join(".output/server/index.mjs"))? == b"server");
+                        anyhow::ensure!(bytes > 0);
+                    }
+                    "log-limit" => anyhow::ensure!(outcome.unwrap_err().to_string().contains("byte budget exceeded")),
+                    "timeout" => anyhow::ensure!(matches!(outcome, Err(ContainerRuntimeError::Timeout(_)))),
+                    _ => anyhow::ensure!(outcome.is_err(), "symbolic link output root was accepted"),
+                }
+                anyhow::ensure!(!std::fs::read_dir(workspace.path())?.filter_map(Result::ok)
+                    .any(|entry| entry.file_name().to_string_lossy().starts_with(".tmp")), "export staging directory leaked");
+            }
+            Ok(())
+        }.await;
+
+        let containers = runtime
+            .docker
+            .list_containers(Some(ListContainersOptions {
+                all: true,
+                ..Default::default()
+            }))
+            .await?;
+        let mut leaked = 0;
+        for container in containers {
+            let Some(id) = container.id else { continue };
+            let inspect = runtime
+                .docker
+                .inspect_container(&id, None::<InspectContainerOptions>)
+                .await?;
+            if inspect
+                .config
+                .and_then(|config| config.env)
+                .is_some_and(|env| env.contains(&marker))
+            {
+                leaked += 1;
+                runtime.remove_container(&id).await;
+            }
+        }
+        result?;
+        anyhow::ensure!(leaked == 0, "runtime left {leaked} test containers behind");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn upload_archives_preserve_sparse_files_as_regular_entries() {
         use std::io::{Read, Seek, SeekFrom, Write};
 
@@ -578,7 +704,7 @@ mod tests {
 
         for root in ["workspace", "app"] {
             let bytes = rooted_tar(root, source.path().to_owned()).await.unwrap();
-            let mut archive = tar::Archive::new(bytes.as_slice());
+            let mut archive = tar::Archive::new(bytes.into_std().await);
             let mut files = HashMap::new();
             for entry in archive.entries().unwrap() {
                 let mut entry = entry.unwrap();
@@ -611,7 +737,7 @@ mod tests {
         let bytes = rooted_tar("workspace", source.path().to_owned())
             .await
             .unwrap();
-        let mut archive = tar::Archive::new(bytes.as_slice());
+        let mut archive = tar::Archive::new(bytes.into_std().await);
         let mut links = 0;
         for entry in archive.entries().unwrap() {
             let entry = entry.unwrap();
@@ -637,5 +763,39 @@ mod tests {
     fn service_memory_megabytes_convert_without_overflow() {
         assert_eq!(service_memory_bytes(256), 268_435_456);
         assert_eq!(service_memory_bytes(u64::MAX), i64::MAX);
+    }
+}
+
+#[cfg(test)]
+mod log_tests {
+    use super::*;
+    #[tokio::test]
+    async fn long_unterminated_logs_are_split_with_bounded_lines() {
+        let text = "构建".repeat(16 * 1024);
+        let stream = futures_util::stream::iter(
+            text.as_bytes()
+                .chunks(511)
+                .map(|chunk| Ok::<_, std::io::Error>(chunk.to_vec()))
+                .collect::<Vec<_>>(),
+        );
+        let (sender, mut receiver) = mpsc::channel(2);
+        let task = tokio::spawn(forward_logs(stream, sender, text.len()));
+        let mut actual = String::new();
+        while let Some(line) = receiver.recv().await {
+            assert!(line.len() <= crate::build::logs::MAX_LINE_BYTES);
+            actual.push_str(&line);
+        }
+        task.await.unwrap().unwrap();
+        assert_eq!(actual, text);
+    }
+    #[tokio::test]
+    async fn log_budget_and_consumer_failure_stop_the_producer() {
+        let stream = futures_util::stream::iter([Ok::<_, std::io::Error>(b"12345".to_vec())]);
+        let (sender, _receiver) = mpsc::channel(1);
+        assert!(forward_logs(stream, sender, 4).await.is_err());
+        let stream = futures_util::stream::iter([Ok::<_, std::io::Error>(b"line\n".to_vec())]);
+        let (sender, receiver) = mpsc::channel(1);
+        drop(receiver);
+        assert!(forward_logs(stream, sender, 1024).await.is_err());
     }
 }

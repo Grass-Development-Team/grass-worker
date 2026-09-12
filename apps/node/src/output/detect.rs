@@ -65,7 +65,7 @@ impl PackageJson {
 fn read_config_containing(root: &Path, names: &[&str]) -> String {
     let mut merged = String::new();
     for name in names {
-        if let Ok(content) = std::fs::read_to_string(root.join(name)) {
+        if let Ok(content) = read_config(&root.join(name)) {
             merged.push_str(&content);
             merged.push('\n');
         }
@@ -75,7 +75,7 @@ fn read_config_containing(root: &Path, names: &[&str]) -> String {
 
 /// Detects the framework of the project at `root`.
 pub fn detect(root: &Path) -> Detection {
-    let package: PackageJson = std::fs::read_to_string(root.join("package.json"))
+    let package: PackageJson = read_config(&root.join("package.json"))
         .ok()
         .and_then(|content| serde_json::from_str(&content).ok())
         .unwrap_or_default();
@@ -181,6 +181,21 @@ pub fn detect(root: &Path) -> Detection {
         framework_version: String::new(),
         static_signal: None,
     }
+}
+
+fn read_config(path: &std::path::Path) -> std::io::Result<String> {
+    use std::io::Read;
+    const MAX_BYTES: u64 = 1024 * 1024;
+    let mut text = String::new();
+    std::fs::File::open(path)?
+        .take(MAX_BYTES + 1)
+        .read_to_string(&mut text)?;
+    if text.len() as u64 > MAX_BYTES {
+        return Err(std::io::Error::other(
+            "framework configuration is too large",
+        ));
+    }
+    Ok(text)
 }
 
 #[cfg(test)]

@@ -13,6 +13,7 @@ pub struct Model {
     pub display_name: Option<String>,
     pub avatar_version: Option<Uuid>,
     pub status: UserStatus,
+    pub auth_version: i64,
     pub platform_role: PlatformRole,
     pub email_verified_at: Option<TimeDateTimeWithTimeZone>,
     pub last_login_at: Option<TimeDateTimeWithTimeZone>,

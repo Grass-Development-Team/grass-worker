@@ -493,6 +493,7 @@ mod tests {
         request.extensions_mut().insert(Some((
             "session".to_owned(),
             grass_session::SessionData {
+                auth_version: 1,
                 user_id: actor_id,
                 created_at: now,
                 last_accessed_at: now,

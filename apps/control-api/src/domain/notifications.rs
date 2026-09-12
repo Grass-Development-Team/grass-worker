@@ -474,6 +474,7 @@ mod tests {
             },
         ];
         let actor = user::Model {
+            auth_version: 1,
             id: actor_user_id,
             email: "admin@example.com".to_owned(),
             display_name: Some("Platform Admin".to_owned()),
@@ -489,6 +490,7 @@ mod tests {
         let eligible_users = [owner, creator]
             .into_iter()
             .map(|id| user::Model {
+                auth_version: 1,
                 id,
                 email: format!("{id}@example.invalid"),
                 display_name: None,

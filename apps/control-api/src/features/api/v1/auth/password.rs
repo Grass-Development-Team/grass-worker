@@ -1,5 +1,7 @@
 use axum::{Json, extract::State, response::IntoResponse};
+use axum_extra::extract::cookie::CookieJar;
 use grass_cache::Cache;
+use sea_orm::TransactionTrait;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -95,14 +97,28 @@ pub async fn reset(
             message: "password reset token is invalid or expired".to_owned(),
         })?;
     ensure_not_reused(db, user_id, &body.password, policy.history_count, OP).await?;
-    authentication::consume_auth_token(db, token, AuthTokenKind::PasswordReset)
+    let transaction = db
+        .begin()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    authentication::consume_auth_token(&transaction, token, AuthTokenKind::PasswordReset)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?
         .ok_or_else(|| AppError::Validation {
             op: OP,
             message: "password reset token is invalid or expired".to_owned(),
         })?;
-    set_password(db, user_id, &body.password, OP).await?;
+    set_password(&transaction, user_id, &body.password, OP).await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     Ok(ok_response(json!({ "reset": true })))
 }
 
@@ -115,6 +131,7 @@ pub struct ChangePasswordRequest {
 pub async fn change(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
+    jar: CookieJar,
     Json(body): Json<ChangePasswordRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "me.password.change";
@@ -142,7 +159,12 @@ pub async fn change(
         })?;
     ensure_not_reused(db, data.user_id, &body.password, policy.history_count, OP).await?;
     set_password(db, data.user_id, &body.password, OP).await?;
-    Ok(ok_response(json!({ "changed": true })))
+    let config = state.config.read().unwrap();
+    let jar = jar.add(super::logout::removal_cookie(
+        config.session.cookie_secure,
+        config.development_enabled(),
+    ));
+    Ok((jar, ok_response(json!({ "changed": true }))))
 }
 
 async fn ensure_not_reused(
@@ -164,8 +186,8 @@ async fn ensure_not_reused(
     Ok(())
 }
 
-async fn set_password(
-    db: &sea_orm::DatabaseConnection,
+async fn set_password<C: sea_orm::ConnectionTrait + TransactionTrait>(
+    db: &C,
     user_id: uuid::Uuid,
     password: &str,
     op: &'static str,

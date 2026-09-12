@@ -115,10 +115,9 @@ pub async fn stream(
         access.role,
         crate::infra::database::entity::TeamMemberRole::Viewer
     );
-    let user_id = session.data.user_id;
     let team_id = access.team.id;
     Ok(upgrade.on_upgrade(move |socket| {
-        browser_stream(state, socket, deployment_id, team_id, user_id, can_cancel)
+        browser_stream(state, socket, deployment_id, team_id, session, can_cancel)
     }))
 }
 
@@ -154,16 +153,22 @@ async fn browser_stream(
     mut socket: WebSocket,
     deployment_id: Uuid,
     team_id: Uuid,
-    user_id: Uuid,
+    session: Session,
     can_cancel: bool,
 ) {
+    let user_id = session.data.user_id;
+    let mut recheck = tokio::time::interval(std::time::Duration::from_secs(5));
     let mut frames = state.log_hub.subscribe(deployment_id);
 
     loop {
         tokio::select! {
+            _ = recheck.tick() => {
+                if !stream_session_valid(&state, &session).await { break; }
+            }
             frame = frames.recv() => {
                 match frame {
                     Ok(frame) => {
+                        if !stream_session_valid(&state, &session).await { break; }
                         let Ok(text) = serde_json::to_string(&frame) else { continue };
                         if socket.send(Message::Text(text.into())).await.is_err() {
                             break;
@@ -187,6 +192,7 @@ async fn browser_stream(
                         if requested != deployment_id || !can_cancel {
                             continue;
                         }
+                        if !stream_session_valid(&state, &session).await { break; }
                         handle_ws_cancel(&state, deployment_id, user_id).await;
                     }
                     Ok(LogStreamMessage::Subscribe { .. }) => {}
@@ -215,4 +221,16 @@ async fn handle_ws_cancel(state: &ControlApiState, deployment_id: Uuid, user_id:
     {
         tracing::warn!(operation = OP, %error, "websocket cancel failed");
     }
+}
+
+async fn stream_session_valid(state: &ControlApiState, session: &Session) -> bool {
+    matches!(
+        crate::infra::http::middlewares::session::validate_current_session(
+            state,
+            &session.session_id,
+            "deployments.logs.ws_session"
+        )
+        .await,
+        Ok(Some(_))
+    )
 }

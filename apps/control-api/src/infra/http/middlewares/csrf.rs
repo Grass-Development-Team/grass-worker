@@ -141,7 +141,6 @@ mod tests {
     use grass_cache::{CacheBackend, CacheStore};
     use std::time::Duration;
     use tower::ServiceExt;
-    use uuid::Uuid;
 
     use crate::{
         features::api::v1::auth::logout,
@@ -183,14 +182,24 @@ mod tests {
         let cache = CacheStore::connect_cache(CacheBackend::Moka, "")
             .await
             .unwrap();
+        let user = session::tests::active_user();
         let session_id =
-            grass_session::create_session(&cache, Uuid::now_v7(), Duration::from_secs(300))
+            grass_session::create_session(&cache, user.id, 1, Duration::from_secs(300))
                 .await
                 .unwrap();
         let mut config = ControlApiConfig::default();
         config.development.enabled = development_enabled;
         let state = ControlApiState::new(config, "unused.toml");
         assert!(state.cache.set(cache.clone()).is_ok());
+        state
+            .database
+            .set(
+                sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+                    .append_query_results(vec![vec![user]; 8])
+                    .into_connection(),
+            )
+            .ok()
+            .unwrap();
 
         async fn protected(_session: Session) -> &'static str {
             "ok"

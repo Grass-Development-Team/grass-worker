@@ -1390,6 +1390,7 @@ mod tests {
     fn session() -> Session {
         Session {
             data: grass_session::SessionData {
+                auth_version: 1,
                 user_id: Uuid::now_v7(),
                 created_at: OffsetDateTime::UNIX_EPOCH,
                 last_accessed_at: OffsetDateTime::UNIX_EPOCH,

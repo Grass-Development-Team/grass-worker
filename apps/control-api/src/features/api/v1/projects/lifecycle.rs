@@ -531,6 +531,7 @@ mod tests {
         );
         let session = Session {
             data: grass_session::SessionData {
+                auth_version: 1,
                 user_id: actor_id,
                 created_at: time::OffsetDateTime::UNIX_EPOCH,
                 last_accessed_at: time::OffsetDateTime::UNIX_EPOCH,

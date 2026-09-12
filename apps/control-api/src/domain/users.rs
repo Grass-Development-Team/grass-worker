@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
-    EntityTrait, QueryFilter,
+    EntityTrait, ExprTrait, QueryFilter, TransactionSession, TransactionTrait,
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -37,6 +37,7 @@ pub async fn create_user<C: ConnectionTrait>(
         display_name: Set(params.display_name),
         avatar_version: Set(None),
         status: Set(UserStatus::Active),
+        auth_version: Set(1),
         platform_role: Set(params.platform_role),
         email_verified_at: Set(params.email_verified_at),
         last_login_at: Set(None),
@@ -170,6 +171,8 @@ pub async fn update_user<C: ConnectionTrait>(
     user: user::Model,
     params: UpdateUserParams,
 ) -> anyhow::Result<user::Model> {
+    let revoke = matches!(params.status, Some(UserStatus::Disabled));
+    let user_id = user.id;
     let mut active: user::ActiveModel = user.into();
     if let Some(display_name) = params.display_name {
         active.display_name = Set(display_name);
@@ -179,6 +182,21 @@ pub async fn update_user<C: ConnectionTrait>(
     }
     if let Some(role) = params.platform_role {
         active.platform_role = Set(role);
+    }
+    if revoke {
+        use sea_orm::sea_query::Expr;
+        return user::Entity::update_many()
+            .set(active)
+            .col_expr(
+                user::Column::AuthVersion,
+                Expr::col(user::Column::AuthVersion).add(1),
+            )
+            .filter(user::Column::Id.eq(user_id))
+            .exec_with_returning(db)
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("user no longer exists"));
     }
     active.update(db).await.map_err(Into::into)
 }
@@ -197,11 +215,13 @@ pub async fn count_active_admins<C: ConnectionTrait>(db: &C) -> anyhow::Result<u
 }
 
 /// Replaces (or creates) the password credential for a user.
-pub async fn set_password<C: ConnectionTrait>(
+pub async fn set_password<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     user_id: Uuid,
     password_hash: String,
 ) -> anyhow::Result<()> {
+    let transaction = db.begin().await?;
+    let db = &transaction;
     let existing = user_password_credential::Entity::find()
         .filter(user_password_credential::Column::UserId.eq(user_id))
         .one(db)
@@ -212,6 +232,7 @@ pub async fn set_password<C: ConnectionTrait>(
         Some(credential) => {
             let mut active: user_password_credential::ActiveModel = credential.into();
             active.password_hash = Set(password_hash.clone());
+            active.updated_at = Set(OffsetDateTime::now_utc());
             active.update(db).await?;
         }
         None => {
@@ -229,6 +250,19 @@ pub async fn set_password<C: ConnectionTrait>(
         }
     }
     insert_password_history(db, user_id, password_hash, OffsetDateTime::now_utc()).await?;
+    let updated = user::Entity::update_many()
+        .col_expr(
+            user::Column::AuthVersion,
+            sea_orm::sea_query::Expr::col(user::Column::AuthVersion).add(1),
+        )
+        .filter(user::Column::Id.eq(user_id))
+        .exec(db)
+        .await?;
+    anyhow::ensure!(
+        updated.rows_affected == 1,
+        "password owner no longer exists"
+    );
+    transaction.commit().await?;
     Ok(())
 }
 
@@ -316,5 +350,54 @@ mod tests {
         let statements = format!("{:?}", log.into_transaction_log());
         assert!(statements.contains("status\\\" ="), "{statements}");
         assert!(statements.contains("platform_role\\\" ="), "{statements}");
+    }
+}
+
+#[cfg(test)]
+mod password_revocation_tests {
+    use super::*;
+    use sea_orm::{DbBackend, MockDatabase, MockExecResult};
+
+    #[tokio::test]
+    async fn password_history_and_revocation_commit_or_rollback_together() {
+        for affected in [1, 0] {
+            let user = crate::infra::http::middlewares::session::tests::active_user();
+            let now = OffsetDateTime::now_utc();
+            let old = user_password_credential::Model {
+                id: Uuid::now_v7(),
+                user_id: user.id,
+                password_hash: "old-hash".into(),
+                must_change_password: false,
+                created_at: now,
+                updated_at: now,
+            };
+            let mut new = old.clone();
+            new.password_hash = "new-hash".into();
+            let history = user_password_history::Model {
+                id: Uuid::now_v7(),
+                user_id: user.id,
+                password_hash: "new-hash".into(),
+                created_at: now,
+            };
+            let db = MockDatabase::new(DbBackend::Postgres)
+                .append_query_results([vec![old], vec![new]])
+                .append_query_results([vec![history]])
+                .append_exec_results([MockExecResult {
+                    last_insert_id: 0,
+                    rows_affected: affected,
+                }])
+                .into_connection();
+            assert_eq!(
+                set_password(&db, user.id, "new-hash".into()).await.is_ok(),
+                affected == 1
+            );
+            let log = format!("{:?}", db.into_transaction_log());
+            assert!(log.contains("auth_version"));
+            assert!(log.contains("user_password_history"));
+            assert!(
+                log.contains(if affected == 1 { "COMMIT" } else { "ROLLBACK" }),
+                "{log}"
+            );
+        }
     }
 }

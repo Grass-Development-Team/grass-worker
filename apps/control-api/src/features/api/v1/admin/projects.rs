@@ -1123,6 +1123,7 @@ mod tests {
         state.database.set(db).unwrap();
         let session = crate::infra::http::extractors::Session {
             data: grass_session::SessionData {
+                auth_version: 1,
                 user_id: actor_id,
                 created_at: OffsetDateTime::UNIX_EPOCH,
                 last_accessed_at: OffsetDateTime::UNIX_EPOCH,
@@ -1217,6 +1218,7 @@ mod tests {
         );
         let session = crate::infra::http::extractors::Session {
             data: grass_session::SessionData {
+                auth_version: 1,
                 user_id: actor_id,
                 created_at: OffsetDateTime::UNIX_EPOCH,
                 last_accessed_at: OffsetDateTime::UNIX_EPOCH,
@@ -1340,6 +1342,7 @@ mod tests {
         );
         let session = crate::infra::http::extractors::Session {
             data: grass_session::SessionData {
+                auth_version: 1,
                 user_id: actor_id,
                 created_at: OffsetDateTime::UNIX_EPOCH,
                 last_accessed_at: OffsetDateTime::UNIX_EPOCH,
@@ -1372,6 +1375,7 @@ mod tests {
             let project_id = Uuid::now_v7();
             let now = OffsetDateTime::UNIX_EPOCH;
             let actor = user::Model {
+                auth_version: 1,
                 id: actor_id,
                 email: "owner@example.invalid".to_owned(),
                 display_name: Some("Team Owner".to_owned()),

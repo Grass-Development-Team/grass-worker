@@ -100,9 +100,9 @@ async fn run_build_job(
     let workspace = PathBuf::from(&config.node.work_root)
         .join("builds")
         .join(deployment_id.to_string());
-    let publisher =
+    let (publisher, mut realtime_task) =
         realtime::RealtimePublisher::start(&config.node.control_api, &config.node.node_token);
-    let (collector, log_flusher) = logs::LogCollector::start(
+    let (collector, mut log_flusher) = logs::LogCollector::start(
         deployment_id,
         client.clone(),
         workspace.join("build-log.txt"),
@@ -162,9 +162,13 @@ async fn run_build_job(
     };
 
     if let Some(failure) = &failure {
-        collector.log("system", format!("build failed: {}", failure.message));
+        let _ = collector
+            .log("system", format!("build failed: {}", failure.message))
+            .await;
     } else {
-        collector.log("system", "build completed successfully");
+        let _ = collector
+            .log("system", "build completed successfully")
+            .await;
     }
 
     let status_value = match status {
@@ -192,10 +196,36 @@ async fn run_build_job(
 
     // Drain remaining log lines to the Control API before cleanup.
     drop(collector);
-    let _ = log_flusher.await;
+    if tokio::time::timeout(Duration::from_secs(20), &mut log_flusher)
+        .await
+        .is_err()
+    {
+        log_flusher.abort();
+        let _ = log_flusher.await;
+    }
+    if tokio::time::timeout(Duration::from_secs(5), &mut realtime_task)
+        .await
+        .is_err()
+    {
+        realtime_task.abort();
+        let _ = realtime_task.await;
+    }
 
-    let keep_workspace =
-        config.build.retain_workspace_on_failure && !matches!(status, ReportedStatus::Ready);
+    // Resource-processing failures must not accumulate hostile partial output,
+    // even when ordinary command failures are retained for debugging.
+    let resource_failure = failure.as_ref().is_some_and(|failure| {
+        matches!(
+            failure.code,
+            "build_log_failed"
+                | "runtime_failed"
+                | "archive_failed"
+                | "output_failed"
+                | "output_invalid"
+        )
+    });
+    let keep_workspace = config.build.retain_workspace_on_failure
+        && !matches!(status, ReportedStatus::Ready)
+        && !resource_failure;
     if !keep_workspace {
         let _ = tokio::fs::remove_dir_all(&workspace).await;
     }
@@ -309,7 +339,9 @@ async fn run_pipeline(
     )
     .await?;
     collector.publish_stage(stage::CHECKOUT);
-    collector.log(stage::CHECKOUT, "cloning configured repository");
+    collector
+        .log(stage::CHECKOUT, "cloning configured repository")
+        .await?;
 
     let repository_exceptions = config.security.repository_exceptions();
     let ssh_host = git::inspect_ssh_host_key(&claimed.repository_url, &repository_exceptions)
@@ -387,7 +419,9 @@ async fn run_pipeline(
         _ => BuildFailure::new("git_clone_failed", error.to_string()),
     })?;
     if let Some(commit) = &checkout.commit_hash {
-        collector.log(stage::CHECKOUT, format!("checked out {commit}"));
+        collector
+            .log(stage::CHECKOUT, format!("checked out {commit}"))
+            .await?;
     }
 
     // Custom Grass Output is a later-stage capability: refuse early when the
@@ -422,15 +456,19 @@ async fn run_pipeline(
     let image_collector = collector.clone();
     let image_pump = tokio::spawn(async move {
         while let Some(line) = log_rx.recv().await {
-            image_collector.log(stage::BUILD, line);
+            image_collector.log(stage::BUILD, line).await?;
         }
+        Ok::<(), logs::LogError>(())
     });
-    runtime
+    let prepared = runtime
         .prepare_image(&image, log_tx.clone())
         .await
-        .map_err(|error| BuildFailure::new("image_pull_failed", error.to_string()))?;
+        .map_err(|error| BuildFailure::new("image_pull_failed", error.to_string()));
     drop(log_tx);
-    let _ = image_pump.await;
+    image_pump
+        .await
+        .map_err(|error| BuildFailure::new("build_log_failed", error.to_string()))??;
+    prepared?;
 
     // Per-deployment override when set, otherwise the node's configured build
     // command timeout so a runaway build is always bounded.
@@ -451,8 +489,12 @@ if [ $rc -ne 0 ]; then echo \"build command failed with exit code $rc\"; exit 92
 
     report_stage_checked(client, deployment_id, &stage_report(None, stage::BUILD)).await?;
     collector.publish_stage(stage::BUILD);
-    collector.log(stage::BUILD, format!("$ {install_command}"));
-    collector.log(stage::BUILD, format!("$ {build_command}"));
+    collector
+        .log(stage::BUILD, format!("$ {install_command}"))
+        .await?;
+    collector
+        .log(stage::BUILD, format!("$ {build_command}"))
+        .await?;
 
     // Next.js without a static-export config builds a server bundle; ask it
     // for the self-contained standalone output so SSR serving has a complete
@@ -463,18 +505,21 @@ if [ $rc -ne 0 ]; then echo \"build command failed with exit code $rc\"; exit 92
         && pre_detection.static_signal != Some(true)
     {
         build_env.push(("NEXT_PRIVATE_STANDALONE".to_owned(), "true".to_owned()));
-        collector.log(
-            stage::BUILD,
-            "next.js without static export detected; requesting standalone output",
-        );
+        collector
+            .log(
+                stage::BUILD,
+                "next.js without static export detected; requesting standalone output",
+            )
+            .await?;
     }
 
     let (log_tx, mut log_rx) = mpsc::channel::<String>(256);
     let pump_collector = collector.clone();
     let pump = tokio::spawn(async move {
         while let Some(line) = log_rx.recv().await {
-            pump_collector.log(stage::BUILD, line);
+            pump_collector.log(stage::BUILD, line).await?;
         }
+        Ok::<(), logs::LogError>(())
     });
 
     // Every output location the detector may look at, copied back after a
@@ -533,7 +578,8 @@ if [ $rc -ne 0 ]; then echo \"build command failed with exit code $rc\"; exit 92
             cancel.clone(),
         )
         .await;
-    let _ = pump.await;
+    pump.await
+        .map_err(|error| BuildFailure::new("build_log_failed", error.to_string()))??;
 
     match result {
         Ok(result) if result.exit_code == 0 => {}
@@ -564,7 +610,9 @@ if [ $rc -ne 0 ]; then echo \"build command failed with exit code $rc\"; exit 92
     // --- Grass Output -------------------------------------------------------
     report_stage_checked(client, deployment_id, &stage_report(None, stage::OUTPUT)).await?;
     collector.publish_stage(stage::OUTPUT);
-    collector.log(stage::OUTPUT, "generating .grass/output");
+    collector
+        .log(stage::OUTPUT, "generating .grass/output")
+        .await?;
 
     let project_root = checkout.project_root.clone();
     let configured_output = claimed.output_directory.clone();
@@ -587,13 +635,15 @@ if [ $rc -ne 0 ]; then echo \"build command failed with exit code $rc\"; exit 92
         }
         _ => BuildFailure::new("output_invalid", error.to_string()),
     })?;
-    collector.log(
-        stage::OUTPUT,
-        format!(
-            "grass output ready (framework: {}, spa_fallback: {})",
-            generated.framework_name, generated.spa_fallback
-        ),
-    );
+    collector
+        .log(
+            stage::OUTPUT,
+            format!(
+                "grass output ready (framework: {}, spa_fallback: {})",
+                generated.framework_name, generated.spa_fallback
+            ),
+        )
+        .await?;
 
     // --- Archive ------------------------------------------------------------
     report_stage_checked(client, deployment_id, &stage_report(None, stage::ARCHIVE)).await?;
@@ -606,16 +656,18 @@ if [ $rc -ne 0 ]; then echo \"build command failed with exit code $rc\"; exit 92
             .await
             .map_err(|error| BuildFailure::new("archive_failed", error.to_string()))?
             .map_err(|error| BuildFailure::new("archive_failed", error.to_string()))?;
-    collector.log(
-        stage::ARCHIVE,
-        format!(
-            "packed {} files ({} bytes packed, {} bytes unpacked, sha256 {})",
-            packed.file_count,
-            packed.size_bytes,
-            packed.unpacked_size_bytes,
-            packed.checksum_sha256
-        ),
-    );
+    collector
+        .log(
+            stage::ARCHIVE,
+            format!(
+                "packed {} files ({} bytes packed, {} bytes unpacked, sha256 {})",
+                packed.file_count,
+                packed.size_bytes,
+                packed.unpacked_size_bytes,
+                packed.checksum_sha256
+            ),
+        )
+        .await?;
 
     // --- Upload -------------------------------------------------------------
     report_stage_checked(client, deployment_id, &stage_report(None, stage::UPLOAD)).await?;
@@ -635,15 +687,23 @@ if [ $rc -ne 0 ]; then echo \"build command failed with exit code $rc\"; exit 92
         )
         .await
         .map_err(|error| BuildFailure::new("upload_failed", error.to_string()))?;
-    collector.log(
-        stage::UPLOAD,
-        format!(
-            "artifact uploaded ({} bytes, sha256 {})",
-            uploaded.size_bytes, uploaded.checksum_sha256
-        ),
-    );
+    collector
+        .log(
+            stage::UPLOAD,
+            format!(
+                "artifact uploaded ({} bytes, sha256 {})",
+                uploaded.size_bytes, uploaded.checksum_sha256
+            ),
+        )
+        .await?;
 
     Ok(())
+}
+
+impl From<logs::LogError> for BuildFailure {
+    fn from(error: logs::LogError) -> Self {
+        Self::new("build_log_failed", error.to_string())
+    }
 }
 
 #[cfg(test)]

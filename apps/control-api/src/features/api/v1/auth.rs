@@ -62,6 +62,7 @@ mod tests {
         let now = OffsetDateTime::UNIX_EPOCH;
         let avatar_version = Uuid::max();
         let user = user::Model {
+            auth_version: 1,
             id: Uuid::nil(),
             email: "admin@example.com".to_owned(),
             display_name: Some("Admin".to_owned()),
