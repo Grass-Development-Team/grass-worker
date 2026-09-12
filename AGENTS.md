@@ -409,3 +409,7 @@ Agents must keep implementation aligned with the current version and priority sc
 - Prefer repository Just targets such as `just install console`, `just run console`, `just check console`, `just test console`, and `just build console` when operating from the repository root.
 - If the agent runtime uses `sh` and cannot find a user-installed `vp`, verify with `fish -lc '<command>'` before concluding that Vite+ is unavailable.
 - CI should use the official Vite+ setup action and let Vite+ manage the underlying package manager and dependency cache.
+
+## Control API Code Conventions
+
+Control API changes must follow [the route-slice and audit conventions](docs/agents/control-api-conventions.md). In particular, each feature file owns one URL path, endpoint DTOs are local, and all auditing uses `infra/audit`.
