@@ -116,6 +116,9 @@ S3-compatible storage, MinIO, and Cloudflare R2. Object storage configuration
 is persisted in the database rather than `config.toml`. Access keys, secret
 keys, and session tokens are write-only in the Console and encrypted with a
 storage-specific key derived from `secrets.secret_key` before they are stored.
+Both setup and administration trim credential values and discard empty ones.
+Setup accepts the legacy `root` field; `local_root` takes precedence when both
+are supplied. Administration defaults an omitted local root to the active root.
 
 Remote backends require a bucket and region. MinIO and R2 require an endpoint;
 R2 uses the `auto` region. A generic S3-compatible backend may omit the
@@ -457,8 +460,9 @@ manual certificates. Enable `[serve.tls]` on each public entry Node and use
 TCP passthrough at the regional load balancer. Nodes select certificates by
 SNI, enforce the original Host, and hot-reload validated renewals. Keep
 `serve.public_base_url` on private HTTP for Peer Hop and health checks.
-Custom domains require TXT ownership plus review, default to HTTP-01, and
-support delegated DNS-01; regional certificates use DNS-01. The Console
+Custom domains require TXT ownership plus review. Automatic regional and
+custom-domain certificates use HTTP-01, so public port 80 must remain reachable
+for issuance and renewal. The Console
 reports issuance, expiry, retries and actual Node certificate revisions.
 See [Regional ingress and HTTPS](regional-ingress.md) for complete configuration.
 
@@ -467,6 +471,13 @@ settings. The platform default is `auto`; a Team Group can override it with
 `auto`, `manual`, or inherit the platform default. Manual review keeps a new
 custom binding unavailable until an administrator approves it. Domains
 assigned from a platform Host Source do not require domain review.
+
+Deleting a domain from either the project or administration commits its soft
+deletion, releases its host quota, and notifies Serve Nodes to refresh routes.
+Repeated deletion retries cleanup with the same quota release key. Restoring
+and deleting the binding again uses a new deletion generation. DNS cleanup
+failures are recorded and do not prevent route invalidation; infrastructure
+errors are returned so the delete can be retried.
 
 New projects automatically receive `slug.apps.example.com`; preview
 deployments receive unique `slug-xxxxxxxx.apps.example.com` hosts.

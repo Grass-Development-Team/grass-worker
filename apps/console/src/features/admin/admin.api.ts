@@ -1,3 +1,4 @@
+import type { StorageConfiguration, StorageInput } from "@/features/storage/storage-form";
 import type {
   BuildStatus,
   ReleaseStatus,
@@ -7,13 +8,13 @@ import type { AuditPage } from "@/features/audit/audit.api";
 import { request } from "@/lib/api";
 import type { Announcement } from "@/features/announcements/announcements.api";
 
-export interface AdministrationStatus {
+interface AdministrationStatus {
   service: string;
   mode: "ready";
   version: string;
 }
 
-export type NodeStatus = "pending" | "active" | "draining" | "offline" | "disabled";
+type NodeStatus = "pending" | "active" | "draining" | "offline" | "disabled";
 
 export interface AdminNode {
   id: string;
@@ -36,13 +37,7 @@ export interface AdminNode {
   created_at: string;
 }
 
-export type NodeDeletionStatus =
-  | "queued"
-  | "migrating"
-  | "draining"
-  | "deleting"
-  | "failed"
-  | "completed";
+type NodeDeletionStatus = "queued" | "migrating" | "draining" | "deleting" | "failed" | "completed";
 
 export interface AdminNodeDeletionJob {
   id: string;
@@ -69,7 +64,7 @@ export interface AdminNodeDeletionPlan {
   }>;
 }
 
-export type NodeConfigurationSyncStatus = "pending" | "applying" | "applied" | "failed";
+type NodeConfigurationSyncStatus = "pending" | "applying" | "applied" | "failed";
 
 export interface AdminNodeConfigurationSync {
   desired: NodeConfiguration | null;
@@ -122,30 +117,23 @@ export interface NodeConfiguration {
   log: { level: string; format: "pretty" | "json" };
 }
 
-export interface AdminNodeResources {
+interface AdminNodeResources {
   cpu_millicores: number;
   memory_mb: number;
   disk_mb: number;
   max_deployments: number;
 }
 
-export interface AdminNodeUsage {
+interface AdminNodeUsage {
   cpu_millicores: number;
   memory_mb: number;
   disk_mb: number;
   deployments: number;
 }
 
-export interface UpdateNodeCapacityInput {
-  capacity_cpu_millicores: number;
-  capacity_memory_mb: number;
-  capacity_disk_mb: number;
-  max_deployments: number;
-}
+type LocalProcessState = "stopped" | "running" | "backoff" | "failed";
 
-export type LocalProcessState = "stopped" | "running" | "backoff" | "failed";
-
-export interface AdminLocalProcess {
+interface AdminLocalProcess {
   state: LocalProcessState;
   pid: number | null;
   started_at: string | null;
@@ -161,7 +149,7 @@ export interface AdminLocalProcessInfo {
   process: AdminLocalProcess;
 }
 
-export interface AdminQuotaLimit {
+interface AdminQuotaLimit {
   dimension: string;
   limit_value: number;
   period: "none" | "monthly";
@@ -233,7 +221,7 @@ export interface AdminBatchItemResult {
   message?: string;
 }
 
-export interface AdminUserFilters {
+interface AdminUserFilters {
   q?: string;
   status?: AdminUser["status"];
   role?: AdminUser["platform_role"];
@@ -241,7 +229,7 @@ export interface AdminUserFilters {
 
 export type AdminCodeStatus = "available" | "used" | "expired" | "revoked";
 
-export interface AdminCodeUser {
+interface AdminCodeUser {
   id: string;
   email: string;
   display_name: string | null;
@@ -267,7 +255,7 @@ export interface AdminGeneratedCode {
   created_at: string;
 }
 
-export interface AdminCodesPage {
+interface AdminCodesPage {
   scopes: string[];
   codes: AdminCode[];
   pagination: {
@@ -278,7 +266,7 @@ export interface AdminCodesPage {
   };
 }
 
-export interface AdminRegistrationEmailCreator {
+interface AdminRegistrationEmailCreator {
   id: string;
   email?: string | null;
   display_name?: string | null;
@@ -291,7 +279,7 @@ export interface AdminRegistrationEmail {
   created_by: AdminRegistrationEmailCreator | null;
 }
 
-export type AdminMfaEnforcement = "none" | "platform_admins" | "all_users";
+type AdminMfaEnforcement = "none" | "platform_admins" | "all_users";
 
 export interface AdminMfaPolicy {
   allowed_factors: Array<"totp" | "email">;
@@ -306,7 +294,7 @@ export interface AdminUserMfaPolicy {
   required_factors: Array<"totp" | "email">;
 }
 
-export interface AdminUserMfaResponse {
+interface AdminUserMfaResponse {
   factors: AdminMfaFactor[];
   policy: AdminUserMfaPolicy;
   allowed_factors: Array<"totp" | "email">;
@@ -326,7 +314,7 @@ export interface AdminPasswordPolicy {
   history_count: number;
 }
 
-export interface AdminMfaFactor {
+interface AdminMfaFactor {
   id: string;
   kind: "totp" | "email";
   label: string | null;
@@ -354,7 +342,7 @@ export interface AdminIdentityProvider {
   updated_at: string;
 }
 
-export interface AdminTeamGroupRef {
+interface AdminTeamGroupRef {
   id: string;
   code: string;
   name: string;
@@ -371,14 +359,14 @@ export interface AdminTeam {
   created_at: string;
 }
 
-export interface AdminTeamFilters {
+interface AdminTeamFilters {
   q?: string;
   kind?: AdminTeam["kind"];
   group_id?: string;
   quota_plan_id?: string;
 }
 
-export interface AdminTeamDetail {
+interface AdminTeamDetail {
   team: AdminTeam;
   members: {
     user_id: string;
@@ -412,13 +400,13 @@ export interface QuotaLimitInput {
   limit_value: number | null;
 }
 
-export interface AdminProjectTeamRef {
+interface AdminProjectTeamRef {
   id: string;
   slug: string;
   name: string;
 }
 
-export interface AdminDeploymentSummary {
+interface AdminDeploymentSummary {
   id: string;
   environment: "production" | "preview";
   build_status: BuildStatus;
@@ -440,12 +428,12 @@ export interface AdminProject {
   created_at: string;
 }
 
-export interface AdminProjectFilters {
+interface AdminProjectFilters {
   q?: string;
   status?: AdminProject["status"];
 }
 
-export interface AdminProjectDetail {
+interface AdminProjectDetail {
   id: string;
   uuid: string;
   slug: string;
@@ -510,7 +498,7 @@ export interface AdminProjectDomain {
   updated_at: string;
 }
 
-export interface AdminDeploymentGovernanceResult {
+interface AdminDeploymentGovernanceResult {
   deployment: Pick<
     AdminGovernanceDeployment,
     "id" | "project_id" | "release_status" | "serve_status"
@@ -518,7 +506,7 @@ export interface AdminDeploymentGovernanceResult {
   reason: string | null;
 }
 
-export interface AdminDomainGovernanceResult {
+interface AdminDomainGovernanceResult {
   domain: Pick<
     AdminProjectDomain,
     | "id"
@@ -602,41 +590,13 @@ export interface AdminSettings {
   restart_required_sections: Array<"server" | "redis" | "node_manager" | "migration" | "log">;
 }
 
-export type AdminStorageBackend = "local" | "s3" | "minio" | "r2";
-
-export interface AdminStorageConfiguration {
-  backend: AdminStorageBackend;
-  local_root: string;
-  endpoint: string;
-  region: string;
-  bucket: string;
-  prefix: string;
-  force_path_style: boolean;
-  allow_http: boolean;
-  credentials_configured: boolean;
-}
-
-export interface AdminStorageInput {
-  backend: AdminStorageBackend;
-  local_root?: string;
-  endpoint?: string;
-  region?: string;
-  bucket?: string;
-  prefix?: string;
-  force_path_style?: boolean;
-  allow_http?: boolean;
-  access_key_id?: string;
-  secret_access_key?: string;
-  session_token?: string;
-}
-
-export type AdminStorageMigrationStatus = "pending" | "running" | "succeeded" | "failed";
+type AdminStorageMigrationStatus = "pending" | "running" | "succeeded" | "failed";
 
 export interface AdminStorageMigration {
   id: string;
   status: AdminStorageMigrationStatus;
-  source: AdminStorageConfiguration;
-  target: AdminStorageConfiguration;
+  source: StorageConfiguration;
+  target: StorageConfiguration;
   copied_objects: number;
   copied_bytes: number;
   total_objects: number | null;
@@ -648,14 +608,14 @@ export interface AdminStorageMigration {
 }
 
 export interface AdminStorageState {
-  storage: AdminStorageConfiguration;
+  storage: StorageConfiguration;
   maintenance: boolean;
   migration: AdminStorageMigration | null;
 }
 
-export type AdminAnnouncement = Announcement;
+type AdminAnnouncement = Announcement;
 
-export interface AdminAnnouncementsPage {
+interface AdminAnnouncementsPage {
   announcements: AdminAnnouncement[];
   pagination: {
     page: number;
@@ -794,12 +754,6 @@ export const adminApi = {
   rotateNodeToken: (nodeId: string) =>
     request<{ node_id: string; token: string }>(`/api/v1/admin/nodes/${nodeId}/rotate-token`, {
       method: "POST",
-    }),
-
-  updateNodeCapacity: (nodeId: string, input: UpdateNodeCapacityInput) =>
-    request<{ node: AdminNode }>(`/api/v1/admin/nodes/${nodeId}`, {
-      method: "PATCH",
-      body: JSON.stringify(input),
     }),
 
   updateNodeConfiguration: (nodeId: string, input: NodeConfiguration) =>
@@ -1113,22 +1067,17 @@ export const adminApi = {
 
   getStorage: () => request<AdminStorageState>("/api/v1/admin/storage"),
 
-  testStorage: (input: AdminStorageInput) =>
+  testStorage: (input: StorageInput) =>
     request<{ tested: true }>("/api/v1/admin/storage/test", {
       method: "POST",
       body: JSON.stringify(input),
     }),
 
-  createStorageMigration: (input: AdminStorageInput) =>
+  createStorageMigration: (input: StorageInput) =>
     request<{ migration: AdminStorageMigration }>("/api/v1/admin/storage/migrations", {
       method: "POST",
       body: JSON.stringify(input),
     }),
-
-  getStorageMigration: () =>
-    request<Pick<AdminStorageState, "maintenance" | "migration">>(
-      "/api/v1/admin/storage/migrations",
-    ),
 
   listIdentityProviders: () =>
     request<{ providers: AdminIdentityProvider[] }>("/api/v1/admin/identity-providers"),

@@ -1,30 +1,25 @@
+import { AccountAvatar, AccountMenuContent } from "@/features/account/account-menu";
 import {
   FolderGitIcon,
   GaugeIcon,
   HomeIcon,
-  LogOutIcon,
   MonitorIcon,
   MoonIcon,
   ScrollTextIcon,
   SettingsIcon,
-  ShieldCheckIcon,
   SunIcon,
-  UserRoundIcon,
   UsersIcon,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useEffect } from "react";
-import { matchPath, NavLink, Outlet, useLocation, useNavigate } from "react-router";
+import { matchPath, NavLink, Outlet, useLocation } from "react-router";
 
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { SiteLogo } from "@/components/site-logo";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
@@ -59,8 +54,6 @@ import { canViewTeamAudit, canViewTeamSettings } from "@/features/teams/team-per
 import { TeamSwitcher } from "@/features/teams/team-switcher";
 import { useTeam } from "@/features/teams/team-context";
 import { NotificationBell } from "@/features/notifications/notification-bell";
-import { showErrorToast } from "@/lib/toast";
-import { apiUrl } from "@/lib/api";
 
 const primaryNavigation = [
   { title: "Overview", url: "/", icon: HomeIcon },
@@ -72,8 +65,6 @@ const settingsNavigation = [
   { title: "Members", url: "/settings/members", icon: UsersIcon },
   { title: "Audit", url: "/settings/audit", icon: ScrollTextIcon },
 ];
-
-const initials = (value: string) => value.slice(0, 2).toUpperCase();
 
 function pageTitle(pathname: string, inProject: boolean): string {
   if (pathname === "/") return "Overview";
@@ -205,11 +196,10 @@ function TeamSidebarNav({
 }
 
 function AppLayoutContent() {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const { siteName, version } = useBranding();
   const { activeTeam, activeRole, error, isLoading, refreshTeams } = useTeam();
   const location = useLocation();
-  const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
   const showSettings = activeRole ? canViewTeamSettings(activeRole) : false;
   const showAudit = activeRole ? canViewTeamAudit(activeRole) : false;
@@ -229,15 +219,6 @@ function AppLayoutContent() {
   useEffect(() => {
     if (isMobile) setOpenMobile(false);
   }, [isMobile, location.pathname, location.search, setOpenMobile]);
-
-  const signOut = async () => {
-    try {
-      await logout();
-      navigate("/login", { replace: true });
-    } catch (cause) {
-      showErrorToast(cause);
-    }
-  };
 
   return (
     <>
@@ -278,48 +259,17 @@ function AppLayoutContent() {
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <SidebarMenuButton tooltip={user?.display_name || user?.email || "Account"}>
-                    <Avatar className="size-6">
-                      {user?.avatar_url && (
-                        <AvatarImage
-                          src={apiUrl(user.avatar_url)}
-                          alt=""
-                          className="object-cover"
-                        />
-                      )}
-                      <AvatarFallback className="text-[10px]">
-                        {initials(user?.display_name || user?.email || "GW")}
-                      </AvatarFallback>
-                    </Avatar>
+                    <AccountAvatar className="size-6" />
                     <span className="min-w-0 flex-1 truncate text-left">
                       {user?.display_name || user?.email}
                     </span>
                   </SidebarMenuButton>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent side="top" align="start" className="w-56">
-                  <DropdownMenuLabel className="font-normal">
-                    <p className="truncate text-sm font-medium">
-                      {user?.display_name ?? user?.email}
-                    </p>
-                    <p className="truncate text-xs text-muted-foreground">{user?.email}</p>
-                  </DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem asChild>
-                    <NavLink to="/account/profile">
-                      <UserRoundIcon /> Personal settings
-                    </NavLink>
-                  </DropdownMenuItem>
-                  {user?.platform_role === "admin" && (
-                    <DropdownMenuItem asChild>
-                      <NavLink to="/admin">
-                        <ShieldCheckIcon /> Administration
-                      </NavLink>
-                    </DropdownMenuItem>
-                  )}
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={signOut}>
-                    <LogOutIcon /> Log out
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
+                <AccountMenuContent
+                  side="top"
+                  align="start"
+                  showAdministration={user?.platform_role === "admin"}
+                />
               </DropdownMenu>
             </SidebarMenuItem>
           </SidebarMenu>

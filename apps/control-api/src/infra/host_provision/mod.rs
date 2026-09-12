@@ -164,77 +164,6 @@ impl DnsProviderHostProvisioner {
         }
     }
 
-    #[allow(dead_code)]
-    pub async fn ensure_txt_record(
-        &self,
-        provider: &str,
-        config: &serde_json::Value,
-        zone: &str,
-        name: &str,
-        value: &str,
-    ) -> Result<String, HostProvisionError> {
-        let result = match provider.trim().to_ascii_lowercase().as_str() {
-            cloudflare::PROVIDER_NAME => {
-                let parsed = cloudflare::CloudflareConfig::from_json(&txt_config(config, value))
-                    .map_err(HostProvisionError::Provider)?;
-                self.cloudflare
-                    .ensure_txt_record(&parsed, name, value)
-                    .await
-                    .map(|record| record.id)
-            }
-            dnspod::PROVIDER_NAME => {
-                let parsed = dnspod::DnsPodConfig::from_json(zone, &txt_config(config, value))
-                    .map_err(HostProvisionError::Provider)?;
-                self.dnspod
-                    .ensure_txt_record(&parsed, name, value)
-                    .await
-                    .map(|record| record.id)
-            }
-            route53::PROVIDER_NAME => {
-                let parsed = route53::Route53Config::from_json(&txt_config(config, value))
-                    .map_err(HostProvisionError::Provider)?;
-                self.route53
-                    .ensure_txt_record(&parsed, name, value)
-                    .await
-                    .map(|record| record.id)
-            }
-            other => Err(Self::unsupported(Some(other))),
-        };
-        result.map_err(|error| credentials::redact_error(config, error))
-    }
-
-    #[allow(dead_code)]
-    pub async fn remove_txt_record(
-        &self,
-        provider: &str,
-        config: &serde_json::Value,
-        zone: &str,
-        name: &str,
-        value: &str,
-    ) -> Result<Option<String>, HostProvisionError> {
-        let result = match provider.trim().to_ascii_lowercase().as_str() {
-            cloudflare::PROVIDER_NAME => {
-                let parsed = cloudflare::CloudflareConfig::from_json(&txt_config(config, value))
-                    .map_err(HostProvisionError::Provider)?;
-                self.cloudflare
-                    .remove_txt_record(&parsed, name, value)
-                    .await
-            }
-            dnspod::PROVIDER_NAME => {
-                let parsed = dnspod::DnsPodConfig::from_json(zone, &txt_config(config, value))
-                    .map_err(HostProvisionError::Provider)?;
-                self.dnspod.remove_txt_record(&parsed, name, value).await
-            }
-            route53::PROVIDER_NAME => {
-                let parsed = route53::Route53Config::from_json(&txt_config(config, value))
-                    .map_err(HostProvisionError::Provider)?;
-                self.route53.remove_txt_record(&parsed, name, value).await
-            }
-            other => Err(Self::unsupported(Some(other))),
-        };
-        result.map_err(|error| credentials::redact_error(config, error))
-    }
-
     fn unsupported(provider: Option<&str>) -> HostProvisionError {
         HostProvisionError::UnsupportedSource(format!(
             "dns provider '{}' is not supported (supported: {})",
@@ -242,17 +171,6 @@ impl DnsProviderHostProvisioner {
             supported_provider_names(),
         ))
     }
-}
-
-/// Add the record fields required by the provider parsers without requiring
-/// ACME configuration to contain a project-host record template.
-fn txt_config(config: &serde_json::Value, value: &str) -> serde_json::Value {
-    let mut object = config.as_object().cloned().unwrap_or_default();
-    // Provider parsers validate the base host-source template. The concrete
-    // TXT methods call `for_txt` after parsing and replace this placeholder.
-    object.insert("record_type".to_owned(), serde_json::json!("CNAME"));
-    object.insert("record_value".to_owned(), serde_json::json!(value));
-    serde_json::Value::Object(object)
 }
 
 pub fn supported_provider_names() -> &'static str {
@@ -507,17 +425,5 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("api_token"), "{error}");
-    }
-
-    #[test]
-    fn acme_txt_config_keeps_provider_parsers_on_a_valid_base_template() {
-        let config = txt_config(
-            &serde_json::json!({ "api_token": "token", "zone_id": "zone" }),
-            "challenge",
-        );
-        let parsed = cloudflare::CloudflareConfig::from_json(&config).unwrap();
-
-        assert_eq!(parsed.record_type, "CNAME");
-        assert_eq!(parsed.record_value, "challenge");
     }
 }

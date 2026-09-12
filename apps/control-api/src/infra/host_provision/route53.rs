@@ -42,14 +42,6 @@ impl Route53Config {
         Self::from_json(&source.config)
     }
 
-    #[allow(dead_code)]
-    pub fn for_txt(&self, value: &str) -> Self {
-        let mut config = self.clone();
-        config.record_type = "TXT".to_owned();
-        config.record_value = value.to_owned();
-        config
-    }
-
     pub fn from_json(config: &Value) -> Result<Self, String> {
         let object = config
             .as_object()
@@ -365,97 +357,6 @@ fn aws_uri_encode(value: &str) -> String {
         .collect()
 }
 
-/// Route53 TXT RDATA consists of quoted strings of at most 255 bytes.
-fn encode_txt(value: &str) -> String {
-    let mut chunks = Vec::new();
-    let mut chunk = String::new();
-    let mut bytes = 0;
-    for character in value.chars() {
-        if bytes + character.len_utf8() > 255 {
-            chunks.push(format!("\"{chunk}\""));
-            chunk.clear();
-            bytes = 0;
-        }
-        bytes += character.len_utf8();
-        match character {
-            '"' | '\\' => {
-                chunk.push('\\');
-                chunk.push(character);
-            }
-            character if character.is_control() => {
-                for byte in character.to_string().bytes() {
-                    chunk.push_str(&format!("\\{byte:03o}"));
-                }
-            }
-            character => chunk.push(character),
-        }
-    }
-    chunks.push(format!("\"{chunk}\""));
-    chunks.join(" ")
-}
-
-fn decode_txt(value: &str) -> Option<String> {
-    let bytes = value.as_bytes();
-    let mut output = Vec::new();
-    let mut position = 0;
-    let mut chunks = 0;
-    while position < bytes.len() {
-        if bytes[position].is_ascii_whitespace() {
-            position += 1;
-            continue;
-        }
-        if bytes[position] != b'"' {
-            return None;
-        }
-        position += 1;
-        chunks += 1;
-        loop {
-            let byte = *bytes.get(position)?;
-            position += 1;
-            match byte {
-                b'"' => break,
-                b'\\' => {
-                    let escaped = *bytes.get(position)?;
-                    if (b'0'..=b'7').contains(&escaped) {
-                        let digits = bytes.get(position..position + 3)?;
-                        if !digits.iter().all(|byte| (b'0'..=b'7').contains(byte)) {
-                            return None;
-                        }
-                        let decoded = (u16::from(digits[0] - b'0') << 6)
-                            + (u16::from(digits[1] - b'0') << 3)
-                            + u16::from(digits[2] - b'0');
-                        output.push(u8::try_from(decoded).ok()?);
-                        position += 3;
-                    } else {
-                        output.push(escaped);
-                        position += 1;
-                    }
-                }
-                byte => output.push(byte),
-            }
-        }
-    }
-    (chunks > 0)
-        .then(|| String::from_utf8(output).ok())
-        .flatten()
-}
-
-fn value_matches(config: &Route53Config, value: &str) -> bool {
-    if config.record_type == "TXT" {
-        decode_txt(value).as_deref() == Some(config.record_value.as_str())
-    } else {
-        same_record_value(&config.record_type, value, &config.record_value)
-    }
-}
-
-fn desired_value(config: &Route53Config) -> String {
-    if config.record_type == "TXT" {
-        encode_txt(&config.record_value)
-    } else {
-        config.record_value.clone()
-    }
-}
-
 fn change_fragment(record: &RecordSet, action: &str) -> String {
     let values = record
         .values
@@ -663,26 +564,6 @@ impl Route53 {
             .unwrap_or_else(|| format!("route53:{}", config.hosted_zone_id)))
     }
 
-    #[allow(dead_code)]
-    pub async fn ensure_txt_record(
-        &self,
-        config: &Route53Config,
-        name: &str,
-        value: &str,
-    ) -> Result<EnsuredRecord, HostProvisionError> {
-        self.ensure_record(&config.for_txt(value), name).await
-    }
-
-    #[allow(dead_code)]
-    pub async fn remove_txt_record(
-        &self,
-        config: &Route53Config,
-        name: &str,
-        value: &str,
-    ) -> Result<Option<String>, HostProvisionError> {
-        self.remove_record(&config.for_txt(value), name).await
-    }
-
     pub async fn ensure_record(
         &self,
         config: &Route53Config,
@@ -700,9 +581,9 @@ impl Route53 {
             let contains_value = record
                 .values
                 .iter()
-                .any(|value| value_matches(config, value));
+                .any(|value| same_record_value(&config.record_type, value, &config.record_value));
             let matches = contains_value
-                && (config.record_type == "TXT" || record.ttl == config.ttl)
+                && record.ttl == config.ttl
                 && (config.record_type != "CNAME" || record.values.len() == 1);
             if matches {
                 return Ok(EnsuredRecord {
@@ -711,13 +592,11 @@ impl Route53 {
                 });
             }
             if config.record_type == "CNAME" {
-                record.values = vec![desired_value(config)];
+                record.values = vec![config.record_value.clone()];
             } else if !contains_value {
-                record.values.push(desired_value(config));
+                record.values.push(config.record_value.clone());
             }
-            if config.record_type != "TXT" {
-                record.ttl = config.ttl;
-            }
+            record.ttl = config.ttl;
             match self
                 .change_record_set(config, existing.as_ref(), Some(&record))
                 .await
@@ -748,7 +627,9 @@ impl Route53 {
             };
             let mut record = original.clone();
             let original_len = record.values.len();
-            record.values.retain(|value| !value_matches(config, value));
+            record.values.retain(|value| {
+                !same_record_value(&config.record_type, value, &config.record_value)
+            });
             if record.values.len() == original_len {
                 return Ok(None);
             }
@@ -1093,131 +974,6 @@ mod tests {
         config.record_value = "old.example.com".to_owned();
         assert_eq!(
             dns.remove_record(&config, "app.example.com").await.unwrap(),
-            None
-        );
-    }
-
-    #[test]
-    fn txt_rdata_round_trips_quotes_escapes_utf8_and_multiple_chunks() {
-        for value in [
-            String::new(),
-            "text with \"quotes\" and \\backslash\n".to_owned(),
-            "a".repeat(256),
-            "证书".repeat(60),
-        ] {
-            let encoded = encode_txt(&value);
-            assert_eq!(decode_txt(&encoded).as_deref(), Some(value.as_str()));
-            assert!(encoded.starts_with('"') && encoded.ends_with('"'));
-        }
-        assert_eq!(
-            encode_txt(&"a".repeat(256)),
-            format!("\"{}\" \"a\"", "a".repeat(255))
-        );
-        assert_eq!(
-            decode_txt("\"first\" \"second\""),
-            Some("firstsecond".to_owned())
-        );
-        assert_eq!(decode_txt("unquoted"), None);
-        assert_eq!(decode_txt("\"unfinished"), None);
-        assert_eq!(aws_uri_encode("*.example.com ~"), "%2A.example.com%20~");
-    }
-
-    #[tokio::test]
-    async fn txt_lifecycle_retries_conflicts_and_preserves_other_challenges() {
-        let original = RecordSet {
-            name: "_acme-challenge.example.com.".to_owned(),
-            record_type: "TXT".to_owned(),
-            ttl: 60,
-            values: vec!["\"keep-me\"".to_owned()],
-        };
-        let mut concurrent = original.clone();
-        concurrent.values.push("\"other-challenge\"".to_owned());
-        let zone = Arc::new(Mutex::new(MockZone {
-            record: Some(original),
-            replace_on_next_write: Some(concurrent.clone()),
-            requests: Vec::new(),
-        }));
-        let endpoint = mock_zone(zone.clone()).await;
-        let config = config(&endpoint);
-        let dns = Route53::with_base_url(endpoint);
-        let value = "new-\"challenge\"\\value";
-        assert!(
-            dns.ensure_txt_record(&config, "_acme-challenge.example.com", value)
-                .await
-                .unwrap()
-                .updated
-        );
-        let expected = {
-            let mut expected = concurrent.clone();
-            expected.values.push(encode_txt(value));
-            expected
-        };
-        assert_eq!(zone.lock().unwrap().record, Some(expected));
-        assert_eq!(zone.lock().unwrap().requests.len(), 2);
-        assert!(
-            !dns.ensure_txt_record(&config, "_acme-challenge.example.com", value)
-                .await
-                .unwrap()
-                .updated
-        );
-        assert_eq!(zone.lock().unwrap().requests.len(), 2);
-        assert!(
-            dns.remove_txt_record(&config, "_acme-challenge.example.com", value)
-                .await
-                .unwrap()
-                .is_some()
-        );
-        assert_eq!(zone.lock().unwrap().record, Some(concurrent));
-        assert_eq!(
-            dns.remove_txt_record(&config, "_acme-challenge.example.com", value)
-                .await
-                .unwrap(),
-            None
-        );
-    }
-
-    #[tokio::test]
-    async fn simultaneous_txt_ensures_keep_both_values() {
-        let zone = Arc::new(Mutex::new(MockZone::default()));
-        let endpoint = mock_zone(zone.clone()).await;
-        let config = config(&endpoint);
-        let dns = Route53::with_base_url(endpoint);
-        let (first, second) = tokio::join!(
-            dns.ensure_txt_record(&config, "_acme-challenge.example.com", "first"),
-            dns.ensure_txt_record(&config, "_acme-challenge.example.com", "second")
-        );
-        first.unwrap();
-        second.unwrap();
-        let mut values = zone.lock().unwrap().record.as_ref().unwrap().values.clone();
-        values.sort();
-        assert_eq!(values, ["\"first\"", "\"second\""]);
-    }
-
-    #[tokio::test]
-    async fn last_txt_cleanup_deletes_the_original_chunked_rdata_exactly() {
-        let zone = Arc::new(Mutex::new(MockZone {
-            record: Some(RecordSet {
-                name: "_acme-challenge.example.com.".to_owned(),
-                record_type: "TXT".to_owned(),
-                ttl: 60,
-                values: vec!["\"first\" \"second\"".to_owned()],
-            }),
-            ..MockZone::default()
-        }));
-        let endpoint = mock_zone(zone.clone()).await;
-        let config = config(&endpoint);
-        let dns = Route53::with_base_url(endpoint);
-        assert!(
-            dns.remove_txt_record(&config, "_acme-challenge.example.com", "firstsecond")
-                .await
-                .unwrap()
-                .is_some()
-        );
-        assert!(zone.lock().unwrap().record.is_none());
-        assert_eq!(
-            dns.remove_txt_record(&config, "_acme-challenge.example.com", "firstsecond")
-                .await
-                .unwrap(),
             None
         );
     }

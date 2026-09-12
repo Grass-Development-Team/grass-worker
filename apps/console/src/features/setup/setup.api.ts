@@ -1,38 +1,11 @@
+import type { StorageConfiguration, StorageInput } from "@/features/storage/storage-form";
 import { request } from "@/lib/api";
 
 export type SetupStage = "database" | "admin" | "site" | "node" | "storage" | "finish" | "complete";
 
-export interface SetupState {
+interface SetupState {
   stage: SetupStage;
   is_setup_mode: boolean;
-}
-
-export type StorageBackend = "local" | "s3" | "minio" | "r2";
-
-export interface StorageConfigurationInput {
-  backend: StorageBackend;
-  local_root: string;
-  endpoint?: string;
-  region?: string;
-  bucket?: string;
-  prefix?: string;
-  force_path_style?: boolean;
-  allow_http?: boolean;
-  access_key_id?: string;
-  secret_access_key?: string;
-  session_token?: string;
-}
-
-export interface PublicStorageConfiguration {
-  backend: StorageBackend;
-  local_root: string;
-  endpoint: string;
-  region: string;
-  bucket: string;
-  prefix: string;
-  force_path_style: boolean;
-  allow_http: boolean;
-  credentials_configured: boolean;
 }
 
 export function buildPostgresUrl(
@@ -100,8 +73,8 @@ export const setupApi = {
       body: JSON.stringify({ name: name ?? null }),
     }),
 
-  configureStorage: (input: StorageConfigurationInput) =>
-    request<{ configured: boolean; storage: PublicStorageConfiguration }>("/api/v1/setup/storage", {
+  configureStorage: (input: StorageInput) =>
+    request<{ configured: boolean; storage: StorageConfiguration }>("/api/v1/setup/storage", {
       method: "POST",
       body: JSON.stringify(input),
     }),

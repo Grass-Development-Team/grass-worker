@@ -148,14 +148,6 @@ pub async fn set_archived<C: ConnectionTrait>(
     active.update(db).await.map_err(Into::into)
 }
 
-#[allow(dead_code)]
-pub async fn soft_delete<C: ConnectionTrait>(
-    db: &C,
-    project: project::Model,
-) -> anyhow::Result<project::Model> {
-    soft_delete_at(db, project, OffsetDateTime::now_utc()).await
-}
-
 pub async fn soft_delete_at<C: ConnectionTrait>(
     db: &C,
     project: project::Model,
@@ -191,7 +183,6 @@ pub async fn hard_delete<C: ConnectionTrait>(db: &C, project_id: Uuid) -> anyhow
 }
 
 /// Validates that a project is in a state that accepts new deployments.
-#[allow(dead_code)] // Wired by deployment creation in Milestone 5.
 pub fn ensure_deployable(project: &project::Model) -> Result<(), ProjectStateError> {
     if project.archived_at.is_some() {
         return Err(ProjectStateError::Archived);

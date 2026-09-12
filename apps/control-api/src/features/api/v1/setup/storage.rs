@@ -18,26 +18,8 @@ pub struct StorageSetupRequest {
     pub backend: Option<String>,
     #[serde(default)]
     pub root: Option<String>,
-    #[serde(default)]
-    pub local_root: Option<String>,
-    #[serde(default)]
-    pub endpoint: Option<String>,
-    #[serde(default)]
-    pub region: Option<String>,
-    #[serde(default)]
-    pub bucket: Option<String>,
-    #[serde(default)]
-    pub prefix: Option<String>,
-    #[serde(default)]
-    pub force_path_style: Option<bool>,
-    #[serde(default)]
-    pub allow_http: Option<bool>,
-    #[serde(default)]
-    pub access_key_id: Option<String>,
-    #[serde(default)]
-    pub secret_access_key: Option<String>,
-    #[serde(default)]
-    pub session_token: Option<String>,
+    #[serde(flatten)]
+    pub options: storage_settings::StorageOptions,
 }
 
 pub async fn handler(
@@ -48,49 +30,8 @@ pub async fn handler(
     let db = super::setup_database(&state, "setup.storage.database")?;
     super::ensure_setup_mutation_allowed(db, "setup.storage.ready_mode").await?;
 
-    let root = body
-        .local_root
-        .or(body.root)
-        .unwrap_or_else(|| "/data".to_owned());
-    let backend = body
-        .backend
-        .as_deref()
-        .unwrap_or("local")
-        .parse::<StorageBackendKind>()
-        .map_err(|_| AppError::Validation {
-            op: "setup.storage.invalid_backend",
-            message: "backend must be local, s3, minio or r2".to_owned(),
-        })?;
-    let config = StorageConfig {
-        backend,
-        local_root: validate_storage_root(&root)?,
-        endpoint: body.endpoint.unwrap_or_default().trim().to_owned(),
-        region: body
-            .region
-            .unwrap_or_else(|| backend.default_region().to_owned())
-            .trim()
-            .to_owned(),
-        bucket: body.bucket.unwrap_or_default().trim().to_owned(),
-        prefix: body.prefix.unwrap_or_default().trim_matches('/').to_owned(),
-        force_path_style: body
-            .force_path_style
-            .unwrap_or(matches!(backend, StorageBackendKind::Minio)),
-        allow_http: body
-            .allow_http
-            .unwrap_or(matches!(backend, StorageBackendKind::Minio)),
-    };
-    let credentials = StorageCredentials {
-        access_key_id: body.access_key_id.filter(|value| !value.trim().is_empty()),
-        secret_access_key: body
-            .secret_access_key
-            .filter(|value| !value.trim().is_empty()),
-        session_token: body.session_token.filter(|value| !value.trim().is_empty()),
-    };
+    let (config, credentials) = prepare(body)?;
     let credentials_configured = credentials.is_configured();
-    config.validate().map_err(|source| AppError::Validation {
-        op: "setup.storage.invalid_config",
-        message: source.to_string(),
-    })?;
     let backend_instance =
         build_backend(&config, &credentials).map_err(|source| AppError::Validation {
             op: "setup.storage.build_backend",
@@ -163,15 +104,22 @@ pub(super) fn node_work_root(storage_root: &str) -> String {
     nodes::work_root_for_storage(storage_root)
 }
 
-fn validate_storage_root(root: &str) -> Result<String, AppError> {
-    let root = root.trim().trim_end_matches('/');
-    if root.is_empty() || !std::path::Path::new(root).is_absolute() {
-        return Err(AppError::Validation {
-            op: "setup.storage.invalid_root",
-            message: "storage root must be a non-empty absolute path".to_owned(),
-        });
-    }
-    Ok(root.to_owned())
+fn prepare(body: StorageSetupRequest) -> Result<(StorageConfig, StorageCredentials), AppError> {
+    let backend = body
+        .backend
+        .as_deref()
+        .unwrap_or("local")
+        .parse::<StorageBackendKind>()
+        .map_err(|_| AppError::Validation {
+            op: "setup.storage.invalid_backend",
+            message: "backend must be local, s3, minio or r2".to_owned(),
+        })?;
+    body.options
+        .resolve(backend, body.root.as_deref().unwrap_or("/data"))
+        .map_err(|source| AppError::Validation {
+            op: "setup.storage.invalid_config",
+            message: source.to_string(),
+        })
 }
 
 #[cfg(test)]
@@ -195,10 +143,21 @@ mod tests {
     }
 
     #[test]
-    fn storage_root_must_be_absolute_and_normalized() {
-        assert_eq!(validate_storage_root(" /srv/grass ").unwrap(), "/srv/grass");
-        assert!(validate_storage_root("relative/path").is_err());
-        assert!(validate_storage_root("   ").is_err());
+    fn setup_root_compatibility_and_precedence_are_preserved() {
+        for (input, expected) in [
+            (json!({}), "/data"),
+            (json!({"root":" /srv/legacy/ "}), "/srv/legacy"),
+            (
+                json!({"root":"/srv/legacy", "local_root":"/srv/current"}),
+                "/srv/current",
+            ),
+        ] {
+            let (config, _) = prepare(serde_json::from_value(input).unwrap()).unwrap();
+            assert_eq!(config.local_root, expected);
+        }
+        for root in ["relative/path", "   "] {
+            assert!(prepare(serde_json::from_value(json!({"root":root})).unwrap()).is_err());
+        }
     }
 
     #[test]

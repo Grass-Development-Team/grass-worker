@@ -39,14 +39,6 @@ impl DnsPodConfig {
         Self::from_json(&source.base_domain, &source.config)
     }
 
-    #[allow(dead_code)]
-    pub fn for_txt(&self, value: &str) -> Self {
-        let mut config = self.clone();
-        config.record_type = "TXT".to_owned();
-        config.record_value = value.to_owned();
-        config
-    }
-
     pub fn from_json(base_domain: &str, config: &Value) -> Result<Self, String> {
         let object = config
             .as_object()
@@ -478,26 +470,6 @@ impl DnsPod {
         .map(|_| ())
     }
 
-    #[allow(dead_code)]
-    pub async fn ensure_txt_record(
-        &self,
-        config: &DnsPodConfig,
-        name: &str,
-        value: &str,
-    ) -> Result<EnsuredRecord, HostProvisionError> {
-        self.ensure_record(&config.for_txt(value), name).await
-    }
-
-    #[allow(dead_code)]
-    pub async fn remove_txt_record(
-        &self,
-        config: &DnsPodConfig,
-        name: &str,
-        value: &str,
-    ) -> Result<Option<String>, HostProvisionError> {
-        self.remove_record(&config.for_txt(value), name).await
-    }
-
     pub async fn ensure_record(
         &self,
         config: &DnsPodConfig,
@@ -519,8 +491,6 @@ impl DnsPod {
         });
         let existing = if let Some(index) = exact {
             Some(matching.swap_remove(index))
-        } else if config.record_type == "TXT" {
-            None
         } else {
             matching.into_iter().next()
         };
@@ -556,7 +526,7 @@ impl DnsPod {
             return Ok(EnsuredRecord { id, updated: false });
         };
         if same_record_value(&config.record_type, &existing.value, &config.record_value)
-            && (config.record_type == "TXT" || existing.ttl == config.ttl)
+            && existing.ttl == config.ttl
         {
             return Ok(EnsuredRecord {
                 id: existing.id,
@@ -777,71 +747,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn txt_lifecycle_preserves_other_values_names_and_lines_across_pages() {
-        type Records = Arc<Mutex<Vec<Value>>>;
-        let mut initial = vec![
-            json!({"RecordId": 1, "Name": "_acme-challenge", "Type": "TXT", "Value": "other-challenge", "Line": "默认", "TTL": 600}),
-            json!({"RecordId": 2, "Name": "other", "Type": "TXT", "Value": "desired", "Line": "默认", "TTL": 600}),
-            json!({"RecordId": 3, "Name": "_acme-challenge", "Type": "TXT", "Value": "desired", "Line": "overseas", "TTL": 600}),
-        ];
-        initial.extend((0..97).map(|index| json!({"RecordId": 100 + index, "Name": "_acme-challenge", "Type": "TXT", "Value": format!("other-{index}"), "Line": "默认", "TTL": 600})));
-        let records = Arc::new(Mutex::new(initial.clone()));
-        let router = Router::new().route("/", post(|State(records): State<Records>, headers: HeaderMap, Json(body): Json<Value>| async move {
-            let mut records = records.lock().unwrap();
-            match headers["x-tc-action"].to_str().unwrap() {
-                "DescribeRecordList" => {
-                    let offset = body["Offset"].as_u64().unwrap() as usize;
-                    let page = records.iter().skip(offset).take(100).cloned().collect::<Vec<_>>();
-                    Json(json!({"Response": {"RecordCountInfo": {"ListCount": page.len(), "TotalCount": records.len()}, "RecordList": page}}))
-                }
-                "CreateRecord" => {
-                    assert_eq!(body["RecordType"], "TXT");
-                    assert_eq!(body["Value"], "desired");
-                    records.push(json!({"RecordId": 9, "Name": "_ACME-CHALLENGE", "Type": "TXT", "Value": "desired", "Line": "默认", "TTL": 600}));
-                    Json(json!({"Response": {"RecordId": 9}}))
-                }
-                "DeleteRecord" => {
-                    assert_eq!(body["RecordId"], 9);
-                    records.retain(|record| record["RecordId"] != 9);
-                    Json(json!({"Response": {}}))
-                }
-                action => panic!("unexpected mutation: {action}"),
-            }
-        })).with_state(records.clone());
-        let endpoint = spawn(router).await;
-        let dns = DnsPod::with_base_url(endpoint.clone());
-        let config = config(&endpoint);
-        assert_eq!(
-            dns.ensure_txt_record(&config, "_acme-challenge.example.com", "desired")
-                .await
-                .unwrap()
-                .id,
-            "9"
-        );
-        assert!(
-            !dns.ensure_txt_record(&config, "_acme-challenge.example.com", "desired")
-                .await
-                .unwrap()
-                .updated
-        );
-        assert_eq!(records.lock().unwrap().len(), 101);
-        assert_eq!(
-            dns.remove_txt_record(&config, "_acme-challenge.example.com", "desired")
-                .await
-                .unwrap()
-                .as_deref(),
-            Some("9")
-        );
-        assert_eq!(*records.lock().unwrap(), initial);
-        assert_eq!(
-            dns.remove_txt_record(&config, "_acme-challenge.example.com", "desired")
-                .await
-                .unwrap(),
-            None
-        );
-    }
-
-    #[tokio::test]
     async fn no_data_error_is_an_empty_zone_and_allows_initial_creation() {
         let router = Router::new().route("/", post(|headers: HeaderMap| async move {
             Json(if headers["x-tc-action"] == "DescribeRecordList" {
@@ -854,14 +759,14 @@ mod tests {
         let endpoint = spawn(router).await;
         let dns = DnsPod::with_base_url(endpoint.clone());
         assert_eq!(
-            dns.ensure_txt_record(&config(&endpoint), "_acme-challenge.example.com", "value")
+            dns.ensure_record(&config(&endpoint), "www.example.com")
                 .await
                 .unwrap()
                 .id,
             "5"
         );
         assert_eq!(
-            dns.remove_txt_record(&config(&endpoint), "_acme-challenge.example.com", "value")
+            dns.remove_record(&config(&endpoint), "www.example.com")
                 .await
                 .unwrap(),
             None
@@ -905,7 +810,7 @@ mod tests {
         let router = Router::new().route("/", post(|State(created): State<Arc<Mutex<bool>>>, headers: HeaderMap| async move {
             let mut created = created.lock().unwrap();
             Json(if headers["x-tc-action"] == "DescribeRecordList" {
-                json!({"Response": {"RecordList": if *created { vec![json!({"RecordId": 42, "Name": "_acme-challenge", "Type": "TXT", "Value": "desired", "Line": "默认", "TTL": 300})] } else { vec![] }}})
+                json!({"Response": {"RecordList": if *created { vec![json!({"RecordId": 42, "Name": "www", "Type": "A", "Value": "203.0.113.7", "Line": "默认", "TTL": 300})] } else { vec![] }}})
             } else {
                 assert_eq!(headers["x-tc-action"], "CreateRecord");
                 *created = true;
@@ -915,7 +820,7 @@ mod tests {
         let endpoint = spawn(router).await;
         assert_eq!(
             DnsPod::with_base_url(endpoint.clone())
-                .ensure_txt_record(&config(&endpoint), "_acme-challenge.example.com", "desired")
+                .ensure_record(&config(&endpoint), "www.example.com")
                 .await
                 .unwrap()
                 .id,

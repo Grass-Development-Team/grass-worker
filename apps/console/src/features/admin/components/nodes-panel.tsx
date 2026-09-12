@@ -1,3 +1,4 @@
+import { SettingSwitch } from "./setting-switch";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   PlayIcon,
@@ -54,7 +55,6 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { Switch } from "@/components/ui/switch";
 import {
   Table,
   TableBody,
@@ -622,30 +622,6 @@ function ConfigurationNumberField({
   );
 }
 
-function ConfigurationSwitch({
-  id,
-  label,
-  description,
-  checked,
-  onCheckedChange,
-}: {
-  id: string;
-  label: string;
-  description?: string;
-  checked: boolean;
-  onCheckedChange: (checked: boolean) => void;
-}) {
-  return (
-    <Field orientation="horizontal">
-      <FieldContent>
-        <FieldLabel htmlFor={id}>{label}</FieldLabel>
-        {description && <FieldDescription>{description}</FieldDescription>}
-      </FieldContent>
-      <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} />
-    </Field>
-  );
-}
-
 function EditConfigurationDialog({ node }: { node: AdminNode }) {
   const queryClient = useQueryClient();
   const source = node.configuration.desired ?? node.configuration.effective;
@@ -819,7 +795,7 @@ function EditConfigurationDialog({ node }: { node: AdminNode }) {
                   <FieldSet className="gap-3">
                     <FieldLegend>Capabilities</FieldLegend>
                     <FieldGroup className="gap-3">
-                      <ConfigurationSwitch
+                      <SettingSwitch
                         id={`node-${node.id}-build-capability`}
                         label="Build"
                         checked={configuration.node.capabilities.build}
@@ -837,7 +813,7 @@ function EditConfigurationDialog({ node }: { node: AdminNode }) {
                           )
                         }
                       />
-                      <ConfigurationSwitch
+                      <SettingSwitch
                         id={`node-${node.id}-serve-capability`}
                         label="Serve"
                         checked={configuration.node.capabilities.serve}
@@ -892,7 +868,7 @@ function EditConfigurationDialog({ node }: { node: AdminNode }) {
                         }
                       />
                     </div>
-                    <ConfigurationSwitch
+                    <SettingSwitch
                       id={`node-${node.id}-retain-workspace`}
                       label="Retain workspace on failure"
                       checked={configuration.build.retain_workspace_on_failure}
@@ -984,7 +960,7 @@ function EditConfigurationDialog({ node }: { node: AdminNode }) {
                   <FieldSet className="gap-4">
                     <FieldLegend>HTTPS</FieldLegend>
                     <FieldGroup>
-                      <ConfigurationSwitch
+                      <SettingSwitch
                         id={`node-${node.id}-tls-enabled`}
                         label="Native HTTPS"
                         checked={configuration.serve.tls?.enabled ?? false}
@@ -1460,7 +1436,7 @@ function EditConfigurationDialog({ node }: { node: AdminNode }) {
 
                   <FieldSet className="gap-4">
                     <FieldLegend>Development and logging</FieldLegend>
-                    <ConfigurationSwitch
+                    <SettingSwitch
                       id={`node-${node.id}-verbose-build-log`}
                       label="Verbose build log"
                       checked={configuration.development.verbose_build_log}

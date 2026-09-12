@@ -12,24 +12,24 @@ export type BuildStatus =
 export type ReleaseStatus = "draft" | "pending_review" | "approved" | "rejected" | "active";
 export type ServeStatus = "pending" | "syncing" | "ready" | "failed" | "retired";
 export type DeploymentEnvironment = "production" | "preview";
-export type ScreenshotStatus = "pending" | "ready" | "unavailable";
+type ScreenshotStatus = "pending" | "ready" | "unavailable";
 
-export interface NodeRef {
+interface NodeRef {
   id: string;
   name: string;
 }
 
-export interface ServeResources {
+interface ServeResources {
   cpu_millicores: number;
   memory_mb: number;
   disk_mb: number;
 }
 
-export interface NodeResources extends ServeResources {
+interface NodeResources extends ServeResources {
   max_deployments: number;
 }
 
-export interface NodeUsage extends ServeResources {
+interface NodeUsage extends ServeResources {
   deployments: number;
 }
 
@@ -89,7 +89,7 @@ export interface Deployment {
   screenshot_url: string | null;
 }
 
-export interface DeploymentEvent {
+interface DeploymentEvent {
   id: string;
   kind: "system" | "build" | "serve" | "release" | "review" | "host";
   message: string;
@@ -97,7 +97,7 @@ export interface DeploymentEvent {
   created_at: string;
 }
 
-export interface DeploymentArtifact {
+interface DeploymentArtifact {
   id: string;
   kind: "grass_output" | "build_log" | "static_site" | "screenshot";
   storage_path: string;
@@ -107,7 +107,7 @@ export interface DeploymentArtifact {
   created_at: string;
 }
 
-export interface DeploymentReview {
+interface DeploymentReview {
   id: string;
   status: "pending" | "approved" | "rejected";
   reviewer_user_id: string | null;

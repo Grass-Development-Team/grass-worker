@@ -8,7 +8,7 @@ export interface Announcement {
   published_at: string;
 }
 
-export interface AnnouncementsPage {
+interface AnnouncementsPage {
   announcements: Announcement[];
   pagination: {
     page: number;

@@ -1,6 +1,6 @@
 import { request } from "@/lib/api";
 
-export type TeamKind = "personal" | "team";
+type TeamKind = "personal" | "team";
 export type TeamRole = "owner" | "admin" | "member" | "viewer";
 export type ManagedTeamRole = Exclude<TeamRole, "owner">;
 
@@ -14,7 +14,7 @@ export interface Team {
   group_id: string | null;
 }
 
-export interface TeamDetail extends Team {
+interface TeamDetail extends Team {
   role: TeamRole;
 }
 
@@ -44,7 +44,7 @@ export interface InvitationCandidate {
   display_name: string | null;
 }
 
-export interface InvitationPreflight {
+interface InvitationPreflight {
   team: Pick<Team, "id" | "name">;
   role: ManagedTeamRole;
   status: "pending" | "expired" | "accepted" | "revoked" | "email_mismatch";
@@ -67,19 +67,19 @@ export interface SourceCredential {
   updated_at: string;
 }
 
-export interface SourceCredentialSecretInput {
+interface SourceCredentialSecretInput {
   username: string;
   secret?: string;
   private_key?: string;
   passphrase?: string;
 }
 
-export interface CreateSourceCredentialInput extends SourceCredentialSecretInput {
+interface CreateSourceCredentialInput extends SourceCredentialSecretInput {
   name: string;
   repository_url: string;
 }
 
-export interface SshHostKey {
+interface SshHostKey {
   id: string;
   host: string;
   port: number;

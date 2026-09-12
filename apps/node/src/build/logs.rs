@@ -91,11 +91,6 @@ impl LogCollector {
         )
     }
 
-    #[allow(dead_code)] // Read by the websocket log pusher in Milestone 9.
-    pub fn deployment_id(&self) -> Uuid {
-        self.deployment_id
-    }
-
     /// Records one log line under the given stage: persisted through the
     /// HTTP batch and mirrored on the realtime channel.
     pub fn log(&self, stage: &str, line: impl Into<String>) {
@@ -136,11 +131,6 @@ impl LogCollector {
                 build_status: build_status.to_owned(),
             });
         }
-    }
-
-    #[allow(dead_code)] // Read by the websocket log pusher in Milestone 9.
-    pub fn last_seq(&self) -> u64 {
-        self.seq.load(Ordering::Relaxed)
     }
 }
 

@@ -17,7 +17,7 @@ export interface NotificationItem {
   created_at: string;
 }
 
-export interface NotificationsPage {
+interface NotificationsPage {
   notifications: NotificationItem[];
   pagination: {
     page: number;

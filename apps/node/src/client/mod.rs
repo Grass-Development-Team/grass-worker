@@ -10,8 +10,8 @@ use grass_node_protocol::{
     HeartbeatResponse, ObserveSshHostKeyRequest, ObserveSshHostKeyResponse,
     RedeemGitCredentialRequest, RedeemGitCredentialResponse, RegisterRequest, RegisterResponse,
     ReportIngressStatusRequest, ReportServeStatusRequest, ReportServeStatusResponse,
-    ResolveHostResponse, RouteSnapshotResponse, ServeAssignment, ServeAssignmentsResponse,
-    SsrLeaseResponse, StageRequest, StageResponse, StartPreviewAuthorizationRequest,
+    RouteSnapshotResponse, ServeAssignment, ServeAssignmentsResponse, SsrLeaseResponse,
+    StageRequest, StageResponse, StartPreviewAuthorizationRequest,
     StartPreviewAuthorizationResponse, UploadArtifactResponse, VerifyPreviewGrantRequest,
     VerifyPreviewGrantResponse, artifact_headers,
 };
@@ -147,13 +147,11 @@ impl ControlApiClient {
             .await
     }
 
-    #[allow(dead_code)] // Wired by the build loop in Milestone 7.
     pub async fn claim(&self, request: &ClaimRequest) -> anyhow::Result<ClaimResponse> {
         self.post_json("/deployments/claim", request, "deployment.claim")
             .await
     }
 
-    #[allow(dead_code)] // Wired by the build loop in Milestone 7.
     pub async fn report_stage(
         &self,
         deployment_id: Uuid,
@@ -193,7 +191,6 @@ impl ControlApiClient {
         .await
     }
 
-    #[allow(dead_code)] // Wired by the build loop in Milestone 7.
     pub async fn append_build_log(
         &self,
         deployment_id: Uuid,
@@ -256,7 +253,6 @@ impl ControlApiClient {
         Ok(request)
     }
 
-    #[allow(dead_code)] // Wired by the build loop in Milestone 7.
     #[allow(clippy::too_many_arguments)]
     pub async fn upload_artifact(
         &self,
@@ -489,24 +485,6 @@ impl ControlApiClient {
             .post_json("/serve/ingress-status", request, "serve.ingress_status")
             .await?;
         Ok(())
-    }
-
-    #[allow(dead_code)] // Wired by the serve resolver in Milestone 10.
-    pub async fn resolve_host(&self, host: &str) -> anyhow::Result<Option<ResolveHostResponse>> {
-        let response = self
-            .http
-            .get(self.url("/serve/resolve-host"))
-            .query(&[("host", host)])
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .context("serve.resolve_host: request failed")?;
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
-        Self::unwrap_envelope(response, "serve.resolve_host")
-            .await
-            .map(Some)
     }
 
     pub async fn start_preview_authorization(

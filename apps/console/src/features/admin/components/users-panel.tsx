@@ -1,3 +1,4 @@
+import { formatTimestamp } from "@/lib/format-timestamp";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronDownIcon,
@@ -426,11 +427,7 @@ function MfaFactorsDialog({ user, onClose }: { user: AdminUser; onClose: () => v
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ["admin", "users", user.id, "mfa"] }),
   });
-  const formatTimestamp = (value: string | null | undefined, fallback: string) => {
-    if (!value) return fallback;
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? "Unknown date" : date.toLocaleString();
-  };
+
   const toggleRequired = (factor: "totp" | "email", checked: boolean) =>
     setPolicy((current) =>
       current

@@ -106,7 +106,7 @@ fails must reconnect; new requests use an available entry.
 
 1. Under **Administration → Regional ingresses**, add the Node region and an
    ingress hostname such as `eu.entry.example.net`. Enable the ingress and TLS,
-   select the certificate issuer, and configure its DNS challenge provider.
+   select the certificate issuer, and point its public DNS records at the entries.
 2. Add the custom domain in the project's Domains page and select that region.
    Publish the displayed CNAME target and the exact `_grass.<domain>` TXT
    ownership record. The TXT value is bound to this domain binding; copy the
@@ -127,21 +127,16 @@ Node polls snapshots every five seconds. An unreachable Control API preserves
 the last valid local certificate; explicit Node authorization revocation or
 an authoritative snapshot removing the hostname withdraws it.
 
-If public port 80 cannot be exposed, select DNS-01 for the custom domain and
-publish the displayed `_acme-challenge.<domain>` CNAME delegation. Its target
-is specific to the binding under the regional ingress hostname. The Control
-API verifies that delegation, creates the TXT value through the configured
-regional DNS provider, waits for public DNS propagation, and removes that
-exact value after the attempt. Preserve the delegation for automatic renewal;
-update it if the regional ingress hostname changes. HTTP-01 and delegated
-DNS-01 both require the independent `_grass` TXT ownership verification.
+Automatic certificate issuance uses HTTP-01 for both regional ingress and
+custom hostnames. Keep public port 80 reachable for issuance and renewal.
+When that is unavailable, import and renew a manual certificate. Custom
+domains still require the independent `_grass` TXT ownership verification.
 
 ## Issuers and renewal
 
 - **Let's Encrypt:** automatic issuance and renewal. Regional ingress
-  hostnames use DNS-01; custom domains default to HTTP-01 and can use the
-  delegated DNS-01 flow above. `contact_email` is optional account contact
-  configuration.
+  hostnames and custom domains use HTTP-01. `contact_email` is optional
+  account contact configuration.
 - **ZeroSSL:** uses the same lifecycle and also requires `eab_kid` and the
   base64/base64url `eab_hmac_key` in the regional account configuration.
 - **Manual:** import a full certificate chain and matching private key through

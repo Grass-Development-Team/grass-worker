@@ -28,7 +28,7 @@ use crate::{
     client::ControlApiClient,
     config::NodeConfig,
     output::generate_grass_output,
-    runtime::{ContainerRuntime, PrepareImageInput, RunBuildInput, SocketRuntime},
+    runtime::{ContainerRuntime, RunBuildInput, SocketRuntime},
     serve::{ServeState, routes::RouteTable, ssr::SsrManager, sync::stage_archive},
 };
 
@@ -248,10 +248,10 @@ async fn checks_out_builds_packages_stages_and_serves_vite() -> anyhow::Result<(
         "checkout resolved an unexpected commit"
     );
 
-    let runtime = SocketRuntime::connect("docker-socket", &socket)?;
+    let runtime = SocketRuntime::connect(&socket)?;
     let (log_sender, mut log_receiver) = mpsc::channel(4096);
     runtime
-        .prepare_image(PrepareImageInput { image: &image }, log_sender.clone())
+        .prepare_image(&image, log_sender.clone())
         .await
         .context("build image is unavailable")?;
     let (_cancel_sender, cancel_receiver) = watch::channel(false);

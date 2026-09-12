@@ -216,7 +216,7 @@ mod tests {
                 INSERT INTO managed_certificates (id, ingress_id, host_binding_id, hostname, issuer, generation, challenge_method) VALUES ('{0}', '{entry_id}', '{0}', 'legacy.example.org', 'letsencrypt', '{0}', 'dns01');
             "#, old.id)).await?;
             Migrator::up(db, None).await?;
-            assert_migration_tracking(db, 34, 0).await?;
+            assert_migration_tracking(db, 34).await?;
             ensure!(managed_certificate::Entity::find_by_id(entry_id).one(db).await?.is_none(), "entry certificate must be removed");
             let legacy = managed_certificate::Entity::find_by_id(old.id).one(db).await?.unwrap();
             ensure!(legacy.challenge_method == "http01" && legacy.contact_email == "owner@example.org");
@@ -306,9 +306,9 @@ mod tests {
             server.abort();
             // Down/up restores the legacy shape, while reapplication produces the same new constraints.
             Migrator::down(db, Some(1)).await?;
-            assert_migration_tracking(db, 33, 1).await?;
+            assert_migration_tracking(db, 33).await?;
             Migrator::up(db, None).await?;
-            assert_migration_tracking(db, 34, 0).await?;
+            assert_migration_tracking(db, 34).await?;
             Ok(())
         }.await;
         database.cleanup().await?;
@@ -477,39 +477,39 @@ mod tests {
 
         let verification = async {
             Migrator::up(&test_db.db, Some(31)).await?;
-            assert_migration_tracking(&test_db.db, 31, 0).await?;
+            assert_migration_tracking(&test_db.db, 31).await?;
             assert_avatar_schema(&test_db.db).await?;
             assert_screenshot_schema(&test_db.db).await?;
             assert_object_storage_schema(&test_db.db).await?;
 
             Migrator::down(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 30, 1).await?;
+            assert_migration_tracking(&test_db.db, 30).await?;
             assert_regional_ingress_lifecycle_absent(&test_db.db).await?;
             assert_avatar_schema(&test_db.db).await?;
             assert_screenshot_schema(&test_db.db).await?;
             assert_object_storage_schema(&test_db.db).await?;
 
             Migrator::down(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 29, 2).await?;
+            assert_migration_tracking(&test_db.db, 29).await?;
             assert_regional_ingress_schema_absent(&test_db.db).await?;
             assert_avatar_schema(&test_db.db).await?;
             assert_screenshot_schema(&test_db.db).await?;
             assert_object_storage_schema(&test_db.db).await?;
 
             Migrator::down(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 28, 3).await?;
+            assert_migration_tracking(&test_db.db, 28).await?;
             assert_avatar_schema(&test_db.db).await?;
             assert_screenshot_schema(&test_db.db).await?;
             assert_object_storage_schema(&test_db.db).await?;
 
             Migrator::down(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 27, 4).await?;
+            assert_migration_tracking(&test_db.db, 27).await?;
             assert_avatar_schema(&test_db.db).await?;
             assert_screenshot_schema(&test_db.db).await?;
             assert_object_storage_schema_absent(&test_db.db).await?;
 
             Migrator::up(&test_db.db, Some(4)).await?;
-            assert_migration_tracking(&test_db.db, 31, 0).await?;
+            assert_migration_tracking(&test_db.db, 31).await?;
             assert_avatar_schema(&test_db.db).await?;
             assert_screenshot_schema(&test_db.db).await?;
             assert_object_storage_schema(&test_db.db).await
@@ -537,19 +537,19 @@ mod tests {
 
         let verification = async {
             Migrator::up(&test_db.db, Some(31)).await?;
-            assert_migration_tracking(&test_db.db, 31, 0).await?;
+            assert_migration_tracking(&test_db.db, 31).await?;
             assert_regional_ingress_schema(&test_db.db).await?;
 
             Migrator::down(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 30, 1).await?;
+            assert_migration_tracking(&test_db.db, 30).await?;
             assert_regional_ingress_lifecycle_absent(&test_db.db).await?;
 
             Migrator::down(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 29, 2).await?;
+            assert_migration_tracking(&test_db.db, 29).await?;
             assert_regional_ingress_schema_absent(&test_db.db).await?;
 
             Migrator::up(&test_db.db, Some(2)).await?;
-            assert_migration_tracking(&test_db.db, 31, 0).await?;
+            assert_migration_tracking(&test_db.db, 31).await?;
             assert_regional_ingress_schema(&test_db.db).await
         }
         .await;
@@ -575,15 +575,15 @@ mod tests {
 
         let verification = async {
             Migrator::up(&test_db.db, Some(25)).await?;
-            assert_migration_tracking(&test_db.db, 25, 0).await?;
+            assert_migration_tracking(&test_db.db, 25).await?;
             assert_registration_allowlist_schema(&test_db.db).await?;
 
             Migrator::down(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 24, 1).await?;
+            assert_migration_tracking(&test_db.db, 24).await?;
             assert_registration_allowlist_schema_absent(&test_db.db).await?;
 
             Migrator::up(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 25, 0).await?;
+            assert_migration_tracking(&test_db.db, 25).await?;
             assert_registration_allowlist_schema(&test_db.db).await
         }
         .await;
@@ -609,23 +609,23 @@ mod tests {
 
         let verification = async {
             Migrator::up(&test_db.db, Some(19)).await?;
-            assert_migration_tracking(&test_db.db, 19, 2).await?;
+            assert_migration_tracking(&test_db.db, 19).await?;
 
             Migrator::up(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 20, 1).await?;
+            assert_migration_tracking(&test_db.db, 20).await?;
             assert_notification_content_schema(&test_db.db).await?;
 
             Migrator::up(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 21, 0).await?;
+            assert_migration_tracking(&test_db.db, 21).await?;
             assert_announcement_schema(&test_db.db).await?;
 
             Migrator::down(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 20, 1).await?;
+            assert_migration_tracking(&test_db.db, 20).await?;
             assert_announcement_schema_absent(&test_db.db).await?;
             assert_notification_content_schema(&test_db.db).await?;
 
             Migrator::up(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 21, 0).await?;
+            assert_migration_tracking(&test_db.db, 21).await?;
             assert_announcement_schema(&test_db.db).await
         }
         .await;
@@ -672,15 +672,15 @@ mod tests {
 
         let verification = async {
             Migrator::up(&test_db.db, Some(15)).await?;
-            assert_migration_tracking(&test_db.db, 15, 2).await?;
+            assert_migration_tracking(&test_db.db, 15).await?;
             assert_node_deletion_schema(&test_db.db).await?;
 
             Migrator::down(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 14, 3).await?;
+            assert_migration_tracking(&test_db.db, 14).await?;
             assert_node_deletion_schema_absent(&test_db.db).await?;
 
             Migrator::up(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 15, 2).await?;
+            assert_migration_tracking(&test_db.db, 15).await?;
             assert_node_deletion_schema(&test_db.db).await
         }
         .await;
@@ -706,19 +706,19 @@ mod tests {
 
         let verification = async {
             Migrator::up(&test_db.db, Some(16)).await?;
-            assert_migration_tracking(&test_db.db, 16, 1).await?;
+            assert_migration_tracking(&test_db.db, 16).await?;
             let (user_id, project_id) = seed_project_notification_fixture(&test_db.db).await?;
 
             Migrator::up(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 17, 0).await?;
+            assert_migration_tracking(&test_db.db, 17).await?;
             assert_project_notification_schema(&test_db.db, user_id, project_id).await?;
 
             Migrator::down(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 16, 1).await?;
+            assert_migration_tracking(&test_db.db, 16).await?;
             assert_project_notification_schema_absent(&test_db.db).await?;
 
             Migrator::up(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 17, 0).await?;
+            assert_migration_tracking(&test_db.db, 17).await?;
             assert_project_notification_schema(&test_db.db, user_id, project_id).await
         }
         .await;
@@ -744,19 +744,19 @@ mod tests {
 
         let verification = async {
             Migrator::up(&test_db.db, Some(21)).await?;
-            assert_migration_tracking(&test_db.db, 21, 1).await?;
+            assert_migration_tracking(&test_db.db, 21).await?;
             let user_id = seed_authentication_fixture(&test_db.db).await?;
 
             Migrator::up(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 22, 0).await?;
+            assert_migration_tracking(&test_db.db, 22).await?;
             assert_authentication_schema(&test_db.db, user_id).await?;
 
             Migrator::down(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 21, 1).await?;
+            assert_migration_tracking(&test_db.db, 21).await?;
             assert_authentication_schema_absent(&test_db.db).await?;
 
             Migrator::up(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 22, 0).await?;
+            assert_migration_tracking(&test_db.db, 22).await?;
             assert_authentication_schema(&test_db.db, user_id).await
         }
         .await;
@@ -782,19 +782,19 @@ mod tests {
 
         let verification = async {
             Migrator::up(&test_db.db, Some(22)).await?;
-            assert_migration_tracking(&test_db.db, 22, 1).await?;
+            assert_migration_tracking(&test_db.db, 22).await?;
             let user_id = seed_legacy_mfa_policy_fixture(&test_db.db).await?;
 
             Migrator::up(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 23, 0).await?;
+            assert_migration_tracking(&test_db.db, 23).await?;
             assert_mfa_policy_schema(&test_db.db, user_id).await?;
 
             Migrator::down(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 22, 1).await?;
+            assert_migration_tracking(&test_db.db, 22).await?;
             assert_mfa_policy_schema_absent(&test_db.db, user_id).await?;
 
             Migrator::up(&test_db.db, Some(1)).await?;
-            assert_migration_tracking(&test_db.db, 23, 0).await?;
+            assert_migration_tracking(&test_db.db, 23).await?;
             assert_mfa_policy_schema(&test_db.db, user_id).await
         }
         .await;
@@ -1801,7 +1801,7 @@ SELECT
 
     async fn verify_audit_foundation_migration(db: &DatabaseConnection) -> anyhow::Result<()> {
         Migrator::up(db, Some(11)).await?;
-        assert_migration_tracking(db, 11, 6).await?;
+        assert_migration_tracking(db, 11).await?;
 
         let user_id = Uuid::now_v7();
         let team_id = Uuid::now_v7();
@@ -1810,7 +1810,7 @@ SELECT
         seed_v11_audit_fixtures(db, user_id, team_id, project_id, deployment_id).await?;
 
         Migrator::up(db, Some(1)).await?;
-        assert_migration_tracking(db, 12, 5).await?;
+        assert_migration_tracking(db, 12).await?;
         assert_audit_enum_shapes(db).await?;
         assert_audit_column_shapes(db).await?;
         assert_audit_constraints(db).await?;
@@ -1818,11 +1818,11 @@ SELECT
         assert_audit_backfill(db, deployment_id).await?;
 
         Migrator::down(db, Some(1)).await?;
-        assert_migration_tracking(db, 11, 6).await?;
+        assert_migration_tracking(db, 11).await?;
         assert_audit_foundation_objects_absent(db).await?;
 
         Migrator::up(db, None).await?;
-        assert_migration_tracking(db, 17, 0).await?;
+        assert_migration_tracking(db, 17).await?;
         assert_audit_foundation_objects_restored(db).await?;
 
         Ok(())
@@ -1879,7 +1879,6 @@ VALUES (
     async fn assert_migration_tracking(
         db: &DatabaseConnection,
         applied_count: usize,
-        _phase_pending_count: usize,
     ) -> anyhow::Result<()> {
         let applied = Migrator::get_applied_migrations(db).await?;
         let pending = Migrator::get_pending_migrations(db).await?;

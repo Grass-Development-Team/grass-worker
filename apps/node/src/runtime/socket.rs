@@ -21,12 +21,11 @@ use futures_util::StreamExt;
 use tokio::sync::{mpsc, watch};
 
 use super::{
-    BuildExecutionResult, ContainerRuntimeError, PrepareImageInput, RunBuildInput, RunServiceInput,
-    RunningService, ServiceContainer,
+    BuildExecutionResult, ContainerRuntimeError, RunBuildInput, RunServiceInput, RunningService,
+    ServiceContainer,
 };
 
 pub struct SocketRuntime {
-    backend: String,
     docker: Docker,
 }
 
@@ -35,19 +34,11 @@ fn runtime_error(context: &str, error: impl std::fmt::Display) -> ContainerRunti
 }
 
 impl SocketRuntime {
-    pub fn connect(backend: &str, socket: &str) -> Result<Self, ContainerRuntimeError> {
+    pub fn connect(socket: &str) -> Result<Self, ContainerRuntimeError> {
         let path = socket.strip_prefix("unix://").unwrap_or(socket).to_owned();
         let docker = Docker::connect_with_unix(&path, 120, bollard::API_DEFAULT_VERSION)
             .map_err(|error| runtime_error("connect", error))?;
-        Ok(Self {
-            backend: backend.to_owned(),
-            docker,
-        })
-    }
-
-    #[allow(dead_code)] // Reported in diagnostics once serve logging lands.
-    pub fn backend(&self) -> &str {
-        &self.backend
+        Ok(Self { docker })
     }
 
     async fn remove_container(&self, name: &str) {
@@ -137,19 +128,17 @@ async fn unpack_export(destination: PathBuf, bytes: Vec<u8>) -> Result<(), Conta
 impl super::ContainerRuntime for SocketRuntime {
     async fn prepare_image(
         &self,
-        input: PrepareImageInput<'_>,
+        image: &str,
         logs: mpsc::Sender<String>,
     ) -> Result<(), ContainerRuntimeError> {
-        if self.docker.inspect_image(input.image).await.is_ok() {
+        if self.docker.inspect_image(image).await.is_ok() {
             return Ok(());
         }
 
-        let _ = logs
-            .send(format!("pulling build image {}", input.image))
-            .await;
+        let _ = logs.send(format!("pulling build image {}", image)).await;
         let mut pull = self.docker.create_image(
             Some(CreateImageOptions {
-                from_image: Some(input.image.to_owned()),
+                from_image: Some(image.to_owned()),
                 ..Default::default()
             }),
             None,
@@ -165,7 +154,7 @@ impl super::ContainerRuntime for SocketRuntime {
         }
         // Confirm the image exists after the pull stream completes.
         self.docker
-            .inspect_image(input.image)
+            .inspect_image(image)
             .await
             .map(|_| ())
             .map_err(|error| runtime_error("image inspect", error))

@@ -22,7 +22,7 @@ use crate::{
     client::ControlApiClient,
     config::NodeConfig,
     output::manifest::ServerSection,
-    runtime::{BuildRuntime, ContainerRuntime, PrepareImageInput, RunServiceInput},
+    runtime::{BuildRuntime, ContainerRuntime, RunServiceInput},
 };
 
 /// Fixed port SSR servers listen on inside their container; the manager
@@ -212,7 +212,7 @@ impl SsrManager {
         let (pull_tx, mut pull_rx) = mpsc::channel::<String>(8);
         let drain = tokio::spawn(async move { while pull_rx.recv().await.is_some() {} });
         runtime
-            .prepare_image(PrepareImageInput { image: &self.image }, pull_tx)
+            .prepare_image(&self.image, pull_tx)
             .await
             .map_err(|error| anyhow::anyhow!("serve image unavailable: {error}"))
             .inspect_err(|_| {

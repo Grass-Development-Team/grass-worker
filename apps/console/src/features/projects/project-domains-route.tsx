@@ -24,7 +24,7 @@ import { projectsApi, type HostStatus } from "./projects.api";
 import { useProject } from "./project-layout";
 import { DomainCertificateControls } from "./domain-certificate-controls";
 
-export function hostStatusVariant(
+function hostStatusVariant(
   status: HostStatus,
 ): "success" | "warning" | "destructive" | "secondary" {
   switch (status) {
