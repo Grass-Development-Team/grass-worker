@@ -600,6 +600,94 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[ignore = "requires GRASS_TEST_DOCKER_SOCKET and a local alpine:3.22 image"]
+    async fn docker_build_exports_logs_and_failure_cleanup() -> anyhow::Result<()> {
+        use crate::runtime::ContainerRuntime;
+        use std::time::Duration;
+
+        let runtime = SocketRuntime::connect(&std::env::var("GRASS_TEST_DOCKER_SOCKET")?)?;
+        // A unique marker identifies only this test's containers if an assertion fails.
+        let marker = format!("GW_SECURITY_TEST_MARKER={}", uuid::Uuid::now_v7());
+        let result: anyhow::Result<()> = async {
+            for (scenario, script) in [
+                ("success", "mkdir -p dist .output/server; cp input.txt dist/index.html; printf 'server' > .output/server/index.mjs; echo built"),
+                ("log-limit", "head -c 17825792 /dev/zero | tr '\\000' x; sleep 30"),
+                ("timeout", "sleep 30"),
+                ("symlink", "ln -s /tmp dist"),
+            ] {
+                let workspace = tempfile::tempdir()?;
+                std::fs::write(workspace.path().join("input.txt"), b"site contents")?;
+                let (sender, mut receiver) = mpsc::channel::<String>(2);
+                let consumer = tokio::spawn(async move {
+                    let mut bytes = 0;
+                    while let Some(line) = receiver.recv().await {
+                        assert!(line.len() <= crate::build::logs::MAX_LINE_BYTES);
+                        bytes += line.len();
+                    }
+                    bytes
+                });
+                let (cancel_sender, cancel) = watch::channel(false);
+                // Closing the cancel channel must not disable the wall-clock deadline.
+                drop(cancel_sender);
+                let outcome = runtime.run_build(RunBuildInput {
+                    image: "alpine:3.22".into(),
+                    workspace: workspace.path().into(),
+                    working_dir: ".".into(),
+                    script: script.into(),
+                    env: vec![("GW_SECURITY_TEST_MARKER".into(), marker.split_once('=').unwrap().1.into())],
+                    cpu_limit: 1,
+                    memory_mb: 64,
+                    network: "none".into(),
+                    timeout: Some(if scenario == "timeout" { Duration::from_millis(100) } else { Duration::from_secs(15) }),
+                    export_paths: vec!["dist".into(), ".output".into(), "missing-output".into()],
+                }, sender, cancel).await;
+                let bytes = consumer.await?;
+                match scenario {
+                    "success" => {
+                        anyhow::ensure!(outcome?.exit_code == 0);
+                        anyhow::ensure!(std::fs::read(workspace.path().join("dist/index.html"))? == b"site contents");
+                        anyhow::ensure!(std::fs::read(workspace.path().join(".output/server/index.mjs"))? == b"server");
+                        anyhow::ensure!(bytes > 0);
+                    }
+                    "log-limit" => anyhow::ensure!(outcome.unwrap_err().to_string().contains("byte budget exceeded")),
+                    "timeout" => anyhow::ensure!(matches!(outcome, Err(ContainerRuntimeError::Timeout(_)))),
+                    _ => anyhow::ensure!(outcome.is_err(), "symbolic link output root was accepted"),
+                }
+                anyhow::ensure!(!std::fs::read_dir(workspace.path())?.filter_map(Result::ok)
+                    .any(|entry| entry.file_name().to_string_lossy().starts_with(".tmp")), "export staging directory leaked");
+            }
+            Ok(())
+        }.await;
+
+        let containers = runtime
+            .docker
+            .list_containers(Some(ListContainersOptions {
+                all: true,
+                ..Default::default()
+            }))
+            .await?;
+        let mut leaked = 0;
+        for container in containers {
+            let Some(id) = container.id else { continue };
+            let inspect = runtime
+                .docker
+                .inspect_container(&id, None::<InspectContainerOptions>)
+                .await?;
+            if inspect
+                .config
+                .and_then(|config| config.env)
+                .is_some_and(|env| env.contains(&marker))
+            {
+                leaked += 1;
+                runtime.remove_container(&id).await;
+            }
+        }
+        result?;
+        anyhow::ensure!(leaked == 0, "runtime left {leaked} test containers behind");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn upload_archives_preserve_sparse_files_as_regular_entries() {
         use std::io::{Read, Seek, SeekFrom, Write};
 
