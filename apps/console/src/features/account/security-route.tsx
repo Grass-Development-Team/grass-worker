@@ -1,3 +1,4 @@
+import { formatTimestamp } from "@/lib/format-timestamp";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MailIcon, PlusIcon, SmartphoneIcon, Trash2Icon } from "lucide-react";
 import { useState } from "react";
@@ -50,12 +51,6 @@ export function SecurityRoute() {
 
   if (security.isLoading) return <Skeleton className="h-64 w-full" aria-busy="true" />;
   if (security.isError || !security.data) return null;
-
-  const formatTimestamp = (value: string | null | undefined, fallback: string) => {
-    if (!value) return fallback;
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? "Unknown date" : date.toLocaleString();
-  };
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">

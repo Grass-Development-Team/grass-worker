@@ -3,7 +3,7 @@ import { request } from "@/lib/api";
 
 export type SetupStage = "database" | "admin" | "site" | "node" | "storage" | "finish" | "complete";
 
-export interface SetupState {
+interface SetupState {
   stage: SetupStage;
   is_setup_mode: boolean;
 }

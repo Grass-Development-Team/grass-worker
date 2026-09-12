@@ -1,8 +1,8 @@
 import { request } from "@/lib/api";
 import { setCsrfToken } from "@/lib/csrf";
 
-export type PlatformRole = "admin" | "user";
-export type MfaFactorKind = "totp" | "email";
+type PlatformRole = "admin" | "user";
+type MfaFactorKind = "totp" | "email";
 
 export interface AuthUser {
   id: string;
@@ -13,7 +13,7 @@ export interface AuthUser {
   email_verified: boolean;
 }
 
-export interface PasswordPolicy {
+interface PasswordPolicy {
   min_length: number;
   max_length: number;
   require_lowercase: boolean;
@@ -32,7 +32,7 @@ export interface MfaFactor {
   last_used_at: string | null;
 }
 
-export interface MfaChallenge {
+interface MfaChallenge {
   mfa_required: boolean;
   mfa_enrollment_required: boolean;
   challenge_token: string;
@@ -49,12 +49,12 @@ export interface AuthConfiguration {
   password_policy: PasswordPolicy;
 }
 
-export interface AuthResponse {
+interface AuthResponse {
   user: AuthUser;
   csrf_token: string;
 }
 
-export interface RegistrationVerificationResponse {
+interface RegistrationVerificationResponse {
   verification_required: true;
   email: string;
 }
@@ -148,7 +148,6 @@ export const authApi = {
     setCsrfToken(null);
     return data;
   },
-  me: () => getMe(),
   updateMe: (input: { display_name: string | null }) =>
     request<MeResponse>("/api/v1/me", {
       method: "PATCH",
@@ -161,7 +160,6 @@ export const authApi = {
       body: png,
     }),
   deleteAvatar: () => request<MeResponse>("/api/v1/me/avatar", { method: "DELETE" }),
-  csrf: () => getCsrf(),
   forgotPassword: (email: string) =>
     request<{ accepted: true }>("/api/v1/auth/password/forgot", {
       method: "POST",
@@ -236,7 +234,7 @@ export interface TotpEnrollment {
   otpauth_uri: string;
 }
 
-export interface AccountSecurity {
+interface AccountSecurity {
   email_verified: boolean;
   factors: MfaFactor[];
   allowed_factors: MfaFactorKind[];

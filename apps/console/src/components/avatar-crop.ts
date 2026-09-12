@@ -7,7 +7,7 @@ export interface AvatarCropInput {
   offsetY: number;
 }
 
-export interface AvatarCrop {
+interface AvatarCrop {
   sourceX: number;
   sourceY: number;
   sourceSize: number;

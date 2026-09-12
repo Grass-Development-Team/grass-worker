@@ -16,7 +16,7 @@ export interface CleanupPreview {
   skipped: number;
 }
 
-export interface AuditCleanupFilters extends AuditFilters {
+interface AuditCleanupFilters extends AuditFilters {
   snapshot_before?: number;
 }
 

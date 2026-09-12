@@ -1,5 +1,4 @@
 import {
-  ArrowLeftIcon,
   KeyRoundIcon,
   MegaphoneIcon,
   MailIcon,
@@ -8,16 +7,9 @@ import {
   SlidersHorizontalIcon,
   WorkflowIcon,
 } from "lucide-react";
-import { NavLink, useLocation } from "react-router";
+import { useLocation } from "react-router";
 
-import {
-  SidebarGroup,
-  SidebarGroupContent,
-  SidebarGroupLabel,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
-} from "@/components/ui/sidebar";
+import { SettingsSidebarSections } from "@/components/settings-sidebar-sections";
 
 const sections = [
   { to: "/admin/settings/basic", label: "Basic", icon: PaletteIcon },
@@ -33,42 +25,13 @@ export function SettingsSidebarNav() {
   const location = useLocation();
 
   return (
-    <>
-      <SidebarGroup>
-        <SidebarGroupContent>
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton asChild tooltip="Back to Administration">
-                <NavLink to="/admin">
-                  <ArrowLeftIcon />
-                  <span>Administration</span>
-                </NavLink>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
-        </SidebarGroupContent>
-      </SidebarGroup>
-      <SidebarGroup>
-        <SidebarGroupLabel>Settings</SidebarGroupLabel>
-        <SidebarGroupContent>
-          <SidebarMenu>
-            {sections.map((section) => (
-              <SidebarMenuItem key={section.to}>
-                <SidebarMenuButton
-                  asChild
-                  tooltip={section.label}
-                  isActive={location.pathname === section.to}
-                >
-                  <NavLink to={section.to}>
-                    <section.icon />
-                    <span>{section.label}</span>
-                  </NavLink>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            ))}
-          </SidebarMenu>
-        </SidebarGroupContent>
-      </SidebarGroup>
-    </>
+    <SettingsSidebarSections
+      title="Settings"
+      back={{ to: "/admin", label: "Administration", tooltip: "Back to Administration" }}
+      sections={sections.map((section) => ({
+        ...section,
+        active: location.pathname === section.to,
+      }))}
+    />
   );
 }

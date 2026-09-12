@@ -1,21 +1,21 @@
 import { request } from "@/lib/api";
 
-export type QuotaPeriod = "none" | "monthly";
+type QuotaPeriod = "none" | "monthly";
 
-export interface QuotaPlanSummary {
+interface QuotaPlanSummary {
   id: string;
   code: string;
   name: string;
   source: "explicit" | "group" | "default";
 }
 
-export interface QuotaLimitEntry {
+interface QuotaLimitEntry {
   dimension: string;
   limit: number | null;
   period: QuotaPeriod;
 }
 
-export interface QuotaUsageEntry {
+interface QuotaUsageEntry {
   dimension: string;
   limit: number | null;
   used: number;

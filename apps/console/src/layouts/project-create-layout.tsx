@@ -1,23 +1,16 @@
-import { ArrowLeftIcon, LogOutIcon, MoonIcon, SunIcon, UserRoundIcon } from "lucide-react";
+import { AccountAvatar, AccountMenuContent } from "@/features/account/account-menu";
+import { ArrowLeftIcon, MoonIcon, SunIcon } from "lucide-react";
 import { useTheme } from "next-themes";
-import { Link, Outlet, useNavigate } from "react-router";
+import { Link, Outlet } from "react-router";
 
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useAuth } from "@/features/auth/auth-context";
 import { NotificationBell } from "@/features/notifications/notification-bell";
-import { showErrorToast } from "@/lib/toast";
-import { apiUrl } from "@/lib/api";
-
-const initials = (value: string) => value.slice(0, 2).toUpperCase();
 
 function ThemeToggle() {
   const { setTheme } = useTheme();
@@ -44,18 +37,6 @@ function ThemeToggle() {
 }
 
 export function ProjectCreateLayout() {
-  const { user, logout } = useAuth();
-  const navigate = useNavigate();
-
-  const signOut = async () => {
-    try {
-      await logout();
-      navigate("/login", { replace: true });
-    } catch (cause) {
-      showErrorToast(cause);
-    }
-  };
-
   return (
     <div className="flex min-h-svh flex-col bg-background text-foreground">
       <header className="relative flex h-14 shrink-0 items-center border-b px-4 md:px-6">
@@ -75,32 +56,10 @@ export function ProjectCreateLayout() {
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" aria-label="Open account menu">
-                <Avatar className="size-7">
-                  {user?.avatar_url && (
-                    <AvatarImage src={apiUrl(user.avatar_url)} alt="" className="object-cover" />
-                  )}
-                  <AvatarFallback className="text-[10px]">
-                    {initials(user?.display_name || user?.email || "GW")}
-                  </AvatarFallback>
-                </Avatar>
+                <AccountAvatar className="size-7" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuLabel className="font-normal">
-                <p className="truncate text-sm font-medium">{user?.display_name ?? user?.email}</p>
-                <p className="truncate text-xs text-muted-foreground">{user?.email}</p>
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem asChild>
-                <Link to="/account/profile">
-                  <UserRoundIcon /> Personal settings
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={signOut}>
-                <LogOutIcon /> Log out
-              </DropdownMenuItem>
-            </DropdownMenuContent>
+            <AccountMenuContent align="end" />
           </DropdownMenu>
         </div>
       </header>

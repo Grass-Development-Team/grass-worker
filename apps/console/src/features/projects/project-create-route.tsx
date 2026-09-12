@@ -12,7 +12,7 @@ import { showErrorToast } from "@/lib/toast";
 
 import { projectsApi, type CreateProjectInput } from "./projects.api";
 
-export const FRAMEWORK_PRESETS = [
+const FRAMEWORK_PRESETS = [
   {
     id: "vite",
     label: "Vite (React, Vue, Svelte)",

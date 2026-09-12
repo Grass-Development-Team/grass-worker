@@ -15,7 +15,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-export interface AdminSection {
+interface AdminSection {
   to: string;
   label: string;
   icon: LucideIcon;

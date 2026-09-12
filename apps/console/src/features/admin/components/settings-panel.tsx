@@ -1,16 +1,10 @@
+import { SettingSwitch } from "./setting-switch";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  Field,
-  FieldContent,
-  FieldDescription,
-  FieldGroup,
-  FieldLabel,
-  FieldTitle,
-} from "@/components/ui/field";
+import { Field, FieldDescription, FieldGroup, FieldLabel, FieldTitle } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -21,7 +15,6 @@ import {
 } from "@/components/ui/select";
 import { SettingsCard } from "@/components/settings-card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
 import { useBranding } from "@/features/branding/branding-context";
 
 import { adminApi, type AdminSettings } from "../admin.api";
@@ -86,30 +79,6 @@ function SaveAction({ pending, saved }: { pending: boolean; saved: boolean }) {
         {pending ? "Saving…" : "Save"}
       </Button>
     </>
-  );
-}
-
-function BooleanSetting({
-  id,
-  label,
-  description,
-  checked,
-  onCheckedChange,
-}: {
-  id: string;
-  label: string;
-  description?: string;
-  checked: boolean;
-  onCheckedChange: (checked: boolean) => void;
-}) {
-  return (
-    <Field orientation="horizontal">
-      <FieldContent>
-        <FieldLabel htmlFor={id}>{label}</FieldLabel>
-        {description && <FieldDescription>{description}</FieldDescription>}
-      </FieldContent>
-      <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} />
-    </Field>
   );
 }
 
@@ -492,7 +461,7 @@ function SettingsForm({ initial, section }: { initial: AdminSettings; section: S
             action={<SaveAction pending={sessions.mutation.isPending} saved={sessions.saved} />}
           >
             <FieldGroup>
-              <BooleanSetting
+              <SettingSwitch
                 id="settings-cookie-secure"
                 label="Secure session cookies"
                 description="Only send authentication cookies over HTTPS."
@@ -568,7 +537,7 @@ function SettingsForm({ initial, section }: { initial: AdminSettings; section: S
             }
           >
             <FieldGroup>
-              <BooleanSetting
+              <SettingSwitch
                 id="settings-node-auto-start"
                 label="Auto-start local Node"
                 checked={autoStartLocalNode}
@@ -595,7 +564,7 @@ function SettingsForm({ initial, section }: { initial: AdminSettings; section: S
                   required
                 />
               </Field>
-              <BooleanSetting
+              <SettingSwitch
                 id="settings-node-restart-on-exit"
                 label="Restart local Node on exit"
                 checked={restartLocalNodeOnExit}
@@ -628,7 +597,7 @@ function SettingsForm({ initial, section }: { initial: AdminSettings; section: S
             action={<SaveAction pending={startup.mutation.isPending} saved={startup.saved} />}
           >
             <FieldGroup>
-              <BooleanSetting
+              <SettingSwitch
                 id="settings-auto-migrate"
                 label="Run database migrations on startup"
                 checked={autoMigrate}

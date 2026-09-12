@@ -26,9 +26,6 @@ vi.mock("@/features/admin/admin-route", () => ({
     </>
   ),
 }));
-vi.mock("@/features/admin/components/settings-layout", () => ({
-  SettingsLayout: () => <Outlet />,
-}));
 vi.mock("@/features/admin/components/settings-panel", () => ({
   SettingsPanel: ({ section }: { section?: string }) => <div>Settings {section}</div>,
 }));

@@ -1,8 +1,8 @@
 import { request } from "@/lib/api";
 
-export type ProjectRuntime = "static" | "ssr" | "hybrid" | "serverless" | "edge";
+type ProjectRuntime = "static" | "ssr" | "hybrid" | "serverless" | "edge";
 export type HostStatus = "pending" | "active" | "failed" | "disabled";
-export type HostEnvironment = "production" | "preview" | "all";
+type HostEnvironment = "production" | "preview" | "all";
 
 export interface Project {
   id: string;
@@ -23,7 +23,7 @@ export interface Project {
   updated_at: string;
 }
 
-export interface HostAssignment {
+interface HostAssignment {
   assigned: boolean;
   host?: string;
   status?: HostStatus;
@@ -31,7 +31,7 @@ export interface HostAssignment {
   reason?: string;
 }
 
-export interface ProvisionEvent {
+interface ProvisionEvent {
   id: string;
   status: "success" | "pending" | "failed";
   operation: string;
@@ -84,7 +84,7 @@ export interface DomainCertificate {
   revision: string | null;
 }
 
-export interface ProjectHostIngress {
+interface ProjectHostIngress {
   region: string;
   cname: { record_type: "CNAME"; name: string; target: string };
   txt: { record_type: "TXT"; name: string; value: string };
@@ -126,7 +126,7 @@ export interface UpdateProjectInput {
   framework_hint?: string;
 }
 
-export interface BoundSourceCredential {
+interface BoundSourceCredential {
   id: string;
   name: string;
   kind: "https" | "ssh";
