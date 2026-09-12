@@ -1,4 +1,4 @@
-import { request } from "@/lib/api";
+import { API_UNAUTHORIZED_EVENT, request } from "@/lib/api";
 import { setCsrfToken } from "@/lib/csrf";
 
 type PlatformRole = "admin" | "user";
@@ -210,11 +210,15 @@ export const authApi = {
     return isAuthResponse(data) ? storeAuthenticatedResponse(data) : data;
   },
   security: () => request<AccountSecurity>("/api/v1/me/security"),
-  changePassword: (currentPassword: string, password: string) =>
-    request<{ changed: true }>("/api/v1/me/password", {
+  changePassword: async (currentPassword: string, password: string) => {
+    const result = await request<{ changed: true }>("/api/v1/me/password", {
       method: "POST",
       body: JSON.stringify({ current_password: currentPassword, password }),
-    }),
+    });
+    setCsrfToken(null);
+    window.dispatchEvent(new Event(API_UNAUTHORIZED_EVENT));
+    return result;
+  },
   accountTotpStart: () => request<TotpEnrollment>("/api/v1/me/mfa/totp/start", { method: "POST" }),
   accountEmailStart: () =>
     request<{ factor: MfaFactor }>("/api/v1/me/mfa/email/start", { method: "POST" }),

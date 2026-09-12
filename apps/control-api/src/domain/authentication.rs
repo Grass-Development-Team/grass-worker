@@ -1,6 +1,6 @@
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
-    QueryOrder, QuerySelect, TransactionTrait,
+    QueryOrder, QuerySelect, TransactionSession, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -480,8 +480,8 @@ pub async fn create_auth_token(
     Ok(token)
 }
 
-pub async fn consume_auth_token(
-    db: &DatabaseConnection,
+pub async fn consume_auth_token<C: sea_orm::ConnectionTrait + TransactionTrait>(
+    db: &C,
     token: &str,
     kind: AuthTokenKind,
 ) -> anyhow::Result<Option<Uuid>> {

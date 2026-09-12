@@ -35,7 +35,10 @@ pub async fn handler(
     Ok((jar, ok_response(json!({"message": "logged out"}))))
 }
 
-fn removal_cookie(configured_secure: bool, development_enabled: bool) -> Cookie<'static> {
+pub(super) fn removal_cookie(
+    configured_secure: bool,
+    development_enabled: bool,
+) -> Cookie<'static> {
     let secure = configured_secure && !development_enabled;
     let mut clear_cookie = Cookie::new("session_id", "");
     clear_cookie.set_path("/api");

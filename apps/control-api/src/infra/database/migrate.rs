@@ -154,6 +154,81 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires GRASS_TEST_DATABASE_URL and disposable schema permission"]
+    async fn postgres_auth_version_shape_and_password_revocation() -> anyhow::Result<()> {
+        use crate::{
+            domain::{authentication, users},
+            infra::{
+                config::ControlApiConfig,
+                database::entity::{AuthTokenKind, PlatformRole},
+                http::{extractors::Session, middlewares::session},
+            },
+            state::ControlApiState,
+        };
+        use axum::{
+            Router,
+            body::Body,
+            http::Request,
+            middleware,
+            routing::{get, post},
+        };
+        use std::time::Duration;
+        use tower::ServiceExt;
+        let _guard = MIGRATION_TEST_LOCK.lock().await;
+        let database =
+            PostgresMigrationDatabase::start(&std::env::var("GRASS_TEST_DATABASE_URL")?).await?;
+        let result: anyhow::Result<()> = async {
+            let db = &database.db;
+            Migrator::up(db, None).await?;
+            assert_migration_tracking(db, 35).await?;
+            let shapes = query_column_shapes(db, "SELECT column_name, udt_name, is_nullable, column_default FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'users' AND column_name = 'auth_version'").await?;
+            ensure!(shapes == vec![column("auth_version", "int8", "NO", Some("1"))], "incorrect authentication version column shape");
+            let constraint = db.query_one_raw(Statement::from_string(DatabaseBackend::Postgres, "SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conrelid = 'users'::regclass AND conname = 'users_auth_version_check'")).await?.unwrap();
+            ensure!(constraint.try_get::<String>("", "definition")?.contains("auth_version > 0"));
+            let user = users::create_user(db, users::CreateUserParams { email: "revocation@example.test".into(), display_name: None, password_hash: Some(grass_crypto::hash_password("Original-password-123!")?), platform_role: PlatformRole::Admin, email_verified_at: Some(time::OffsetDateTime::now_utc()) }).await?;
+            ensure!(user.auth_version == 1);
+            let state = ControlApiState::new(ControlApiConfig::default(), "unused.toml");
+            state.database.set(db.clone()).ok().unwrap();
+            state.cache.set(grass_cache::CacheStore::Moka(grass_cache::MokaCache::connect())).ok().unwrap();
+            async fn protected(_session: Session) -> &'static str { "allowed" }
+            let app = Router::new().route("/protected", get(protected).post(protected))
+                .route("/password/change", post(crate::features::api::v1::auth::password::change))
+                .route("/password/reset", post(crate::features::api::v1::auth::password::reset))
+                .route("/admin/users/{user_id}/password", post(crate::features::api::v1::admin::users::reset_password))
+                .layer(middleware::from_fn_with_state(state.clone(), session::session_middleware)).with_state(state.clone());
+            let cache = state.try_cache().unwrap();
+            let mut current_password = "Original-password-123!";
+            for (flow, next_password) in [("change", "Changed-password-123!"), ("reset", "Reset-password-123!"), ("admin", "Admin-reset-password-123!")] {
+                let current = users::get_user_by_id(db, user.id).await?.unwrap();
+                let first = grass_session::create_session(cache, user.id, current.auth_version, Duration::from_secs(300)).await?;
+                let second = grass_session::create_session(cache, user.id, current.auth_version, Duration::from_secs(300)).await?;
+                let (uri, body) = match flow {
+                    "change" => ("/password/change".into(), serde_json::json!({"current_password": current_password, "password": next_password})),
+                    "reset" => {
+                        let token = authentication::create_auth_token(db, user.id, AuthTokenKind::PasswordReset, time::Duration::hours(1)).await?;
+                        ("/password/reset".into(), serde_json::json!({"token": token, "password": next_password}))
+                    },
+                    _ => (format!("/admin/users/{}/password", user.id), serde_json::json!({"password": next_password})),
+                };
+                let response = app.clone().oneshot(Request::builder().uri(uri).method("POST").header("content-type", "application/json").header("cookie", format!("session_id={first}")).body(Body::from(body.to_string()))?).await?;
+                ensure!(response.status().is_success(), "password flow {flow} failed with {}", response.status());
+                let updated = users::get_user_by_id(db, user.id).await?.unwrap();
+                ensure!(updated.auth_version == current.auth_version + 1);
+                for (sid, method) in [(&first, "GET"), (&second, "POST")] {
+                    let response = app.clone().oneshot(Request::builder().uri("/protected").method(method).header("cookie", format!("session_id={sid}")).body(Body::empty())?).await?;
+                    ensure!(response.status().as_u16() == 401, "old session survived {flow}");
+                }
+                ensure!(users::verify_user_password(db, &user.email, next_password).await?.is_some());
+                ensure!(users::verify_user_password(db, &user.email, current_password).await?.is_none());
+                current_password = next_password;
+            }
+            Ok(())
+        }.await;
+        database.cleanup().await?;
+        result
+    }
+
+    #[tokio::test]
     #[ignore = "requires GRASS_TEST_DATABASE_URL"]
     async fn postgres_region_catalog_backfills_and_enforces_references() -> anyhow::Result<()> {
         let _guard = MIGRATION_TEST_LOCK.lock().await;

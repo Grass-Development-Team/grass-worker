@@ -2,6 +2,7 @@ import { formatTimestamp } from "@/lib/format-timestamp";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MailIcon, PlusIcon, SmartphoneIcon, Trash2Icon } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 import { QRCodeSVG } from "qrcode.react";
 
 import { SettingsCard } from "@/components/settings-card";
@@ -234,6 +235,7 @@ function PasswordForm({
       setPassword("");
       setConfirm("");
       setSaved(true);
+      toast.success("Password changed. Sign in again on each device.");
     },
   });
 
