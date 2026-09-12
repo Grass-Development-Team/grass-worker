@@ -20,7 +20,6 @@ pub enum AppError {
     Gone { op: &'static str, message: String },
     #[error("{message}")]
     Conflict { op: &'static str, message: String },
-    #[allow(dead_code)]
     #[error("{message}")]
     TooManyRequests { op: &'static str, message: String },
     #[error("{message}")]
