@@ -40,6 +40,8 @@ enum ChallengeMode {
 #[derive(Debug, Deserialize, Serialize)]
 struct LoginChallenge {
     user_id: Uuid,
+    #[serde(default)]
+    auth_version: i64,
     mode: ChallengeMode,
     return_to: String,
 }
@@ -94,7 +96,15 @@ pub async fn begin_login_payload(
         return Ok(None);
     };
     let return_to = super::oidc::safe_return_to(return_to);
-    let token = create_challenge(cache, user.id, mode, return_to.clone(), OP).await?;
+    let token = create_challenge(
+        cache,
+        user.id,
+        user.auth_version,
+        mode,
+        return_to.clone(),
+        OP,
+    )
+    .await?;
     Ok(Some(json!({
         "mfa_required": mode == ChallengeMode::Verify,
         "mfa_enrollment_required": mode == ChallengeMode::Enroll,
@@ -108,6 +118,7 @@ pub async fn begin_login_payload(
 async fn create_challenge(
     cache: &grass_cache::CacheStore,
     user_id: Uuid,
+    auth_version: i64,
     mode: ChallengeMode,
     return_to: String,
     op: &'static str,
@@ -118,6 +129,7 @@ async fn create_challenge(
             &challenge_key(&token),
             &serde_json::to_string(&LoginChallenge {
                 user_id,
+                auth_version,
                 mode,
                 return_to,
             })
@@ -175,7 +187,7 @@ pub async fn challenge_status(
         message: "cache service not available".to_owned(),
     })?;
     let challenge = load_challenge(cache, body.challenge_token.trim(), OP).await?;
-    let user = challenge_user(&state, challenge.user_id, OP).await?;
+    let user = challenge_authenticated_user(&state, &challenge, OP).await?;
     let db = state.try_database().unwrap();
     let policy = authentication::mfa_policy(db)
         .await
@@ -212,7 +224,7 @@ pub async fn challenge_totp_start(
             message: "this challenge does not permit factor enrollment".to_owned(),
         });
     }
-    let user = challenge_user(&state, challenge.user_id, OP).await?;
+    let user = challenge_authenticated_user(&state, &challenge, OP).await?;
     let enrollment = start_totp(&state, &user, OP).await?;
     Ok(ok_response(enrollment))
 }
@@ -228,7 +240,7 @@ pub async fn challenge_email_send(
     })?;
     let challenge_token = body.challenge_token.trim();
     let challenge = load_challenge(cache, challenge_token, OP).await?;
-    let user = challenge_user(&state, challenge.user_id, OP).await?;
+    let user = challenge_authenticated_user(&state, &challenge, OP).await?;
     let factor = match challenge.mode {
         ChallengeMode::Enroll => start_email_factor(&state, &user, OP).await?,
         ChallengeMode::Verify => {
@@ -262,7 +274,7 @@ pub async fn challenge_verify(
     })?;
     let token = body.challenge_token.trim();
     let challenge = load_challenge(cache, token, OP).await?;
-    let user = challenge_user(&state, challenge.user_id, OP).await?;
+    let user = challenge_authenticated_user(&state, &challenge, OP).await?;
     let factor = factor_for_user(&state, user.id, body.factor_id, OP).await?;
     let policy = authentication::mfa_policy(state.try_database().unwrap())
         .await
@@ -760,4 +772,52 @@ async fn setting_string(
     Ok(settings::get_setting(db, key)
         .await?
         .and_then(|setting| setting.value.as_str().map(str::to_owned)))
+}
+
+async fn challenge_authenticated_user(
+    state: &ControlApiState,
+    challenge: &LoginChallenge,
+    op: &'static str,
+) -> Result<user::Model, AppError> {
+    let user = challenge_user(state, challenge.user_id, op).await?;
+    if challenge.auth_version <= 0 || challenge.auth_version != user.auth_version {
+        return Err(AppError::Unauthorized {
+            op,
+            message: "MFA challenge is invalid or expired".to_owned(),
+        });
+    }
+    Ok(user)
+}
+
+#[cfg(test)]
+mod revocation_tests {
+    use super::*;
+    #[tokio::test]
+    async fn a_password_reset_invalidates_a_pending_login_challenge() {
+        let mut user = crate::infra::http::middlewares::session::tests::active_user();
+        let challenge = LoginChallenge {
+            user_id: user.id,
+            auth_version: 1,
+            mode: ChallengeMode::Verify,
+            return_to: "/".into(),
+        };
+        user.auth_version = 2;
+        let state = ControlApiState::new(
+            crate::infra::config::ControlApiConfig::default(),
+            "unused.toml",
+        );
+        state
+            .database
+            .set(
+                sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+                    .append_query_results([vec![user]])
+                    .into_connection(),
+            )
+            .ok()
+            .unwrap();
+        assert!(matches!(
+            challenge_authenticated_user(&state, &challenge, "test").await,
+            Err(AppError::Unauthorized { .. })
+        ));
+    }
 }

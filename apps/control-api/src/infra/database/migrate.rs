@@ -46,6 +46,7 @@ impl MigratorTrait for Migrator {
             Box::new(migration::m20260910_000032_managed_certificates::Migration),
             Box::new(migration::m20260911_000033_regions::Migration),
             Box::new(migration::m20260911_000034_domain_onboarding::Migration),
+            Box::new(migration::m20260912_000035_user_auth_version::Migration),
         ]
     }
 }
@@ -216,7 +217,7 @@ mod tests {
                 INSERT INTO managed_certificates (id, ingress_id, host_binding_id, hostname, issuer, generation, challenge_method) VALUES ('{0}', '{entry_id}', '{0}', 'legacy.example.org', 'letsencrypt', '{0}', 'dns01');
             "#, old.id)).await?;
             Migrator::up(db, None).await?;
-            assert_migration_tracking(db, 34).await?;
+            assert_migration_tracking(db, 35).await?;
             ensure!(managed_certificate::Entity::find_by_id(entry_id).one(db).await?.is_none(), "entry certificate must be removed");
             let legacy = managed_certificate::Entity::find_by_id(old.id).one(db).await?.unwrap();
             ensure!(legacy.challenge_method == "http01" && legacy.contact_email == "owner@example.org");
@@ -305,10 +306,10 @@ mod tests {
             ensure!(binding::Entity::find_by_id(custom.id).one(db).await?.unwrap().status == HostBindingStatus::Disabled);
             server.abort();
             // Down/up restores the legacy shape, while reapplication produces the same new constraints.
-            Migrator::down(db, Some(1)).await?;
+            Migrator::down(db, Some(2)).await?;
             assert_migration_tracking(db, 33).await?;
             Migrator::up(db, None).await?;
-            assert_migration_tracking(db, 34).await?;
+            assert_migration_tracking(db, 35).await?;
             Ok(())
         }.await;
         database.cleanup().await?;
@@ -319,7 +320,7 @@ mod tests {
     fn registers_audit_foundation_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 34);
+        assert_eq!(migrations.len(), 35);
         assert_eq!(
             migrations.get(11).expect("twelfth migration").name(),
             "m20260729_000012_audit_foundation"
@@ -348,7 +349,7 @@ mod tests {
     fn registers_team_group_review_policy_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 34);
+        assert_eq!(migrations.len(), 35);
         assert_eq!(
             migrations.get(12).expect("thirteenth migration").name(),
             "m20260729_000013_team_group_review_policy"
@@ -359,7 +360,7 @@ mod tests {
     fn registers_node_config_sync_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 34);
+        assert_eq!(migrations.len(), 35);
         assert_eq!(
             migrations.get(13).expect("fourteenth migration").name(),
             "m20260729_000014_node_config_sync"
@@ -370,7 +371,7 @@ mod tests {
     fn registers_node_deletion_queue_migration() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 34);
+        assert_eq!(migrations.len(), 35);
         assert_eq!(
             migrations.get(14).expect("fifteenth migration").name(),
             "m20260729_000015_node_deletion_queue"
@@ -381,7 +382,7 @@ mod tests {
     fn registers_domain_review_policy_after_node_deletion_queue() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 34);
+        assert_eq!(migrations.len(), 35);
         assert_eq!(
             migrations.get(14).expect("fifteenth migration").name(),
             "m20260729_000015_node_deletion_queue"
@@ -396,7 +397,7 @@ mod tests {
     fn registers_project_notifications_after_domain_review_policy() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 34);
+        assert_eq!(migrations.len(), 35);
         assert_eq!(
             migrations.get(15).expect("sixteenth migration").name(),
             "m20260730_000016_domain_review_policy"
@@ -419,7 +420,7 @@ mod tests {
     fn registers_scoped_codes_after_authentication_migrations() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 34);
+        assert_eq!(migrations.len(), 35);
         assert_eq!(
             migrations.get(23).expect("twenty-fourth migration").name(),
             "m20260806_000024_scoped_codes"
@@ -430,7 +431,7 @@ mod tests {
     fn registers_registration_allowlist_after_scoped_codes() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 34);
+        assert_eq!(migrations.len(), 35);
         assert_eq!(
             migrations.get(24).expect("twenty-fifth migration").name(),
             "m20260806_000025_registration_allowlist"
@@ -441,7 +442,7 @@ mod tests {
     fn registers_avatar_versions_after_registration_allowlist() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 34);
+        assert_eq!(migrations.len(), 35);
         assert_eq!(
             migrations.get(25).expect("twenty-sixth migration").name(),
             "m20260807_000026_avatars"
@@ -452,7 +453,7 @@ mod tests {
     fn registers_object_storage_after_deployment_screenshots() {
         let migrations = Migrator::migrations();
 
-        assert_eq!(migrations.len(), 34);
+        assert_eq!(migrations.len(), 35);
         assert_eq!(
             migrations.get(26).expect("twenty-seventh migration").name(),
             "m20260807_000027_deployment_screenshots"
@@ -463,7 +464,7 @@ mod tests {
         );
         assert_eq!(
             migrations.last().expect("last migration").name(),
-            "m20260911_000034_domain_onboarding"
+            "m20260912_000035_user_auth_version"
         );
     }
 
@@ -1822,7 +1823,7 @@ SELECT
         assert_audit_foundation_objects_absent(db).await?;
 
         Migrator::up(db, None).await?;
-        assert_migration_tracking(db, 17).await?;
+        assert_migration_tracking(db, 35).await?;
         assert_audit_foundation_objects_restored(db).await?;
 
         Ok(())

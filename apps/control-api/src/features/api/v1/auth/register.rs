@@ -390,6 +390,7 @@ mod tests {
         let invitation_token = "legacy-team-invitation";
         let invitation_token_hash = teams::invitation_token_hash(invitation_token);
         let user = user::Model {
+            auth_version: 1,
             id: user_id,
             email: "new-user@example.com".to_owned(),
             display_name: Some("New User".to_owned()),

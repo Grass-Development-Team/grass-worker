@@ -930,6 +930,7 @@ mod tests {
     async fn seed_fixture(db: &DatabaseConnection, with_artifact: bool) -> DeletionFixture {
         let now = OffsetDateTime::now_utc();
         let user = user::ActiveModel {
+            auth_version: Set(1),
             id: Set(Uuid::now_v7()),
             email: Set(format!("{}@example.test", Uuid::now_v7().simple())),
             display_name: Set(Some("Node Deletion Tester".to_owned())),

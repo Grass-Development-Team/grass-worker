@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
-    EntityTrait, QueryFilter,
+    EntityTrait, ExprTrait, QueryFilter,
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -37,6 +37,7 @@ pub async fn create_user<C: ConnectionTrait>(
         display_name: Set(params.display_name),
         avatar_version: Set(None),
         status: Set(UserStatus::Active),
+        auth_version: Set(1),
         platform_role: Set(params.platform_role),
         email_verified_at: Set(params.email_verified_at),
         last_login_at: Set(None),
@@ -170,6 +171,8 @@ pub async fn update_user<C: ConnectionTrait>(
     user: user::Model,
     params: UpdateUserParams,
 ) -> anyhow::Result<user::Model> {
+    let revoke = matches!(params.status, Some(UserStatus::Disabled));
+    let user_id = user.id;
     let mut active: user::ActiveModel = user.into();
     if let Some(display_name) = params.display_name {
         active.display_name = Set(display_name);
@@ -179,6 +182,21 @@ pub async fn update_user<C: ConnectionTrait>(
     }
     if let Some(role) = params.platform_role {
         active.platform_role = Set(role);
+    }
+    if revoke {
+        use sea_orm::sea_query::Expr;
+        return user::Entity::update_many()
+            .set(active)
+            .col_expr(
+                user::Column::AuthVersion,
+                Expr::col(user::Column::AuthVersion).add(1),
+            )
+            .filter(user::Column::Id.eq(user_id))
+            .exec_with_returning(db)
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("user no longer exists"));
     }
     active.update(db).await.map_err(Into::into)
 }

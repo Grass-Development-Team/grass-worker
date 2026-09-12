@@ -390,20 +390,7 @@ async fn validate_source_session(
     session_id: &str,
     op: &'static str,
 ) -> Result<Option<grass_session::SessionData>, AppError> {
-    let cache = state.try_cache().ok_or_else(|| AppError::Internal {
-        op,
-        message: "cache service not available".to_owned(),
-    })?;
-    let (idle_ttl, absolute_ttl) = {
-        let config = state.config.read().unwrap();
-        (
-            Duration::from_secs(config.session.idle_ttl_seconds),
-            Duration::from_secs(config.session.session_ttl_seconds),
-        )
-    };
-    grass_session::validate_session(cache, session_id, idle_ttl, absolute_ttl)
-        .await
-        .map_err(|source| AppError::Infrastructure { op, source })
+    crate::infra::http::middlewares::session::validate_current_session(state, session_id, op).await
 }
 
 fn redirect_response(location: String) -> Result<Response, AppError> {
