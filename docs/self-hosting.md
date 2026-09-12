@@ -472,6 +472,13 @@ settings. The platform default is `auto`; a Team Group can override it with
 custom binding unavailable until an administrator approves it. Domains
 assigned from a platform Host Source do not require domain review.
 
+Deleting a domain from either the project or administration commits its soft
+deletion, releases its host quota, and notifies Serve Nodes to refresh routes.
+Repeated deletion retries cleanup with the same quota release key. Restoring
+and deleting the binding again uses a new deletion generation. DNS cleanup
+failures are recorded and do not prevent route invalidation; infrastructure
+errors are returned so the delete can be retried.
+
 New projects automatically receive `slug.apps.example.com`; preview
 deployments receive unique `slug-xxxxxxxx.apps.example.com` hosts.
 

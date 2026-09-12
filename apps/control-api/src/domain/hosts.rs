@@ -403,23 +403,15 @@ pub async fn update_binding_status<C: ConnectionTrait>(
     active.update(db).await.map_err(Into::into)
 }
 
-pub async fn soft_delete_binding<C: ConnectionTrait>(
-    db: &C,
-    binding: project_host_binding::Model,
-) -> anyhow::Result<()> {
-    soft_delete_binding_at(db, binding, OffsetDateTime::now_utc()).await
-}
-
 pub async fn soft_delete_binding_at<C: ConnectionTrait>(
     db: &C,
     binding: project_host_binding::Model,
     deleted_at: OffsetDateTime,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<project_host_binding::Model> {
     let mut active: project_host_binding::ActiveModel = binding.into();
     active.deleted_at = Set(Some(deleted_at));
     active.is_primary = Set(false);
-    active.update(db).await?;
-    Ok(())
+    active.update(db).await.map_err(Into::into)
 }
 
 /// Marks one binding as primary and clears the flag on every other binding

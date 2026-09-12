@@ -2,13 +2,13 @@ use std::time::Duration;
 
 use futures_util::future::join_all;
 use grass_node_protocol::GatewayAuthenticationMode;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
 use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
     domain::nodes,
-    infra::database::entity::{NodeStatus, node},
+    infra::database::entity::{DeploymentReleaseStatus, NodeStatus, deployment, node},
 };
 
 const INVALIDATION_PATH: &str = "/_grass/internal/routes/invalidate";
@@ -105,6 +105,33 @@ fn finish_post_commit_invalidation(
             "route invalidation failed after the deployment change was committed"
         );
     }
+}
+
+/// Invalidates every active deployment of a project after a host change.
+pub async fn invalidate_project(
+    db: &sea_orm::DatabaseConnection,
+    secret_key: &str,
+    project_id: Uuid,
+) -> anyhow::Result<()> {
+    let deployment_ids = deployment::Entity::find()
+        .select_only()
+        .column(deployment::Column::Id)
+        .filter(deployment::Column::ProjectId.eq(project_id))
+        .filter(deployment::Column::ReleaseStatus.eq(DeploymentReleaseStatus::Active))
+        .filter(deployment::Column::DeletedAt.is_null())
+        .into_tuple::<Uuid>()
+        .all(db)
+        .await?;
+    let results = join_all(
+        deployment_ids
+            .into_iter()
+            .map(|deployment_id| invalidate_deployment(db, secret_key, deployment_id)),
+    )
+    .await;
+    for result in results {
+        result?;
+    }
+    Ok(())
 }
 
 pub async fn invalidate_deployment(

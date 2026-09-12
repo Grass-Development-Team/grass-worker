@@ -28,6 +28,9 @@ use super::{
     credentials,
 };
 
+mod deletion;
+pub use deletion::DeleteHostScope;
+
 pub struct BindHostRequest<'a> {
     pub project: &'a project::Model,
     pub team: &'a team::Model,
@@ -60,15 +63,21 @@ fn custom_binding_status(
 
 pub struct HostBindingService<'a> {
     db: &'a DatabaseConnection,
+    platform_secret: &'a str,
     cache: &'a CacheStore,
     provisioner: CompositeHostProvisioner,
     credential_key: [u8; 32],
 }
 
 impl<'a> HostBindingService<'a> {
-    pub fn new(db: &'a DatabaseConnection, cache: &'a CacheStore, platform_secret: &str) -> Self {
+    pub fn new(
+        db: &'a DatabaseConnection,
+        cache: &'a CacheStore,
+        platform_secret: &'a str,
+    ) -> Self {
         Self {
             db,
+            platform_secret,
             cache,
             provisioner: CompositeHostProvisioner::new(),
             credential_key: credentials::encryption_key(platform_secret),

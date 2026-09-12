@@ -3,10 +3,7 @@ use axum::{
     extract::{Path, State},
     response::IntoResponse,
 };
-use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter,
-    QuerySelect, TransactionTrait,
-};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ConnectionTrait, TransactionTrait};
 use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
@@ -18,13 +15,12 @@ use crate::{
     },
     infra::{
         database::entity::{
-            AuditEventResult, DeploymentReleaseStatus, HostBindingKind, HostBindingStatus,
-            HostReviewStatus, deployment, project_host_binding,
+            AuditEventResult, HostBindingKind, HostBindingStatus, HostReviewStatus,
+            project_host_binding,
         },
         error::{AppError, ok_response},
-        host_provision::service::HostBindingService,
+        host_provision::service::{DeleteHostScope, HostBindingService},
         http::extractors::Session,
-        quota::{QuotaCharge, QuotaService},
         route_invalidation,
     },
     state::ControlApiState,
@@ -223,7 +219,10 @@ async fn decide(
             op: OP,
             source: source.into(),
         })?;
-    invalidate_project_routes(&state, updated.project_id, OP).await?;
+    let secret_key = state.config.read().unwrap().secrets.secret_key.clone();
+    route_invalidation::invalidate_project(db, &secret_key, updated.project_id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     Ok(ok_response(
         json!({ "domain": domain_view(&updated), "reason": reason }),
     ))
@@ -240,120 +239,18 @@ pub async fn remove(
     let db = super::database(&state, OP)?;
     let cache = super::cache(&state, OP)?;
     let reason = optional_reason(body.and_then(|Json(body)| body.reason));
-    let transaction = db
-        .begin()
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
-    let binding = hosts::get_binding_by_id_for_update_including_deleted(&transaction, domain_id)
-        .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?
-        .ok_or_else(|| AppError::NotFound {
-            op: OP,
-            message: "domain binding not found".to_owned(),
-        })?;
-    let generation = deletion_generation(binding.deleted_at, time::OffsetDateTime::now_utc());
-    if binding.deleted_at.is_none() {
-        hosts::soft_delete_binding_at(&transaction, binding.clone(), generation)
-            .await
-            .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-        audits::create_platform_audit_event_with_changes(
-            &transaction,
-            CreateAuditEventParams {
-                actor_user_id: Some(data.user_id), actor_node_id: None, team_id: Some(binding.team_id),
-                action: "domain.deleted".to_owned(), target_type: "project_host_binding".to_owned(), target_id: Some(binding.id),
-                result: AuditEventResult::Success, reason: reason.clone(), metadata: json!({ "platform_admin": true, "project_id": binding.project_id }),
-            },
-            json!({ "before": { "host": binding.host, "deleted": false }, "after": { "deleted": true } }),
-        ).await.map_err(|source| AppError::Infrastructure { op: OP, source })?;
-        let project = projects::get_by_id_any(&transaction, binding.project_id)
-            .await
-            .map_err(|source| AppError::Infrastructure { op: OP, source })?
-            .ok_or_else(|| AppError::NotFound {
-                op: OP,
-                message: "project not found".to_owned(),
-            })?;
-        notifications::create_project_notification(
-            &transaction,
-            notifications::CreateProjectNotification {
-                project: &project,
-                actor_user_id: data.user_id,
-                action: "domain.deleted",
-                reason: reason.clone(),
-                target_url: format!("/projects/{}/domains", project.id),
-            },
-        )
-        .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    }
-    transaction
-        .commit()
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
-    if let Some(source_id) = binding.host_source_id
-        && let Some(source) = hosts::get_source_by_id(db, source_id)
-            .await
-            .map_err(|source| AppError::Infrastructure { op: OP, source })?
-    {
-        let platform_secret = state.config.read().unwrap().secrets.secret_key.clone();
-        let _ = HostBindingService::new(db, cache, &platform_secret)
-            .deprovision(OP, &binding, &source)
-            .await?;
-    }
-    QuotaService::new(db, cache)
-        .release_once_for_generation(
+    let platform_secret = state.config.read().unwrap().secrets.secret_key.clone();
+    HostBindingService::new(db, cache, &platform_secret)
+        .delete_host(
             OP,
-            binding.team_id,
-            &[QuotaCharge::one(
-                crate::domain::quotas::QuotaDimension::Hosts,
-            )],
-            "project_host_binding",
-            binding.id,
-            generation,
+            domain_id,
+            DeleteHostScope::Platform {
+                actor_user_id: data.user_id,
+                reason: reason.clone(),
+            },
         )
         .await?;
-    invalidate_project_routes(&state, binding.project_id, OP).await?;
     Ok(ok_response(json!({ "deleted": true, "reason": reason })))
-}
-
-fn deletion_generation(
-    deleted_at: Option<time::OffsetDateTime>,
-    now: time::OffsetDateTime,
-) -> time::OffsetDateTime {
-    deleted_at.unwrap_or(now)
-}
-
-async fn invalidate_project_routes(
-    state: &ControlApiState,
-    project_id: Uuid,
-    op: &'static str,
-) -> Result<(), AppError> {
-    let db = super::database(state, op)?;
-    let deployment_ids = deployment::Entity::find()
-        .select_only()
-        .column(deployment::Column::Id)
-        .filter(deployment::Column::ProjectId.eq(project_id))
-        .filter(deployment::Column::ReleaseStatus.eq(DeploymentReleaseStatus::Active))
-        .filter(deployment::Column::DeletedAt.is_null())
-        .into_tuple::<Uuid>()
-        .all(db)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op,
-            source: source.into(),
-        })?;
-    let secret_key = state.config.read().unwrap().secrets.secret_key.clone();
-    for deployment_id in deployment_ids {
-        route_invalidation::invalidate_deployment(db, &secret_key, deployment_id)
-            .await
-            .map_err(|source| AppError::Infrastructure { op, source })?;
-    }
-    Ok(())
 }
 
 fn review_status(value: &HostReviewStatus) -> &'static str {
@@ -379,9 +276,8 @@ fn domain_view(binding: &project_host_binding::Model) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use crate::infra::database::entity::{HostBindingStatus, HostReviewStatus};
-    use time::OffsetDateTime;
 
-    use super::{DomainDecision, deletion_generation, domain_decision, optional_reason};
+    use super::{DomainDecision, domain_decision, optional_reason};
 
     #[test]
     fn reasons_trim_and_blank_is_none() {
@@ -416,14 +312,5 @@ mod tests {
             domain_decision(&HostReviewStatus::Rejected, false),
             DomainDecision::Conflict
         );
-    }
-
-    #[test]
-    fn domain_deletion_reuses_an_existing_binding_generation() {
-        let now = OffsetDateTime::from_unix_timestamp(20).unwrap();
-        let deleted_at = OffsetDateTime::from_unix_timestamp(10).unwrap();
-
-        assert_eq!(deletion_generation(Some(deleted_at), now), deleted_at);
-        assert_eq!(deletion_generation(None, now), now);
     }
 }
