@@ -1,3 +1,4 @@
+import type { StorageConfiguration, StorageInput } from "@/features/storage/storage-form";
 import type {
   BuildStatus,
   ReleaseStatus,
@@ -602,41 +603,13 @@ export interface AdminSettings {
   restart_required_sections: Array<"server" | "redis" | "node_manager" | "migration" | "log">;
 }
 
-export type AdminStorageBackend = "local" | "s3" | "minio" | "r2";
-
-export interface AdminStorageConfiguration {
-  backend: AdminStorageBackend;
-  local_root: string;
-  endpoint: string;
-  region: string;
-  bucket: string;
-  prefix: string;
-  force_path_style: boolean;
-  allow_http: boolean;
-  credentials_configured: boolean;
-}
-
-export interface AdminStorageInput {
-  backend: AdminStorageBackend;
-  local_root?: string;
-  endpoint?: string;
-  region?: string;
-  bucket?: string;
-  prefix?: string;
-  force_path_style?: boolean;
-  allow_http?: boolean;
-  access_key_id?: string;
-  secret_access_key?: string;
-  session_token?: string;
-}
-
 export type AdminStorageMigrationStatus = "pending" | "running" | "succeeded" | "failed";
 
 export interface AdminStorageMigration {
   id: string;
   status: AdminStorageMigrationStatus;
-  source: AdminStorageConfiguration;
-  target: AdminStorageConfiguration;
+  source: StorageConfiguration;
+  target: StorageConfiguration;
   copied_objects: number;
   copied_bytes: number;
   total_objects: number | null;
@@ -648,7 +621,7 @@ export interface AdminStorageMigration {
 }
 
 export interface AdminStorageState {
-  storage: AdminStorageConfiguration;
+  storage: StorageConfiguration;
   maintenance: boolean;
   migration: AdminStorageMigration | null;
 }
@@ -1113,13 +1086,13 @@ export const adminApi = {
 
   getStorage: () => request<AdminStorageState>("/api/v1/admin/storage"),
 
-  testStorage: (input: AdminStorageInput) =>
+  testStorage: (input: StorageInput) =>
     request<{ tested: true }>("/api/v1/admin/storage/test", {
       method: "POST",
       body: JSON.stringify(input),
     }),
 
-  createStorageMigration: (input: AdminStorageInput) =>
+  createStorageMigration: (input: StorageInput) =>
     request<{ migration: AdminStorageMigration }>("/api/v1/admin/storage/migrations", {
       method: "POST",
       body: JSON.stringify(input),

@@ -1,12 +1,14 @@
+import {
+  storageDefaults,
+  storageInput,
+  type StorageBackend,
+  type StorageInput,
+} from "@/features/storage/storage-form";
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { ArrowRight, Package } from "lucide-react";
 
-import {
-  setupApi,
-  type StorageBackend,
-  type StorageConfigurationInput,
-} from "@/features/setup/setup.api";
+import { setupApi } from "@/features/setup/setup.api";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -35,41 +37,33 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 
-function defaultRegion(backend: StorageBackend) {
-  return backend === "r2" ? "auto" : "us-east-1";
-}
-
 export function StorageStep({ onSuccess }: { onSuccess: () => void }) {
   const [backend, setBackend] = useState<StorageBackend>("local");
   const [localRoot, setLocalRoot] = useState("/data");
   const [endpoint, setEndpoint] = useState("");
-  const [region, setRegion] = useState(defaultRegion("local"));
+  const [region, setRegion] = useState(storageDefaults("local").region);
   const [bucket, setBucket] = useState("");
   const [prefix, setPrefix] = useState("");
-  const [forcePathStyle, setForcePathStyle] = useState(false);
-  const [allowHttp, setAllowHttp] = useState(false);
+  const [forcePathStyle, setForcePathStyle] = useState(storageDefaults("local").forcePathStyle);
+  const [allowHttp, setAllowHttp] = useState(storageDefaults("local").allowHttp);
   const [accessKeyId, setAccessKeyId] = useState("");
   const [secretAccessKey, setSecretAccessKey] = useState("");
   const [sessionToken, setSessionToken] = useState("");
 
-  const input = (): StorageConfigurationInput => {
-    if (backend === "local") {
-      return { backend, local_root: localRoot.trim() };
-    }
-    return {
+  const input = (): StorageInput =>
+    storageInput({
       backend,
-      local_root: localRoot.trim(),
-      endpoint: endpoint.trim(),
-      region: region.trim(),
-      bucket: bucket.trim(),
-      prefix: prefix.trim().replace(/^\/+|\/+$/g, ""),
-      force_path_style: forcePathStyle,
-      allow_http: allowHttp,
-      ...(accessKeyId.trim() && { access_key_id: accessKeyId.trim() }),
-      ...(secretAccessKey.trim() && { secret_access_key: secretAccessKey.trim() }),
-      ...(sessionToken.trim() && { session_token: sessionToken.trim() }),
-    };
-  };
+      localRoot,
+      endpoint,
+      region,
+      bucket,
+      prefix,
+      forcePathStyle,
+      allowHttp,
+      accessKeyId,
+      secretAccessKey,
+      sessionToken,
+    });
   const mutation = useMutation({
     mutationFn: () => setupApi.configureStorage(input()),
     onSuccess,
@@ -83,9 +77,9 @@ export function StorageStep({ onSuccess }: { onSuccess: () => void }) {
 
   const changeBackend = (value: StorageBackend) => {
     setBackend(value);
-    setRegion(defaultRegion(value));
-    setForcePathStyle(value === "minio");
-    setAllowHttp(value === "minio");
+    setRegion(storageDefaults(value).region);
+    setForcePathStyle(storageDefaults(value).forcePathStyle);
+    setAllowHttp(storageDefaults(value).allowHttp);
   };
 
   return (

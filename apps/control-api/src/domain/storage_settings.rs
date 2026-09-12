@@ -1,10 +1,11 @@
 use sea_orm::{ConnectionTrait, DatabaseConnection, TransactionTrait};
+use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::{
     domain::settings,
-    infra::storage::{StorageConfig, StorageCredentials},
+    infra::storage::{StorageBackendKind, StorageConfig, StorageCredentials, StorageError},
 };
 
 pub const CONFIG_KEY: &str = "storage.config";
@@ -19,6 +20,67 @@ pub struct LoadedStorageSettings {
     pub config: StorageConfig,
     pub credentials: StorageCredentials,
     pub credentials_envelope: Option<serde_json::Value>,
+}
+
+/// Storage fields shared by setup and administration request DTOs.
+#[derive(Debug, Default, Deserialize)]
+pub struct StorageOptions {
+    pub local_root: Option<String>,
+    pub endpoint: Option<String>,
+    pub region: Option<String>,
+    pub bucket: Option<String>,
+    pub prefix: Option<String>,
+    pub force_path_style: Option<bool>,
+    pub allow_http: Option<bool>,
+    pub access_key_id: Option<String>,
+    pub secret_access_key: Option<String>,
+    pub session_token: Option<String>,
+}
+
+impl StorageOptions {
+    pub fn resolve(
+        self,
+        backend: StorageBackendKind,
+        default_root: &str,
+    ) -> Result<(StorageConfig, StorageCredentials), StorageError> {
+        let config = StorageConfig {
+            backend,
+            local_root: self
+                .local_root
+                .as_deref()
+                .unwrap_or(default_root)
+                .trim()
+                .trim_end_matches('/')
+                .to_owned(),
+            endpoint: self.endpoint.unwrap_or_default().trim().to_owned(),
+            region: self
+                .region
+                .unwrap_or_else(|| backend.default_region().to_owned())
+                .trim()
+                .to_owned(),
+            bucket: self.bucket.unwrap_or_default().trim().to_owned(),
+            prefix: self.prefix.unwrap_or_default().trim_matches('/').to_owned(),
+            force_path_style: self
+                .force_path_style
+                .unwrap_or(backend == StorageBackendKind::Minio),
+            allow_http: self
+                .allow_http
+                .unwrap_or(backend == StorageBackendKind::Minio),
+        };
+        config.validate()?;
+        let credentials = StorageCredentials {
+            access_key_id: clean_secret(self.access_key_id),
+            secret_access_key: clean_secret(self.secret_access_key),
+            session_token: clean_secret(self.session_token),
+        };
+        Ok((config, credentials))
+    }
+}
+
+fn clean_secret(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 pub async fn load_or_seed(
@@ -177,6 +239,71 @@ pub fn public_config(config: &StorageConfig, credentials_configured: bool) -> se
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn storage_input_normalizes_defaults_overrides_and_credentials() {
+        for backend in [
+            StorageBackendKind::Local,
+            StorageBackendKind::S3,
+            StorageBackendKind::Minio,
+            StorageBackendKind::R2,
+        ] {
+            let input = StorageOptions {
+                endpoint: Some(" https://storage.example.invalid ".to_owned()),
+                bucket: Some(" artifacts ".to_owned()),
+                prefix: Some("/production/".to_owned()),
+                access_key_id: Some(" access ".to_owned()),
+                secret_access_key: Some(" secret ".to_owned()),
+                session_token: Some("  ".to_owned()),
+                ..Default::default()
+            };
+            let (config, credentials) = input.resolve(backend, " /srv/grass/ ").unwrap();
+            assert_eq!(config.local_root, "/srv/grass");
+            assert_eq!(config.endpoint, "https://storage.example.invalid");
+            assert_eq!(config.bucket, "artifacts");
+            assert_eq!(config.prefix, "production");
+            assert_eq!(
+                config.region,
+                if backend == StorageBackendKind::R2 {
+                    "auto"
+                } else {
+                    "us-east-1"
+                }
+            );
+            assert_eq!(config.allow_http, backend == StorageBackendKind::Minio);
+            assert_eq!(
+                config.force_path_style,
+                backend == StorageBackendKind::Minio
+            );
+            assert_eq!(credentials.access_key_id.as_deref(), Some("access"));
+            assert_eq!(credentials.secret_access_key.as_deref(), Some("secret"));
+            assert!(credentials.session_token.is_none());
+        }
+        let input = StorageOptions {
+            endpoint: Some("https://storage.example.invalid".to_owned()),
+            bucket: Some("artifacts".to_owned()),
+            region: Some(" eu-west-1 ".to_owned()),
+            allow_http: Some(false),
+            force_path_style: Some(false),
+            ..Default::default()
+        };
+        let (config, _) = input.resolve(StorageBackendKind::Minio, "/data").unwrap();
+        assert_eq!(config.region, "eu-west-1");
+        assert!(!config.allow_http && !config.force_path_style);
+    }
+
+    #[test]
+    fn storage_input_rejects_invalid_remote_settings() {
+        for input in [
+            json!({}),
+            json!({"bucket":"artifacts", "region":" "}),
+            json!({"bucket":"artifacts", "endpoint":"invalid"}),
+            json!({"bucket":"artifacts", "endpoint":"http://storage.example.invalid", "allow_http":false}),
+        ] {
+            let input: StorageOptions = serde_json::from_value(input).unwrap();
+            assert!(input.resolve(StorageBackendKind::Minio, "/data").is_err());
+        }
+    }
 
     #[test]
     fn local_seed_prefers_legacy_root_and_ignores_blank_values() {

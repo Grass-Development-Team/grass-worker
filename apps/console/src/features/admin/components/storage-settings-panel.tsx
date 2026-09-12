@@ -1,3 +1,10 @@
+import {
+  storageDefaults,
+  storageInput,
+  type StorageBackend,
+  type StorageInput,
+  type StorageConfiguration,
+} from "@/features/storage/storage-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2Icon,
@@ -42,27 +49,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 
-import {
-  adminApi,
-  type AdminStorageBackend,
-  type AdminStorageConfiguration,
-  type AdminStorageInput,
-  type AdminStorageMigration,
-  type AdminStorageState,
-} from "../admin.api";
+import { adminApi, type AdminStorageMigration, type AdminStorageState } from "../admin.api";
 
 const ACTIVE_MIGRATION_STATUSES = new Set<AdminStorageMigration["status"]>(["pending", "running"]);
 
-const PROVIDER_LABELS: Record<AdminStorageBackend, string> = {
+const PROVIDER_LABELS: Record<StorageBackend, string> = {
   local: "Local filesystem",
   s3: "S3-compatible",
   minio: "MinIO",
   r2: "Cloudflare R2",
 };
-
-function defaultRegion(backend: AdminStorageBackend) {
-  return backend === "r2" ? "auto" : "us-east-1";
-}
 
 function migrationProgress(migration: AdminStorageMigration) {
   if (migration.total_objects === 0) {
@@ -72,7 +68,7 @@ function migrationProgress(migration: AdminStorageMigration) {
   return Math.min(100, Math.round((migration.copied_objects / migration.total_objects) * 100));
 }
 
-function CurrentStorage({ storage }: { storage: AdminStorageConfiguration }) {
+function CurrentStorage({ storage }: { storage: StorageConfiguration }) {
   const remote = storage.backend !== "local";
   return (
     <div className="grid gap-3 border-b pb-5 sm:grid-cols-2">
@@ -170,14 +166,14 @@ function MigrationStatus({ migration }: { migration: AdminStorageMigration }) {
 
 export function StorageSettingsPanel() {
   const queryClient = useQueryClient();
-  const [backend, setBackend] = useState<AdminStorageBackend>("local");
+  const [backend, setBackend] = useState<StorageBackend>("local");
   const [localRoot, setLocalRoot] = useState<string | null>(null);
   const [endpoint, setEndpoint] = useState("");
-  const [region, setRegion] = useState(defaultRegion("local"));
+  const [region, setRegion] = useState(storageDefaults("local").region);
   const [bucket, setBucket] = useState("");
   const [prefix, setPrefix] = useState("");
-  const [forcePathStyle, setForcePathStyle] = useState(false);
-  const [allowHttp, setAllowHttp] = useState(false);
+  const [forcePathStyle, setForcePathStyle] = useState(storageDefaults("local").forcePathStyle);
+  const [allowHttp, setAllowHttp] = useState(storageDefaults("local").allowHttp);
   const [accessKeyId, setAccessKeyId] = useState("");
   const [secretAccessKey, setSecretAccessKey] = useState("");
   const [sessionToken, setSessionToken] = useState("");
@@ -198,24 +194,20 @@ export function StorageSettingsPanel() {
   const remote = backend !== "local";
   const maintenance = storageQuery.data?.maintenance ?? false;
 
-  const input = (): AdminStorageInput => {
-    if (backend === "local") {
-      return { backend, local_root: currentRoot.trim() };
-    }
-    return {
+  const input = (): StorageInput =>
+    storageInput({
       backend,
-      local_root: currentRoot.trim(),
-      endpoint: endpoint.trim(),
-      region: region.trim(),
-      bucket: bucket.trim(),
-      prefix: prefix.trim().replace(/^\/+|\/+$/g, ""),
-      force_path_style: forcePathStyle,
-      allow_http: allowHttp,
-      ...(accessKeyId.trim() && { access_key_id: accessKeyId.trim() }),
-      ...(secretAccessKey.trim() && { secret_access_key: secretAccessKey.trim() }),
-      ...(sessionToken.trim() && { session_token: sessionToken.trim() }),
-    };
-  };
+      localRoot: currentRoot,
+      endpoint,
+      region,
+      bucket,
+      prefix,
+      forcePathStyle,
+      allowHttp,
+      accessKeyId,
+      secretAccessKey,
+      sessionToken,
+    });
 
   const testMutation = useMutation({
     mutationFn: () => adminApi.testStorage(input()),
@@ -238,12 +230,12 @@ export function StorageSettingsPanel() {
     setConnectionVerified(false);
   };
 
-  const changeBackend = (value: AdminStorageBackend) => {
+  const changeBackend = (value: StorageBackend) => {
     change(() => {
       setBackend(value);
-      setRegion(defaultRegion(value));
-      setForcePathStyle(value === "minio");
-      setAllowHttp(value === "minio");
+      setRegion(storageDefaults(value).region);
+      setForcePathStyle(storageDefaults(value).forcePathStyle);
+      setAllowHttp(storageDefaults(value).allowHttp);
     });
   };
 
@@ -275,7 +267,7 @@ export function StorageSettingsPanel() {
                 <FieldLabel htmlFor="storage-target-backend">Target backend</FieldLabel>
                 <Select
                   value={backend}
-                  onValueChange={(value) => changeBackend(value as AdminStorageBackend)}
+                  onValueChange={(value) => changeBackend(value as StorageBackend)}
                   disabled={maintenance}
                 >
                   <SelectTrigger id="storage-target-backend" className="w-full">

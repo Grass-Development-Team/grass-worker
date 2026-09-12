@@ -116,6 +116,9 @@ S3-compatible storage, MinIO, and Cloudflare R2. Object storage configuration
 is persisted in the database rather than `config.toml`. Access keys, secret
 keys, and session tokens are write-only in the Console and encrypted with a
 storage-specific key derived from `secrets.secret_key` before they are stored.
+Both setup and administration trim credential values and discard empty ones.
+Setup accepts the legacy `root` field; `local_root` takes precedence when both
+are supplied. Administration defaults an omitted local root to the active root.
 
 Remote backends require a bucket and region. MinIO and R2 require an endpoint;
 R2 uses the `auto` region. A generic S3-compatible backend may omit the

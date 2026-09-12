@@ -16,26 +16,8 @@ use crate::{
 #[derive(Debug, Default, Deserialize)]
 pub struct StorageRequest {
     pub backend: String,
-    #[serde(default)]
-    pub local_root: Option<String>,
-    #[serde(default)]
-    pub endpoint: Option<String>,
-    #[serde(default)]
-    pub region: Option<String>,
-    #[serde(default)]
-    pub bucket: Option<String>,
-    #[serde(default)]
-    pub prefix: Option<String>,
-    #[serde(default)]
-    pub force_path_style: Option<bool>,
-    #[serde(default)]
-    pub allow_http: Option<bool>,
-    #[serde(default)]
-    pub access_key_id: Option<String>,
-    #[serde(default)]
-    pub secret_access_key: Option<String>,
-    #[serde(default)]
-    pub session_token: Option<String>,
+    #[serde(flatten)]
+    pub options: storage_settings::StorageOptions,
 }
 
 /// GET /api/v1/admin/storage
@@ -156,46 +138,12 @@ fn prepare(
             op,
             message: source.to_string(),
         })?;
-    let current = state.storage.config();
-    let config = StorageConfig {
-        backend,
-        local_root: body
-            .local_root
-            .unwrap_or(current.local_root)
-            .trim()
-            .trim_end_matches('/')
-            .to_owned(),
-        endpoint: body.endpoint.unwrap_or_default().trim().to_owned(),
-        region: body
-            .region
-            .unwrap_or_else(|| backend.default_region().to_owned())
-            .trim()
-            .to_owned(),
-        bucket: body.bucket.unwrap_or_default().trim().to_owned(),
-        prefix: body.prefix.unwrap_or_default().trim_matches('/').to_owned(),
-        force_path_style: body
-            .force_path_style
-            .unwrap_or(matches!(backend, StorageBackendKind::Minio)),
-        allow_http: body
-            .allow_http
-            .unwrap_or(matches!(backend, StorageBackendKind::Minio)),
-    };
-    config.validate().map_err(|source| AppError::Validation {
-        op,
-        message: source.to_string(),
-    })?;
-    let credentials = StorageCredentials {
-        access_key_id: clean_secret(body.access_key_id),
-        secret_access_key: clean_secret(body.secret_access_key),
-        session_token: clean_secret(body.session_token),
-    };
-    Ok((config, credentials))
-}
-
-fn clean_secret(value: Option<String>) -> Option<String> {
-    value
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
+    body.options
+        .resolve(backend, &state.storage.config().local_root)
+        .map_err(|source| AppError::Validation {
+            op,
+            message: source.to_string(),
+        })
 }
 
 fn public_job(job: storage_migration_job::Model) -> anyhow::Result<serde_json::Value> {
@@ -222,11 +170,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn secrets_are_trimmed_without_being_exposed() {
-        assert_eq!(
-            clean_secret(Some(" secret ".to_owned())).as_deref(),
-            Some("secret")
-        );
-        assert_eq!(clean_secret(Some("  ".to_owned())), None);
+    fn administration_defaults_to_the_current_root_and_requires_a_backend() {
+        assert!(serde_json::from_value::<StorageRequest>(json!({})).is_err());
+        let request: StorageRequest = serde_json::from_value(json!({"backend":"local"})).unwrap();
+        let state =
+            ControlApiState::new(crate::infra::config::ControlApiConfig::default(), "unused");
+        let (config, _) = prepare(&state, request, "test.storage").unwrap();
+        assert_eq!(config.local_root, state.storage.config().local_root);
     }
 }
