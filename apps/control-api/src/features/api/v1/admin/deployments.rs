@@ -3,19 +3,18 @@ use axum::{
     extract::{Path, State},
     response::IntoResponse,
 };
-use sea_orm::TransactionTrait;
 use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
     domain::{
-        audits::{self, CreateAuditEventParams},
         delivery::{self, PublicationRemovalKind},
         deployments::{self, DeploymentStateError, ReviewMode},
         notifications, projects,
     },
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::{
             AuditEventResult, AuditEventVisibility, DeploymentBuildStatus, DeploymentReleaseStatus,
             DeploymentServeStatus, ReleaseReason, deployment,
@@ -103,8 +102,7 @@ pub async fn withdraw(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.deployments.withdraw";
     let db = super::database(&state, OP)?;
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
@@ -194,8 +192,7 @@ pub async fn republish(
     const OP: &str = "admin.deployments.republish";
     let db = super::database(&state, OP)?;
     let reason = optional_reason(body.and_then(|Json(body)| body.reason));
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,

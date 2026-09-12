@@ -9,15 +9,13 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::infra::http::timestamps::ts;
 use crate::{
     domain::{
-        audits::{self, CreateAuditEventParams},
         delivery::{self, DeliveryError, ReleaseRequestOutcome},
         deployments::{
             self, BuildTransition, CreateDeploymentParams, DeploymentListFilter,
@@ -30,6 +28,7 @@ use crate::{
         source_credentials,
     },
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::{
             AuditEventResult, AuditEventVisibility, DeploymentArtifactKind, DeploymentBuildStatus,
             DeploymentEnvironment, DeploymentReleaseStatus, HostBindingEnvironment,
@@ -37,7 +36,7 @@ use crate::{
             deployment_screenshot_job, node, project_host_binding, user,
         },
         error::{AppError, accepted_response, ok_response},
-        http::extractors::Session,
+        http::{extractors::Session, timestamps::ts},
         quota::{QuotaCharge, QuotaService},
         route_invalidation,
     },
@@ -443,8 +442,7 @@ async fn create_placed_deployment(
     op: &'static str,
 ) -> Result<deployment::Model, AppError> {
     let requested = deployments::runtime_serve_resources(&params.project.runtime);
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op,
@@ -494,6 +492,25 @@ async fn create_placed_deployment(
         let _ = transaction.rollback().await;
         return Err(AppError::Infrastructure { op, source });
     }
+    audits::create_audit_event(
+        &transaction,
+        CreateAuditEventParams {
+            actor_user_id: deployment.triggered_by_user_id,
+            actor_node_id: None,
+            team_id: Some(deployment.team_id),
+            action: "deployment.created".to_owned(),
+            target_type: "deployment".to_owned(),
+            target_id: Some(deployment.id),
+            result: AuditEventResult::Success,
+            reason: None,
+            metadata: json!({
+                "project_id": deployment.project_id,
+                "environment": deployments::environment_value(&deployment.environment),
+            }),
+        },
+    )
+    .await
+    .map_err(|source| AppError::Infrastructure { op, source })?;
     transaction
         .commit()
         .await
@@ -616,32 +633,12 @@ pub async fn create(
         .commit(OP, reservation, "deployment", Some(deployment.id))
         .await?;
 
-    let _ = audits::create_audit_event(
-        db,
-        CreateAuditEventParams {
-            actor_user_id: Some(session.data.user_id),
-            actor_node_id: None,
-            team_id: Some(access.team.id),
-            action: "deployment.created".to_owned(),
-            target_type: "deployment".to_owned(),
-            target_id: Some(deployment.id),
-            result: AuditEventResult::Success,
-            reason: None,
-            metadata: json!({
-                "project_id": access.project.id,
-                "environment": deployments::environment_value(&deployment.environment),
-            }),
-        },
-    )
-    .await;
-
     // Non-static runtimes are reserved but not implemented: fail the
     // deployment immediately with the stable message instead of letting it
     // sit in the queue forever.
     let deployment = match deployments::runtime_failure(&deployment.runtime_kind) {
         Some((code, message)) => {
-            let transaction = db
-                .begin()
+            let transaction = crate::infra::audit::AuditTransaction::begin(db)
                 .await
                 .map_err(|source| AppError::Infrastructure {
                     op: OP,
@@ -1144,8 +1141,7 @@ pub(crate) async fn cancel_deployment_core(
     let was_running = cancellation_releases_build_slot(&deployment.build_status);
     let team_id = deployment.team_id;
 
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op,
@@ -1164,6 +1160,22 @@ pub(crate) async fn cancel_deployment_core(
     )
     .await
     .map_err(|error| map_delivery_error(error, op))?;
+    audits::create_audit_event(
+        &transaction,
+        CreateAuditEventParams {
+            actor_user_id: Some(actor_user_id),
+            actor_node_id: None,
+            team_id: Some(team_id),
+            action: "deployment.canceled".to_owned(),
+            target_type: "deployment".to_owned(),
+            target_id: Some(deployment.id),
+            result: AuditEventResult::Success,
+            reason: None,
+            metadata: json!({}),
+        },
+    )
+    .await
+    .map_err(|source| AppError::Infrastructure { op, source })?;
     transaction
         .commit()
         .await
@@ -1187,22 +1199,6 @@ pub(crate) async fn cancel_deployment_core(
             .release_build_slot_once(team_id, deployment.id)
             .await;
     }
-
-    let _ = audits::create_audit_event(
-        db,
-        CreateAuditEventParams {
-            actor_user_id: Some(actor_user_id),
-            actor_node_id: None,
-            team_id: Some(team_id),
-            action: "deployment.canceled".to_owned(),
-            target_type: "deployment".to_owned(),
-            target_id: Some(deployment.id),
-            result: AuditEventResult::Success,
-            reason: None,
-            metadata: json!({}),
-        },
-    )
-    .await;
 
     Ok(deployment)
 }
@@ -1251,8 +1247,7 @@ pub async fn unpublish(
     let access = super::project_access(&state, &session, project_id, false, OP).await?;
     access.require_admin(OP)?;
     let db = super::database(&state, OP)?;
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
@@ -1403,8 +1398,7 @@ pub async fn retry(
 
     let new_deployment = match deployments::runtime_failure(&new_deployment.runtime_kind) {
         Some((code, message)) => {
-            let transaction = db
-                .begin()
+            let transaction = crate::infra::audit::AuditTransaction::begin(db)
                 .await
                 .map_err(|source| AppError::Infrastructure {
                     op: OP,
@@ -1562,8 +1556,7 @@ async fn activate_deployment(
             }
         })?;
 
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op,

@@ -14,8 +14,8 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
-    domain::audits::{self, CreateAuditEventParams},
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::{AuditEventResult, registration_email_allowlist, user},
         error::{AppError, ok_response},
         http::{extractors::Session, timestamps::ts},
@@ -92,6 +92,13 @@ pub async fn add(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.registration.emails.add";
     let db = super::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
     let email = validate_email(&body.email)?;
     let entry = registration_email_allowlist::ActiveModel {
         id: Set(Uuid::now_v7()),
@@ -112,7 +119,7 @@ pub async fn add(
             AppError::Infrastructure { op: OP, source }
         }
     })?;
-    let _ = audits::create_platform_audit_event(
+    audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
@@ -126,7 +133,15 @@ pub async fn add(
             metadata: json!({ "email": entry.email }),
         },
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     Ok(ok_response(json!({
         "email": {
@@ -147,6 +162,13 @@ pub async fn remove(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.registration.emails.remove";
     let db = super::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
     let entry = registration_email_allowlist::Entity::find_by_id(entry_id)
         .one(db)
         .await
@@ -165,7 +187,7 @@ pub async fn remove(
             op: OP,
             source: source.into(),
         })?;
-    let _ = audits::create_platform_audit_event(
+    audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
@@ -179,7 +201,15 @@ pub async fn remove(
             metadata: json!({ "email": entry.email }),
         },
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     Ok(ok_response(json!({ "deleted": true })))
 }

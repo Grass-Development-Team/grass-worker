@@ -1,21 +1,25 @@
 use std::collections::HashSet;
 
+use crate::infra::audit::AuditTransaction;
 use grass_node_protocol::ServeResources;
-use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseTransaction,
-    EntityTrait, QueryFilter, QueryOrder,
-};
+use sea_orm::ActiveModelTrait;
+use sea_orm::ActiveValue::Set;
+use sea_orm::ColumnTrait;
+use sea_orm::ConnectionTrait;
+use sea_orm::EntityTrait;
+use sea_orm::QueryFilter;
+use sea_orm::QueryOrder;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
-    domain::{
-        audits::{self, CreateAuditEventParams},
-        deployments, scheduler,
-    },
-    infra::database::entity::{
-        AuditEventResult, AuditEventVisibility, DeploymentBuildStatus, DeploymentEnvironment,
-        DeploymentReleaseStatus, DeploymentServeStatus, ReleaseReason, deployment,
+    domain::{deployments, scheduler},
+    infra::{
+        audit::{self as audits, CreateAuditEventParams},
+        database::entity::{
+            AuditEventResult, AuditEventVisibility, DeploymentBuildStatus, DeploymentEnvironment,
+            DeploymentReleaseStatus, DeploymentServeStatus, ReleaseReason, deployment,
+        },
     },
 };
 
@@ -218,7 +222,7 @@ pub async fn effective_preview<C: ConnectionTrait>(
 /// artifact, log, and review records. This operation never activates an older
 /// deployment.
 pub async fn remove_publication(
-    tx: &DatabaseTransaction,
+    tx: &AuditTransaction,
     target: deployment::Model,
     kind: PublicationRemovalKind,
 ) -> Result<deployment::Model, DeliveryError> {
@@ -271,7 +275,7 @@ pub async fn remove_publication(
 /// Reconciles the Serve assignments for one project environment while holding
 /// the same placement lock used by the scheduler.
 pub async fn reconcile_environment(
-    tx: &DatabaseTransaction,
+    tx: &AuditTransaction,
     project_id: Uuid,
     environment: DeploymentEnvironment,
 ) -> Result<(), DeliveryError> {
@@ -326,7 +330,7 @@ pub async fn reconcile_environment(
 /// Applies an unsuccessful terminal build transition and releases its Serve
 /// assignment in the same transaction.
 pub async fn transition_unsuccessful_build(
-    tx: &DatabaseTransaction,
+    tx: &AuditTransaction,
     target: deployment::Model,
     transition: deployments::BuildTransition,
 ) -> Result<deployment::Model, DeliveryError> {
@@ -353,7 +357,7 @@ pub async fn transition_unsuccessful_build(
 }
 
 pub async fn request_release(
-    tx: &DatabaseTransaction,
+    tx: &AuditTransaction,
     target: deployment::Model,
     reason: ReleaseReason,
     actor_user_id: Uuid,
@@ -433,7 +437,7 @@ pub async fn request_release(
 }
 
 pub async fn complete_pending_release(
-    tx: &DatabaseTransaction,
+    tx: &AuditTransaction,
     target: deployment::Model,
 ) -> Result<Option<deployment::Model>, DeliveryError> {
     let Some(reason) = target.pending_release_reason.clone() else {
@@ -492,7 +496,7 @@ mod tests {
     use grass_node_protocol::{ReportServeStatusRequest, ReportedServeStatus};
     use sea_orm::{
         ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, Database,
-        DatabaseBackend, DatabaseConnection, EntityTrait, QueryFilter, Statement, TransactionTrait,
+        DatabaseBackend, DatabaseConnection, EntityTrait, QueryFilter, Statement,
     };
     use sea_orm_migration::MigratorTrait;
     use time::{Duration, OffsetDateTime};
@@ -1065,7 +1069,9 @@ mod tests {
         };
         let fixture = seed_delivery_fixture(&test_db.db).await;
 
-        let transaction = test_db.db.begin().await.unwrap();
+        let transaction = crate::infra::audit::AuditTransaction::begin(&test_db.db)
+            .await
+            .unwrap();
         reconcile_environment(
             &transaction,
             fixture.project.id,
@@ -1087,7 +1093,9 @@ mod tests {
             DeploymentServeStatus::Ready,
         )
         .await;
-        let transaction = test_db.db.begin().await.unwrap();
+        let transaction = crate::infra::audit::AuditTransaction::begin(&test_db.db)
+            .await
+            .unwrap();
         reconcile_environment(
             &transaction,
             fixture.project.id,
@@ -1100,7 +1108,9 @@ mod tests {
         assert_eq!(retired.serve_status, DeploymentServeStatus::Retired);
         assert_eq!(retired.serve_node_id, None);
 
-        let transaction = test_db.db.begin().await.unwrap();
+        let transaction = crate::infra::audit::AuditTransaction::begin(&test_db.db)
+            .await
+            .unwrap();
         let outcome = request_release(
             &transaction,
             fixture.rollback_target.clone(),
@@ -1125,7 +1135,9 @@ mod tests {
             DeploymentServeStatus::Ready,
         )
         .await;
-        let transaction = test_db.db.begin().await.unwrap();
+        let transaction = crate::infra::audit::AuditTransaction::begin(&test_db.db)
+            .await
+            .unwrap();
         let target = reload_deployment(&transaction, fixture.rollback_target.id).await;
         let activated = complete_pending_release(&transaction, target)
             .await
@@ -1151,7 +1163,9 @@ mod tests {
         active.serve_status = Set(DeploymentServeStatus::Pending);
         let candidate = active.update(&test_db.db).await.unwrap();
 
-        let transaction = test_db.db.begin().await.unwrap();
+        let transaction = crate::infra::audit::AuditTransaction::begin(&test_db.db)
+            .await
+            .unwrap();
         let retired = transition_unsuccessful_build(
             &transaction,
             candidate,
@@ -1188,7 +1202,9 @@ mod tests {
         };
         let fixture = seed_delivery_fixture(&test_db.db).await;
 
-        let transaction = test_db.db.begin().await.unwrap();
+        let transaction = crate::infra::audit::AuditTransaction::begin(&test_db.db)
+            .await
+            .unwrap();
         request_release(
             &transaction,
             fixture.rollback_target.clone(),
@@ -1307,7 +1323,9 @@ mod tests {
         let target = active.update(&test_db.db).await.unwrap();
         let stale_target = target.clone();
 
-        let transaction = test_db.db.begin().await.unwrap();
+        let transaction = crate::infra::audit::AuditTransaction::begin(&test_db.db)
+            .await
+            .unwrap();
         let first = request_release(
             &transaction,
             target,
@@ -1320,7 +1338,9 @@ mod tests {
         assert!(matches!(first, ReleaseRequestOutcome::Activated(_)));
         transaction.commit().await.unwrap();
 
-        let transaction = test_db.db.begin().await.unwrap();
+        let transaction = crate::infra::audit::AuditTransaction::begin(&test_db.db)
+            .await
+            .unwrap();
         let second = request_release(
             &transaction,
             stale_target,
@@ -1410,7 +1430,9 @@ CREATE TRIGGER reject_queued_release_audit
         };
         let fixture = seed_delivery_fixture(&test_db.db).await;
 
-        let transaction = test_db.db.begin().await.unwrap();
+        let transaction = crate::infra::audit::AuditTransaction::begin(&test_db.db)
+            .await
+            .unwrap();
         let queued = request_release(
             &transaction,
             fixture.rollback_target.clone(),
@@ -1429,7 +1451,9 @@ CREATE TRIGGER reject_queued_release_audit
             DeploymentServeStatus::Ready,
         )
         .await;
-        let transaction = test_db.db.begin().await.unwrap();
+        let transaction = crate::infra::audit::AuditTransaction::begin(&test_db.db)
+            .await
+            .unwrap();
         let target = reload_deployment(&transaction, fixture.rollback_target.id).await;
         let activated = complete_pending_release(&transaction, target)
             .await

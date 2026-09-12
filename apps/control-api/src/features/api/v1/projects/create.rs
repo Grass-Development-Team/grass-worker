@@ -5,13 +5,13 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        audits::{self, CreateAuditEventParams},
         hosts::{self, AutoAssignSelection},
         projects::{self, CreateProjectParams},
         quotas::QuotaDimension,
         teams,
     },
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::{
             AuditEventResult, HostBindingEnvironment, HostBindingKind, HostReviewStatus,
             ProjectRuntime,
@@ -135,23 +135,44 @@ pub async fn handler(
         "framework_hint": super::optional_trimmed(body.framework_hint),
     });
 
-    let project = match projects::create_project(
-        db,
-        CreateProjectParams {
-            team_id: team.id,
-            created_by_user_id: Some(session.data.user_id),
-            slug,
-            name: body.name.trim().to_owned(),
-            runtime,
-            repository_url: super::optional_trimmed(body.repository_url),
-            default_branch: super::optional_trimmed(body.default_branch),
-            install_command: super::optional_trimmed(body.install_command),
-            build_command: super::optional_trimmed(body.build_command),
-            output_directory: super::optional_trimmed(body.output_directory),
-            source_config,
-            build_config: json!({}),
-        },
-    )
+    let project = match async {
+        let transaction = audits::AuditTransaction::begin(db).await?;
+        let project = projects::create_project(
+            &transaction,
+            CreateProjectParams {
+                team_id: team.id,
+                created_by_user_id: Some(session.data.user_id),
+                slug,
+                name: body.name.trim().to_owned(),
+                runtime,
+                repository_url: super::optional_trimmed(body.repository_url),
+                default_branch: super::optional_trimmed(body.default_branch),
+                install_command: super::optional_trimmed(body.install_command),
+                build_command: super::optional_trimmed(body.build_command),
+                output_directory: super::optional_trimmed(body.output_directory),
+                source_config,
+                build_config: json!({}),
+            },
+        )
+        .await?;
+        audits::create_audit_event(
+            &transaction,
+            CreateAuditEventParams {
+                actor_user_id: Some(session.data.user_id),
+                actor_node_id: None,
+                team_id: Some(team.id),
+                action: "project.created".to_owned(),
+                target_type: "project".to_owned(),
+                target_id: Some(project.id),
+                result: AuditEventResult::Success,
+                reason: None,
+                metadata: json!({ "team_id": team.id, "slug": project.slug }),
+            },
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok::<_, anyhow::Error>(project)
+    }
     .await
     {
         Ok(project) => project,
@@ -171,22 +192,6 @@ pub async fn handler(
     quota
         .commit(OP, reservation, "project", Some(project.id))
         .await?;
-
-    let _ = audits::create_audit_event(
-        db,
-        CreateAuditEventParams {
-            actor_user_id: Some(session.data.user_id),
-            actor_node_id: None,
-            team_id: Some(team.id),
-            action: "project.created".to_owned(),
-            target_type: "project".to_owned(),
-            target_id: Some(project.id),
-            result: AuditEventResult::Success,
-            reason: None,
-            metadata: json!({ "team_id": team.id, "slug": project.slug }),
-        },
-    )
-    .await;
 
     // Platform-domain auto-assignment. Failures never fail project creation;
     // the response carries the reason so the Console can explain it.
@@ -274,7 +279,7 @@ async fn auto_assign_host(
             .await
         {
             Ok(binding) => {
-                let _ = audits::create_audit_event(
+                audits::observe_event(
                     db,
                     CreateAuditEventParams {
                         actor_user_id: Some(session.data.user_id),

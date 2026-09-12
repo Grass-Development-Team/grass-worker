@@ -9,27 +9,26 @@ use axum::{
     extract::{Path, State},
     response::IntoResponse,
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::infra::http::timestamps::ts;
 use crate::{
     domain::{
-        audits::{self, CreateAuditEventParams},
         delivery::{self, ReleaseRequestOutcome},
         deployments::{self, DeploymentStateError},
         projects, scheduler,
     },
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::{
             AuditEventResult, AuditEventVisibility, DeploymentBuildStatus, DeploymentEventKind,
             DeploymentReleaseStatus, DeploymentReviewStatus, DeploymentServeStatus, ReleaseReason,
             deployment, deployment_event, deployment_review, project, team, user,
         },
         error::{AppError, accepted_response, ok_response},
-        http::extractors::Session,
+        http::{extractors::Session, timestamps::ts},
     },
     state::ControlApiState,
 };
@@ -239,8 +238,7 @@ async fn decide(
         "admin.reviews.reject"
     };
     let db = super::database(&state, op)?;
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op,

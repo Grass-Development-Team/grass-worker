@@ -9,11 +9,11 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{
-    domain::{
-        audits::{self, CreateAuditEventParams},
-        source_credentials::{self, CreateCredentialParams, CreateSecret, SourceCredentialError},
+    domain::source_credentials::{
+        self, CreateCredentialParams, CreateSecret, SourceCredentialError,
     },
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::{AuditEventResult, SourceCredentialKind, source_credential},
         error::{AppError, ok_response},
         http::{extractors::TeamRole, timestamps::ts},
@@ -137,15 +137,12 @@ fn map_error(error: SourceCredentialError, op: &'static str) -> AppError {
 }
 
 async fn audit(
-    state: &ControlApiState,
+    db: &impl audits::AuditConnection,
     role: &TeamRole,
     credential: &source_credential::Model,
     action: &str,
-) {
-    let Some(db) = state.try_database() else {
-        return;
-    };
-    let _ = audits::create_audit_event(
+) -> anyhow::Result<()> {
+    audits::create_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(role.user_id),
@@ -163,7 +160,7 @@ async fn audit(
             }),
         },
     )
-    .await;
+    .await
 }
 
 pub async fn list(
@@ -209,8 +206,14 @@ pub async fn create(
         OP,
     )?;
     let keyring = state.config.read().unwrap().secrets.git_credentials.clone();
+    let transaction = audits::AuditTransaction::begin(super::database(&state, OP)?)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     let credential = source_credentials::create(
-        super::database(&state, OP)?,
+        &*transaction,
         &keyring,
         CreateCredentialParams {
             team_id: role.team_id,
@@ -222,7 +225,21 @@ pub async fn create(
     )
     .await
     .map_err(|error| map_error(error, OP))?;
-    audit(&state, &role, &credential, "source_credential.created").await;
+    audit(
+        &transaction,
+        &role,
+        &credential,
+        "source_credential.created",
+    )
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     Ok(ok_response(
         json!({ "credential": credential_view(&credential) }),
     ))
@@ -253,8 +270,14 @@ pub async fn rotate(
         OP,
     )?;
     let keyring = state.config.read().unwrap().secrets.git_credentials.clone();
+    let transaction = audits::AuditTransaction::begin(super::database(&state, OP)?)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     let credential = source_credentials::rotate(
-        db,
+        &*transaction,
         &keyring,
         role.team_id,
         path.credential_id,
@@ -263,7 +286,21 @@ pub async fn rotate(
     )
     .await
     .map_err(|error| map_error(error, OP))?;
-    audit(&state, &role, &credential, "source_credential.rotated").await;
+    audit(
+        &transaction,
+        &role,
+        &credential,
+        "source_credential.rotated",
+    )
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     Ok(ok_response(
         json!({ "credential": credential_view(&credential) }),
     ))
@@ -276,14 +313,30 @@ pub async fn revoke(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "teams.source_credentials.revoke";
     role.require_admin(OP)?;
-    let credential = source_credentials::revoke(
-        super::database(&state, OP)?,
-        role.team_id,
-        path.credential_id,
+    let transaction = audits::AuditTransaction::begin(super::database(&state, OP)?)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let credential = source_credentials::revoke(&*transaction, role.team_id, path.credential_id)
+        .await
+        .map_err(|error| map_error(error, OP))?;
+    audit(
+        &transaction,
+        &role,
+        &credential,
+        "source_credential.revoked",
     )
     .await
-    .map_err(|error| map_error(error, OP))?;
-    audit(&state, &role, &credential, "source_credential.revoked").await;
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     Ok(ok_response(
         json!({ "credential": credential_view(&credential) }),
     ))

@@ -8,12 +8,12 @@ use serde_json::json;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::infra::http::{extractors::Session, timestamps::ts};
 use crate::{
-    domain::audits::{self, AuditEventFilter},
     infra::{
+        audit::{self as audits, AuditEventFilter},
         database::entity::{AuditActorType, AuditEventResult, AuditEventVisibility, audit_event},
         error::{AppError, ok_response},
+        http::{extractors::Session, timestamps::ts},
     },
     state::ControlApiState,
 };
@@ -275,12 +275,18 @@ pub async fn cleanup(
     const OP: &str = "admin.cleanup.audit_events.delete";
     let db = super::database(&state, OP)?;
     let (filter, _) = cleanup_event_filter(query, None, OP)?;
-    let deleted = audits::delete_events(db, filter)
+    let transaction = audits::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let deleted = audits::delete_events(&transaction, filter)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
     audits::create_platform_audit_event(
-        db,
+        &transaction,
         audits::CreateAuditEventParams {
             actor_user_id: Some(session.data.user_id),
             actor_node_id: None,
@@ -296,6 +302,13 @@ pub async fn cleanup(
     .await
     .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     Ok(ok_response(json!({
         "deleted": deleted,
         "skipped": 0,
@@ -398,5 +411,85 @@ mod tests {
         assert_eq!(view["status_code"], 200);
         assert_eq!(view["duration_ms"], 17);
         assert_eq!(view["changes"]["after"]["name"], "New");
+    }
+    #[tokio::test]
+    async fn cleanup_http_rolls_back_when_its_audit_cannot_be_written() {
+        check_cleanup_transaction(true).await;
+    }
+
+    #[tokio::test]
+    async fn cleanup_http_commits_deletion_and_its_audit_together() {
+        check_cleanup_transaction(false).await;
+    }
+
+    async fn check_cleanup_transaction(fail_audit: bool) {
+        use axum::{
+            Extension, Router,
+            body::Body,
+            http::{Request, StatusCode},
+            routing::delete,
+        };
+        use sea_orm::{DbBackend, DbErr, MockDatabase, MockExecResult};
+        use tower::ServiceExt;
+
+        let mock = MockDatabase::new(DbBackend::Postgres).append_exec_results([MockExecResult {
+            last_insert_id: 0,
+            rows_affected: 3,
+        }]);
+        let mock = if fail_audit {
+            mock.append_exec_errors([DbErr::Custom("audit insert unavailable".to_owned())])
+        } else {
+            mock.append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+        };
+        let state = crate::state::ControlApiState::new(Default::default(), "unused.toml");
+        state.database.set(mock.into_connection()).unwrap();
+        let now = OffsetDateTime::now_utc();
+        let session = Some((
+            "test-session".to_owned(),
+            grass_session::SessionData {
+                user_id: Uuid::now_v7(),
+                auth_version: 0,
+                created_at: now,
+                last_accessed_at: now,
+            },
+        ));
+        let app = Router::new()
+            .route("/api/v1/admin/cleanup/audit-events", delete(super::cleanup))
+            .layer(Extension(session))
+            .with_state(state.clone());
+        let request = Request::builder()
+            .method("DELETE")
+            .uri("/api/v1/admin/cleanup/audit-events")
+            .header("content-type", "application/json")
+            .body(Body::from(json!({ "snapshot_before": 0 }).to_string()))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            if fail_audit {
+                StatusCode::INTERNAL_SERVER_ERROR
+            } else {
+                StatusCode::OK
+            }
+        );
+        let log = std::sync::Arc::try_unwrap(state.database)
+            .unwrap()
+            .into_inner()
+            .unwrap()
+            .into_transaction_log();
+        let statements = format!("{log:?}");
+        assert!(statements.contains("DELETE FROM"), "{statements}");
+        assert!(statements.contains("INSERT INTO"), "{statements}");
+        assert!(
+            statements.contains(if fail_audit { "ROLLBACK" } else { "COMMIT" }),
+            "{statements}"
+        );
+        assert!(
+            !statements.contains(if fail_audit { "COMMIT" } else { "ROLLBACK" }),
+            "{statements}"
+        );
     }
 }

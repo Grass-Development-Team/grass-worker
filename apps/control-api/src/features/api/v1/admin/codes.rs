@@ -12,11 +12,9 @@ use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
 use crate::{
-    domain::{
-        audits::{self, CreateAuditEventParams},
-        codes::{self, CodeScope, CodeStatus, CodeUseError},
-    },
+    domain::codes::{self, CodeScope, CodeStatus, CodeUseError},
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::{AuditEventResult, code, user},
         error::{AppError, ok_response},
         http::{extractors::Session, timestamps::ts},
@@ -231,6 +229,13 @@ pub async fn generate(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.codes.generate";
     let db = super::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
     let input = validate_generation(body, OffsetDateTime::now_utc())?;
     let generated = codes::generate_codes(
         db,
@@ -241,7 +246,7 @@ pub async fn generate(
     )
     .await
     .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    let _ = audits::create_platform_audit_event(
+    audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
@@ -259,7 +264,15 @@ pub async fn generate(
             }),
         },
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     Ok(ok_response(json!({
         "codes": generated.iter().map(|item| json!({
@@ -279,10 +292,17 @@ pub async fn revoke(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.codes.revoke";
     let db = super::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
     let item = codes::revoke_code(db, code_id)
         .await
         .map_err(|error| map_code_error(error, OP))?;
-    let _ = audits::create_platform_audit_event(
+    audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
@@ -296,7 +316,15 @@ pub async fn revoke(
             metadata: json!({ "scope": item.scope }),
         },
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     Ok(ok_response(json!({
         "code": code_view(&item, None, OffsetDateTime::now_utc()),

@@ -1,20 +1,20 @@
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
-    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
+    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 use serde::Serialize;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
-    domain::{
-        audits::{self, CreateAuditEventParams},
-        deployments, nodes, scheduler,
-    },
-    infra::database::entity::{
-        AuditEventResult, DeploymentArtifactKind, DeploymentBuildStatus, DeploymentServeStatus,
-        NodeDeletionStatus, NodeDeploymentMigrationStatus, NodeStatus, deployment,
-        deployment_artifact, node, node_deletion_job, node_deployment_migration,
+    domain::{deployments, nodes, scheduler},
+    infra::{
+        audit::{self as audits, CreateAuditEventParams},
+        database::entity::{
+            AuditEventResult, DeploymentArtifactKind, DeploymentBuildStatus, DeploymentServeStatus,
+            NodeDeletionStatus, NodeDeploymentMigrationStatus, NodeStatus, deployment,
+            deployment_artifact, node, node_deletion_job, node_deployment_migration,
+        },
     },
 };
 
@@ -211,7 +211,7 @@ pub fn status_value(status: &NodeDeletionStatus) -> &'static str {
 }
 
 async fn create_job_audit(
-    transaction: &sea_orm::DatabaseTransaction,
+    transaction: &crate::infra::audit::AuditTransaction,
     job: &node_deletion_job::Model,
     action: &str,
     result: AuditEventResult,
@@ -240,7 +240,7 @@ fn bounded_job_error(error: impl std::fmt::Display) -> String {
 }
 
 pub async fn enqueue(
-    transaction: &sea_orm::DatabaseTransaction,
+    transaction: &crate::infra::audit::AuditTransaction,
     source: node::Model,
     target_node_id: Option<Uuid>,
     requested_by_user_id: Uuid,
@@ -341,7 +341,7 @@ pub async fn enqueue(
 }
 
 async fn update_job_phase(
-    transaction: &sea_orm::DatabaseTransaction,
+    transaction: &crate::infra::audit::AuditTransaction,
     job: node_deletion_job::Model,
     status: NodeDeletionStatus,
     ready: u64,
@@ -358,7 +358,7 @@ async fn update_job_phase(
 }
 
 async fn fail_job(
-    transaction: &sea_orm::DatabaseTransaction,
+    transaction: &crate::infra::audit::AuditTransaction,
     job: node_deletion_job::Model,
     ready: u64,
     active_builds: u64,
@@ -442,7 +442,7 @@ fn target_is_available(target: &node::Model, now: OffsetDateTime) -> bool {
 }
 
 async fn switch_ready_routes(
-    transaction: &sea_orm::DatabaseTransaction,
+    transaction: &crate::infra::audit::AuditTransaction,
     job: &node_deletion_job::Model,
     migrations: &[node_deployment_migration::Model],
 ) -> anyhow::Result<u64> {
@@ -492,7 +492,7 @@ async fn switch_ready_routes(
 }
 
 async fn process_job(db: &DatabaseConnection, job_id: Uuid) -> anyhow::Result<()> {
-    let transaction = db.begin().await?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db).await?;
     scheduler::lock_placement(&transaction).await?;
     let Some(job) = node_deletion_job::Entity::find_by_id(job_id)
         .lock_exclusive()
@@ -721,7 +721,7 @@ pub async fn process_pending_jobs(db: &DatabaseConnection) -> anyhow::Result<u64
                 %error,
                 "node deletion job failed"
             );
-            let transaction = db.begin().await?;
+            let transaction = crate::infra::audit::AuditTransaction::begin(db).await?;
             if let Some(current) = node_deletion_job::Entity::find_by_id(job.id)
                 .lock_exclusive()
                 .one(&transaction)
@@ -762,7 +762,7 @@ mod tests {
     use grass_node_protocol::{ClaimRequest, ReportServeStatusRequest, ReportedServeStatus};
     use sea_orm::{
         ActiveModelTrait, ActiveValue::Set, ColumnTrait, Database, DatabaseConnection, EntityTrait,
-        QueryFilter, TransactionTrait,
+        QueryFilter,
     };
     use sea_orm_migration::MigratorTrait;
 
@@ -990,7 +990,9 @@ mod tests {
     }
 
     async fn enqueue_fixture(db: &DatabaseConnection, fixture: &DeletionFixture) {
-        let transaction = db.begin().await.unwrap();
+        let transaction = crate::infra::audit::AuditTransaction::begin(db)
+            .await
+            .unwrap();
         scheduler::lock_placement(&transaction).await.unwrap();
         let source = node::Entity::find_by_id(fixture.source.id)
             .one(&transaction)
@@ -1431,7 +1433,9 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let transaction = test_db.db.begin().await.unwrap();
+        let transaction = crate::infra::audit::AuditTransaction::begin(&test_db.db)
+            .await
+            .unwrap();
         scheduler::lock_placement(&transaction).await.unwrap();
         enqueue(&transaction, source, None, fixture.user.id)
             .await

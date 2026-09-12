@@ -7,20 +7,17 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
-use sea_orm::TransactionTrait;
-
-use crate::infra::http::timestamps::ts;
 use crate::{
     domain::{
-        audits::{self, CreateAuditEventParams},
         authentication::{self, UserMfaPolicy},
         teams::{self, CreateTeamParams},
         users::{self, CreateUserParams, UpdateUserParams, UserListFilter},
     },
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::{AuditEventResult, PlatformRole, TeamKind, UserStatus, user},
         error::{AppError, ok_response},
-        http::extractors::Session,
+        http::{extractors::Session, timestamps::ts},
     },
     state::ControlApiState,
 };
@@ -169,6 +166,13 @@ pub async fn update(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.users.update";
     let db = super::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
 
     let target = users::get_user_by_id(db, user_id)
         .await
@@ -261,7 +265,7 @@ pub async fn update(
     .await
     .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
-    let _ = audits::create_platform_audit_event(
+    audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
@@ -275,7 +279,15 @@ pub async fn update(
             metadata: json!({ "changed": changed }),
         },
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     Ok(ok_response(json!({ "user": user_view(&updated) })))
 }
@@ -299,6 +311,13 @@ pub async fn reset_password(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.users.reset_password";
     let db = super::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
 
     let target = users::get_user_by_id(db, user_id)
         .await
@@ -342,11 +361,11 @@ pub async fn reset_password(
             op: OP,
             message: format!("password hashing failed: {error}"),
         })?;
-    users::set_password(db, target.id, password_hash)
+    users::set_password(&**db, target.id, password_hash)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
-    let _ = audits::create_platform_audit_event(
+    audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
@@ -360,7 +379,15 @@ pub async fn reset_password(
             metadata: json!({}),
         },
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     Ok(ok_response(json!({
         "user_id": target.id,
@@ -441,8 +468,7 @@ pub async fn create(
             message: format!("password hashing failed: {error}"),
         })?;
 
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
@@ -487,16 +513,9 @@ pub async fn create(
     )
     .await
     .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    transaction
-        .commit()
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
 
-    let _ = audits::create_platform_audit_event(
-        db,
+    audits::create_platform_audit_event(
+        &transaction,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
             actor_node_id: None,
@@ -509,7 +528,15 @@ pub async fn create(
             metadata: json!({ "email": created.email, "role": created.platform_role.as_str() }),
         },
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     Ok(ok_response(json!({
         "user": user_view(&created),
@@ -568,6 +595,13 @@ pub async fn update_mfa_policy(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.users.mfa.policy.update";
     let db = super::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
     let user = users::get_user_by_id(db, user_id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?
@@ -588,7 +622,7 @@ pub async fn update_mfa_policy(
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     let requirements = platform_policy.requirements_for(&policy, &user.platform_role);
-    let _ = audits::create_platform_audit_event(
+    audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
@@ -606,7 +640,15 @@ pub async fn update_mfa_policy(
             }),
         },
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     Ok(ok_response(json!({
         "policy": policy,
         "effective_requirements": {
@@ -623,6 +665,13 @@ pub async fn reset_mfa_factor(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.users.mfa.reset";
     let db = super::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
     let factor = authentication::mfa_factor(db, user_id, factor_id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?
@@ -633,7 +682,7 @@ pub async fn reset_mfa_factor(
     authentication::delete_mfa_factor(db, user_id, factor_id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    let _ = audits::create_platform_audit_event(
+    audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
@@ -647,7 +696,15 @@ pub async fn reset_mfa_factor(
             metadata: json!({ "factor_id": factor.id, "factor_kind": factor.kind.as_str() }),
         },
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     Ok(ok_response(json!({ "deleted": true })))
 }
 

@@ -14,11 +14,9 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    domain::{
-        audits::{self, CreateAuditEventParams},
-        deployments,
-    },
+    domain::deployments,
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::AuditEventResult,
         error::{AppError, ok_response},
         http::extractors::Session,
@@ -130,7 +128,7 @@ async fn record_stream_ended_audit(
     deployment_id: Uuid,
 ) {
     if let Some(db) = state.try_database() {
-        let _ = audits::create_platform_audit_event(
+        audits::observe_platform_event(
             db,
             CreateAuditEventParams {
                 actor_user_id: Some(user_id),

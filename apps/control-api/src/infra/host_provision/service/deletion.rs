@@ -1,15 +1,11 @@
-use sea_orm::TransactionTrait;
 use serde_json::json;
 use uuid::Uuid;
 
 use super::HostBindingService;
 use crate::{
-    domain::{
-        audits::{self, CreateAuditEventParams},
-        hosts, notifications, projects,
-        quotas::QuotaDimension,
-    },
+    domain::{hosts, notifications, projects, quotas::QuotaDimension},
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::AuditEventResult,
         error::AppError,
         quota::{QuotaCharge, QuotaService},
@@ -35,9 +31,7 @@ impl HostBindingService<'_> {
         binding_id: Uuid,
         scope: DeleteHostScope,
     ) -> Result<(), AppError> {
-        let transaction = self
-            .db
-            .begin()
+        let transaction = crate::infra::audit::AuditTransaction::begin(self.db)
             .await
             .map_err(|source| AppError::Infrastructure {
                 op,

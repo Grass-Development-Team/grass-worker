@@ -8,11 +8,9 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    domain::{
-        audits::{self, CreateAuditEventParams},
-        source_credentials::{self, SourceCredentialError},
-    },
+    domain::source_credentials::{self, SourceCredentialError},
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::{AuditEventResult, source_credential},
         error::{AppError, ok_response},
         http::extractors::Session,
@@ -53,13 +51,13 @@ fn map_error(error: SourceCredentialError, op: &'static str) -> AppError {
 }
 
 async fn audit_binding(
-    db: &sea_orm::DatabaseConnection,
+    db: &impl audits::AuditConnection,
     access: &super::ProjectAccess,
     actor_user_id: Uuid,
     credential: &source_credential::Model,
     action: &str,
-) {
-    let _ = audits::create_audit_event(
+) -> anyhow::Result<()> {
+    audits::create_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(actor_user_id),
@@ -73,7 +71,7 @@ async fn audit_binding(
             metadata: json!({ "project_id": access.project.id }),
         },
     )
-    .await;
+    .await
 }
 
 pub async fn get(
@@ -110,6 +108,13 @@ pub async fn bind(
     let access = super::project_access(&state, &session, project_id, false, OP).await?;
     access.require_admin(OP)?;
     let db = super::database(&state, OP)?;
+    let transaction = audits::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
     let credential = source_credentials::bind_project(
         db,
         &access.project,
@@ -125,7 +130,15 @@ pub async fn bind(
         &credential,
         "source_credential.bound",
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     Ok(ok_response(json!({ "credential_id": credential.id })))
 }
 
@@ -138,6 +151,13 @@ pub async fn unbind(
     let access = super::project_access(&state, &session, project_id, false, OP).await?;
     access.require_admin(OP)?;
     let db = super::database(&state, OP)?;
+    let transaction = audits::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
     let credential = source_credentials::bound_credential(db, access.project.id)
         .await
         .map_err(|error| map_error(error, OP))?;
@@ -152,7 +172,15 @@ pub async fn unbind(
             &credential,
             "source_credential.unbound",
         )
-        .await;
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     }
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     Ok(ok_response(json!({ "unbound": true })))
 }

@@ -8,17 +8,16 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::infra::http::timestamps::ts;
 use crate::{
     domain::{
-        audits::{self, CreateAuditEventParams},
         quotas,
         teams::{self, TeamListFilter, UpdateTeamParams},
     },
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::{AuditEventResult, TeamKind, project, team, team_group},
         error::{AppError, ok_response},
-        http::extractors::Session,
+        http::{extractors::Session, timestamps::ts},
     },
     state::ControlApiState,
 };
@@ -274,6 +273,13 @@ pub async fn update(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.teams.update";
     let db = super::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
 
     let name = body
         .name
@@ -311,7 +317,7 @@ pub async fn update(
     .await
     .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
-    let _ = audits::create_platform_audit_event(
+    audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
@@ -325,7 +331,15 @@ pub async fn update(
             metadata: json!({ "changed": ["name"] }),
         },
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     Ok(ok_response(json!({ "team": team_view(&team, None, 0) })))
 }
@@ -341,6 +355,13 @@ pub async fn remove(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.teams.remove";
     let db = super::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
 
     let team = teams::get_by_id(db, team_id)
         .await
@@ -378,7 +399,7 @@ pub async fn remove(
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
-    let _ = audits::create_platform_audit_event(
+    audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
@@ -392,7 +413,15 @@ pub async fn remove(
             metadata: json!({ "slug": team.slug }),
         },
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     Ok(ok_response(json!({ "deleted": true })))
 }
@@ -415,6 +444,13 @@ pub async fn set_quota_plan(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.teams.set_quota_plan";
     let db = super::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
 
     let target = teams::get_by_id(db, team_id)
         .await
@@ -456,7 +492,7 @@ pub async fn set_quota_plan(
             source: source.into(),
         })?;
 
-    let _ = audits::create_platform_audit_event(
+    audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
@@ -470,7 +506,15 @@ pub async fn set_quota_plan(
             metadata: json!({ "plan_id": body.plan_id }),
         },
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     Ok(ok_response(json!({
         "team": {
@@ -498,6 +542,13 @@ pub async fn create(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.teams.create";
     let db = super::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
 
     let name = body.name.trim().to_owned();
     if name.is_empty() || name.chars().count() > 120 {
@@ -528,7 +579,7 @@ pub async fn create(
         });
     }
 
-    let team = teams::create_team(
+    let team = teams::create_team_with_connection(
         db,
         crate::domain::teams::CreateTeamParams {
             slug,
@@ -550,7 +601,7 @@ pub async fn create(
         }
     })?;
 
-    let _ = audits::create_platform_audit_event(
+    audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
@@ -564,7 +615,15 @@ pub async fn create(
             metadata: json!({ "slug": team.slug, "owner": owner.email }),
         },
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     Ok(ok_response(json!({ "team": team_view(&team, None, 1) })))
 }

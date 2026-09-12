@@ -223,7 +223,7 @@ fn spawn_audit_retention_sweep(state: ControlApiState) {
             let Some(db) = state.try_database() else {
                 continue;
             };
-            match domain::audits::prune_events_before(db, cutoff).await {
+            match infra::audit::prune_events_before(db, cutoff).await {
                 Ok(0) => {}
                 Ok(count) => info!(
                     operation = "control_api.audit_retention_sweep",

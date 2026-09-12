@@ -9,8 +9,8 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    domain::audits::{self, CreateAuditEventParams},
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::{AuditEventResult, IdentityProviderKind, auth_identity_provider},
         error::{AppError, ok_response},
         http::extractors::Session,
@@ -252,6 +252,13 @@ pub async fn create(
             message: "client_secret is required when creating a provider".to_owned(),
         })?;
     let db = super::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
     let now = time::OffsetDateTime::now_utc();
     let id = Uuid::now_v7();
     let provider = auth_identity_provider::ActiveModel {
@@ -292,7 +299,15 @@ pub async fn create(
         provider.id,
         &provider.slug,
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     Ok(ok_response(json!({ "provider": provider_view(&provider) })))
 }
 
@@ -318,6 +333,13 @@ pub async fn update(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.identity_providers.update";
     let db = super::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
     let provider = auth_identity_provider::Entity::find_by_id(provider_id)
         .one(db)
         .await
@@ -413,7 +435,15 @@ pub async fn update(
         provider.id,
         &provider.slug,
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     Ok(ok_response(json!({ "provider": provider_view(&provider) })))
 }
 
@@ -424,6 +454,13 @@ pub async fn remove(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.identity_providers.remove";
     let db = super::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
     let result = auth_identity_provider::Entity::delete_by_id(provider_id)
         .exec(db)
         .await
@@ -444,18 +481,26 @@ pub async fn remove(
         provider_id,
         "",
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     Ok(ok_response(json!({ "deleted": true })))
 }
 
 async fn record_provider_audit(
-    db: &sea_orm::DatabaseConnection,
+    db: &impl audits::AuditConnection,
     actor_user_id: Uuid,
     action: &str,
     provider_id: Uuid,
     slug: &str,
-) {
-    let _ = audits::create_platform_audit_event(
+) -> anyhow::Result<()> {
+    audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(actor_user_id),
@@ -469,7 +514,7 @@ async fn record_provider_audit(
             metadata: json!({ "slug": slug }),
         },
     )
-    .await;
+    .await
 }
 
 #[cfg(test)]

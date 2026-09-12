@@ -14,14 +14,13 @@ use grass_node_protocol::{
 };
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect, TransactionTrait,
+    QuerySelect,
 };
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
     domain::{
-        audits::{self, CreateAuditEventParams},
         delivery,
         deployments::{self, BuildTransition, ReadyReleaseAction},
         platform_mail,
@@ -30,6 +29,7 @@ use crate::{
         source_credentials, ssh_host_keys, teams,
     },
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::{
             AuditEventResult, DeploymentArtifactKind, DeploymentBuildStatus, NodeStatus,
             ProjectRuntime, ReleaseReason, deployment, deployment_artifact, node,
@@ -159,7 +159,7 @@ pub async fn claim(
                 return Err(error);
             }
         };
-        let transaction = match db.begin().await {
+        let transaction = match crate::infra::audit::AuditTransaction::begin(db).await {
             Ok(transaction) => transaction,
             Err(source) => {
                 quota.release_build_slot(team.id).await;
@@ -512,20 +512,19 @@ pub async fn stage(
                 failure_message: body.failure_message.clone(),
                 build_node_id: Some(node.id),
             };
+            let transaction = audits::AuditTransaction::begin(db)
+                .await
+                .map_err(|source| AppError::Infrastructure {
+                    op: OP,
+                    source: source.into(),
+                })?;
             let (updated, build_transitioned, ready_action) =
                 if matches!(target, DeploymentBuildStatus::Ready) {
-                    finalize_ready(db, deployment, transition).await?
+                    finalize_ready(&transaction, deployment, transition).await?
                 } else if matches!(
                     target,
                     DeploymentBuildStatus::Failed | DeploymentBuildStatus::Canceled
                 ) {
-                    let transaction =
-                        db.begin()
-                            .await
-                            .map_err(|source| AppError::Infrastructure {
-                                op: OP,
-                                source: source.into(),
-                            })?;
                     let updated = delivery::transition_unsuccessful_build(
                         &transaction,
                         deployment,
@@ -537,28 +536,23 @@ pub async fn stage(
                             error, OP,
                         )
                     })?;
-                    transaction
-                        .commit()
-                        .await
-                        .map_err(|source| AppError::Infrastructure {
-                            op: OP,
-                            source: source.into(),
-                        })?;
+
                     (updated, true, ReadyReleaseAction::None)
                 } else {
-                    let updated = deployments::transition_build(db, deployment, transition)
-                        .await
-                        .map_err(|error| {
-                            crate::features::api::v1::projects::deployments::map_state_error(
-                                error, OP,
-                            )
-                        })?;
+                    let updated =
+                        deployments::transition_build(&transaction, deployment, transition)
+                            .await
+                            .map_err(|error| {
+                                crate::features::api::v1::projects::deployments::map_state_error(
+                                    error, OP,
+                                )
+                            })?;
                     (updated, true, ReadyReleaseAction::None)
                 };
 
             if was_started {
-                let _ = audits::create_audit_event(
-                    db,
+                audits::create_audit_event(
+                    &transaction,
                     CreateAuditEventParams {
                         actor_user_id: None,
                         actor_node_id: Some(node.id),
@@ -571,28 +565,13 @@ pub async fn stage(
                         metadata: json!({ "build_node_id": node.id }),
                     },
                 )
-                .await;
+                .await
+                .map_err(|source| AppError::Infrastructure { op: OP, source })?;
             }
 
             if is_terminal && build_transitioned {
-                quota.release_build_slot_once(team_id, updated.id).await;
-                if let Some(minutes) = body.build_minutes.filter(|minutes| *minutes > 0) {
-                    quota
-                        .charge_unchecked(
-                            OP,
-                            team_id,
-                            &[QuotaCharge::amount(
-                                QuotaDimension::BuildMinutesMonthly,
-                                minutes,
-                            )],
-                            "deployment",
-                            Some(updated.id),
-                        )
-                        .await?;
-                }
-
-                let _ = audits::create_audit_event(
-                    db,
+                audits::create_audit_event(
+                    &transaction,
                     CreateAuditEventParams {
                         actor_user_id: None,
                         actor_node_id: Some(node.id),
@@ -611,7 +590,52 @@ pub async fn stage(
                         }),
                     },
                 )
-                .await;
+                .await
+                .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+            }
+
+            if matches!(ready_action, ReadyReleaseAction::RequestReview) {
+                audits::create_audit_event(
+                    &transaction,
+                    CreateAuditEventParams {
+                        actor_user_id: None,
+                        actor_node_id: None,
+                        team_id: Some(team_id),
+                        action: "deployment.review_requested".to_owned(),
+                        target_type: "deployment".to_owned(),
+                        target_id: Some(updated.id),
+                        result: AuditEventResult::Success,
+                        reason: None,
+                        metadata: json!({ "automatic": true }),
+                    },
+                )
+                .await
+                .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+            }
+
+            transaction
+                .commit()
+                .await
+                .map_err(|source| AppError::Infrastructure {
+                    op: OP,
+                    source: source.into(),
+                })?;
+            if is_terminal && build_transitioned {
+                quota.release_build_slot_once(team_id, updated.id).await;
+                if let Some(minutes) = body.build_minutes.filter(|minutes| *minutes > 0) {
+                    quota
+                        .charge_unchecked(
+                            OP,
+                            team_id,
+                            &[QuotaCharge::amount(
+                                QuotaDimension::BuildMinutesMonthly,
+                                minutes,
+                            )],
+                            "deployment",
+                            Some(updated.id),
+                        )
+                        .await?;
+                }
 
                 // Record the persisted build log as an artifact row once.
                 if super::storage(&state)
@@ -626,24 +650,6 @@ pub async fn stage(
 
                 let mail_config = state.config.read().unwrap().mail.clone();
                 platform_mail::send_deployment_result_best_effort(db, mail_config, &updated).await;
-            }
-
-            if matches!(ready_action, ReadyReleaseAction::RequestReview) {
-                let _ = audits::create_audit_event(
-                    db,
-                    CreateAuditEventParams {
-                        actor_user_id: None,
-                        actor_node_id: None,
-                        team_id: Some(team_id),
-                        action: "deployment.review_requested".to_owned(),
-                        target_type: "deployment".to_owned(),
-                        target_id: Some(updated.id),
-                        result: AuditEventResult::Success,
-                        reason: None,
-                        metadata: json!({ "automatic": true }),
-                    },
-                )
-                .await;
             }
 
             StageResponse {
@@ -698,20 +704,13 @@ fn ready_report_needs_build_transition(status: &DeploymentBuildStatus) -> bool {
 }
 
 async fn finalize_ready(
-    db: &sea_orm::DatabaseConnection,
+    transaction: &audits::AuditTransaction,
     requested_deployment: deployment::Model,
     transition: BuildTransition,
 ) -> Result<(deployment::Model, bool, ReadyReleaseAction), AppError> {
     const OP: &str = "internal.deployments.finalize_ready";
-    let transaction = db
-        .begin()
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
 
-    scheduler::lock_placement(&transaction)
+    scheduler::lock_placement(transaction)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
@@ -720,7 +719,7 @@ async fn finalize_ready(
 
     // Serialize retries for this deployment and make the decision from the
     // latest row, not from the pre-transaction request snapshot.
-    let deployment = deployments::get_by_id_for_update(&transaction, requested_deployment.id)
+    let deployment = deployments::get_by_id_for_update(transaction, requested_deployment.id)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
@@ -732,7 +731,7 @@ async fn finalize_ready(
         })?;
     let build_transitioned = ready_report_needs_build_transition(&deployment.build_status);
     let deployment = if build_transitioned {
-        deployments::transition_build(&transaction, deployment, transition)
+        deployments::transition_build(transaction, deployment, transition)
             .await
             .map_err(|error| {
                 crate::features::api::v1::projects::deployments::map_state_error(error, OP)
@@ -740,7 +739,7 @@ async fn finalize_ready(
     } else {
         deployment
     };
-    let policy = deployments::review_policy_for_team(&transaction, deployment.team_id)
+    let policy = deployments::review_policy_for_team(transaction, deployment.team_id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     let action = deployments::ready_release_action(
@@ -749,14 +748,14 @@ async fn finalize_ready(
     );
     let deployment = match action {
         ReadyReleaseAction::Activate => {
-            deployments::activate(&transaction, deployment, ReleaseReason::Auto, None)
+            deployments::activate(transaction, deployment, ReleaseReason::Auto, None)
                 .await
                 .map_err(|error| {
                     crate::features::api::v1::projects::deployments::map_state_error(error, OP)
                 })?
         }
         ReadyReleaseAction::RequestReview => {
-            deployments::request_review(&transaction, deployment, None)
+            deployments::request_review(transaction, deployment, None)
                 .await
                 .map_err(|error| {
                     crate::features::api::v1::projects::deployments::map_state_error(error, OP)
@@ -766,7 +765,7 @@ async fn finalize_ready(
         ReadyReleaseAction::None => deployment,
     };
     delivery::reconcile_environment(
-        &transaction,
+        transaction,
         deployment.project_id,
         deployment.environment.clone(),
     )
@@ -775,27 +774,12 @@ async fn finalize_ready(
         op: OP,
         source: source.into(),
     })?;
-    transaction
-        .commit()
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
 
-    if matches!(action, ReadyReleaseAction::Activate) {
-        tracing::info!(
-            operation = OP,
-            deployment_id = %deployment.id,
-            environment = deployments::environment_value(&deployment.environment),
-            "deployment auto-activated"
-        );
-    }
     Ok((deployment, build_transitioned, action))
 }
 
 pub(super) async fn auto_activate_if_allowed(
-    transaction: &sea_orm::DatabaseTransaction,
+    transaction: &crate::infra::audit::AuditTransaction,
     deployment: deployment::Model,
 ) -> Result<(), AppError> {
     const OP: &str = "internal.deployments.auto_activate";
@@ -1093,8 +1077,7 @@ pub async fn upload_static_site(
     let team_id = deployment.team_id;
     let project_id = deployment.project_id;
     let result: Result<_, AppError> = async move {
-        let transaction = db
-            .begin()
+        let transaction = crate::infra::audit::AuditTransaction::begin(db)
             .await
             .map_err(|source| AppError::Infrastructure {
                 op: OP,
@@ -1210,6 +1193,27 @@ pub async fn upload_static_site(
             op: OP,
             source: source.into(),
         })?;
+        audits::create_audit_event(
+            &transaction,
+            CreateAuditEventParams {
+                actor_user_id: None,
+                actor_node_id: Some(node.id),
+                team_id: Some(team_id),
+                action: "artifact.uploaded".to_owned(),
+                target_type: "deployment".to_owned(),
+                target_id: Some(deployment_id),
+                result: AuditEventResult::Success,
+                reason: None,
+                metadata: json!({
+                    "size_bytes": stored.size_bytes,
+                    "unpacked_size_bytes": upload.unpacked_size_bytes,
+                    "checksum_sha256": stored.checksum_sha256,
+                    "project_id": project_id,
+                }),
+            },
+        )
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
         transaction
             .commit()
             .await
@@ -1231,27 +1235,6 @@ pub async fn upload_static_site(
     quota
         .commit(OP, reservation, "deployment_artifact", Some(artifact.id))
         .await?;
-
-    let _ = audits::create_audit_event(
-        db,
-        CreateAuditEventParams {
-            actor_user_id: None,
-            actor_node_id: Some(node.id),
-            team_id: Some(team_id),
-            action: "artifact.uploaded".to_owned(),
-            target_type: "deployment".to_owned(),
-            target_id: Some(deployment_id),
-            result: AuditEventResult::Success,
-            reason: None,
-            metadata: json!({
-                "size_bytes": stored.size_bytes,
-                "unpacked_size_bytes": upload.unpacked_size_bytes,
-                "checksum_sha256": stored.checksum_sha256,
-                "project_id": project_id,
-            }),
-        },
-    )
-    .await;
 
     Ok(ok_response(UploadArtifactResponse {
         artifact_id: artifact.id,

@@ -13,7 +13,6 @@ use grass_node_protocol::{
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
-    TransactionTrait,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -367,8 +366,7 @@ pub async fn report_status(
         message: message.to_owned(),
     })?;
     let db = super::database(&state, OP)?;
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,

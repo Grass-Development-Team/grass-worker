@@ -39,7 +39,7 @@ fn status_after_node_activity(current: &NodeStatus) -> NodeStatus {
 }
 
 pub async fn create_node(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     params: CreateNodeParams,
 ) -> anyhow::Result<node::Model> {
     let now = OffsetDateTime::now_utc();

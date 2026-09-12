@@ -7,25 +7,22 @@ use axum::{
 };
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, ConnectionTrait, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::infra::http::timestamps::ts;
 use crate::{
-    domain::{
-        audits::{self, CreateAuditEventParams},
-        deployments, hosts, notifications, projects, teams,
-    },
+    domain::{deployments, hosts, notifications, projects, teams},
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::{
             AuditEventResult, HostBindingKind, HostBindingStatus, HostReviewStatus, audit_event,
             deployment, project, project_host_binding, team,
         },
         error::{AppError, ok_response},
-        http::extractors::Session,
+        http::{extractors::Session, timestamps::ts},
     },
     state::ControlApiState,
 };
@@ -325,8 +322,7 @@ pub async fn update_slug(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.projects.slug.update";
     let db = super::database(&state, OP)?;
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
@@ -611,7 +607,7 @@ async fn load_project_any<C: ConnectionTrait>(
         })
 }
 
-async fn record_project_event<C: ConnectionTrait>(
+async fn record_project_event<C: crate::infra::audit::AuditConnection>(
     db: &C,
     actor: Uuid,
     project: &project::Model,
@@ -655,8 +651,7 @@ pub async fn archive(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.projects.archive";
     let db = super::database(&state, OP)?;
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
@@ -701,8 +696,7 @@ pub async fn unarchive(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.projects.unarchive";
     let db = super::database(&state, OP)?;
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
@@ -750,8 +744,7 @@ pub async fn remove(
     const OP: &str = "admin.projects.delete";
     let db = super::database(&state, OP)?;
     let cache = super::cache(&state, OP)?;
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,

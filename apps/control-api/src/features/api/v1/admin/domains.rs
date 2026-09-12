@@ -3,17 +3,15 @@ use axum::{
     extract::{Path, State},
     response::IntoResponse,
 };
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ConnectionTrait, TransactionTrait};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ConnectionTrait};
 use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    domain::{
-        audits::{self, CreateAuditEventParams},
-        hosts, notifications, projects,
-    },
+    domain::{hosts, notifications, projects},
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::{
             AuditEventResult, HostBindingKind, HostBindingStatus, HostReviewStatus,
             project_host_binding,
@@ -138,8 +136,7 @@ async fn decide(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.domains.decide";
     let db = super::database(&state, OP)?;
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,

@@ -1,15 +1,16 @@
+use crate::infra::audit::AuditTransaction;
 use axum::{Json, extract::State, response::IntoResponse};
-use sea_orm::{ConnectionTrait, DatabaseTransaction, TransactionTrait};
+use sea_orm::ConnectionTrait;
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::{
     domain::{
-        audits::{self, CreateAuditEventParams},
         authentication::{self, MfaPolicy, PasswordPolicy},
         retention, settings,
     },
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         config::mail::{MailMode, SmtpSecurity},
         database::entity::{AuditEventResult, SystemSettingValueKind},
         error::{AppError, ok_response},
@@ -831,7 +832,7 @@ fn prepare_settings_update(
 }
 
 async fn create_settings_audit_in_transaction(
-    transaction: &DatabaseTransaction,
+    transaction: &AuditTransaction,
     actor_user_id: uuid::Uuid,
     changed: Vec<&'static str>,
     before: serde_json::Map<String, serde_json::Value>,
@@ -939,8 +940,7 @@ pub async fn update(
             });
         }
     }
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
@@ -1244,7 +1244,7 @@ mod tests {
     use std::{fs, time::SystemTime};
 
     use axum::{Json, body::to_bytes, extract::State, response::IntoResponse};
-    use sea_orm::{DatabaseConnection, MockDatabase, TransactionTrait};
+    use sea_orm::{DatabaseConnection, MockDatabase};
     use time::OffsetDateTime;
     use uuid::Uuid;
 
@@ -1680,7 +1680,9 @@ mod tests {
                 rows_affected: 1,
             }])
             .into_connection();
-        let transaction = db.begin().await.expect("begin transaction");
+        let transaction = crate::infra::audit::AuditTransaction::begin(&db)
+            .await
+            .expect("begin transaction");
 
         create_settings_audit_in_transaction(
             &transaction,

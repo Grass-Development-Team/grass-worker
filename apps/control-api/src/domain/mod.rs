@@ -1,5 +1,4 @@
 pub mod acme;
-pub mod audits;
 pub mod authentication;
 pub mod certificates;
 pub mod cleanup;

@@ -3,17 +3,16 @@ use axum::{
     extract::{Path, Query, State},
     response::IntoResponse,
 };
-use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, EntityTrait, PaginatorTrait, QueryOrder, TransactionTrait,
-};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait, PaginatorTrait, QueryOrder};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
-    domain::{audits, notifications},
+    domain::notifications,
     infra::{
+        audit as audits,
         database::entity::{AuditEventResult, announcement},
         error::{AppError, ok_response},
         http::{extractors::Session, timestamps::ts},
@@ -129,8 +128,7 @@ pub async fn publish(
     const OP: &str = "admin.announcements.publish";
     let (title, content, auto_popup) = prepare_announcement(body, OP)?;
     let db = database(&state, OP)?;
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
@@ -209,8 +207,7 @@ pub async fn remove(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.announcements.delete";
     let db = database(&state, OP)?;
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,

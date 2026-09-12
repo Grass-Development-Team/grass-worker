@@ -5,8 +5,8 @@ use axum::{
 use serde_json::json;
 
 use crate::{
-    domain::audits,
     infra::{
+        audit as audits,
         database::entity::AuditEventVisibility,
         error::{AppError, ok_response},
         http::extractors::TeamRole,

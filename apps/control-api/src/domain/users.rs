@@ -87,7 +87,7 @@ pub async fn get_user_by_email<C: ConnectionTrait>(
 }
 
 pub async fn get_user_by_id(
-    db: &DatabaseConnection,
+    db: &impl sea_orm::ConnectionTrait,
     user_id: Uuid,
 ) -> anyhow::Result<Option<user::Model>> {
     user::Entity::find()

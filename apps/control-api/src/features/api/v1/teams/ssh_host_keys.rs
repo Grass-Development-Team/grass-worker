@@ -7,11 +7,9 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{
-    domain::{
-        audits::{self, CreateAuditEventParams},
-        ssh_host_keys::{self, SshHostKeyError},
-    },
+    domain::ssh_host_keys::{self, SshHostKeyError},
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::{AuditEventResult, SshHostKeyStatus, ssh_host_key},
         error::{AppError, ok_response},
         http::{extractors::TeamRole, timestamps::ts},
@@ -81,8 +79,14 @@ async fn change_status(
     op: &'static str,
 ) -> Result<impl IntoResponse, AppError> {
     role.require_admin(op)?;
+    let transaction = audits::AuditTransaction::begin(super::database(&state, op)?)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op,
+            source: source.into(),
+        })?;
     let key = ssh_host_keys::set_status(
-        super::database(&state, op)?,
+        &*transaction,
         role.team_id,
         path.key_id,
         status,
@@ -95,8 +99,8 @@ async fn change_status(
         SshHostKeyStatus::Rejected => "ssh_host_key.rejected",
         _ => "ssh_host_key.updated",
     };
-    let _ = audits::create_audit_event(
-        super::database(&state, op)?,
+    audits::create_audit_event(
+        &transaction,
         CreateAuditEventParams {
             actor_user_id: Some(role.user_id),
             actor_node_id: None,
@@ -114,7 +118,15 @@ async fn change_status(
             }),
         },
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op,
+            source: source.into(),
+        })?;
     Ok(ok_response(json!({ "host_key": view(&key) })))
 }
 

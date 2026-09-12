@@ -13,10 +13,9 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
-    domain::audits::{self, CreateRequestAuditEventParams},
     infra::{
+        audit::{self as audits, AuditErrorContext, CreateRequestAuditEventParams},
         database::entity::{AuditEventResult, deployment, project},
-        error::AuditErrorContext,
         http::middlewares::node_auth::AuthenticatedNode,
     },
     state::ControlApiState,
@@ -61,7 +60,7 @@ pub async fn audit_middleware(
         .map(|value| truncate(value, 512));
     let target = extract_request_target(&path);
 
-    let mut response = next.run(request).await;
+    let mut response = super::context::scope(request_id, next.run(request)).await;
     let status = response.status();
     let result = result_for_status(status);
     let error_context = response.extensions().get::<AuditErrorContext>().cloned();
@@ -87,7 +86,7 @@ pub async fn audit_middleware(
             "matched_path": matched_path,
             "project_id": project_id,
         });
-        if let Err(error) = audits::create_request_audit_event(
+        audits::observe_request(
             db,
             CreateRequestAuditEventParams {
                 request_id,
@@ -110,15 +109,7 @@ pub async fn audit_middleware(
                 occurred_at,
             },
         )
-        .await
-        {
-            tracing::warn!(
-                operation = "audit.request.write",
-                %request_id,
-                %error,
-                "failed to record request audit event"
-            );
-        }
+        .await;
     }
 
     response

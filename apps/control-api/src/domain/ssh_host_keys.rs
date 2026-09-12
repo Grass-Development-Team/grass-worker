@@ -1,7 +1,7 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
-    QueryOrder, QuerySelect, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set, TransactionTrait,
 };
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
@@ -108,7 +108,7 @@ pub async fn list_for_team<C: ConnectionTrait>(
 }
 
 pub async fn set_status(
-    db: &DatabaseConnection,
+    db: &(impl ConnectionTrait + TransactionTrait<Transaction = sea_orm::DatabaseTransaction>),
     team_id: Uuid,
     key_id: Uuid,
     status: SshHostKeyStatus,

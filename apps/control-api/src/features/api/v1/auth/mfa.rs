@@ -14,15 +14,12 @@ use totp_rs::{Algorithm, Secret, TOTP};
 use uuid::Uuid;
 
 use crate::{
-    domain::{
-        audits::{self, CreateAuditEventParams},
-        authentication, platform_mail, settings, users,
-    },
+    domain::{authentication, platform_mail, settings, users},
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::{AuditEventResult, MfaFactorKind, user, user_mfa_factor},
         error::{AppError, ok_response},
-        http::extractors::Session,
-        http::timestamps::ts,
+        http::{extractors::Session, timestamps::ts},
     },
     state::ControlApiState,
 };
@@ -290,20 +287,35 @@ pub async fn challenge_verify(
     enforce_attempt_limit(cache, token, OP).await?;
     verify_factor_code(&state, &factor, token, body.code.trim(), OP).await?;
     let db = state.try_database().unwrap();
+    let transaction = audits::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     let enrolled = factor.verified_at.is_none();
     let factor_kind = factor.kind.clone();
     if enrolled {
-        authentication::verify_mfa_factor(db, factor)
+        authentication::verify_mfa_factor(&transaction, factor)
             .await
             .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     } else {
-        authentication::mark_mfa_factor_used(db, factor)
+        authentication::mark_mfa_factor_used(&transaction, factor)
             .await
             .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     }
     if enrolled {
-        record_factor_audit(db, user.id, "mfa.factor_enrolled", &factor_kind).await;
+        record_factor_audit(&transaction, user.id, "mfa.factor_enrolled", &factor_kind)
+            .await
+            .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     }
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     if challenge.mode == ChallengeMode::Enroll {
         let factors = authentication::verified_mfa_factors(db, user.id)
             .await
@@ -498,16 +510,30 @@ pub async fn account_confirm(
     let scope = format!("account:{}", data.user_id);
     enforce_attempt_limit(state.try_cache().unwrap(), &scope, OP).await?;
     verify_factor_code(&state, &factor, &scope, body.code.trim(), OP).await?;
-    let factor = authentication::verify_mfa_factor(state.try_database().unwrap(), factor)
+    let transaction = audits::AuditTransaction::begin(state.try_database().unwrap())
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let factor = authentication::verify_mfa_factor(&transaction, factor)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     record_factor_audit(
-        state.try_database().unwrap(),
+        &transaction,
         data.user_id,
         "mfa.factor_enrolled",
         &factor.kind,
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     Ok(ok_response(json!({ "factor": factor_view(&factor) })))
 }
 
@@ -544,20 +570,35 @@ pub async fn account_delete(
             });
         }
     }
-    authentication::delete_mfa_factor(db, user.id, factor.id)
+    let transaction = audits::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    authentication::delete_mfa_factor(&transaction, user.id, factor.id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    record_factor_audit(db, user.id, "mfa.factor_removed", &factor.kind).await;
+    record_factor_audit(&transaction, user.id, "mfa.factor_removed", &factor.kind)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     Ok(ok_response(json!({ "deleted": true })))
 }
 
 async fn record_factor_audit(
-    db: &sea_orm::DatabaseConnection,
+    db: &impl audits::AuditConnection,
     user_id: Uuid,
     action: &str,
     kind: &MfaFactorKind,
-) {
-    let _ = audits::create_platform_audit_event(
+) -> anyhow::Result<()> {
+    audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(user_id),
@@ -571,7 +612,7 @@ async fn record_factor_audit(
             metadata: json!({ "factor_kind": kind.as_str() }),
         },
     )
-    .await;
+    .await
 }
 
 async fn start_totp(

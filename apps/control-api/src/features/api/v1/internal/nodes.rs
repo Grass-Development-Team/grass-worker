@@ -6,11 +6,9 @@ use grass_node_protocol::{
 use serde_json::json;
 
 use crate::{
-    domain::{
-        audits::{self, CreateAuditEventParams},
-        nodes::{self, RegisterNodeParams},
-    },
+    domain::nodes::{self, RegisterNodeParams},
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::AuditEventResult,
         error::{AppError, ok_response},
         http::middlewares::node_auth::AuthenticatedNode,
@@ -26,6 +24,13 @@ pub async fn register(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "internal.nodes.register";
     let db = super::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
 
     validate_registration(&body).map_err(|message| AppError::Validation {
         op: OP,
@@ -87,7 +92,7 @@ pub async fn register(
     .await
     .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
-    let _ = audits::create_audit_event(
+    audits::create_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: None,
@@ -101,7 +106,15 @@ pub async fn register(
             metadata: json!({ "name": node.name }),
         },
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     // Inbound policy does not determine outbound credentials: a trusted-network
     // entry still needs a token when its destination requires authentication.

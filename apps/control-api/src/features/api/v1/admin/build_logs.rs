@@ -8,8 +8,9 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    domain::{audits, cleanup},
+    domain::cleanup,
     infra::{
+        audit as audits,
         database::entity::AuditEventResult,
         error::{AppError, ok_response},
         http::extractors::Session,

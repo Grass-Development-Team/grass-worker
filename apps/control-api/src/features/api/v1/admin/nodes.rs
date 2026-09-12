@@ -4,27 +4,24 @@ use axum::{
     response::IntoResponse,
 };
 use grass_node_protocol::NodeResources;
-use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, TransactionTrait,
-};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::Deserialize;
 use serde_json::json;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::infra::http::timestamps::ts;
 use crate::{
     domain::{
-        audits::{self, CreateAuditEventParams},
         node_deletions,
         nodes::{self, CreateNodeParams},
         scheduler::{self, NodeUsage},
         settings,
     },
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::{AuditEventResult, NodeConfigSyncStatus, node, node_deletion_job},
         error::{AppError, ok_response},
-        http::middlewares::node_auth::revoked_token_key,
+        http::{middlewares::node_auth::revoked_token_key, timestamps::ts},
         node_manager::config_file,
     },
     state::ControlApiState,
@@ -222,8 +219,7 @@ pub async fn queue_deletion(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.nodes.queue_deletion";
     let db = super::database(&state, OP)?;
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
@@ -500,8 +496,7 @@ pub async fn update_configuration(
     validate_node_configuration(&configuration)
         .map_err(|message| AppError::Validation { op: OP, message })?;
     let db = super::database(&state, OP)?;
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
@@ -594,8 +589,7 @@ pub async fn update_capacity(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.nodes.update_capacity";
     let db = super::database(&state, OP)?;
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
@@ -654,16 +648,9 @@ pub async fn update_capacity(
             op: OP,
             source: source.into(),
         })?;
-    transaction
-        .commit()
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
 
-    let _ = audits::create_platform_audit_event(
-        db,
+    audits::create_platform_audit_event(
+        &transaction,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
             actor_node_id: None,
@@ -676,7 +663,15 @@ pub async fn update_capacity(
             metadata: json!({ "old": old, "new": new }),
         },
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     Ok(ok_response(json!({
         "node": node_view(&node, usage, None, OffsetDateTime::now_utc()),
@@ -731,6 +726,13 @@ pub async fn create(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.nodes.create";
     let db = super::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
 
     if body.name.trim().is_empty() {
         return Err(AppError::Validation {
@@ -760,7 +762,7 @@ pub async fn create(
     .await
     .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
-    let _ = audits::create_platform_audit_event(
+    audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
@@ -774,8 +776,17 @@ pub async fn create(
             metadata: json!({ "name": node.name, "start_local": body.start_local }),
         },
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = super::database(&state, OP)?;
     let mut warnings = Vec::new();
     let mut local_process = None;
     if body.start_local {
@@ -808,7 +819,7 @@ pub async fn create(
                 match state.node_manager.start().await {
                     Ok(status) => {
                         local_process = Some(status);
-                        let _ = audits::create_platform_audit_event(
+                        audits::observe_platform_event(
                             db,
                             CreateAuditEventParams {
                                 actor_user_id: Some(data.user_id),
@@ -887,7 +898,7 @@ pub async fn local_process_action(
 
     match result {
         Ok(_) => {
-            let _ = audits::create_platform_audit_event(
+            audits::observe_platform_event(
                 db,
                 CreateAuditEventParams {
                     actor_user_id: Some(data.user_id),
@@ -921,6 +932,13 @@ pub async fn rotate_token(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.nodes.rotate_token";
     let db = super::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
 
     let node = nodes::get_by_id(db, node_id)
         .await
@@ -936,20 +954,7 @@ pub async fn rotate_token(
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
-    // Blacklist the old token so revocation applies before any cache of the
-    // node row expires.
-    if let Some(cache) = state.try_cache() {
-        use grass_cache::Cache;
-        let _ = cache
-            .set(
-                &revoked_token_key(&old_hash),
-                "1",
-                std::time::Duration::from_secs(60 * 60 * 24 * 30),
-            )
-            .await;
-    }
-
-    let _ = audits::create_platform_audit_event(
+    audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
@@ -963,7 +968,27 @@ pub async fn rotate_token(
             metadata: json!({}),
         },
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    // Blacklist the old token so revocation applies before any cache of the
+    // node row expires.
+    if let Some(cache) = state.try_cache() {
+        use grass_cache::Cache;
+        let _ = cache
+            .set(
+                &revoked_token_key(&old_hash),
+                "1",
+                std::time::Duration::from_secs(60 * 60 * 24 * 30),
+            )
+            .await;
+    }
 
     Ok(ok_response(json!({
         "node_id": node.id,

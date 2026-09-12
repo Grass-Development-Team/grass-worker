@@ -3,17 +3,14 @@ use axum::{
     extract::{Path, State},
     response::IntoResponse,
 };
-use sea_orm::TransactionTrait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    domain::{
-        audits::{self, CreateAuditEventParams},
-        quotas::{self, CreatePlanParams, QuotaDimension, UpdatePlanParams},
-    },
+    domain::quotas::{self, CreatePlanParams, QuotaDimension, UpdatePlanParams},
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::{AuditEventResult, QuotaPeriod, quota_limit, quota_plan},
         error::{AppError, ok_response},
         http::extractors::Session,
@@ -114,13 +111,13 @@ fn parse_limits(limits: Vec<QuotaLimitInput>, op: &'static str) -> Result<Parsed
 }
 
 async fn audit_plan_mutation(
-    db: &sea_orm::DatabaseConnection,
+    db: &impl audits::AuditConnection,
     actor: Uuid,
     action: &str,
     plan_id: Uuid,
     metadata: serde_json::Value,
-) {
-    let _ = audits::create_platform_audit_event(
+) -> anyhow::Result<()> {
+    audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(actor),
@@ -134,7 +131,7 @@ async fn audit_plan_mutation(
             metadata,
         },
     )
-    .await;
+    .await
 }
 
 /// GET /api/v1/admin/quota-plans
@@ -174,8 +171,7 @@ pub async fn create(
     let (limits, _removed) = parse_limits(body.limits, OP)?;
 
     let db = super::database(&state, OP)?;
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
@@ -201,6 +197,16 @@ pub async fn create(
             AppError::Infrastructure { op: OP, source }
         }
     })?;
+
+    audit_plan_mutation(
+        &transaction,
+        data.user_id,
+        "quota_plan.created",
+        plan.id,
+        json!({ "code": plan.code }),
+    )
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     transaction
         .commit()
         .await
@@ -208,15 +214,6 @@ pub async fn create(
             op: OP,
             source: source.into(),
         })?;
-
-    audit_plan_mutation(
-        db,
-        data.user_id,
-        "quota_plan.created",
-        plan.id,
-        json!({ "code": plan.code }),
-    )
-    .await;
 
     Ok(ok_response(json!({
         "plan": { "id": plan.id, "code": plan.code, "name": plan.name },
@@ -266,8 +263,7 @@ pub async fn update(
         });
     }
 
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
@@ -299,16 +295,9 @@ pub async fn update(
             .await
             .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     }
-    transaction
-        .commit()
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
 
     audit_plan_mutation(
-        db,
+        &transaction,
         data.user_id,
         "quota_plan.updated",
         plan.id,
@@ -318,7 +307,15 @@ pub async fn update(
             "removed_limits": removed.iter().map(|d| d.as_str()).collect::<Vec<_>>(),
         }),
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     Ok(ok_response(json!({
         "plan": {

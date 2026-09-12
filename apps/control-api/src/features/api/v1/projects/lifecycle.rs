@@ -4,9 +4,7 @@ use axum::{
     response::IntoResponse,
 };
 use sea_orm::sea_query::LockType;
-use sea_orm::{
-    ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect, TransactionTrait,
-};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect};
 use serde::Deserialize;
 use serde_json::json;
 use std::future::Future;
@@ -14,13 +12,9 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
-    domain::{
-        audits::{self, CreateAuditEventParams},
-        hosts, notifications, projects,
-        quotas::QuotaDimension,
-        teams,
-    },
+    domain::{hosts, notifications, projects, quotas::QuotaDimension, teams},
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::{
             AuditEventResult, ProjectRuntime, TeamMemberRole, project, project_host_binding, team,
         },
@@ -33,33 +27,31 @@ use crate::{
 };
 
 async fn record_lifecycle_audit(
-    state: &ControlApiState,
+    db: &impl audits::AuditConnection,
     actor: Uuid,
     team_id: Uuid,
     action: &str,
     project_id: Uuid,
     metadata: serde_json::Value,
-) {
-    if let Some(db) = state.try_database() {
-        let _ = audits::create_audit_event(
-            db,
-            CreateAuditEventParams {
-                actor_user_id: Some(actor),
-                actor_node_id: None,
-                team_id: Some(team_id),
-                action: action.to_owned(),
-                target_type: "project".to_owned(),
-                target_id: Some(project_id),
-                result: AuditEventResult::Success,
-                reason: None,
-                metadata,
-            },
-        )
-        .await;
-    }
+) -> anyhow::Result<()> {
+    audits::create_audit_event(
+        db,
+        CreateAuditEventParams {
+            actor_user_id: Some(actor),
+            actor_node_id: None,
+            team_id: Some(team_id),
+            action: action.to_owned(),
+            target_type: "project".to_owned(),
+            target_id: Some(project_id),
+            result: AuditEventResult::Success,
+            reason: None,
+            metadata,
+        },
+    )
+    .await
 }
 
-async fn record_lifecycle_event<C: ConnectionTrait>(
+async fn record_lifecycle_event<C: crate::infra::audit::AuditConnection>(
     db: &C,
     actor: Uuid,
     action: &str,
@@ -789,8 +781,7 @@ pub async fn archive(
     let access = super::project_access(&state, &session, project_id, false, OP).await?;
     access.require_admin(OP)?;
     let db = super::database(&state, OP)?;
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
@@ -831,8 +822,7 @@ pub async fn unarchive(
     let access = super::project_access(&state, &session, project_id, false, OP).await?;
     access.require_admin(OP)?;
     let db = super::database(&state, OP)?;
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
@@ -875,8 +865,7 @@ pub async fn delete(
     let db = super::database(&state, OP)?;
     let cache = super::cache(&state, OP)?;
 
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
@@ -987,7 +976,7 @@ pub(crate) async fn restore_project_with_quota(
         )
         .await?;
 
-    let transaction = match db.begin().await {
+    let transaction = match crate::infra::audit::AuditTransaction::begin(db).await {
         Ok(transaction) => transaction,
         Err(source) => {
             quota.rollback(reservation).await;
@@ -1157,7 +1146,23 @@ pub async fn transfer_team(
         .await?;
 
     let source_team_id = access.project.team_id;
-    let project = match projects::transfer_team(db, access.project, target_team.id).await {
+    let project = match async {
+        let transaction = audits::AuditTransaction::begin(db).await?;
+        let project = projects::transfer_team(&transaction, access.project, target_team.id).await?;
+        record_lifecycle_audit(
+            &transaction,
+            session.data.user_id,
+            target_team.id,
+            "project.transferred",
+            project.id,
+            json!({ "from_team_id": source_team_id, "to_team_id": target_team.id }),
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok::<_, anyhow::Error>(project)
+    }
+    .await
+    {
         Ok(project) => project,
         Err(source) => {
             quota.rollback(reservation).await;
@@ -1170,15 +1175,6 @@ pub async fn transfer_team(
     quota
         .release(OP, source_team_id, &charges, "project", Some(project.id))
         .await?;
-    record_lifecycle_audit(
-        &state,
-        session.data.user_id,
-        target_team.id,
-        "project.transferred",
-        project.id,
-        json!({ "from_team_id": source_team_id, "to_team_id": target_team.id }),
-    )
-    .await;
 
     Ok(ok_response(
         json!({ "project": super::project_view(&project) }),
@@ -1202,18 +1198,32 @@ pub async fn hard_delete(
     }
     let db = super::database(&state, OP)?;
 
-    projects::hard_delete(db, access.project.id)
+    let transaction = audits::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    projects::hard_delete(&transaction, access.project.id)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+
     record_lifecycle_audit(
-        &state,
+        &transaction,
         session.data.user_id,
         access.team.id,
         "project.hard_deleted",
         project_id,
         json!({}),
     )
-    .await;
-
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
     Ok(ok_response(json!({ "ok": true })))
 }

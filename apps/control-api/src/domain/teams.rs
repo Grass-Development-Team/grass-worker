@@ -8,10 +8,12 @@ use sea_orm::{
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
-use crate::domain::registration::SignupPolicy;
-use crate::infra::database::entity::{
-    TeamInvitationStatus, TeamKind, TeamMemberRole, team, team_group, team_invitation, team_member,
-    user,
+use crate::{
+    domain::registration::SignupPolicy,
+    infra::database::entity::{
+        TeamInvitationStatus, TeamKind, TeamMemberRole, team, team_group, team_invitation,
+        team_member, user,
+    },
 };
 
 pub struct CreateTeamParams {
@@ -270,7 +272,7 @@ pub async fn member_counts(
 }
 
 pub async fn get_by_id(
-    db: &DatabaseConnection,
+    db: &impl sea_orm::ConnectionTrait,
     team_id: Uuid,
 ) -> anyhow::Result<Option<team::Model>> {
     team::Entity::find()
@@ -282,7 +284,7 @@ pub async fn get_by_id(
 }
 
 pub async fn update(
-    db: &DatabaseConnection,
+    db: &impl sea_orm::ConnectionTrait,
     team_id: Uuid,
     params: UpdateTeamParams,
 ) -> anyhow::Result<team::Model> {
@@ -302,7 +304,7 @@ pub async fn update(
     active.update(db).await.map_err(Into::into)
 }
 
-pub async fn soft_delete(db: &DatabaseConnection, team_id: Uuid) -> anyhow::Result<()> {
+pub async fn soft_delete(db: &impl sea_orm::ConnectionTrait, team_id: Uuid) -> anyhow::Result<()> {
     let team = get_by_id(db, team_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("team not found"))?;

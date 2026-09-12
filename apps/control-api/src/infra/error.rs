@@ -50,11 +50,7 @@ pub struct ErrorBody {
     pub op: &'static str,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AuditErrorContext {
-    pub operation: &'static str,
-    pub reason: String,
-}
+use crate::infra::audit::AuditErrorContext;
 
 impl AppError {
     fn status_code(&self) -> StatusCode {

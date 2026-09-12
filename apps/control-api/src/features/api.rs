@@ -1,7 +1,7 @@
 use axum::{Router, middleware};
 
 use crate::{
-    infra::http::middlewares::{audit, csrf},
+    infra::{audit::http as audit, http::middlewares::csrf},
     state::ControlApiState,
 };
 

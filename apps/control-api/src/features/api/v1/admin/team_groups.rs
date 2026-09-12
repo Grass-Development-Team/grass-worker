@@ -12,16 +12,13 @@ use serde_json::json;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::infra::http::timestamps::ts;
 use crate::{
-    domain::{
-        audits::{self, CreateAuditEventParams},
-        quotas, teams,
-    },
+    domain::{quotas, teams},
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::{AuditEventResult, team, team_group},
         error::{AppError, ok_response},
-        http::extractors::Session,
+        http::{extractors::Session, timestamps::ts},
     },
     state::ControlApiState,
 };
@@ -45,7 +42,7 @@ fn group_view(group: &team_group::Model) -> serde_json::Value {
 }
 
 async fn find_group(
-    db: &sea_orm::DatabaseConnection,
+    db: &impl sea_orm::ConnectionTrait,
     group_id: Uuid,
     op: &'static str,
 ) -> Result<team_group::Model, AppError> {
@@ -67,7 +64,7 @@ async fn find_group(
 /// Rejects a quota plan id that does not exist or is disabled, so the error
 /// is a 400 instead of a foreign-key 500 (or a silently ignored plan).
 async fn validate_plan_reference(
-    db: &sea_orm::DatabaseConnection,
+    db: &impl sea_orm::ConnectionTrait,
     plan_id: Uuid,
     op: &'static str,
 ) -> Result<(), AppError> {
@@ -88,13 +85,13 @@ async fn validate_plan_reference(
 }
 
 async fn audit_group_mutation(
-    db: &sea_orm::DatabaseConnection,
+    db: &impl audits::AuditConnection,
     actor: Uuid,
     action: &str,
     group_id: Uuid,
     metadata: serde_json::Value,
-) {
-    let _ = audits::create_platform_audit_event(
+) -> anyhow::Result<()> {
+    audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(actor),
@@ -108,7 +105,7 @@ async fn audit_group_mutation(
             metadata,
         },
     )
-    .await;
+    .await
 }
 
 /// GET /api/v1/admin/team-groups
@@ -217,6 +214,13 @@ pub async fn create(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.team_groups.create";
     let db = super::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
 
     let code =
         grass_validator::normalize_slug(&body.code).map_err(|error| AppError::Validation {
@@ -272,7 +276,15 @@ pub async fn create(
         group.id,
         json!({ "code": group.code, "review_policy": group.review_policy }),
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     Ok(ok_response(json!({ "group": group_view(&group) })))
 }
@@ -309,6 +321,13 @@ pub async fn update(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.team_groups.update";
     let db = super::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
 
     let group = find_group(db, group_id, OP).await?;
 
@@ -383,7 +402,15 @@ pub async fn update(
             "review_policy": group.review_policy,
         }),
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     Ok(ok_response(json!({ "group": group_view(&group) })))
 }
@@ -396,6 +423,13 @@ pub async fn remove(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.team_groups.remove";
     let db = super::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
 
     let group = find_group(db, group_id, OP).await?;
     if group.is_default {
@@ -440,7 +474,15 @@ pub async fn remove(
         group.id,
         json!({ "code": code }),
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     Ok(ok_response(json!({ "deleted": true })))
 }
@@ -459,6 +501,13 @@ pub async fn assign(
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.teams.assign_group";
     let db = super::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
 
     let target = teams::get_by_id(db, team_id)
         .await
@@ -479,7 +528,7 @@ pub async fn assign(
             source: source.into(),
         })?;
 
-    let _ = audits::create_platform_audit_event(
+    audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(data.user_id),
@@ -493,7 +542,15 @@ pub async fn assign(
             metadata: json!({ "group_id": group.id, "group_code": group.code }),
         },
     )
-    .await;
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
 
     Ok(ok_response(json!({
         "team": { "id": team.id, "slug": team.slug, "group_id": team.group_id },

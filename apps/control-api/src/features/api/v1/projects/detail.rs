@@ -3,17 +3,14 @@ use axum::{
     extract::{Path, State},
     response::IntoResponse,
 };
-use sea_orm::TransactionTrait;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use crate::{
-    domain::{
-        audits::{self, CreateAuditEventParams},
-        projects::{self, UpdateProjectParams},
-    },
+    domain::projects::{self, UpdateProjectParams},
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::{AuditEventResult, project},
         error::{AppError, ok_response},
         http::extractors::Session,
@@ -183,8 +180,7 @@ pub async fn update(
         }
     }
 
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
