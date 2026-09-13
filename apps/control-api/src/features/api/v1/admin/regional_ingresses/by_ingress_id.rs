@@ -169,7 +169,7 @@ pub async fn update(
                     message: e.to_string(),
                 })?,
             );
-        active.dns_status = Set("pending".to_owned());
+        active.dns_status = Set(ingress::IngressDnsStatus::Pending.as_str().to_owned());
         active.dns_checked_at = Set(None);
         active.dns_error = Set(None);
     }

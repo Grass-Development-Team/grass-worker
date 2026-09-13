@@ -14,14 +14,6 @@ pub enum ConnectionState {
 }
 
 impl ConnectionState {
-    pub fn status(self) -> &'static str {
-        match self {
-            Self::Ready => "ready",
-            Self::Unresolved => "unresolved",
-            Self::Mismatch => "mismatch",
-            Self::EntryUnavailable => "entry_unavailable",
-        }
-    }
     pub fn message(self) -> Option<&'static str> {
         match self {
             Self::Ready => None,

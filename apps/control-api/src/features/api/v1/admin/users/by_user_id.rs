@@ -42,18 +42,10 @@ fn user_view(user: &user::Model) -> UserResponse {
 #[derive(Deserialize)]
 pub struct UpdateUserRequest {
     /// Explicit `null` clears the display name.
-    #[serde(default, deserialize_with = "deserialize_double_option")]
+    #[serde(default, deserialize_with = "crate::infra::http::patch::nullable")]
     pub display_name: Option<Option<String>>,
     pub status: Option<String>,
     pub platform_role: Option<String>,
-}
-
-fn deserialize_double_option<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::Deserialize;
-    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 /// PATCH /api/v1/admin/users/{user_id}
@@ -132,4 +124,25 @@ struct UserResponse {
 #[derive(serde::Serialize)]
 struct UpdateResponse {
     user: UserResponse,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_json_preserves_display_name_patch_intent() {
+        for (raw, expected) in [
+            ("{}", None),
+            (r#"{"display_name":null}"#, Some(None)),
+            (
+                r#"{"display_name":"Admin"}"#,
+                Some(Some("Admin".to_owned())),
+            ),
+        ] {
+            let request: UpdateUserRequest = serde_json::from_str(raw).unwrap();
+            assert_eq!(request.display_name, expected);
+        }
+        assert!(serde_json::from_str::<UpdateUserRequest>(r#"{"display_name":false}"#).is_err());
+    }
 }

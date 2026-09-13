@@ -13,6 +13,7 @@ pub use context::AuditErrorContext;
 pub use event::*;
 pub use query::*;
 pub use redaction::redact_json;
+pub(crate) use redaction::redact_text;
 pub use retention::prune_events_before;
 pub use transaction::{AuditConnection, AuditTransaction};
 pub use writer::*;

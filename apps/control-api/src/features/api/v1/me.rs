@@ -68,6 +68,7 @@ pub async fn handler(
 
 #[derive(Default, Deserialize)]
 pub struct UpdateMeRequest {
+    #[serde(default, deserialize_with = "crate::infra::http::patch::nullable")]
     pub display_name: Option<Option<String>>,
 }
 
@@ -212,5 +213,75 @@ mod tests {
         );
         assert!(prepare_display_name(None, "test.me").is_err());
         assert!(prepare_display_name(Some(Some("x".repeat(121))), "test.me").is_err());
+    }
+
+    #[test]
+    fn raw_json_distinguishes_missing_null_and_display_name_values() {
+        let missing: UpdateMeRequest = serde_json::from_str("{}").unwrap();
+        assert!(prepare_display_name(missing.display_name, "test").is_err());
+        for (raw, expected) in [
+            (r#"{"display_name":null}"#, None),
+            (r#"{"display_name":"  "}"#, None),
+            (r#"{"display_name":"  用户  "}"#, Some("用户".to_owned())),
+        ] {
+            let request: UpdateMeRequest = serde_json::from_str(raw).unwrap();
+            assert_eq!(
+                prepare_display_name(request.display_name, "test").unwrap(),
+                Some(expected)
+            );
+        }
+        assert!(serde_json::from_str::<UpdateMeRequest>(r#"{"display_name":42}"#).is_err());
+    }
+
+    #[tokio::test]
+    async fn patch_null_clears_the_persisted_display_name_and_response() {
+        use tower::ServiceExt;
+        let before = crate::infra::http::middlewares::session::tests::active_user();
+        let mut after = before.clone();
+        after.display_name = None;
+        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([vec![before.clone()], vec![after]])
+            .into_connection();
+        let log = db.clone();
+        let state = ControlApiState::new(
+            crate::infra::config::ControlApiConfig::default(),
+            "unused.toml",
+        );
+        state.database.set(db).ok().unwrap();
+        let now = time::OffsetDateTime::now_utc();
+        let response = router()
+            .with_state(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("PATCH")
+                    .uri("/me")
+                    .header("content-type", "application/json")
+                    .extension(Some((
+                        "session".to_owned(),
+                        grass_session::SessionData {
+                            user_id: before.id,
+                            auth_version: before.auth_version,
+                            created_at: now,
+                            last_accessed_at: now,
+                        },
+                    )))
+                    .body(axum::body::Body::from(r#"{"display_name":null}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 8192)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(body["data"]["user"]["display_name"].is_null());
+        let sql = format!("{:?}", log.into_transaction_log());
+        assert!(
+            sql.contains("UPDATE") && sql.contains("display_name") && sql.contains("NULL"),
+            "{sql}"
+        );
     }
 }

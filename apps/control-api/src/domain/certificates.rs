@@ -108,7 +108,8 @@ pub fn binding_eligible(binding: &project_host_binding::Model) -> bool {
     binding.deleted_at.is_none()
         && matches!(binding.kind, HostBindingKind::Custom)
         && matches!(binding.status, HostBindingStatus::Active)
-        && binding.ownership_status == "verified"
+        && crate::domain::hosts::OwnershipStatus::parse(&binding.ownership_status)
+            == Some(crate::domain::hosts::OwnershipStatus::Verified)
         && matches!(
             binding.review_status,
             HostReviewStatus::Approved | HostReviewStatus::NotRequired
@@ -186,7 +187,7 @@ async fn ensure_record_inner<C: ConnectionTrait>(
             "Certificate issuance is in progress"
         );
         active.acme_account = Set(None);
-        active.status = Set("pending".to_owned());
+        active.status = Set(CertificateStatus::Pending.as_str().to_owned());
         active.error = Set(None);
         active.retry_at = Set(None);
         active.failure_count = Set(0);
@@ -251,7 +252,7 @@ pub async fn queue(db: &DatabaseConnection, item: &cert::Model) -> anyhow::Resul
         "certificate retry is temporarily delayed after failure"
     );
     let mut active: cert::ActiveModel = item.clone().into();
-    active.status = Set("pending".to_owned());
+    active.status = Set(CertificateStatus::Pending.as_str().to_owned());
     active.retry_at = Set(None);
     active.error = Set(None);
     active.generation = Set(Uuid::now_v7());
@@ -282,7 +283,7 @@ pub async fn import(
     let mut active: cert::ActiveModel = item.clone().into();
     active.issuer = Set("manual".to_owned());
     active.auto_renew = Set(false);
-    active.status = Set("active".to_owned());
+    active.status = Set(CertificateStatus::Active.as_str().to_owned());
     active.error = Set(None);
     active.bundle = Set(Some(encrypt(
         secret,
@@ -374,6 +375,38 @@ pub async fn snapshot(
         challenges,
         challenge_revision,
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CertificateStatus {
+    Pending,
+    Issuing,
+    Active,
+    Failed,
+    Disabled,
+}
+
+impl CertificateStatus {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Issuing => "issuing",
+            Self::Active => "active",
+            Self::Failed => "failed",
+            Self::Disabled => "disabled",
+        }
+    }
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "issuing" => Some(Self::Issuing),
+            "active" => Some(Self::Active),
+            "failed" => Some(Self::Failed),
+            "disabled" => Some(Self::Disabled),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -659,5 +692,18 @@ pub(crate) mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn stored_certificatestatus_values_keep_their_wire_contract() {
+        for value in ["pending", "issuing", "active", "failed", "disabled"] {
+            let status = super::CertificateStatus::parse(value).expect("existing database status");
+            assert_eq!(status.as_str(), value);
+            assert_eq!(
+                serde_json::to_value(status).unwrap(),
+                serde_json::json!(value)
+            );
+        }
+        assert!(super::CertificateStatus::parse("unknown-future-state").is_none());
     }
 }

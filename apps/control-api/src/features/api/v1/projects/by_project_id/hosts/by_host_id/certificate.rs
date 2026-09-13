@@ -1,3 +1,4 @@
+use crate::domain::certificates::CertificateStatus;
 pub(crate) mod import;
 pub(crate) mod renew;
 
@@ -155,7 +156,7 @@ pub async fn update(
             });
         }
         active.generation = Set(Uuid::now_v7());
-        active.status = Set("pending".to_owned());
+        active.status = Set(CertificateStatus::Pending.as_str().to_owned());
         active.retry_at = Set(None);
         active.failure_count = Set(0);
     }

@@ -172,20 +172,12 @@ pub struct UpdateTeamGroupRequest {
     #[serde(default)]
     pub description: Option<String>,
     /// Explicit `null` detaches the quota plan.
-    #[serde(default, deserialize_with = "deserialize_double_option")]
+    #[serde(default, deserialize_with = "crate::infra::http::patch::nullable")]
     pub quota_plan_id: Option<Option<Uuid>>,
     #[serde(default)]
     pub review_policy: Option<ReviewPolicyOverrideRequest>,
     #[serde(default)]
     pub is_default: Option<bool>,
-}
-
-fn deserialize_double_option<'de, D>(deserializer: D) -> Result<Option<Option<Uuid>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::Deserialize;
-    Option::<Uuid>::deserialize(deserializer).map(Some)
 }
 
 /// PATCH /api/v1/admin/team-groups/{group_id}
@@ -393,4 +385,25 @@ struct UpdateResponse {
 #[derive(serde::Serialize)]
 struct RemoveResponse {
     deleted: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_json_preserves_quota_plan_detachment() {
+        let missing: UpdateTeamGroupRequest = serde_json::from_str("{}").unwrap();
+        let clear: UpdateTeamGroupRequest =
+            serde_json::from_str(r#"{"quota_plan_id":null}"#).unwrap();
+        let assign: UpdateTeamGroupRequest =
+            serde_json::from_value(serde_json::json!({"quota_plan_id": Uuid::nil()})).unwrap();
+        assert_eq!(missing.quota_plan_id, None);
+        assert_eq!(clear.quota_plan_id, Some(None));
+        assert_eq!(assign.quota_plan_id, Some(Some(Uuid::nil())));
+        assert!(
+            serde_json::from_str::<UpdateTeamGroupRequest>(r#"{"quota_plan_id":"invalid"}"#)
+                .is_err()
+        );
+    }
 }

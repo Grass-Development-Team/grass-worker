@@ -18,9 +18,9 @@ pub async fn get(State(state): State<ControlApiState>) -> Result<impl IntoRespon
     let secret = state.config.read().unwrap().secrets.secret_key.clone();
     let settings = certificate_settings::load(crate::infra::http::database(&state, OP)?, &secret)
         .await
-        .map_err(|_| AppError::Internal {
+        .map_err(|source| AppError::Infrastructure {
             op: OP,
-            message: "Certificate settings could not be loaded".to_owned(),
+            source: source.context("Certificate settings could not be loaded"),
         })?;
     Ok(ok_response(settings_response(&settings)))
 }
@@ -62,9 +62,9 @@ pub async fn update(
         })?;
     let mut settings = certificate_settings::load(&transaction, &secret)
         .await
-        .map_err(|_| AppError::Internal {
+        .map_err(|source| AppError::Infrastructure {
             op: OP,
-            message: "Certificate settings could not be loaded".to_owned(),
+            source: source.context("Certificate settings could not be loaded"),
         })?;
     settings.issuer = body.issuer;
     match (
@@ -88,9 +88,9 @@ pub async fn update(
     })?;
     certificate_settings::save(&transaction, &settings, &secret)
         .await
-        .map_err(|_| AppError::Internal {
+        .map_err(|source| AppError::Infrastructure {
             op: OP,
-            message: "Certificate settings could not be saved".to_owned(),
+            source: source.context("Certificate settings could not be saved"),
         })?;
     transaction
         .commit()
@@ -133,5 +133,39 @@ mod tests {
             value,
             serde_json::json!({"issuer": "zerossl", "zerossl_eab_configured": true})
         );
+    }
+
+    #[tokio::test]
+    async fn failed_settings_load_retains_its_source_and_has_a_safe_response() {
+        let state = ControlApiState::new(
+            crate::infra::config::ControlApiConfig::default(),
+            "unused.toml",
+        );
+        state
+            .database
+            .set(
+                sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+                    .append_query_errors([sea_orm::DbErr::Custom("storage unavailable".to_owned())])
+                    .into_connection(),
+            )
+            .ok()
+            .unwrap();
+        let error = match get(State(state)).await {
+            Ok(_) => panic!("expected error"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(&error, AppError::Infrastructure { source, .. } if format!("{source:#}").contains("storage unavailable"))
+        );
+        let response = error.into_response();
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let body = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(!body.contains("storage unavailable"));
     }
 }

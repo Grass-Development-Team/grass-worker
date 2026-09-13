@@ -191,7 +191,7 @@ pub async fn create(
         health_check_path: Set(path),
         health_check_interval_seconds: Set(body.health_check_interval_seconds),
         origin_host_preservation: Set(true),
-        dns_status: Set("pending".to_owned()),
+        dns_status: Set(ingress::IngressDnsStatus::Pending.as_str().to_owned()),
         dns_checked_at: Set(None),
         dns_error: Set(None),
         deleted_at: Set(None),

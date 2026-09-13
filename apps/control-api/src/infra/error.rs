@@ -106,10 +106,19 @@ impl AppError {
     }
 }
 
+fn infrastructure_diagnostic(source: &anyhow::Error) -> String {
+    source
+        .chain()
+        .map(|cause| crate::infra::audit::redact_text(cause.to_string()))
+        .collect::<Vec<_>>()
+        .join(": ")
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         if let Self::Infrastructure { op, source } = &self {
-            tracing::error!(operation = *op, error = %source, "infrastructure request failed");
+            let diagnostic = infrastructure_diagnostic(source);
+            tracing::error!(operation = *op, error = %diagnostic, "infrastructure request failed");
         }
         let status = self.status_code();
         let operation = self.op();
@@ -192,5 +201,18 @@ mod tests {
             .expect("audit error context");
         assert_eq!(context.operation, "team.role.not_member");
         assert_eq!(context.reason, "not a member of this team");
+    }
+
+    #[test]
+    fn infrastructure_diagnostics_keep_context_and_redact_credentials() {
+        let source = anyhow::anyhow!("postgres://user:password@example.invalid/db")
+            .context("Certificate settings could not be loaded");
+        let diagnostic = infrastructure_diagnostic(&source);
+        assert!(diagnostic.contains("Certificate settings could not be loaded"));
+        assert!(diagnostic.contains("[REDACTED]"));
+        assert!(!diagnostic.contains("password"));
+        let safe =
+            anyhow::anyhow!("connection pool timed out").context("loading certificate settings");
+        assert!(infrastructure_diagnostic(&safe).contains("connection pool timed out"));
     }
 }

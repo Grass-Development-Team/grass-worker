@@ -160,7 +160,8 @@ pub async fn healthy_serve_nodes<C: ConnectionTrait>(
                         (now - heartbeat).whole_seconds() <= HEARTBEAT_STALE_SECONDS
                     })
                     && health.get(&node.id).is_some_and(|item| {
-                        item.status == "healthy"
+                        IngressHealthStatus::parse(&item.status)
+                            == Some(IngressHealthStatus::Healthy)
                             && item.checked_at.is_some_and(|checked| {
                                 (now - checked).whole_seconds() <= i64::from(health_freshness)
                             })
@@ -187,7 +188,7 @@ pub fn health_check_due(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProbeResult {
-    pub status: &'static str,
+    pub status: IngressHealthStatus,
     pub latency_ms: Option<i32>,
     pub error: Option<String>,
 }
@@ -203,7 +204,7 @@ pub async fn probe_node(
         Ok(url) if matches!(url.scheme(), "http" | "https") && url.host_str().is_some() => url,
         _ => {
             return ProbeResult {
-                status: "unhealthy",
+                status: IngressHealthStatus::Unhealthy,
                 latency_ms: None,
                 error: Some("invalid node base URL".to_owned()),
             };
@@ -217,17 +218,17 @@ pub async fn probe_node(
     let latency_ms = i32::try_from(started.elapsed().as_millis()).ok();
     match response {
         Ok(response) if response.status().is_success() => ProbeResult {
-            status: "healthy",
+            status: IngressHealthStatus::Healthy,
             latency_ms,
             error: None,
         },
         Ok(response) => ProbeResult {
-            status: "unhealthy",
+            status: IngressHealthStatus::Unhealthy,
             latency_ms,
             error: Some(format!("health endpoint returned {}", response.status())),
         },
         Err(error) => ProbeResult {
-            status: "unhealthy",
+            status: IngressHealthStatus::Unhealthy,
             latency_ms,
             error: Some(error.without_url().to_string()),
         },
@@ -259,18 +260,18 @@ pub async fn probe_regional_ingress(
         active.dns_checked_at = Set(Some(now));
         match result {
             Ok(addresses) if !addresses.is_empty() => {
-                active.dns_status = Set("resolved".to_owned());
+                active.dns_status = Set(IngressDnsStatus::Resolved.as_str().to_owned());
                 active.dns_error = Set(None);
             }
             Ok(_) => {
-                active.dns_status = Set("unresolved".to_owned());
+                active.dns_status = Set(IngressDnsStatus::Unresolved.as_str().to_owned());
                 active.dns_error = Set(Some(
                     "Add DNS address records for this CNAME target at your DNS provider."
                         .to_owned(),
                 ));
             }
             Err(_) => {
-                active.dns_status = Set("error".to_owned());
+                active.dns_status = Set(IngressDnsStatus::Error.as_str().to_owned());
                 active.dns_error = Set(Some(
                     "Public DNS could not be checked; automatic retry is scheduled.".to_owned(),
                 ));
@@ -306,7 +307,7 @@ pub async fn probe_regional_ingress(
         let active = regional_ingress_health::ActiveModel {
             ingress_id: Set(ingress.id),
             node_id: Set(node.id),
-            status: Set(result.status.to_owned()),
+            status: Set(result.status.as_str().to_owned()),
             checked_at: Set(Some(now)),
             latency_ms: Set(result.latency_ms),
             error: Set(result.error),
@@ -338,6 +339,51 @@ pub fn dns_verification_token(secret_key: &str, binding_id: Uuid, host: &str) ->
         "grass-{}",
         hex::encode(ring::hmac::sign(&key, message.as_bytes()).as_ref())
     )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum IngressDnsStatus {
+    Pending,
+    Resolved,
+    Unresolved,
+    Error,
+}
+
+impl IngressDnsStatus {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Resolved => "resolved",
+            Self::Unresolved => "unresolved",
+            Self::Error => "error",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum IngressHealthStatus {
+    Unknown,
+    Healthy,
+    Unhealthy,
+}
+
+impl IngressHealthStatus {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Healthy => "healthy",
+            Self::Unhealthy => "unhealthy",
+        }
+    }
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "unknown" => Some(Self::Unknown),
+            "healthy" => Some(Self::Healthy),
+            "unhealthy" => Some(Self::Unhealthy),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -525,5 +571,19 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>(),
             vec!["node-1", "node-2"]
         );
+    }
+
+    #[test]
+    fn stored_ingresshealthstatus_values_keep_their_wire_contract() {
+        for value in ["unknown", "healthy", "unhealthy"] {
+            let status =
+                super::IngressHealthStatus::parse(value).expect("existing database status");
+            assert_eq!(status.as_str(), value);
+            assert_eq!(
+                serde_json::to_value(status).unwrap(),
+                serde_json::json!(value)
+            );
+        }
+        assert!(super::IngressHealthStatus::parse("unknown-future-state").is_none());
     }
 }

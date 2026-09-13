@@ -33,7 +33,7 @@ pub async fn create<C: ConnectionTrait>(
         binding_id: Set(binding.id),
         created_by_user_id: Set(Some(actor)),
         contact_email: Set(user.email),
-        dns_status: Set("pending".to_owned()),
+        dns_status: Set(CheckStatus::Pending.as_str().to_owned()),
         dns_error: Set(None),
         checked_at: Set(None),
         next_check_at: Set(OffsetDateTime::now_utc()),
@@ -50,7 +50,7 @@ pub fn next_delay(id: Uuid, now: OffsetDateTime) -> Duration {
     Duration::seconds(60 + ((id.as_u128() as u64 ^ now.unix_timestamp() as u64) % 61) as i64)
 }
 pub fn ready_for_issuance(check: &check::Model, now: OffsetDateTime) -> bool {
-    check.dns_status == "ready"
+    CheckStatus::parse(&check.dns_status) == Some(CheckStatus::Ready)
         && !check.contact_email.trim().is_empty()
         && check
             .checked_at
@@ -66,7 +66,9 @@ fn apply_ownership(
     active.ownership_checked_at = Set(Some(now));
     match ownership {
         DnsVerification::Verified => {
-            active.ownership_status = Set("verified".to_owned());
+            active.ownership_status = Set(crate::domain::hosts::OwnershipStatus::Verified
+                .as_str()
+                .to_owned());
             active.ownership_error = Set(None);
             if state == ConnectionState::Ready
                 && matches!(
@@ -79,7 +81,9 @@ fn apply_ownership(
             }
         }
         DnsVerification::Missing | DnsVerification::Mismatch => {
-            active.ownership_status = Set("failed".to_owned());
+            active.ownership_status = Set(crate::domain::hosts::OwnershipStatus::Failed
+                .as_str()
+                .to_owned());
             active.ownership_error = Set(Some(
                 if ownership == DnsVerification::Missing {
                     "Add the displayed TXT ownership record. It will be checked automatically."
@@ -189,10 +193,10 @@ pub(crate) async fn run_check_with_resolver(
     }
     let now = OffsetDateTime::now_utc();
     let (status, error) = if current.status == HostBindingStatus::Disabled {
-        ("pending", None)
+        (CheckStatus::Pending, None)
     } else if !entry_unchanged {
         (
-            "entry_unavailable",
+            CheckStatus::EntryUnavailable,
             Some("This region has no enabled entry. Contact a platform administrator.".to_owned()),
         )
     } else {
@@ -201,14 +205,14 @@ pub(crate) async fn run_check_with_resolver(
                 apply_ownership(&current, state, ownership, now)
                     .update(&transaction)
                     .await?;
-                (state.status(), state.message().map(str::to_owned))
+                (CheckStatus::from(state), state.message().map(str::to_owned))
             }
             Ok(None) => (
-                "entry_unavailable",
+                CheckStatus::EntryUnavailable,
                 Some("This region has no enabled entry.".to_owned()),
             ),
             Err(_) => (
-                "error",
+                CheckStatus::Error,
                 Some(
                     "Public DNS could not be checked. The server will retry automatically."
                         .to_owned(),
@@ -217,7 +221,7 @@ pub(crate) async fn run_check_with_resolver(
         }
     };
     check::Entity::update_many()
-        .col_expr(check::Column::DnsStatus, Expr::value(status))
+        .col_expr(check::Column::DnsStatus, Expr::value(status.as_str()))
         .col_expr(check::Column::DnsError, Expr::value(error))
         .col_expr(check::Column::CheckedAt, Expr::value(now))
         .col_expr(
@@ -272,6 +276,52 @@ pub async fn sweep(db: &DatabaseConnection, secret: &str) -> anyhow::Result<()> 
     }
     while tasks.join_next().await.is_some() {}
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CheckStatus {
+    Pending,
+    Ready,
+    Unresolved,
+    Mismatch,
+    EntryUnavailable,
+    Error,
+}
+
+impl CheckStatus {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Ready => "ready",
+            Self::Unresolved => "unresolved",
+            Self::Mismatch => "mismatch",
+            Self::EntryUnavailable => "entry_unavailable",
+            Self::Error => "error",
+        }
+    }
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "ready" => Some(Self::Ready),
+            "unresolved" => Some(Self::Unresolved),
+            "mismatch" => Some(Self::Mismatch),
+            "entry_unavailable" => Some(Self::EntryUnavailable),
+            "error" => Some(Self::Error),
+            _ => None,
+        }
+    }
+}
+
+impl From<ConnectionState> for CheckStatus {
+    fn from(state: ConnectionState) -> Self {
+        match state {
+            ConnectionState::Ready => Self::Ready,
+            ConnectionState::Unresolved => Self::Unresolved,
+            ConnectionState::Mismatch => Self::Mismatch,
+            ConnectionState::EntryUnavailable => Self::EntryUnavailable,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -369,5 +419,25 @@ mod tests {
         check.checked_at = Some(now);
         check.contact_email.clear();
         assert!(!ready_for_issuance(&check, now));
+    }
+
+    #[test]
+    fn stored_checkstatus_values_keep_their_wire_contract() {
+        for value in [
+            "pending",
+            "ready",
+            "unresolved",
+            "mismatch",
+            "entry_unavailable",
+            "error",
+        ] {
+            let status = super::CheckStatus::parse(value).expect("existing database status");
+            assert_eq!(status.as_str(), value);
+            assert_eq!(
+                serde_json::to_value(status).unwrap(),
+                serde_json::json!(value)
+            );
+        }
+        assert!(super::CheckStatus::parse("unknown-future-state").is_none());
     }
 }

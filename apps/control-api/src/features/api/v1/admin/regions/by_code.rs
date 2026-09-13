@@ -97,26 +97,60 @@ pub async fn remove(
             op: OP,
             message: "Region not found".to_owned(),
         })?;
-    let referenced = transaction.query_one_raw(Statement::from_sql_and_values(DbBackend::Postgres, r#"
-SELECT EXISTS(SELECT 1 FROM nodes WHERE region = $1 OR desired_config #>> '{node,region}' = $1 OR effective_config #>> '{node,region}' = $1
-UNION ALL SELECT 1 FROM deployments WHERE region = $1
-UNION ALL SELECT 1 FROM regional_ingresses WHERE region = $1
-UNION ALL SELECT 1 FROM host_sources WHERE region = $1
-UNION ALL SELECT 1 FROM project_host_bindings WHERE region = $1) AS used
-"#, [code.into()])).await.map_err(|source| AppError::Infrastructure { op: OP, source: source.into() })?.and_then(|r| r.try_get::<bool>("", "used").ok()).unwrap_or(true);
+    let references = transaction
+        .query_one_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            r#"
+                SELECT EXISTS (
+                    SELECT 1 FROM nodes
+                    WHERE region = $1
+                        OR desired_config #>> '{node,region}' = $1
+                        OR effective_config #>> '{node,region}' = $1
+                    UNION ALL SELECT 1 FROM deployments WHERE region = $1
+                    UNION ALL SELECT 1 FROM regional_ingresses WHERE region = $1
+                    UNION ALL SELECT 1 FROM host_sources WHERE region = $1
+                    UNION ALL SELECT 1 FROM project_host_bindings WHERE region = $1
+                ) AS used
+            "#,
+            [code.into()],
+        ))
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?
+        .ok_or_else(|| AppError::Infrastructure {
+            op: OP,
+            source: anyhow::anyhow!("Region reference query returned no result"),
+        })?;
+    let referenced: bool =
+        references
+            .try_get("", "used")
+            .map_err(|source| AppError::Infrastructure {
+                op: OP,
+                source: source.into(),
+            })?;
     if referenced || item.code == "default" {
         return Err(AppError::Conflict { op: OP, message: "This region is reserved or still referenced by nodes, configurations, entries, domains, or deployments.".to_owned() });
     }
     region::Entity::delete_by_id(item.code)
         .exec(&transaction)
         .await
-        .map_err(|source| AppError::Conflict {
-            op: OP,
-            message: if source.sql_err().is_some() {
-                "Region is still in use".to_owned()
+        .map_err(|source| {
+            if matches!(
+                source.sql_err(),
+                Some(sea_orm::SqlErr::ForeignKeyConstraintViolation(_))
+            ) {
+                AppError::Conflict {
+                    op: OP,
+                    message: "Region is still in use".to_owned(),
+                }
             } else {
-                "Region could not be removed".to_owned()
-            },
+                AppError::Infrastructure {
+                    op: OP,
+                    source: source.into(),
+                }
+            }
         })?;
     transaction
         .commit()
@@ -136,4 +170,54 @@ struct RenameResponse {
 #[derive(serde::Serialize)]
 struct RemoveResponse {
     ok: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn deleting_a_referenced_region_conflicts_but_storage_failures_do_not() {
+        use std::collections::BTreeMap;
+        use tower::ServiceExt;
+        for (referenced, expected) in [
+            (true, axum::http::StatusCode::CONFLICT),
+            (false, axum::http::StatusCode::INTERNAL_SERVER_ERROR),
+        ] {
+            let db = sea_orm::MockDatabase::new(DbBackend::Postgres)
+                .append_query_results([vec![region::Model {
+                    code: "us-test".to_owned(),
+                    name: "Test".to_owned(),
+                    created_at: OffsetDateTime::UNIX_EPOCH,
+                    updated_at: OffsetDateTime::UNIX_EPOCH,
+                }]])
+                .append_query_results([vec![BTreeMap::from([(
+                    "used",
+                    sea_orm::Value::Bool(Some(referenced)),
+                )])]])
+                .append_exec_errors([sea_orm::DbErr::Custom("storage unavailable".to_owned())])
+                .into_connection();
+            let state = ControlApiState::new(
+                crate::infra::config::ControlApiConfig::default(),
+                "unused.toml",
+            );
+            state.database.set(db).ok().unwrap();
+            let response = router()
+                .with_state(state)
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method("DELETE")
+                        .uri("/regions/us-test")
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            let body = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            assert!(!String::from_utf8_lossy(&body).contains("storage unavailable"));
+        }
+    }
 }

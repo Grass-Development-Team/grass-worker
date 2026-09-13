@@ -100,7 +100,7 @@ fn sensitive_string(value: &str) -> bool {
 }
 
 /// Free text uses the same secret detection as metadata values.
-pub(super) fn redact_text(value: String) -> String {
+pub(crate) fn redact_text(value: String) -> String {
     let lower = value.to_ascii_lowercase();
     let embedded_secret = [
         "bearer ",

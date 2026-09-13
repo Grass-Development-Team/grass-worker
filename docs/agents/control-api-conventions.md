@@ -16,7 +16,7 @@ Every endpoint owns its HTTP request and response types. Different endpoints may
 
 Construct complex responses as typed values after resolving their data. Keep `serde_json::Value` for deliberately open metadata and configuration, not for incrementally patching a stable response shape. Preserve field names, nullability, defaults, status codes, and wire values. Validate Node-facing local contracts against `grass-node-protocol`.
 
-PATCH fields that support clearing must distinguish missing, explicit null, and a supplied value. Test raw JSON at the deserialization boundary.
+PATCH fields that support clearing must distinguish missing, explicit null, and a supplied value. Use an endpoint-local `Option<Option<T>>` with `#[serde(default, deserialize_with = "crate::infra::http::patch::nullable")]`. Missing leaves the value unchanged; null clears it. Keep fields that do not accept clearing on their existing contract. Test raw JSON at the deserialization boundary and the resulting update.
 
 ## Business capabilities and infrastructure
 
@@ -38,7 +38,7 @@ The audit table is the durable source of truth. Database commit and external log
 
 ## Errors, state, and readability
 
-Keep business rejections distinct from infrastructure failures. Preserve safe diagnostic context; do not discard sources or convert arbitrary database errors to Conflict. Use named business state types and explicit storage/wire conversions without changing database enum representation merely for style.
+Keep business rejections distinct from infrastructure failures. Preserve safe diagnostic context; do not discard sources or convert arbitrary database errors to Conflict. Use named business state types and explicit `parse` / `as_str` storage conversions without changing database enum representation merely for style. Certificate, domain-check, ownership, and ingress-health states retain their existing TEXT/CHECK storage values; unknown values must not silently become a valid state.
 
 Place local tests after production items. Shared fixtures belong in test-only support modules; cross-endpoint tests should exercise HTTP boundaries. Do not expose one feature's test module as another feature's fixture API.
 

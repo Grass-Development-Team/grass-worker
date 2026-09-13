@@ -53,8 +53,13 @@ fn custom_binding_status(
     review_status: &HostReviewStatus,
     ownership_status: &str,
 ) -> HostBindingStatus {
-    match (review_status, ownership_status) {
-        (HostReviewStatus::Approved, "verified") => HostBindingStatus::Active,
+    match (
+        review_status,
+        hosts::OwnershipStatus::parse(ownership_status),
+    ) {
+        (HostReviewStatus::Approved, Some(hosts::OwnershipStatus::Verified)) => {
+            HostBindingStatus::Active
+        }
         (HostReviewStatus::Rejected, _) => HostBindingStatus::Disabled,
         _ => HostBindingStatus::Pending,
     }

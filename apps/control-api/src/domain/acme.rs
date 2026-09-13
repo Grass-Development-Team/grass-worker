@@ -1,5 +1,4 @@
 //! Automatic issuance with persistent retry state and challenge publication barriers.
-
 use anyhow::{Context, ensure};
 use base64::{
     Engine,
@@ -13,15 +12,17 @@ use sea_orm::{
     ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect, Set, TransactionTrait,
 };
 use serde_json::Value;
+
+use crate::domain::certificates::CertificateStatus;
+
+use super::certificates::{self, ACCOUNT_KEY, BUNDLE_KEY, PemBundle};
 #[cfg(test)]
 use serde_json::json;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
-use super::certificates::{self, ACCOUNT_KEY, BUNDLE_KEY, PemBundle};
-use crate::infra::database::entity::{
-    managed_certificate as cert, node_ingress_status, project_host_binding, regional_ingress,
-};
+use crate::infra::database::entity::managed_certificate as cert;
+use crate::infra::database::entity::{node_ingress_status, project_host_binding, regional_ingress};
 
 const LEASE_SECONDS: i64 = 600;
 const ATTEMPT_SECONDS: u64 = 480;
@@ -36,8 +37,12 @@ fn due(item: &cert::Model, now: OffsetDateTime) -> bool {
     item.issuer != "manual"
         && !item.lease_until.is_some_and(|until| until > now)
         && !item.retry_at.is_some_and(|until| until > now)
-        && (matches!(item.status.as_str(), "pending" | "issuing" | "failed")
-            || item.bundle.is_none()
+        && (matches!(
+            CertificateStatus::parse(&item.status),
+            Some(
+                CertificateStatus::Pending | CertificateStatus::Issuing | CertificateStatus::Failed
+            )
+        ) || item.bundle.is_none()
             || (item.auto_renew
                 && item
                     .expires_at
@@ -299,7 +304,7 @@ async fn reconcile_record(
     let settings = super::certificate_settings::load(&transaction, secret).await?;
     let mut active: cert::ActiveModel = fresh.clone().into();
     active.lease_until = Set(Some(now + Duration::seconds(LEASE_SECONDS)));
-    active.status = Set("issuing".to_owned());
+    active.status = Set(CertificateStatus::Issuing.as_str().to_owned());
     active.generation = Set(Uuid::now_v7());
     if fresh.contact_email != connection.contact_email {
         active.acme_account = Set(None);
@@ -347,7 +352,7 @@ async fn reconcile_record(
             active.revision = Set(validity.revision);
             active.issued_at = Set(Some(validity.issued_at));
             active.expires_at = Set(Some(validity.expires_at));
-            active.status = Set("active".to_owned());
+            active.status = Set(CertificateStatus::Active.as_str().to_owned());
             active.error = Set(cleanup_result
                 .err()
                 .map(|_| "HTTP challenge cleanup is pending; it will be retried".to_owned()));
@@ -356,7 +361,7 @@ async fn reconcile_record(
         }
         Err(_error) => {
             // ACME/provider errors may contain challenge/account material; expose bounded diagnostics.
-            active.status = Set("failed".to_owned());
+            active.status = Set(CertificateStatus::Failed.as_str().to_owned());
             active.error=Set(Some("Certificate issuance failed; check public HTTP access on port 80, entry acknowledgements and certificate authority settings. Automatic retry is scheduled.".to_owned()));
             active.retry_at = Set(Some(
                 OffsetDateTime::now_utc() + retry_delay(item.failure_count),
