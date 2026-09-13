@@ -752,6 +752,8 @@ pub async fn process_pending_jobs(db: &DatabaseConnection) -> anyhow::Result<u64
 
 #[cfg(test)]
 mod tests {
+    use crate::features::api::v1::internal::deployments::claim::ClaimRequest;
+    use crate::features::api::v1::internal::serve::deployments::by_deployment_id::status::ReportServeStatusRequest;
     use axum::{
         Extension, Json,
         body::to_bytes,
@@ -759,7 +761,7 @@ mod tests {
         response::IntoResponse,
     };
     use grass_cache::{CacheBackend, CacheStore};
-    use grass_node_protocol::{ClaimRequest, ReportServeStatusRequest, ReportedServeStatus};
+    use grass_node_protocol::ReportedServeStatus;
     use sea_orm::{
         ActiveModelTrait, ActiveValue::Set, ColumnTrait, Database, DatabaseConnection, EntityTrait,
         QueryFilter,
@@ -1248,7 +1250,7 @@ mod tests {
         };
 
         for _ in 0..2 {
-            crate::features::api::v1::internal::serve::report_status(
+            crate::features::api::v1::internal::serve::deployments::by_deployment_id::status::report_status(
                 State(state.clone()),
                 Extension(AuthenticatedNode(fixture.target.clone())),
                 Path(fixture.deployment.id),
@@ -1368,7 +1370,7 @@ mod tests {
                 .is_ok()
         );
 
-        let response = crate::features::api::v1::internal::deployments::claim(
+        let response = crate::features::api::v1::internal::deployments::claim::claim(
             State(state),
             Extension(AuthenticatedNode(authenticated_snapshot)),
             Json(ClaimRequest { capacity: 1 }),

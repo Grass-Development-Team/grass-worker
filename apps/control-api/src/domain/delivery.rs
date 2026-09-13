@@ -1,21 +1,16 @@
-use std::collections::HashSet;
-
-use crate::infra::audit::AuditTransaction;
 use grass_node_protocol::ServeResources;
-use sea_orm::ActiveModelTrait;
-use sea_orm::ActiveValue::Set;
-use sea_orm::ColumnTrait;
-use sea_orm::ConnectionTrait;
-use sea_orm::EntityTrait;
-use sea_orm::QueryFilter;
-use sea_orm::QueryOrder;
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter,
+    QueryOrder,
+};
+use std::collections::HashSet;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
     domain::{deployments, scheduler},
     infra::{
-        audit::{self as audits, CreateAuditEventParams},
+        audit::{self as audits, AuditTransaction, CreateAuditEventParams},
         database::entity::{
             AuditEventResult, AuditEventVisibility, DeploymentBuildStatus, DeploymentEnvironment,
             DeploymentReleaseStatus, DeploymentServeStatus, ReleaseReason, deployment,
@@ -489,11 +484,12 @@ pub async fn complete_pending_release(
 mod tests {
     use std::collections::HashSet;
 
+    use crate::features::api::v1::internal::serve::deployments::by_deployment_id::status::ReportServeStatusRequest;
     use axum::{
         Extension, Json,
         extract::{Path, State},
     };
-    use grass_node_protocol::{ReportServeStatusRequest, ReportedServeStatus};
+    use grass_node_protocol::ReportedServeStatus;
     use sea_orm::{
         ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, Database,
         DatabaseBackend, DatabaseConnection, EntityTrait, QueryFilter, Statement,
@@ -1224,7 +1220,7 @@ mod tests {
 
         let state = ControlApiState::new(ControlApiConfig::default(), "unused.toml");
         state.database.set(test_db.db.clone()).unwrap();
-        let result = crate::features::api::v1::internal::serve::report_status(
+        let result = crate::features::api::v1::internal::serve::deployments::by_deployment_id::status::report_status(
             State(state),
             Extension(AuthenticatedNode(fixture.node.clone())),
             Path(fixture.rollback_target.id),
@@ -1398,7 +1394,7 @@ CREATE TRIGGER reject_queued_release_audit
         let state = ControlApiState::new(ControlApiConfig::default(), "unused.toml");
         state.database.set(test_db.db.clone()).unwrap();
         let now = OffsetDateTime::now_utc();
-        let result = crate::features::api::v1::projects::deployments::rollback(
+        let result = crate::features::api::v1::projects::by_project_id::deployments::by_deployment_id::rollback::rollback(
             State(state),
             Session {
                 data: grass_session::SessionData {

@@ -1,0 +1,882 @@
+[
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/announcements"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/announcements"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/admin/announcements/{announcement_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/audit-events"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/admin/cleanup/audit-events"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/cleanup/audit-events"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/admin/cleanup/build-logs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/cleanup/build-logs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/codes"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/codes"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/codes/{code_id}/revoke"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/deployments/{deployment_id}/republish"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/deployments/{deployment_id}/review/approve"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/deployments/{deployment_id}/review/reject"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/deployments/{deployment_id}/withdraw"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/domain-https"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/admin/domain-https"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/admin/domains/{domain_id}"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/domains/{domain_id}/approve"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/domains/{domain_id}/reject"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/host-sources"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/host-sources"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/admin/host-sources/{source_id}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/admin/host-sources/{source_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/identity-providers"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/identity-providers"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/admin/identity-providers/{provider_id}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/admin/identity-providers/{provider_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/nodes"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/nodes"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/nodes/local-process"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/nodes/local-process"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/nodes/{node_id}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/admin/nodes/{node_id}"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/admin/nodes/{node_id}/configuration"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/nodes/{node_id}/deletion"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/nodes/{node_id}/deletion-plan"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/nodes/{node_id}/health"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/nodes/{node_id}/rotate-token"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/projects"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/projects/batch"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/projects/{project_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/projects/{project_id}/activity"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/projects/{project_id}/archive"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/projects/{project_id}/delete"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/projects/{project_id}/deployments"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/projects/{project_id}/domains"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/projects/{project_id}/restore"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/admin/projects/{project_id}/slug"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/projects/{project_id}/unarchive"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/quota-plans"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/quota-plans"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/admin/quota-plans/{plan_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/regional-ingresses"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/regional-ingresses"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/admin/regional-ingresses/{ingress_id}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/admin/regional-ingresses/{ingress_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/regions"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/regions"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/admin/regions/{code}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/admin/regions/{code}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/registration/emails"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/registration/emails"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/admin/registration/emails/{entry_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/reviews"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/settings"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/admin/settings"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/status"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/storage"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/storage/migrations"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/storage/migrations"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/storage/test"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/team-groups"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/team-groups"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/admin/team-groups/{group_id}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/admin/team-groups/{group_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/teams"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/teams"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/teams/batch"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/admin/teams/{team_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/teams/{team_id}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/admin/teams/{team_id}"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/teams/{team_id}/group"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/teams/{team_id}/quota-plan"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/users"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/users"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/users/batch"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/admin/users/{user_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/users/{user_id}/mfa"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/admin/users/{user_id}/mfa"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/admin/users/{user_id}/mfa/{factor_id}"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/users/{user_id}/reset-password"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/announcements"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/auth/csrf"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/email/resend"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/email/verify"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/login"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/logout"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/mfa/challenge"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/mfa/email/send"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/mfa/totp/start"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/mfa/verify"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/password/forgot"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/password/reset"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/auth/providers"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/auth/providers/{slug}/callback"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/providers/{slug}/callback"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/auth/providers/{slug}/start"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/register"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/avatars/teams/{team_id}/{version}/avatar.webp"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/avatars/users/{user_id}/{version}/avatar.webp"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/internal/deployments/claim"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/internal/deployments/{deployment_id}/artifact"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/internal/deployments/{deployment_id}/build-log"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/internal/deployments/{deployment_id}/source-credential"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/internal/deployments/{deployment_id}/ssh-host-key"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/internal/deployments/{deployment_id}/stage"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/internal/deployments/{deployment_id}/static-site"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/internal/log-stream"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/internal/nodes/heartbeat"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/internal/nodes/register"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/internal/serve/assignments"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/internal/serve/certificates"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/internal/serve/deployments/{deployment_id}/ssr-lease"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/internal/serve/deployments/{deployment_id}/ssr-lease/{lease_id}/release"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/internal/serve/deployments/{deployment_id}/ssr-lease/{lease_id}/renew"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/internal/serve/deployments/{deployment_id}/status"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/internal/serve/ingress-status"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/internal/serve/preview/authorize"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/internal/serve/preview/exchange"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/internal/serve/preview/verify"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/internal/serve/resolve-host"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/internal/serve/routes"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/me"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/me"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/me/avatar"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/me/avatar"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/me/mfa/email/start"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/me/mfa/totp/start"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/me/mfa/{factor_id}"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/me/mfa/{factor_id}/confirm"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/me/password"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/me/security"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/notifications"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/notifications/auto-popup"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/notifications/read-all"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/notifications/unread-count"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/notifications/{notification_id}/read"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/preview/authorize"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/projects"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/projects"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/projects/{project_id}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/projects/{project_id}"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/projects/{project_id}/archive"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/projects/{project_id}/delete"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/projects/{project_id}/deployments"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/projects/{project_id}/deployments"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/projects/{project_id}/deployments/{deployment_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/projects/{project_id}/deployments/{deployment_id}/artifacts"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/projects/{project_id}/deployments/{deployment_id}/build-log"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/projects/{project_id}/deployments/{deployment_id}/cancel"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/projects/{project_id}/deployments/{deployment_id}/events"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/projects/{project_id}/deployments/{deployment_id}/logs/ws"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/projects/{project_id}/deployments/{deployment_id}/promote"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/projects/{project_id}/deployments/{deployment_id}/retry"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/projects/{project_id}/deployments/{deployment_id}/rollback"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/projects/{project_id}/deployments/{deployment_id}/screenshot"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/projects/{project_id}/deployments/{deployment_id}/unpublish"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/projects/{project_id}/hard-delete"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/projects/{project_id}/hosts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/projects/{project_id}/hosts"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/projects/{project_id}/hosts/{host_id}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/projects/{project_id}/hosts/{host_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/projects/{project_id}/hosts/{host_id}/certificate"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/projects/{project_id}/hosts/{host_id}/certificate"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/projects/{project_id}/hosts/{host_id}/certificate/import"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/projects/{project_id}/hosts/{host_id}/certificate/renew"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/projects/{project_id}/hosts/{host_id}/primary"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/projects/{project_id}/hosts/{host_id}/provision"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/projects/{project_id}/hosts/{host_id}/verify"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/projects/{project_id}/restore"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/projects/{project_id}/serve-nodes"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/projects/{project_id}/source-credential"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/projects/{project_id}/source-credential"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/projects/{project_id}/source-credential"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/projects/{project_id}/transfer-team"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/projects/{project_id}/unarchive"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/regions"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/setup/admin"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/setup/database"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/setup/finish"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/setup/node"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/setup/site"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/setup/state"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/setup/storage"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/site-config"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/team-invitations/accept"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/team-invitations/preflight"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/teams"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/teams"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/teams/{team_id}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/teams/{team_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/teams/{team_id}/audit-events"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/teams/{team_id}/avatar"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/teams/{team_id}/avatar"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/teams/{team_id}/invitation-candidates"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/teams/{team_id}/invitations"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/teams/{team_id}/members"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/teams/{team_id}/members/{user_id}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/teams/{team_id}/members/{user_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/teams/{team_id}/quota"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/teams/{team_id}/quota/usage"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/teams/{team_id}/source-credentials"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/teams/{team_id}/source-credentials"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/teams/{team_id}/source-credentials/{credential_id}/revoke"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/teams/{team_id}/source-credentials/{credential_id}/rotate"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/teams/{team_id}/ssh-host-keys"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/teams/{team_id}/ssh-host-keys/{key_id}/approve"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/teams/{team_id}/ssh-host-keys/{key_id}/reject"
+  },
+  {
+    "method": "GET",
+    "path": "/health"
+  }
+]

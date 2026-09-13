@@ -8,6 +8,8 @@ mod features;
 mod infra;
 mod init;
 mod state;
+#[cfg(test)]
+mod test_support;
 
 use crate::{
     cli::{Cli, Command},

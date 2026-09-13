@@ -125,9 +125,7 @@ pub async fn withdraw(
         PublicationRemovalKind::PlatformAdmin,
     )
     .await
-    .map_err(|error| {
-        crate::features::api::v1::projects::deployments::map_delivery_error(error, OP)
-    })?;
+    .map_err(|error| crate::infra::http::deployment_errors::map_delivery_error(error, OP))?;
     audits::create_platform_audit_event(
         &transaction,
         CreateAuditEventParams {
@@ -287,7 +285,7 @@ pub async fn republish(
             )
             .await
             .map_err(|error| {
-                crate::features::api::v1::projects::deployments::map_delivery_error(error, OP)
+                crate::infra::http::deployment_errors::map_delivery_error(error, OP)
             })?;
             (target, release_pending) = match outcome {
                 delivery::ReleaseRequestOutcome::Activated(item) => (item, false),

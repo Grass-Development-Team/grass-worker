@@ -1,5 +1,3 @@
-//! Node → Control API websocket ingest for realtime build log frames.
-
 use axum::{
     Extension,
     extract::{
@@ -11,6 +9,10 @@ use axum::{
 use grass_node_protocol::LogStreamMessage;
 
 use crate::{infra::http::middlewares::node_auth::AuthenticatedNode, state::ControlApiState};
+
+pub(crate) fn router() -> axum::Router<ControlApiState> {
+    axum::Router::new().route("/log-stream", axum::routing::get(ingest))
+}
 
 /// GET /api/v1/internal/log-stream
 pub async fn ingest(

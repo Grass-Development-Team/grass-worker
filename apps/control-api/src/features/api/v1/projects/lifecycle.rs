@@ -3,8 +3,9 @@ use axum::{
     extract::{Path, State},
     response::IntoResponse,
 };
-use sea_orm::sea_query::LockType;
-use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect};
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect, sea_query::LockType,
+};
 use serde::Deserialize;
 use serde_json::json;
 use std::future::Future;
@@ -778,7 +779,14 @@ pub async fn archive(
     Path(project_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "projects.archive";
-    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    let access = crate::domain::project_access::load(
+        &state,
+        session.data.user_id,
+        project_id,
+        crate::domain::project_access::ProjectScope::Active,
+        OP,
+    )
+    .await?;
     access.require_admin(OP)?;
     let db = super::database(&state, OP)?;
     let transaction = crate::infra::audit::AuditTransaction::begin(db)
@@ -819,7 +827,14 @@ pub async fn unarchive(
     Path(project_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "projects.unarchive";
-    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    let access = crate::domain::project_access::load(
+        &state,
+        session.data.user_id,
+        project_id,
+        crate::domain::project_access::ProjectScope::Active,
+        OP,
+    )
+    .await?;
     access.require_admin(OP)?;
     let db = super::database(&state, OP)?;
     let transaction = crate::infra::audit::AuditTransaction::begin(db)
@@ -860,7 +875,14 @@ pub async fn delete(
     Path(project_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "projects.delete";
-    let access = super::project_access(&state, &session, project_id, true, OP).await?;
+    let access = crate::domain::project_access::load(
+        &state,
+        session.data.user_id,
+        project_id,
+        crate::domain::project_access::ProjectScope::IncludingDeleted,
+        OP,
+    )
+    .await?;
     access.require_admin(OP)?;
     let db = super::database(&state, OP)?;
     let cache = super::cache(&state, OP)?;
@@ -921,7 +943,14 @@ pub async fn restore(
     Path(project_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "projects.restore";
-    let access = super::project_access(&state, &session, project_id, true, OP).await?;
+    let access = crate::domain::project_access::load(
+        &state,
+        session.data.user_id,
+        project_id,
+        crate::domain::project_access::ProjectScope::IncludingDeleted,
+        OP,
+    )
+    .await?;
     access.require_admin(OP)?;
     let db = super::database(&state, OP)?;
     let cache = super::cache(&state, OP)?;
@@ -1103,7 +1132,14 @@ pub async fn transfer_team(
     Json(body): Json<TransferTeamRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "projects.transfer_team";
-    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    let access = crate::domain::project_access::load(
+        &state,
+        session.data.user_id,
+        project_id,
+        crate::domain::project_access::ProjectScope::Active,
+        OP,
+    )
+    .await?;
     access.require_owner(OP)?;
     let db = super::database(&state, OP)?;
     let cache = super::cache(&state, OP)?;
@@ -1188,7 +1224,14 @@ pub async fn hard_delete(
     Path(project_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "projects.hard_delete";
-    let access = super::project_access(&state, &session, project_id, true, OP).await?;
+    let access = crate::domain::project_access::load(
+        &state,
+        session.data.user_id,
+        project_id,
+        crate::domain::project_access::ProjectScope::IncludingDeleted,
+        OP,
+    )
+    .await?;
     access.require_owner(OP)?;
     if access.project.deleted_at.is_none() {
         return Err(AppError::Conflict {

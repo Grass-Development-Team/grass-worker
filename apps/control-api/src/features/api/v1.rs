@@ -5,7 +5,7 @@ pub mod avatars;
 pub mod internal;
 pub mod me;
 pub mod notifications;
-pub mod preview_auth;
+pub mod preview;
 pub mod projects;
 pub mod regions;
 pub mod setup;
@@ -18,8 +18,10 @@ use axum::{
 };
 
 use crate::{
-    infra::http::extractors::PlatformAdmin,
-    infra::http::middlewares::setup_mode::{require_ready_mode, require_setup_mode},
+    infra::http::{
+        extractors::PlatformAdmin,
+        middlewares::setup_mode::{require_ready_mode, require_setup_mode},
+    },
     state::ControlApiState,
 };
 
@@ -46,17 +48,7 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
                 require_ready_mode,
             )),
         )
-        .route(
-            "/preview/authorize",
-            get(preview_auth::authorize)
-                .layer(middleware::from_fn_with_state(
-                    state.clone(),
-                    require_ready_mode,
-                ))
-                .layer(middleware::map_response(
-                    preview_auth::browser_authorization_headers,
-                )),
-        )
+        .merge(preview::router(state.clone()))
         .route(
             "/me",
             get(me::handler)

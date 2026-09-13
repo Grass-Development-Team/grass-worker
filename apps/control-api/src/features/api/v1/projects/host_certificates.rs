@@ -26,7 +26,14 @@ async fn binding_and_ingress(
     write: bool,
     op: &'static str,
 ) -> Result<(project_host_binding::Model, regional_ingress::Model), AppError> {
-    let access = super::project_access(state, session, project_id, false, op).await?;
+    let access = crate::domain::project_access::load(
+        state,
+        session.data.user_id,
+        project_id,
+        crate::domain::project_access::ProjectScope::Active,
+        op,
+    )
+    .await?;
     if write {
         access.require_member(op)?;
     }

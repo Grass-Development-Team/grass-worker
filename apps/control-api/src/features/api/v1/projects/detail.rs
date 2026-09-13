@@ -25,7 +25,14 @@ pub async fn get(
     Path(project_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "projects.detail";
-    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    let access = crate::domain::project_access::load(
+        &state,
+        session.data.user_id,
+        project_id,
+        crate::domain::project_access::ProjectScope::Active,
+        OP,
+    )
+    .await?;
 
     Ok(ok_response(json!({
         "project": super::project_view(&access.project),
@@ -146,7 +153,14 @@ pub async fn update(
     Json(body): Json<UpdateProjectRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "projects.update";
-    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    let access = crate::domain::project_access::load(
+        &state,
+        session.data.user_id,
+        project_id,
+        crate::domain::project_access::ProjectScope::Active,
+        OP,
+    )
+    .await?;
     access.require_member(OP)?;
     let db = super::database(&state, OP)?;
 

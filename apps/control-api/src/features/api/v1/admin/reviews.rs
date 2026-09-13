@@ -2,8 +2,6 @@
 //! pending review and decide here. Approval publishes the deployment in the
 //! same transaction.
 
-use std::collections::{HashMap, HashSet};
-
 use axum::{
     Json,
     extract::{Path, State},
@@ -12,6 +10,7 @@ use axum::{
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use crate::{
@@ -248,7 +247,7 @@ async fn decide(
         scheduler::lock_placement(&transaction)
             .await
             .map_err(|error| {
-                crate::features::api::v1::projects::deployments::map_delivery_error(
+                crate::infra::http::deployment_errors::map_delivery_error(
                     delivery::DeliveryError::Schedule(error),
                     op,
                 )
@@ -381,9 +380,7 @@ async fn decide(
             AuditEventVisibility::Platform,
         )
         .await
-        .map_err(|error| {
-            crate::features::api::v1::projects::deployments::map_delivery_error(error, op)
-        })?;
+        .map_err(|error| crate::infra::http::deployment_errors::map_delivery_error(error, op))?;
         (deployment, release_pending) = match outcome {
             ReleaseRequestOutcome::Activated(deployment) => (deployment, false),
             ReleaseRequestOutcome::SyncQueued(deployment) => (deployment, true),

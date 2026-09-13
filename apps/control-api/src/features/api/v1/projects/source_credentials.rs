@@ -52,7 +52,7 @@ fn map_error(error: SourceCredentialError, op: &'static str) -> AppError {
 
 async fn audit_binding(
     db: &impl audits::AuditConnection,
-    access: &super::ProjectAccess,
+    access: &crate::domain::project_access::ProjectAccess,
     actor_user_id: Uuid,
     credential: &source_credential::Model,
     action: &str,
@@ -80,7 +80,14 @@ pub async fn get(
     Path(project_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "projects.source_credential.get";
-    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    let access = crate::domain::project_access::load(
+        &state,
+        session.data.user_id,
+        project_id,
+        crate::domain::project_access::ProjectScope::Active,
+        OP,
+    )
+    .await?;
     let credential =
         source_credentials::bound_credential(super::database(&state, OP)?, access.project.id)
             .await
@@ -105,7 +112,14 @@ pub async fn bind(
     Json(body): Json<BindCredentialRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "projects.source_credential.bind";
-    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    let access = crate::domain::project_access::load(
+        &state,
+        session.data.user_id,
+        project_id,
+        crate::domain::project_access::ProjectScope::Active,
+        OP,
+    )
+    .await?;
     access.require_admin(OP)?;
     let db = super::database(&state, OP)?;
     let transaction = audits::AuditTransaction::begin(db)
@@ -148,7 +162,14 @@ pub async fn unbind(
     Path(project_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "projects.source_credential.unbind";
-    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    let access = crate::domain::project_access::load(
+        &state,
+        session.data.user_id,
+        project_id,
+        crate::domain::project_access::ProjectScope::Active,
+        OP,
+    )
+    .await?;
     access.require_admin(OP)?;
     let db = super::database(&state, OP)?;
     let transaction = audits::AuditTransaction::begin(db)

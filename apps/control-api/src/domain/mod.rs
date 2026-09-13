@@ -31,3 +31,13 @@ pub mod regions;
 pub mod certificate_settings;
 pub mod domain_dns;
 pub mod domain_onboarding;
+
+pub mod preview_access;
+
+pub(crate) mod deployment_activation;
+pub(crate) mod deployment_cancellation;
+pub(crate) mod deployment_placement;
+
+pub(crate) mod project_access;
+
+pub(crate) mod node_migration_access;

@@ -9,10 +9,12 @@ use serde_json::json;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::infra::http::timestamps::ts;
 use crate::{
-    domain::hosts::{self, DomainReviewMode},
-    domain::{certificates, deployments, ingress},
+    domain::{
+        certificates, deployments,
+        hosts::{self, DomainReviewMode},
+        ingress,
+    },
     infra::{
         database::entity::{
             DeploymentEnvironment, HostBindingEnvironment, HostBindingKind, HostBindingStatus,
@@ -20,7 +22,7 @@ use crate::{
         },
         error::{AppError, ok_response},
         host_provision::service::{BindHostRequest, DeleteHostScope, HostBindingService},
-        http::extractors::Session,
+        http::{extractors::Session, timestamps::ts},
     },
     state::ControlApiState,
 };
@@ -229,7 +231,14 @@ pub async fn list(
     Path(project_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "projects.hosts.list";
-    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    let access = crate::domain::project_access::load(
+        &state,
+        session.data.user_id,
+        project_id,
+        crate::domain::project_access::ProjectScope::Active,
+        OP,
+    )
+    .await?;
     let db = super::database(&state, OP)?;
 
     let bindings = hosts::list_bindings_for_project(db, access.project.id)
@@ -307,7 +316,14 @@ pub async fn create(
     Json(body): Json<CreateHostRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "projects.hosts.create";
-    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    let access = crate::domain::project_access::load(
+        &state,
+        session.data.user_id,
+        project_id,
+        crate::domain::project_access::ProjectScope::Active,
+        OP,
+    )
+    .await?;
     access.require_member(OP)?;
     let db = super::database(&state, OP)?;
     let cache = super::cache(&state, OP)?;
@@ -467,7 +483,14 @@ pub async fn verify(
     Path((project_id, host_id)): Path<(Uuid, Uuid)>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "projects.hosts.verify";
-    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    let access = crate::domain::project_access::load(
+        &state,
+        session.data.user_id,
+        project_id,
+        crate::domain::project_access::ProjectScope::Active,
+        OP,
+    )
+    .await?;
     access.require_member(OP)?;
     let db = super::database(&state, OP)?;
     let binding = load_binding(db, &access, host_id, OP).await?;
@@ -496,7 +519,14 @@ pub async fn update(
     Json(body): Json<UpdateHostRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "projects.hosts.update";
-    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    let access = crate::domain::project_access::load(
+        &state,
+        session.data.user_id,
+        project_id,
+        crate::domain::project_access::ProjectScope::Active,
+        OP,
+    )
+    .await?;
     access.require_member(OP)?;
     let db = super::database(&state, OP)?;
 
@@ -540,7 +570,14 @@ pub async fn remove(
     Path((project_id, host_id)): Path<(Uuid, Uuid)>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "projects.hosts.remove";
-    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    let access = crate::domain::project_access::load(
+        &state,
+        session.data.user_id,
+        project_id,
+        crate::domain::project_access::ProjectScope::Active,
+        OP,
+    )
+    .await?;
     access.require_member(OP)?;
     let db = super::database(&state, OP)?;
     let cache = super::cache(&state, OP)?;
@@ -560,7 +597,14 @@ pub async fn set_primary(
     Path((project_id, host_id)): Path<(Uuid, Uuid)>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "projects.hosts.set_primary";
-    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    let access = crate::domain::project_access::load(
+        &state,
+        session.data.user_id,
+        project_id,
+        crate::domain::project_access::ProjectScope::Active,
+        OP,
+    )
+    .await?;
     access.require_member(OP)?;
     let db = super::database(&state, OP)?;
 
@@ -595,7 +639,14 @@ pub async fn provision(
     Path((project_id, host_id)): Path<(Uuid, Uuid)>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "projects.hosts.provision";
-    let access = super::project_access(&state, &session, project_id, false, OP).await?;
+    let access = crate::domain::project_access::load(
+        &state,
+        session.data.user_id,
+        project_id,
+        crate::domain::project_access::ProjectScope::Active,
+        OP,
+    )
+    .await?;
     access.require_member(OP)?;
     let db = super::database(&state, OP)?;
     let cache = super::cache(&state, OP)?;
@@ -625,7 +676,7 @@ pub async fn provision(
 
 pub(super) async fn load_binding(
     db: &sea_orm::DatabaseConnection,
-    access: &super::ProjectAccess,
+    access: &crate::domain::project_access::ProjectAccess,
     host_id: Uuid,
     op: &'static str,
 ) -> Result<project_host_binding::Model, AppError> {

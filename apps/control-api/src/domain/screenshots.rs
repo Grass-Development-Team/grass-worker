@@ -1,15 +1,14 @@
-use std::{collections::HashMap, io::Cursor};
-
 use image::{ImageFormat, ImageReader, Limits};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect, TransactionTrait,
 };
+use std::{collections::HashMap, io::Cursor};
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
 use crate::{
-    features::api::v1::preview_auth,
+    domain::preview_access,
     infra::{
         database::{
             entity::{
@@ -244,7 +243,7 @@ async fn capture_job(
         .preview_host
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("deployment has no preview host"))?;
-    let grant = preview_auth::issue_screenshot_grant(state, host).await?;
+    let grant = preview_access::issue_screenshot_grant(state, host).await?;
     let png = from_config(config)
         .capture(CaptureRequest {
             url: grant.target_url,
