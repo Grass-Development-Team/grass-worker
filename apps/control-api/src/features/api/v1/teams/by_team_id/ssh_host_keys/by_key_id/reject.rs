@@ -26,8 +26,8 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct HostKeyPath {
-    pub key_id: Uuid,
+struct HostKeyPath {
+    key_id: Uuid,
 }
 
 fn view(key: &ssh_host_key::Model) -> ItemResponse {
@@ -126,7 +126,7 @@ async fn change_status(
     }))
 }
 
-pub async fn reject(
+async fn reject(
     State(state): State<ControlApiState>,
     role: TeamRole,
     Path(path): Path<HostKeyPath>,

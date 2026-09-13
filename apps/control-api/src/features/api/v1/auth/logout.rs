@@ -13,7 +13,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     axum::Router::new().route("/logout", axum::routing::post(handler))
 }
 
-pub async fn handler(
+async fn handler(
     State(state): State<ControlApiState>,
     session: Session,
     jar: CookieJar,
@@ -43,10 +43,7 @@ pub async fn handler(
     ))
 }
 
-pub(super) fn removal_cookie(
-    configured_secure: bool,
-    development_enabled: bool,
-) -> Cookie<'static> {
+fn removal_cookie(configured_secure: bool, development_enabled: bool) -> Cookie<'static> {
     let secure = configured_secure && !development_enabled;
     let mut clear_cookie = Cookie::new("session_id", "");
     clear_cookie.set_path("/api");

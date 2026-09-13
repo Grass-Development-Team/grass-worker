@@ -26,8 +26,8 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct RenameRequest {
-    pub name: String,
+struct RenameRequest {
+    name: String,
 }
 
 fn name(value: &str, op: &'static str) -> Result<String, AppError> {
@@ -41,7 +41,7 @@ fn name(value: &str, op: &'static str) -> Result<String, AppError> {
     Ok(value.to_owned())
 }
 
-pub async fn rename(
+async fn rename(
     State(state): State<ControlApiState>,
     Path(code): Path<String>,
     Json(body): Json<RenameRequest>,
@@ -72,7 +72,7 @@ pub async fn rename(
     Ok(ok_response(RenameResponse { ok: true }))
 }
 
-pub async fn remove(
+async fn remove(
     State(state): State<ControlApiState>,
     Path(code): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {

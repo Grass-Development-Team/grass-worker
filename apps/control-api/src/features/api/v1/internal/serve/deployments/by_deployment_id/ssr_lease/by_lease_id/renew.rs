@@ -16,10 +16,10 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct SsrLeaseResponse {
-    pub lease_id: Uuid,
-    pub expires_at_unix: i64,
-    pub hour_block_start_unix: i64,
+struct SsrLeaseResponse {
+    lease_id: Uuid,
+    expires_at_unix: i64,
+    hour_block_start_unix: i64,
 }
 
 pub(crate) fn router() -> axum::Router<ControlApiState> {
@@ -79,7 +79,7 @@ fn lease_response(
 }
 
 /// POST /api/v1/internal/serve/deployments/{deployment_id}/ssr-lease/{lease_id}/renew
-pub async fn renew_ssr_lease(
+async fn renew_ssr_lease(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
     Path((deployment_id, lease_id)): Path<(Uuid, Uuid)>,

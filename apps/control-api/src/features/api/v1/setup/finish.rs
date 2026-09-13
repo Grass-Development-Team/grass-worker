@@ -16,7 +16,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     axum::Router::new().route("/finish", axum::routing::post(handler))
 }
 
-pub(crate) fn setup_database<'a>(
+fn setup_database<'a>(
     state: &'a ControlApiState,
     op: &'static str,
 ) -> Result<&'a DatabaseConnection, AppError> {
@@ -26,7 +26,7 @@ pub(crate) fn setup_database<'a>(
     })
 }
 
-pub(crate) async fn ensure_setup_mutation_allowed(
+async fn ensure_setup_mutation_allowed(
     db: &DatabaseConnection,
     op: &'static str,
 ) -> Result<(), AppError> {
@@ -42,7 +42,7 @@ pub(crate) async fn ensure_setup_mutation_allowed(
     Ok(())
 }
 
-pub async fn handler(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
+async fn handler(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     let _setup_guard = state.lock_setup().await;
     let db = setup_database(&state, "setup.finish.database")?;
     ensure_setup_mutation_allowed(db, "setup.finish.ready_mode").await?;

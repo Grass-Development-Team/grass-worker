@@ -7,6 +7,8 @@ mod domain;
 mod features;
 mod infra;
 mod init;
+#[cfg(test)]
+mod integration_tests;
 mod state;
 #[cfg(test)]
 mod test_support;

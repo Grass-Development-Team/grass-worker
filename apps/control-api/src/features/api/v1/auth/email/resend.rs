@@ -17,12 +17,12 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct ResendEmailRequest {
-    pub email: String,
-    pub return_to: Option<String>,
+struct ResendEmailRequest {
+    email: String,
+    return_to: Option<String>,
 }
 
-pub async fn resend(
+async fn resend(
     State(state): State<ControlApiState>,
     Json(body): Json<ResendEmailRequest>,
 ) -> Result<impl IntoResponse, AppError> {

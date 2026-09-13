@@ -15,14 +15,14 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Debug, Default, Deserialize)]
-pub struct StorageRequest {
-    pub backend: String,
+struct StorageRequest {
+    backend: String,
     #[serde(flatten)]
-    pub options: storage_settings::StorageOptions,
+    options: storage_settings::StorageOptions,
 }
 
 /// POST /api/v1/admin/storage/test
-pub async fn test(
+async fn test(
     State(state): State<ControlApiState>,
     Json(body): Json<StorageRequest>,
 ) -> Result<impl IntoResponse, AppError> {

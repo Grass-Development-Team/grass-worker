@@ -62,7 +62,7 @@ async fn resolve(
 }
 
 /// GET /api/v1/teams/{team_id}/quota/usage
-pub async fn usage(
+async fn usage(
     State(state): State<ControlApiState>,
     role: TeamRole,
 ) -> Result<impl IntoResponse, AppError> {

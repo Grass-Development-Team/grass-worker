@@ -67,9 +67,9 @@ fn event_view(event: &audit_event::Model) -> AuditEventResponse {
 }
 
 #[derive(Deserialize, Default)]
-pub struct ActivityQuery {
-    pub page: Option<u64>,
-    pub per_page: Option<u64>,
+struct ActivityQuery {
+    page: Option<u64>,
+    per_page: Option<u64>,
 }
 
 fn binding_audit_target_types() -> [&'static str; 2] {
@@ -77,7 +77,7 @@ fn binding_audit_target_types() -> [&'static str; 2] {
 }
 
 /// GET /api/v1/admin/projects/{project_id}/activity
-pub async fn activity(
+async fn activity(
     State(state): State<ControlApiState>,
     Path(project_id): Path<Uuid>,
     Query(query): Query<ActivityQuery>,

@@ -53,7 +53,7 @@ fn map_error(error: SshHostKeyError, op: &'static str) -> AppError {
     }
 }
 
-pub async fn list(
+async fn list(
     State(state): State<ControlApiState>,
     role: TeamRole,
 ) -> Result<impl IntoResponse, AppError> {

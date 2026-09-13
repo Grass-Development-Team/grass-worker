@@ -19,13 +19,13 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct ChallengeRequest {
-    pub challenge_token: String,
+struct ChallengeRequest {
+    challenge_token: String,
     #[serde(rename = "factor_id")]
     _factor_id: Option<Uuid>,
 }
 
-pub async fn challenge_status(
+async fn challenge_status(
     State(state): State<ControlApiState>,
     Json(body): Json<ChallengeRequest>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -98,7 +98,7 @@ mod tests {
     use crate::state::ControlApiState;
     #[tokio::test]
     async fn a_password_reset_invalidates_a_pending_login_challenge() {
-        let mut user = crate::infra::http::middlewares::session::tests::active_user();
+        let mut user = crate::test_support::users::active_user();
         let challenge = LoginChallenge {
             user_id: user.id,
             auth_version: 1,

@@ -1,4 +1,5 @@
 //! Automatic issuance with persistent retry state and challenge publication barriers.
+use super::certificates::{self, ACCOUNT_KEY, BUNDLE_KEY, PemBundle};
 use anyhow::{Context, ensure};
 use base64::{
     Engine,
@@ -15,7 +16,6 @@ use serde_json::Value;
 
 use crate::domain::certificates::CertificateStatus;
 
-use super::certificates::{self, ACCOUNT_KEY, BUNDLE_KEY, PemBundle};
 #[cfg(test)]
 use serde_json::json;
 use time::{Duration, OffsetDateTime};
@@ -457,9 +457,9 @@ mod tests {
     #[tokio::test]
     async fn http_validation_waits_for_every_eligible_entry_revision() {
         use crate::infra::database::entity::regional_ingress_health;
-        let ingress = certificates::tests::ingress_fixture();
-        let first = super::super::ingress::tests::node_fixture();
-        let second = super::super::ingress::tests::node_fixture();
+        let ingress = crate::test_support::certificates::ingress_fixture();
+        let first = crate::test_support::nodes::node_fixture();
+        let second = crate::test_support::nodes::node_fixture();
         let now = OffsetDateTime::now_utc();
         let revision = "a".repeat(64);
         for second_revision in ["b".repeat(64), revision.clone()] {
@@ -535,23 +535,62 @@ mod tests {
                 serde_json::from_slice(&URL_SAFE_NO_PAD.decode(encoded).unwrap()).unwrap()
             }
         };
-        let order = || json!({"status":if state.issued.load(Ordering::SeqCst){"valid"}else{"ready"},"authorizations":[format!("{}/authorization",state.origin)],"finalize":format!("{}/finalize",state.origin),"certificate":if state.issued.load(Ordering::SeqCst){Some(format!("{}/certificate",state.origin))}else{None}});
-        let mut response=match uri.path(){
-            "/directory"=>axum::Json(json!({"newNonce":format!("{}/nonce",state.origin),"newAccount":format!("{}/account",state.origin),"newOrder":format!("{}/new-order",state.origin)})).into_response(),
-            "/nonce"=>axum::http::StatusCode::OK.into_response(),
-            "/account"=>{state.accounts.fetch_add(1,Ordering::SeqCst);axum::Json(json!({"status":"valid"})).into_response()},
-            "/new-order"=>{assert_eq!(payload["identifiers"][0]["value"],"site.example.org");axum::Json(order()).into_response()},
-            "/authorization"=>axum::Json(json!({"status":"valid","identifier":{"type":"dns","value":"site.example.org"},"challenges":[]})).into_response(),
-            "/finalize"=>{
-                let der=URL_SAFE_NO_PAD.decode(payload["csr"].as_str().unwrap()).unwrap();
-                let mut csr=rcgen::CertificateSigningRequestParams::from_der(&der.into()).unwrap();
-                csr.params.not_before=OffsetDateTime::now_utc()-Duration::minutes(1);csr.params.not_after=OffsetDateTime::now_utc()+Duration::days(14);
-                let issuer=rcgen::Issuer::new(rcgen::CertificateParams::default(),rcgen::KeyPair::generate().unwrap());
-                *state.certificate.lock().unwrap()=Some(csr.signed_by(&issuer).unwrap().pem());state.issued.store(true,Ordering::SeqCst);axum::Json(order()).into_response()
-            },
-            "/order"=>axum::Json(order()).into_response(),
-            "/certificate"=>state.certificate.lock().unwrap().clone().unwrap().into_response(),
-            _=>axum::http::StatusCode::NOT_FOUND.into_response(),
+        let order = || {
+            let issued = state.issued.load(Ordering::SeqCst);
+            json!({
+                "status": if issued { "valid" } else { "ready" },
+                "authorizations": [format!("{}/authorization", state.origin)],
+                "finalize": format!("{}/finalize", state.origin),
+                "certificate": issued.then(|| format!("{}/certificate", state.origin)),
+            })
+        };
+        let mut response = match uri.path() {
+            "/directory" => axum::Json(json!({
+                "newNonce": format!("{}/nonce", state.origin),
+                "newAccount": format!("{}/account", state.origin),
+                "newOrder": format!("{}/new-order", state.origin),
+            }))
+            .into_response(),
+            "/nonce" => axum::http::StatusCode::OK.into_response(),
+            "/account" => {
+                state.accounts.fetch_add(1, Ordering::SeqCst);
+                axum::Json(json!({"status": "valid"})).into_response()
+            }
+            "/new-order" => {
+                assert_eq!(payload["identifiers"][0]["value"], "site.example.org");
+                axum::Json(order()).into_response()
+            }
+            "/authorization" => axum::Json(json!({
+                "status": "valid",
+                "identifier": {"type": "dns", "value": "site.example.org"},
+                "challenges": [],
+            }))
+            .into_response(),
+            "/finalize" => {
+                let der = URL_SAFE_NO_PAD
+                    .decode(payload["csr"].as_str().unwrap())
+                    .unwrap();
+                let mut csr =
+                    rcgen::CertificateSigningRequestParams::from_der(&der.into()).unwrap();
+                csr.params.not_before = OffsetDateTime::now_utc() - Duration::minutes(1);
+                csr.params.not_after = OffsetDateTime::now_utc() + Duration::days(14);
+                let issuer = rcgen::Issuer::new(
+                    rcgen::CertificateParams::default(),
+                    rcgen::KeyPair::generate().unwrap(),
+                );
+                *state.certificate.lock().unwrap() = Some(csr.signed_by(&issuer).unwrap().pem());
+                state.issued.store(true, Ordering::SeqCst);
+                axum::Json(order()).into_response()
+            }
+            "/order" => axum::Json(order()).into_response(),
+            "/certificate" => state
+                .certificate
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap()
+                .into_response(),
+            _ => axum::http::StatusCode::NOT_FOUND.into_response(),
         };
         response
             .headers_mut()
@@ -601,8 +640,8 @@ mod tests {
             )
             .await
             .unwrap();
-        let ingress = certificates::tests::ingress_fixture();
-        let mut item = certificates::tests::certificate_fixture(&ingress);
+        let ingress = crate::test_support::certificates::ingress_fixture();
+        let mut item = crate::test_support::certificates::certificate_fixture(&ingress);
         item.hostname = "site.example.org".to_owned();
         item.acme_account = Some(
             certificates::encrypt(
@@ -641,8 +680,8 @@ mod tests {
     #[test]
     fn renewal_respects_expiry_manual_mode_backoff_and_active_lease() {
         let now = OffsetDateTime::now_utc();
-        let ingress = certificates::tests::ingress_fixture();
-        let mut item = certificates::tests::certificate_fixture(&ingress);
+        let ingress = crate::test_support::certificates::ingress_fixture();
+        let mut item = crate::test_support::certificates::certificate_fixture(&ingress);
         assert!(due(&item, now));
         item.status = "active".to_owned();
         item.bundle = Some(json!({}));
@@ -666,8 +705,8 @@ mod tests {
     #[test]
     fn interrupted_or_failed_forced_renewal_retries_with_auto_renew_disabled() {
         let now = OffsetDateTime::now_utc();
-        let ingress = certificates::tests::ingress_fixture();
-        let mut item = certificates::tests::certificate_fixture(&ingress);
+        let ingress = crate::test_support::certificates::ingress_fixture();
+        let mut item = crate::test_support::certificates::certificate_fixture(&ingress);
         item.auto_renew = false;
         item.bundle = Some(json!({}));
         item.expires_at = Some(now + Duration::days(60));

@@ -24,24 +24,24 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct QuotaLimitInput {
-    pub dimension: String,
+struct QuotaLimitInput {
+    dimension: String,
     /// `null` removes the limit row (unlimited).
-    pub limit_value: Option<i64>,
+    limit_value: Option<i64>,
 }
 
 #[derive(Deserialize)]
-pub struct UpdateQuotaPlanRequest {
+struct UpdateQuotaPlanRequest {
     #[serde(default)]
-    pub name: Option<String>,
+    name: Option<String>,
     #[serde(default)]
-    pub description: Option<String>,
+    description: Option<String>,
     #[serde(default)]
-    pub enabled: Option<bool>,
+    enabled: Option<bool>,
     #[serde(default)]
-    pub is_default: Option<bool>,
+    is_default: Option<bool>,
     #[serde(default)]
-    pub limits: Vec<QuotaLimitInput>,
+    limits: Vec<QuotaLimitInput>,
 }
 
 /// Bounded limits to upsert plus dimensions whose rows should be removed.
@@ -90,7 +90,7 @@ async fn audit_plan_mutation(
 }
 
 /// PATCH /api/v1/admin/quota-plans/{plan_id}
-pub async fn update(
+async fn update(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path(plan_id): Path<Uuid>,

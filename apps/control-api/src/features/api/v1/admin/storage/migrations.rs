@@ -21,14 +21,14 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Debug, Default, Deserialize)]
-pub struct StorageRequest {
-    pub backend: String,
+struct StorageRequest {
+    backend: String,
     #[serde(flatten)]
-    pub options: storage_settings::StorageOptions,
+    options: storage_settings::StorageOptions,
 }
 
 /// POST /api/v1/admin/storage/migrations
-pub async fn create_migration(
+async fn create_migration(
     State(state): State<ControlApiState>,
     session: Session,
     Json(body): Json<StorageRequest>,
@@ -70,9 +70,7 @@ pub async fn create_migration(
 }
 
 /// GET /api/v1/admin/storage/migrations
-pub async fn migration(
-    State(state): State<ControlApiState>,
-) -> Result<impl IntoResponse, AppError> {
+async fn migration(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.storage.migrations.get";
     let db = crate::infra::http::database(&state, OP)?;
     let migration = storage_migrations::latest(db)

@@ -37,7 +37,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
         .merge(by_project_id::router())
 }
 
-pub(crate) fn validate_repository_url(value: &str) -> Result<(), &'static str> {
+fn validate_repository_url(value: &str) -> Result<(), &'static str> {
     grass_git_source::parse_repository_url(value)
         .map(|_| ())
         .map_err(|error| match error {
@@ -72,7 +72,7 @@ fn project_view(project: &project::Model) -> ProjectResponse {
     }
 }
 
-pub(crate) fn optional_trimmed(value: Option<String>) -> Option<String> {
+fn optional_trimmed(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
         let trimmed = value.trim().to_owned();
         (!trimmed.is_empty()).then_some(trimmed)
@@ -80,26 +80,26 @@ pub(crate) fn optional_trimmed(value: Option<String>) -> Option<String> {
 }
 
 #[derive(Deserialize)]
-pub struct CreateProjectRequest {
-    pub team_id: Uuid,
-    pub name: String,
-    pub slug: String,
+struct CreateProjectRequest {
+    team_id: Uuid,
+    name: String,
+    slug: String,
     #[serde(default = "default_runtime")]
-    pub runtime: String,
+    runtime: String,
     #[serde(default)]
-    pub repository_url: Option<String>,
+    repository_url: Option<String>,
     #[serde(default)]
-    pub default_branch: Option<String>,
+    default_branch: Option<String>,
     #[serde(default)]
-    pub root_directory: Option<String>,
+    root_directory: Option<String>,
     #[serde(default)]
-    pub install_command: Option<String>,
+    install_command: Option<String>,
     #[serde(default)]
-    pub build_command: Option<String>,
+    build_command: Option<String>,
     #[serde(default)]
-    pub output_directory: Option<String>,
+    output_directory: Option<String>,
     #[serde(default)]
-    pub framework_hint: Option<String>,
+    framework_hint: Option<String>,
 }
 
 fn default_runtime() -> String {
@@ -107,7 +107,7 @@ fn default_runtime() -> String {
 }
 
 /// POST /api/v1/projects
-pub async fn create(
+async fn create(
     State(state): State<ControlApiState>,
     session: Session,
     Json(body): Json<CreateProjectRequest>,
@@ -389,12 +389,12 @@ fn binding_status(status: &crate::infra::database::entity::HostBindingStatus) ->
 }
 
 #[derive(Deserialize)]
-pub struct ListProjectsQuery {
-    pub team_id: Uuid,
+struct ListProjectsQuery {
+    team_id: Uuid,
 }
 
 /// GET /api/v1/projects?team_id=...
-pub async fn list(
+async fn list(
     State(state): State<ControlApiState>,
     session: Session,
     Query(query): Query<ListProjectsQuery>,

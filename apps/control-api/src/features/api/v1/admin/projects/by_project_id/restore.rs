@@ -81,7 +81,7 @@ async fn load_project_any<C: ConnectionTrait>(
 }
 
 /// POST /api/v1/admin/projects/{project_id}/restore
-pub async fn restore(
+async fn restore(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path(project_id): Path<Uuid>,

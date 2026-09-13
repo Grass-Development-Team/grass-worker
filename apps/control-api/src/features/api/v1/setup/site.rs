@@ -13,7 +13,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     axum::Router::new().route("/site", axum::routing::post(handler))
 }
 
-pub(crate) fn setup_database<'a>(
+fn setup_database<'a>(
     state: &'a ControlApiState,
     op: &'static str,
 ) -> Result<&'a DatabaseConnection, AppError> {
@@ -23,7 +23,7 @@ pub(crate) fn setup_database<'a>(
     })
 }
 
-pub(crate) async fn ensure_setup_mutation_allowed(
+async fn ensure_setup_mutation_allowed(
     db: &DatabaseConnection,
     op: &'static str,
 ) -> Result<(), AppError> {
@@ -40,13 +40,13 @@ pub(crate) async fn ensure_setup_mutation_allowed(
 }
 
 #[derive(Deserialize)]
-pub struct SiteSetupRequest {
-    pub name: String,
-    pub site_url: String,
-    pub public_base_url: String,
+struct SiteSetupRequest {
+    name: String,
+    site_url: String,
+    public_base_url: String,
 }
 
-pub async fn handler(
+async fn handler(
     State(state): State<ControlApiState>,
     Json(body): Json<SiteSetupRequest>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -106,7 +106,7 @@ pub async fn handler(
     }))
 }
 
-pub(crate) fn validate_site_url(value: &str, op: &'static str) -> Result<String, AppError> {
+fn validate_site_url(value: &str, op: &'static str) -> Result<String, AppError> {
     let value = value.trim().trim_end_matches('/');
     let url = url::Url::parse(value).map_err(|_| AppError::Validation {
         op,

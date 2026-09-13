@@ -83,20 +83,20 @@ fn encrypt_client_secret(
 }
 
 #[derive(Deserialize)]
-pub struct UpdateIdentityProviderRequest {
-    pub name: Option<String>,
-    pub enabled: Option<bool>,
-    pub client_id: Option<String>,
-    pub client_secret: Option<String>,
-    pub issuer_url: Option<String>,
-    pub authorization_url: Option<String>,
-    pub token_url: Option<String>,
-    pub userinfo_url: Option<String>,
-    pub jwks_url: Option<String>,
-    pub scopes: Option<Vec<String>>,
+struct UpdateIdentityProviderRequest {
+    name: Option<String>,
+    enabled: Option<bool>,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    issuer_url: Option<String>,
+    authorization_url: Option<String>,
+    token_url: Option<String>,
+    userinfo_url: Option<String>,
+    jwks_url: Option<String>,
+    scopes: Option<Vec<String>>,
 }
 
-pub async fn update(
+async fn update(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path(provider_id): Path<Uuid>,
@@ -220,7 +220,7 @@ pub async fn update(
     }))
 }
 
-pub async fn remove(
+async fn remove(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path(provider_id): Path<Uuid>,

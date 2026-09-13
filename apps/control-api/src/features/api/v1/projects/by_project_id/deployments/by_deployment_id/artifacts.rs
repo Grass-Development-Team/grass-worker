@@ -73,7 +73,7 @@ fn artifact_kind_value(
 }
 
 /// GET /api/v1/projects/{project_id}/deployments/{deployment_id}/artifacts
-pub async fn artifacts(
+async fn artifacts(
     State(state): State<ControlApiState>,
     session: Session,
     Path((project_id, deployment_id)): Path<(Uuid, Uuid)>,

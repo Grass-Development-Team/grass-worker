@@ -26,9 +26,9 @@ const FLOW_TTL: StdDuration = StdDuration::from_secs(10 * 60);
 const STATE_COOKIE: &str = "oauth_state";
 
 #[derive(Deserialize)]
-pub struct StartQuery {
-    pub return_to: Option<String>,
-    pub registration_code: Option<String>,
+struct StartQuery {
+    return_to: Option<String>,
+    registration_code: Option<String>,
 }
 
 impl StartQuery {
@@ -39,7 +39,7 @@ impl StartQuery {
     }
 }
 
-pub async fn start(
+async fn start(
     State(state): State<ControlApiState>,
     Path(slug): Path<String>,
     jar: CookieJar,

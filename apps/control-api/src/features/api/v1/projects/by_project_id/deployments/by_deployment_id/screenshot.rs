@@ -49,7 +49,7 @@ async fn load_deployment(
 }
 
 /// GET /api/v1/projects/{project_id}/deployments/{deployment_id}/screenshot
-pub async fn screenshot(
+async fn screenshot(
     State(state): State<ControlApiState>,
     session: Session,
     Path((project_id, deployment_id)): Path<(Uuid, Uuid)>,

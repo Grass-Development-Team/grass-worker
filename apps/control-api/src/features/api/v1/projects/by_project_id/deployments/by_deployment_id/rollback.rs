@@ -35,7 +35,7 @@ pub(crate) fn router() -> axum::Router<ControlApiState> {
 }
 
 // --- DTO --------------------------------------------------------------------
-pub(crate) struct UrlContext {
+struct UrlContext {
     production_host: Option<String>,
     public_scheme: &'static str,
 }
@@ -273,7 +273,7 @@ async fn effective_preview_ids(
     Ok(ids)
 }
 
-pub(crate) async fn load_nodes(
+async fn load_nodes(
     db: &sea_orm::DatabaseConnection,
     deployments: &[deployment::Model],
 ) -> anyhow::Result<HashMap<Uuid, node::Model>> {
@@ -320,7 +320,7 @@ async fn load_deployment(
 ///
 /// Rolls the environment back to this deployment. The target must be a
 /// previously active deployment with a ready build.
-pub async fn rollback(
+async fn rollback(
     State(state): State<ControlApiState>,
     session: Session,
     Path((project_id, deployment_id)): Path<(Uuid, Uuid)>,

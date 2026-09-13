@@ -47,11 +47,11 @@ fn user_view(user: &user::Model) -> UserResponse {
 }
 
 #[derive(Deserialize)]
-pub struct ListUsersQuery {
-    pub q: Option<String>,
-    pub limit: Option<u64>,
-    pub status: Option<String>,
-    pub role: Option<String>,
+struct ListUsersQuery {
+    q: Option<String>,
+    limit: Option<u64>,
+    status: Option<String>,
+    role: Option<String>,
 }
 
 fn parse_user_status_filter(
@@ -83,7 +83,7 @@ fn parse_user_role_filter(
 }
 
 /// GET /api/v1/admin/users
-pub async fn list(
+async fn list(
     State(state): State<ControlApiState>,
     Query(query): Query<ListUsersQuery>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -110,20 +110,20 @@ pub async fn list(
 }
 
 #[derive(Deserialize)]
-pub struct CreateUserRequest {
-    pub email: String,
+struct CreateUserRequest {
+    email: String,
     #[serde(default)]
-    pub display_name: Option<String>,
+    display_name: Option<String>,
     #[serde(default)]
-    pub platform_role: Option<String>,
+    platform_role: Option<String>,
     /// Omitted: a strong password is generated and returned once.
     #[serde(default)]
-    pub password: Option<String>,
+    password: Option<String>,
 }
 
 /// POST /api/v1/admin/users — provisions an account exactly like signup
 /// (personal team included) without touching the signup policy.
-pub async fn create(
+async fn create(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Json(body): Json<CreateUserRequest>,

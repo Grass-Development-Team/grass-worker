@@ -47,7 +47,7 @@ fn project_status(project: &project::Model) -> &'static str {
 }
 
 /// GET /api/v1/admin/projects/{project_id}
-pub async fn detail(
+async fn detail(
     State(state): State<ControlApiState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {

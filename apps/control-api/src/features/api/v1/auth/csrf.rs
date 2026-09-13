@@ -12,7 +12,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     axum::Router::new().route("/csrf", axum::routing::get(handler))
 }
 
-pub async fn handler(
+async fn handler(
     State(state): State<ControlApiState>,
     session: Session,
 ) -> Result<impl IntoResponse, AppError> {

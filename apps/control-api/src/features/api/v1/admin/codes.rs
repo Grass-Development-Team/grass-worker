@@ -31,12 +31,12 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct GenerateCodesRequest {
-    pub scope: String,
-    pub count: usize,
-    pub expires_in_days: Option<i64>,
+struct GenerateCodesRequest {
+    scope: String,
+    count: usize,
+    expires_in_days: Option<i64>,
     #[serde(default)]
-    pub never_expires: bool,
+    never_expires: bool,
 }
 
 struct GenerationInput {
@@ -80,11 +80,11 @@ fn validate_generation(
 }
 
 #[derive(Deserialize)]
-pub struct ListCodesQuery {
-    pub scope: Option<String>,
-    pub status: Option<String>,
-    pub page: Option<u64>,
-    pub per_page: Option<u64>,
+struct ListCodesQuery {
+    scope: Option<String>,
+    status: Option<String>,
+    page: Option<u64>,
+    per_page: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -126,7 +126,7 @@ fn code_view(item: &code::Model, used_by: Option<&user::Model>, now: OffsetDateT
     }
 }
 
-pub async fn list(
+async fn list(
     State(state): State<ControlApiState>,
     Query(query): Query<ListCodesQuery>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -216,7 +216,7 @@ pub async fn list(
     }))
 }
 
-pub async fn generate(
+async fn generate(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Json(body): Json<GenerateCodesRequest>,

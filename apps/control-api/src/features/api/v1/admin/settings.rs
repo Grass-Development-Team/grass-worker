@@ -49,7 +49,7 @@ async fn setting_string<C: ConnectionTrait>(
 }
 
 /// GET /api/v1/admin/settings — the editable platform base configuration.
-pub async fn get(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
+async fn get(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.settings.get";
     let db = crate::infra::http::database(&state, OP)?;
 
@@ -152,45 +152,45 @@ pub async fn get(State(state): State<ControlApiState>) -> Result<impl IntoRespon
 }
 
 #[derive(Default, Deserialize)]
-pub struct UpdateSettingsRequest {
-    pub site_name: Option<String>,
-    pub site_logo_url: Option<String>,
-    pub site_url: Option<String>,
-    pub public_base_url: Option<String>,
-    pub signup_policy: Option<String>,
-    pub review_production: Option<String>,
-    pub review_preview: Option<String>,
-    pub domain_review_default: Option<String>,
-    pub log_retention_days: Option<u64>,
-    pub preview_retention_days: Option<u64>,
-    pub failed_retention_days: Option<u64>,
-    pub production_keep: Option<u64>,
-    pub server_host: Option<String>,
-    pub server_port: Option<u16>,
-    pub redis_backend: Option<String>,
-    pub session_cookie_secure: Option<bool>,
-    pub session_idle_ttl_seconds: Option<u64>,
-    pub session_ttl_seconds: Option<u64>,
-    pub audit_retention_days: Option<u64>,
-    pub mail_mode: Option<String>,
-    pub mail_from_address: Option<String>,
-    pub mail_from_name: Option<String>,
-    pub mail_sendmail_command: Option<String>,
-    pub mail_smtp_host: Option<String>,
-    pub mail_smtp_port: Option<u16>,
-    pub mail_smtp_security: Option<String>,
-    pub mail_smtp_username: Option<String>,
-    pub mail_smtp_password: Option<String>,
-    pub password_policy: Option<PasswordPolicy>,
-    pub registration_email_verification: Option<bool>,
-    pub mfa_policy: Option<MfaPolicy>,
-    pub node_manager_auto_start_local_node: Option<bool>,
-    pub node_manager_local_node_binary: Option<String>,
-    pub node_manager_local_node_config: Option<String>,
-    pub node_manager_restart_on_exit: Option<bool>,
-    pub migration_auto_migrate: Option<bool>,
-    pub log_level: Option<String>,
-    pub log_format: Option<String>,
+struct UpdateSettingsRequest {
+    site_name: Option<String>,
+    site_logo_url: Option<String>,
+    site_url: Option<String>,
+    public_base_url: Option<String>,
+    signup_policy: Option<String>,
+    review_production: Option<String>,
+    review_preview: Option<String>,
+    domain_review_default: Option<String>,
+    log_retention_days: Option<u64>,
+    preview_retention_days: Option<u64>,
+    failed_retention_days: Option<u64>,
+    production_keep: Option<u64>,
+    server_host: Option<String>,
+    server_port: Option<u16>,
+    redis_backend: Option<String>,
+    session_cookie_secure: Option<bool>,
+    session_idle_ttl_seconds: Option<u64>,
+    session_ttl_seconds: Option<u64>,
+    audit_retention_days: Option<u64>,
+    mail_mode: Option<String>,
+    mail_from_address: Option<String>,
+    mail_from_name: Option<String>,
+    mail_sendmail_command: Option<String>,
+    mail_smtp_host: Option<String>,
+    mail_smtp_port: Option<u16>,
+    mail_smtp_security: Option<String>,
+    mail_smtp_username: Option<String>,
+    mail_smtp_password: Option<String>,
+    password_policy: Option<PasswordPolicy>,
+    registration_email_verification: Option<bool>,
+    mfa_policy: Option<MfaPolicy>,
+    node_manager_auto_start_local_node: Option<bool>,
+    node_manager_local_node_binary: Option<String>,
+    node_manager_local_node_config: Option<String>,
+    node_manager_restart_on_exit: Option<bool>,
+    migration_auto_migrate: Option<bool>,
+    log_level: Option<String>,
+    log_format: Option<String>,
 }
 
 struct PreparedSettingsUpdate {
@@ -875,7 +875,7 @@ async fn create_settings_audit_in_transaction(
 }
 
 /// PATCH /api/v1/admin/settings
-pub async fn update(
+async fn update(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Json(body): Json<UpdateSettingsRequest>,
@@ -1257,7 +1257,7 @@ pub async fn update(
     get(State(state)).await
 }
 
-pub(crate) fn validate_site_url(value: &str, op: &'static str) -> Result<String, AppError> {
+fn validate_site_url(value: &str, op: &'static str) -> Result<String, AppError> {
     let value = value.trim().trim_end_matches('/');
     let url = url::Url::parse(value).map_err(|_| AppError::Validation {
         op,
@@ -1429,7 +1429,7 @@ mod tests {
         config.session.idle_ttl_seconds = 1_200;
         config.session.session_ttl_seconds = 86_400;
         config.audit.retention_days = 120;
-        config.mail.mode = crate::features::api::v1::admin::settings::MailMode::Smtp;
+        config.mail.mode = MailMode::Smtp;
         config.mail.from_address = "noreply@example.com".to_owned();
         config.mail.smtp_host = "smtp.example.com".to_owned();
         config.mail.smtp_username = "mailer".to_owned();

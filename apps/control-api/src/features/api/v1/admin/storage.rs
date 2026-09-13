@@ -21,7 +21,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 /// GET /api/v1/admin/storage
-pub async fn get(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
+async fn get(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.storage.get";
     let db = crate::infra::http::database(&state, OP)?;
     let platform_secret = state.config.read().unwrap().secrets.secret_key.clone();

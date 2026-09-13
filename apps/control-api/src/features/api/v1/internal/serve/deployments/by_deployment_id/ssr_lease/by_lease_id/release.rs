@@ -66,7 +66,7 @@ fn map_lease_error(error: ssr_leases::LeaseError, op: &'static str) -> AppError 
 }
 
 /// POST /api/v1/internal/serve/deployments/{deployment_id}/ssr-lease/{lease_id}/release
-pub async fn release_ssr_lease(
+async fn release_ssr_lease(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
     Path((deployment_id, lease_id)): Path<(Uuid, Uuid)>,

@@ -62,7 +62,7 @@ fn admin_binding_view(binding: &project_host_binding::Model) -> HostBindingRespo
 }
 
 /// GET /api/v1/admin/projects/{project_id}/domains
-pub async fn domains(
+async fn domains(
     State(state): State<ControlApiState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {

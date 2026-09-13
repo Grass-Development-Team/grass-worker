@@ -95,15 +95,15 @@ fn parse_project_status(
 }
 
 #[derive(Deserialize)]
-pub struct ListProjectsQuery {
-    pub q: Option<String>,
-    pub limit: Option<u64>,
-    pub status: Option<String>,
+struct ListProjectsQuery {
+    q: Option<String>,
+    limit: Option<u64>,
+    status: Option<String>,
 }
 
 /// GET /api/v1/admin/projects — every project on the platform
 /// with its team and most recent deployment.
-pub async fn list(
+async fn list(
     State(state): State<ControlApiState>,
     Query(query): Query<ListProjectsQuery>,
 ) -> Result<impl IntoResponse, AppError> {

@@ -34,9 +34,9 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Default, Deserialize)]
-pub struct GovernanceReason {
+struct GovernanceReason {
     #[serde(default)]
-    pub reason: Option<String>,
+    reason: Option<String>,
 }
 
 fn optional_reason(value: Option<String>) -> Option<String> {
@@ -47,22 +47,19 @@ fn optional_reason(value: Option<String>) -> Option<String> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RepublishPolicy {
+enum RepublishPolicy {
     Manual,
     Auto,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RepublishAction {
+enum RepublishAction {
     Release,
     Review,
     Conflict,
 }
 
-pub(crate) fn republish_action(
-    status: &DeploymentReleaseStatus,
-    policy: RepublishPolicy,
-) -> RepublishAction {
+fn republish_action(status: &DeploymentReleaseStatus, policy: RepublishPolicy) -> RepublishAction {
     match (status, policy) {
         (DeploymentReleaseStatus::Approved, _)
         | (DeploymentReleaseStatus::Draft, RepublishPolicy::Auto)
@@ -98,7 +95,7 @@ fn map_state_error(error: DeploymentStateError, op: &'static str) -> AppError {
 }
 
 /// POST /api/v1/admin/deployments/{deployment_id}/republish
-pub async fn republish(
+async fn republish(
     State(state): State<ControlApiState>,
     session: Session,
     Path(deployment_id): Path<Uuid>,

@@ -33,11 +33,11 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
         .merge(ssh_host_keys::router())
 }
 
-pub(crate) fn team_avatar_url(team_id: Uuid, version: Option<Uuid>) -> Option<String> {
+fn team_avatar_url(team_id: Uuid, version: Option<Uuid>) -> Option<String> {
     version.map(|version| format!("/api/v1/avatars/teams/{team_id}/{version}/avatar.webp"))
 }
 
-pub(crate) fn validate_required(value: &str, op: &'static str, name: &str) -> Result<(), AppError> {
+fn validate_required(value: &str, op: &'static str, name: &str) -> Result<(), AppError> {
     if value.trim().is_empty() {
         return Err(AppError::Validation {
             op,
@@ -47,14 +47,14 @@ pub(crate) fn validate_required(value: &str, op: &'static str, name: &str) -> Re
     Ok(())
 }
 
-pub(crate) fn normalize_slug(value: &str, op: &'static str) -> Result<String, AppError> {
+fn normalize_slug(value: &str, op: &'static str) -> Result<String, AppError> {
     grass_validator::normalize_slug(value).map_err(|error| AppError::Validation {
         op,
         message: error.to_string(),
     })
 }
 
-pub(crate) fn map_team_write_error(source: anyhow::Error, op: &'static str) -> AppError {
+fn map_team_write_error(source: anyhow::Error, op: &'static str) -> AppError {
     if crate::infra::database::is_unique_violation(&source) {
         AppError::Conflict {
             op,
@@ -65,7 +65,7 @@ pub(crate) fn map_team_write_error(source: anyhow::Error, op: &'static str) -> A
     }
 }
 
-pub(crate) fn role_value(role: &crate::infra::database::entity::TeamMemberRole) -> &'static str {
+fn role_value(role: &crate::infra::database::entity::TeamMemberRole) -> &'static str {
     use crate::infra::database::entity::TeamMemberRole;
 
     match role {
@@ -76,7 +76,7 @@ pub(crate) fn role_value(role: &crate::infra::database::entity::TeamMemberRole) 
     }
 }
 
-pub(crate) fn kind_value(kind: &crate::infra::database::entity::TeamKind) -> &'static str {
+fn kind_value(kind: &crate::infra::database::entity::TeamKind) -> &'static str {
     use crate::infra::database::entity::TeamKind;
 
     match kind {
@@ -85,7 +85,7 @@ pub(crate) fn kind_value(kind: &crate::infra::database::entity::TeamKind) -> &'s
     }
 }
 
-pub async fn detail(
+async fn detail(
     State(state): State<ControlApiState>,
     team_role: TeamRole,
 ) -> Result<impl IntoResponse, AppError> {
@@ -116,12 +116,12 @@ pub async fn detail(
 }
 
 #[derive(Deserialize)]
-pub struct UpdateTeamRequest {
-    pub name: Option<String>,
-    pub slug: Option<String>,
+struct UpdateTeamRequest {
+    name: Option<String>,
+    slug: Option<String>,
 }
 
-pub async fn update(
+async fn update(
     State(state): State<ControlApiState>,
     team_role: TeamRole,
     Json(body): Json<UpdateTeamRequest>,

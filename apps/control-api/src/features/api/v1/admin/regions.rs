@@ -21,9 +21,9 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct RegionRequest {
-    pub code: String,
-    pub name: Option<String>,
+struct RegionRequest {
+    code: String,
+    name: Option<String>,
 }
 
 fn name(value: &str, op: &'static str) -> Result<String, AppError> {
@@ -37,7 +37,7 @@ fn name(value: &str, op: &'static str) -> Result<String, AppError> {
     Ok(value.to_owned())
 }
 
-pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
+async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.regions.list";
     let regions = regions::available(crate::infra::http::database(&state, OP)?)
         .await
@@ -55,7 +55,7 @@ pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoRespo
     }))
 }
 
-pub async fn create(
+async fn create(
     State(state): State<ControlApiState>,
     Json(body): Json<RegionRequest>,
 ) -> Result<impl IntoResponse, AppError> {

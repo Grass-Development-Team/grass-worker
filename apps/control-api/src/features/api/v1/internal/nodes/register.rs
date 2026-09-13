@@ -6,10 +6,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::infra::audit as audits;
 use crate::{
     domain::nodes::{self, RegisterNodeParams},
     infra::{
-        audit::{self as audits, CreateAuditEventParams},
+        audit::CreateAuditEventParams,
         database::entity::AuditEventResult,
         error::{AppError, ok_response},
         http::middlewares::node_auth::AuthenticatedNode,
@@ -18,31 +19,31 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct RegisterRequest {
-    pub name: String,
-    pub version: String,
-    pub capabilities: NodeCapabilities,
+struct RegisterRequest {
+    name: String,
+    version: String,
+    capabilities: NodeCapabilities,
     #[serde(default = "default_region")]
-    pub region: String,
-    pub build_concurrency: u16,
+    region: String,
+    build_concurrency: u16,
     /// Public base URL of the Node serve listener, when known.
     #[serde(default)]
-    pub serve_base_url: Option<String>,
+    serve_base_url: Option<String>,
     /// Schedulable Serve capacity. Build-only Nodes omit this field.
     #[serde(default)]
-    pub resources: Option<NodeResources>,
+    resources: Option<NodeResources>,
     /// Revision loaded by the running Node process.
     #[serde(default)]
-    pub config_revision: u64,
+    config_revision: u64,
     /// Effective non-secret configuration loaded by this process.
     #[serde(default)]
-    pub effective_config: Option<NodeConfiguration>,
+    effective_config: Option<NodeConfiguration>,
     /// Whether the running process has a usable token, without exposing it.
     #[serde(default)]
-    pub node_token_configured: bool,
+    node_token_configured: bool,
     /// Gateway authentication selected by the running Node.
     #[serde(default)]
-    pub gateway_authentication: GatewayAuthenticationMode,
+    gateway_authentication: GatewayAuthenticationMode,
 }
 
 fn default_region() -> String {
@@ -50,19 +51,19 @@ fn default_region() -> String {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct RegisterResponse {
-    pub node_id: Uuid,
-    pub name: String,
+struct RegisterResponse {
+    node_id: Uuid,
+    name: String,
     /// Capabilities after server-side correction; the first stage forces
     /// build and serve on.
-    pub capabilities: NodeCapabilities,
+    capabilities: NodeCapabilities,
     /// Shared credential for authenticated Serve-to-Serve proxying. It is
     /// present only when Serve capability is enabled.
     #[serde(default)]
-    pub gateway_token: Option<String>,
+    gateway_token: Option<String>,
     /// Gateway authentication accepted by the Control API.
     #[serde(default)]
-    pub gateway_authentication: GatewayAuthenticationMode,
+    gateway_authentication: GatewayAuthenticationMode,
 }
 
 pub(crate) fn router() -> axum::Router<ControlApiState> {
@@ -70,7 +71,7 @@ pub(crate) fn router() -> axum::Router<ControlApiState> {
 }
 
 /// POST /api/v1/internal/nodes/register
-pub async fn register(
+async fn register(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
     Json(body): Json<RegisterRequest>,

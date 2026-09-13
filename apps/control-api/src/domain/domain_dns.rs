@@ -98,30 +98,11 @@ pub async fn ownership(
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
-    use serde_json::{Value, json};
-    use std::collections::HashMap;
-    pub async fn fixture(
-        records: Vec<(&str, &str, Value)>,
-    ) -> (Resolver, tokio::task::JoinHandle<()>) {
-        let records = records
-            .into_iter()
-            .map(|(name, kind, value)| ((name.to_owned(), kind.to_owned()), value))
-            .collect::<HashMap<_, _>>();
-        let app = axum::Router::new().route("/dns", axum::routing::get(|axum::extract::State(records): axum::extract::State<HashMap<(String, String), Value>>, axum::extract::Query(q): axum::extract::Query<HashMap<String,String>>| async move { axum::Json(records.get(&(q["name"].clone(), q["type"].clone())).cloned().unwrap_or_else(|| json!({"Status":0,"Answer":[]}))) })).with_state(records);
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let resolver =
-            Resolver::with_endpoint(&format!("http://{}/dns", listener.local_addr().unwrap()))
-                .unwrap();
-        let server = tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
-        (resolver, server)
-    }
-    pub fn answer(name: &str, kind: u16, data: &str) -> Value {
-        json!({"Status":0,"Answer":[{"name":name,"type":kind,"data":data}]})
-    }
+    use crate::test_support::dns::{answer, fixture};
+    use serde_json::json;
+
     #[tokio::test]
     async fn requires_the_selected_entry_and_accepts_apex_flattening() {
         for (actual, expected) in [

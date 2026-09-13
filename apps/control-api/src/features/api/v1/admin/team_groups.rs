@@ -101,7 +101,7 @@ async fn audit_group_mutation(
 }
 
 /// GET /api/v1/admin/team-groups
-pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
+async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.team_groups.list";
     let db = crate::infra::http::database(&state, OP)?;
 
@@ -143,25 +143,25 @@ pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoRespo
 }
 
 #[derive(Deserialize)]
-pub struct CreateTeamGroupRequest {
-    pub code: String,
-    pub name: String,
+struct CreateTeamGroupRequest {
+    code: String,
+    name: String,
     #[serde(default)]
-    pub description: Option<String>,
+    description: Option<String>,
     #[serde(default)]
-    pub quota_plan_id: Option<Uuid>,
+    quota_plan_id: Option<Uuid>,
     #[serde(default)]
-    pub review_policy: Option<ReviewPolicyOverrideRequest>,
+    review_policy: Option<ReviewPolicyOverrideRequest>,
 }
 
 #[derive(Deserialize)]
-pub struct ReviewPolicyOverrideRequest {
+struct ReviewPolicyOverrideRequest {
     #[serde(default)]
-    pub production: Option<String>,
+    production: Option<String>,
     #[serde(default)]
-    pub preview: Option<String>,
+    preview: Option<String>,
     #[serde(default)]
-    pub domain: Option<String>,
+    domain: Option<String>,
 }
 
 fn review_policy_value(
@@ -199,7 +199,7 @@ fn review_policy_value(
 }
 
 /// POST /api/v1/admin/team-groups
-pub async fn create(
+async fn create(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Json(body): Json<CreateTeamGroupRequest>,

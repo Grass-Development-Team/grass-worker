@@ -19,13 +19,13 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct AppendBuildLogRequest {
-    pub lines: Vec<BuildLogLine>,
+struct AppendBuildLogRequest {
+    lines: Vec<BuildLogLine>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct AppendBuildLogResponse {
-    pub last_seq: u64,
+struct AppendBuildLogResponse {
+    last_seq: u64,
 }
 
 pub(crate) fn router() -> axum::Router<ControlApiState> {
@@ -58,12 +58,12 @@ async fn build_owned_deployment(
 }
 
 // --- Build log --------------------------------------------------------------
-pub(crate) fn log_seq_key(deployment_id: Uuid) -> String {
+fn log_seq_key(deployment_id: Uuid) -> String {
     format!("deployment:{deployment_id}:log_seq")
 }
 
 /// PUT /api/v1/internal/deployments/{deployment_id}/build-log
-pub async fn append_build_log(
+async fn append_build_log(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
     Path(deployment_id): Path<Uuid>,

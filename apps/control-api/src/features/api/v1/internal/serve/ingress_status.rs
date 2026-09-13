@@ -12,10 +12,10 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ReportIngressStatusRequest {
-    pub certificates: Vec<InstalledCertificate>,
-    pub challenge_revision: String,
-    pub tls_ready: bool,
+struct ReportIngressStatusRequest {
+    certificates: Vec<InstalledCertificate>,
+    challenge_revision: String,
+    tls_ready: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -41,7 +41,7 @@ fn ensure_serve_node(
 }
 
 /// POST /api/v1/internal/serve/ingress-status
-pub async fn ingress_status(
+async fn ingress_status(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
     Json(body): Json<ReportIngressStatusRequest>,
@@ -117,7 +117,7 @@ mod tests {
             routing::post,
         };
         use tower::ServiceExt;
-        let node = crate::domain::ingress::tests::node_fixture();
+        let node = crate::test_support::nodes::node_fixture();
         let state = ControlApiState::new(ControlApiConfig::default(), "unused-test-config");
         let revision = "a".repeat(64);
         let status = node_ingress_status::Model {

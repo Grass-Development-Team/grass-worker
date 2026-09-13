@@ -27,7 +27,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 /// POST /api/v1/admin/nodes/{node_id}/rotate-token
 ///
 /// Revokes the current token immediately and returns a new one once.
-pub async fn rotate_token(
+async fn rotate_token(
     State(state): State<ControlApiState>,
     crate::infra::http::extractors::Session { data, .. }: crate::infra::http::extractors::Session,
     Path(node_id): Path<Uuid>,

@@ -13,7 +13,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     axum::Router::new().route("/domain-https", axum::routing::get(get).patch(update))
 }
 
-pub async fn get(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
+async fn get(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.domain_https.get";
     let secret = state.config.read().unwrap().secrets.secret_key.clone();
     let settings = certificate_settings::load(crate::infra::http::database(&state, OP)?, &secret)
@@ -27,13 +27,13 @@ pub async fn get(State(state): State<ControlApiState>) -> Result<impl IntoRespon
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct UpdateRequest {
-    pub issuer: String,
-    pub eab_kid: Option<String>,
-    pub eab_hmac_key: Option<String>,
+struct UpdateRequest {
+    issuer: String,
+    eab_kid: Option<String>,
+    eab_hmac_key: Option<String>,
 }
 
-pub async fn update(
+async fn update(
     State(state): State<ControlApiState>,
     Json(body): Json<UpdateRequest>,
 ) -> Result<impl IntoResponse, AppError> {

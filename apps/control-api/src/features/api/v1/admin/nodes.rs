@@ -95,7 +95,7 @@ fn node_view(
 }
 
 /// GET /api/v1/admin/nodes
-pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
+async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.nodes.list";
     let db = crate::infra::http::database(&state, OP)?;
 
@@ -161,19 +161,19 @@ async fn local_process_view(state: &ControlApiState) -> LocalProcessResponse {
 }
 
 #[derive(Deserialize)]
-pub struct CreateNodeRequest {
-    pub name: String,
+struct CreateNodeRequest {
+    name: String,
     #[serde(default)]
-    pub region: Option<String>,
+    region: Option<String>,
     /// Generate the local node config and start the managed process.
     #[serde(default)]
-    pub start_local: bool,
+    start_local: bool,
 }
 
 /// POST /api/v1/admin/nodes — creates a Node and returns its token once.
 /// With `start_local`, the managed node config is generated from that token
 /// and the local process is started immediately.
-pub async fn create(
+async fn create(
     State(state): State<ControlApiState>,
     crate::infra::http::extractors::Session { data, .. }: crate::infra::http::extractors::Session,
     Json(body): Json<CreateNodeRequest>,

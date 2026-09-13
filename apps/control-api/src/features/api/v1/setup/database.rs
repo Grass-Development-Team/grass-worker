@@ -16,7 +16,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     axum::Router::new().route("/database", axum::routing::post(handler))
 }
 
-pub(crate) async fn ensure_setup_mutation_allowed(
+async fn ensure_setup_mutation_allowed(
     db: &DatabaseConnection,
     op: &'static str,
 ) -> Result<(), AppError> {
@@ -32,7 +32,7 @@ pub(crate) async fn ensure_setup_mutation_allowed(
     Ok(())
 }
 
-pub(crate) fn validate_postgres_url(url: &str) -> Result<(), AppError> {
+fn validate_postgres_url(url: &str) -> Result<(), AppError> {
     let parsed = Url::parse(url).map_err(|error| AppError::Validation {
         op: "setup.database.invalid_url",
         message: format!("invalid database URL: {error}"),
@@ -48,11 +48,11 @@ pub(crate) fn validate_postgres_url(url: &str) -> Result<(), AppError> {
 }
 
 #[derive(Deserialize)]
-pub struct DatabaseSetupRequest {
-    pub url: String,
+struct DatabaseSetupRequest {
+    url: String,
 }
 
-pub async fn handler(
+async fn handler(
     State(state): State<ControlApiState>,
     Json(body): Json<DatabaseSetupRequest>,
 ) -> Result<impl IntoResponse, AppError> {

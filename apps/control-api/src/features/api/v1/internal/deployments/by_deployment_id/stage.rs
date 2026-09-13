@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::infra::audit as audits;
 use crate::{
     domain::{
         delivery,
@@ -20,7 +21,7 @@ use crate::{
         scheduler,
     },
     infra::{
-        audit::{self as audits, CreateAuditEventParams},
+        audit::CreateAuditEventParams,
         database::entity::{
             AuditEventResult, DeploymentArtifactKind, DeploymentBuildStatus, ReleaseReason,
             deployment, deployment_artifact, node,
@@ -38,24 +39,24 @@ use crate::{
 /// change inside the current status (for example install → build while
 /// `building`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct StageRequest {
+struct StageRequest {
     #[serde(default)]
-    pub status: Option<ReportedStatus>,
+    status: Option<ReportedStatus>,
     #[serde(default)]
-    pub stage: Option<String>,
+    stage: Option<String>,
     #[serde(default)]
-    pub failure_code: Option<String>,
+    failure_code: Option<String>,
     #[serde(default)]
-    pub failure_message: Option<String>,
+    failure_message: Option<String>,
     /// Whole build minutes consumed, reported once with the terminal status.
     #[serde(default)]
-    pub build_minutes: Option<i64>,
+    build_minutes: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct StageResponse {
+struct StageResponse {
     /// The server asks the Node to stop this build (user cancel).
-    pub cancel_requested: bool,
+    cancel_requested: bool,
 }
 
 pub(crate) fn router() -> axum::Router<ControlApiState> {
@@ -89,7 +90,7 @@ async fn build_owned_deployment(
 
 // --- Stage reports ----------------------------------------------------------
 /// POST /api/v1/internal/deployments/{deployment_id}/stage
-pub async fn stage(
+async fn stage(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
     Path(deployment_id): Path<Uuid>,

@@ -29,17 +29,17 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Default, Deserialize)]
-pub struct ListQuery {
-    pub page: Option<u64>,
-    pub per_page: Option<u64>,
+struct ListQuery {
+    page: Option<u64>,
+    per_page: Option<u64>,
 }
 
 #[derive(Deserialize)]
-pub struct PublishAnnouncementRequest {
-    pub title: String,
-    pub content: String,
+struct PublishAnnouncementRequest {
+    title: String,
+    content: String,
     #[serde(default)]
-    pub auto_popup: bool,
+    auto_popup: bool,
 }
 
 #[derive(Serialize)]
@@ -89,7 +89,7 @@ fn prepare_announcement(
     Ok((title, content, body.auto_popup))
 }
 
-pub async fn list(
+async fn list(
     State(state): State<ControlApiState>,
     Query(query): Query<ListQuery>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -131,7 +131,7 @@ pub async fn list(
     }))
 }
 
-pub async fn publish(
+async fn publish(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Json(body): Json<PublishAnnouncementRequest>,

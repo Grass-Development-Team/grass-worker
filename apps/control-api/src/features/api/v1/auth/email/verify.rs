@@ -34,11 +34,11 @@ fn user_data(user: &user::Model) -> UserResponse {
 }
 
 #[derive(Deserialize)]
-pub struct VerifyEmailRequest {
-    pub token: String,
+struct VerifyEmailRequest {
+    token: String,
 }
 
-pub async fn verify(
+async fn verify(
     State(state): State<ControlApiState>,
     jar: CookieJar,
     Json(body): Json<VerifyEmailRequest>,
@@ -79,7 +79,7 @@ pub async fn verify(
     authenticated_response(&state, cache, jar, user).await
 }
 
-pub(crate) async fn authenticated_response(
+async fn authenticated_response(
     state: &ControlApiState,
     cache: &grass_cache::CacheStore,
     jar: CookieJar,
@@ -97,7 +97,7 @@ pub(crate) async fn authenticated_response(
         .into_response())
 }
 
-pub(crate) async fn create_authenticated_session(
+async fn create_authenticated_session(
     state: &ControlApiState,
     cache: &grass_cache::CacheStore,
     jar: CookieJar,
@@ -114,7 +114,7 @@ pub(crate) async fn create_authenticated_session(
     Ok((jar.add(cookie), issued.csrf_token))
 }
 
-pub(crate) fn user_avatar_url(user_id: Uuid, version: Option<Uuid>) -> Option<String> {
+fn user_avatar_url(user_id: Uuid, version: Option<Uuid>) -> Option<String> {
     version.map(|version| format!("/api/v1/avatars/users/{user_id}/{version}/avatar.webp"))
 }
 

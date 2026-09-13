@@ -18,7 +18,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     axum::Router::new().route("/team-invitations/accept", axum::routing::post(accept))
 }
 
-pub(crate) fn role_value(role: &crate::infra::database::entity::TeamMemberRole) -> &'static str {
+fn role_value(role: &crate::infra::database::entity::TeamMemberRole) -> &'static str {
     use crate::infra::database::entity::TeamMemberRole;
 
     match role {
@@ -30,11 +30,11 @@ pub(crate) fn role_value(role: &crate::infra::database::entity::TeamMemberRole) 
 }
 
 #[derive(Deserialize)]
-pub struct AcceptInvitationRequest {
-    pub token: String,
+struct AcceptInvitationRequest {
+    token: String,
 }
 
-pub async fn accept(
+async fn accept(
     axum::extract::State(state): axum::extract::State<ControlApiState>,
     session: Session,
     Json(body): Json<AcceptInvitationRequest>,

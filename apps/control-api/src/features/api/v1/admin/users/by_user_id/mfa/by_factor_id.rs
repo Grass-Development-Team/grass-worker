@@ -24,7 +24,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     )
 }
 
-pub async fn reset_mfa_factor(
+async fn reset_mfa_factor(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path((user_id, factor_id)): Path<(Uuid, Uuid)>,

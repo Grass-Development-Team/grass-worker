@@ -71,7 +71,7 @@ fn event_kind_value(kind: &crate::infra::database::entity::DeploymentEventKind) 
 }
 
 /// GET /api/v1/projects/{project_id}/deployments/{deployment_id}/events
-pub async fn events(
+async fn events(
     State(state): State<ControlApiState>,
     session: Session,
     Path((project_id, deployment_id)): Path<(Uuid, Uuid)>,

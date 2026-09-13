@@ -17,19 +17,19 @@ use crate::{
 };
 
 #[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct ObserveSshHostKeyRequest {
-    pub host: String,
-    pub port: u16,
-    pub key_type: String,
-    pub public_key: String,
-    pub fingerprint_sha256: String,
+struct ObserveSshHostKeyRequest {
+    host: String,
+    port: u16,
+    key_type: String,
+    public_key: String,
+    fingerprint_sha256: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct ObserveSshHostKeyResponse {
-    pub approved: bool,
+struct ObserveSshHostKeyResponse {
+    approved: bool,
     #[serde(default)]
-    pub known_hosts_line: Option<String>,
+    known_hosts_line: Option<String>,
 }
 
 pub(crate) fn router() -> axum::Router<ControlApiState> {
@@ -62,7 +62,7 @@ async fn build_owned_deployment(
 }
 
 /// POST /api/v1/internal/deployments/{deployment_id}/ssh-host-key
-pub async fn observe_ssh_host_key(
+async fn observe_ssh_host_key(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
     Path(deployment_id): Path<Uuid>,

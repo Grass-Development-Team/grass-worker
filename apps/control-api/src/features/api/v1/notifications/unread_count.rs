@@ -26,7 +26,7 @@ fn database<'a>(
     })
 }
 
-pub async fn unread_count(
+async fn unread_count(
     State(state): State<ControlApiState>,
     session: Session,
 ) -> Result<impl IntoResponse, AppError> {

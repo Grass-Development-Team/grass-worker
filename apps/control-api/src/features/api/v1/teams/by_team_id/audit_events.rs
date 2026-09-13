@@ -22,29 +22,29 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Default, Deserialize)]
-pub struct AuditQuery {
+struct AuditQuery {
     #[serde(default)]
-    pub action: Option<String>,
+    action: Option<String>,
     #[serde(default)]
-    pub actor_user_id: Option<Uuid>,
+    actor_user_id: Option<Uuid>,
     #[serde(default)]
-    pub actor_type: Option<String>,
+    actor_type: Option<String>,
     #[serde(default)]
-    pub target_type: Option<String>,
+    target_type: Option<String>,
     #[serde(default)]
-    pub target_id: Option<Uuid>,
+    target_id: Option<Uuid>,
     #[serde(default)]
-    pub team_id: Option<Uuid>,
+    team_id: Option<Uuid>,
     #[serde(default)]
-    pub result: Option<String>,
+    result: Option<String>,
     #[serde(default, rename = "from")]
-    pub created_from_ms: Option<i64>,
+    created_from_ms: Option<i64>,
     #[serde(default, rename = "to")]
-    pub created_to_ms: Option<i64>,
+    created_to_ms: Option<i64>,
     #[serde(default)]
-    pub page: Option<u64>,
+    page: Option<u64>,
     #[serde(default)]
-    pub per_page: Option<u64>,
+    per_page: Option<u64>,
     #[serde(default)]
     #[serde(rename = "snapshot_before")]
     _snapshot_before: Option<i64>,
@@ -85,7 +85,7 @@ fn parse_result(
         .transpose()
 }
 
-pub(crate) fn timestamp_from_millis(
+fn timestamp_from_millis(
     value: Option<i64>,
     field: &'static str,
     op: &'static str,
@@ -102,7 +102,7 @@ pub(crate) fn timestamp_from_millis(
         .transpose()
 }
 
-pub(crate) fn event_filter(
+fn event_filter(
     query: AuditQuery,
     team_id: Option<Uuid>,
     visibility: Option<AuditEventVisibility>,
@@ -180,7 +180,7 @@ fn authorize_team_audit(role: &TeamRole) -> Result<(), AppError> {
 }
 
 /// GET /api/v1/teams/{team_id}/audit-events
-pub async fn list(
+async fn list(
     State(state): State<ControlApiState>,
     role: TeamRole,
     Query(query): Query<AuditQuery>,

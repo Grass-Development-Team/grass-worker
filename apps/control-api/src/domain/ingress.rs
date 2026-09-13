@@ -387,48 +387,16 @@ impl IngressHealthStatus {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::{CnameGuidanceInput, IngressCandidateInput, cname_guidance, healthy_candidates};
+    use crate::test_support::nodes::node_fixture;
     use axum::{Json, Router, routing::get};
-    pub(crate) fn node_fixture() -> super::node::Model {
-        let now = time::OffsetDateTime::now_utc();
-        super::node::Model {
-            id: uuid::Uuid::now_v7(),
-            name: "entry".to_owned(),
-            region: "eu".to_owned(),
-            token_hash: "hash".to_owned(),
-            status: super::NodeStatus::Active,
-            build_enabled: false,
-            serve_enabled: true,
-            build_concurrency: 1,
-            base_url: Some("http://entry.example.org".to_owned()),
-            work_root: None,
-            capacity_cpu_millicores: 2000,
-            capacity_memory_mb: 2048,
-            capacity_disk_mb: 10000,
-            max_deployments: 10,
-            metadata: serde_json::json!({}),
-            last_heartbeat_at: Some(now),
-            desired_config: None,
-            desired_config_revision: 0,
-            effective_config: None,
-            effective_config_revision: 0,
-            config_sync_status: crate::infra::database::entity::NodeConfigSyncStatus::Applied,
-            config_sync_error: None,
-            node_token_configured: true,
-            config_updated_at: None,
-            config_applied_at: None,
-            deleted_at: None,
-            created_at: now,
-            updated_at: now,
-        }
-    }
 
     #[tokio::test]
     async fn tls_ingress_excludes_http_only_and_stale_tls_nodes() {
         use super::*;
         let now = OffsetDateTime::now_utc();
-        let ingress = crate::domain::certificates::tests::ingress_fixture();
+        let ingress = crate::test_support::certificates::ingress_fixture();
         let ready = node_fixture();
         let http_only = node_fixture();
         let stale = node_fixture();

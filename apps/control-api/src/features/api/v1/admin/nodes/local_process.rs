@@ -37,20 +37,20 @@ async fn local_process_view(state: &ControlApiState) -> LocalProcessResponse {
 }
 
 /// GET /api/v1/admin/nodes/local-process
-pub async fn local_process_status(
+async fn local_process_status(
     State(state): State<ControlApiState>,
 ) -> Result<impl IntoResponse, AppError> {
     Ok(ok_response(local_process_view(&state).await))
 }
 
 #[derive(Deserialize)]
-pub struct LocalProcessActionRequest {
-    pub action: LocalProcessAction,
+struct LocalProcessActionRequest {
+    action: LocalProcessAction,
 }
 
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum LocalProcessAction {
+enum LocalProcessAction {
     Start,
     Stop,
     Restart,
@@ -58,7 +58,7 @@ pub enum LocalProcessAction {
 
 /// POST /api/v1/admin/nodes/local-process — start/stop/restart the managed
 /// local node process.
-pub async fn local_process_action(
+async fn local_process_action(
     State(state): State<ControlApiState>,
     crate::infra::http::extractors::Session { data, .. }: crate::infra::http::extractors::Session,
     Json(body): Json<LocalProcessActionRequest>,

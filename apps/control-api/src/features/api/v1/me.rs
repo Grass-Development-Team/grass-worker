@@ -37,11 +37,11 @@ fn user_data(user: &user::Model) -> UserResponse {
     }
 }
 
-pub(crate) fn user_avatar_url(user_id: Uuid, version: Option<Uuid>) -> Option<String> {
+fn user_avatar_url(user_id: Uuid, version: Option<Uuid>) -> Option<String> {
     version.map(|version| format!("/api/v1/avatars/users/{user_id}/{version}/avatar.webp"))
 }
 
-pub async fn handler(
+async fn handler(
     State(state): State<ControlApiState>,
     session: Session,
 ) -> Result<impl IntoResponse, AppError> {
@@ -67,9 +67,9 @@ pub async fn handler(
 }
 
 #[derive(Default, Deserialize)]
-pub struct UpdateMeRequest {
+struct UpdateMeRequest {
     #[serde(default, deserialize_with = "crate::infra::http::patch::nullable")]
-    pub display_name: Option<Option<String>>,
+    display_name: Option<Option<String>>,
 }
 
 fn prepare_display_name(
@@ -100,7 +100,7 @@ fn prepare_display_name(
     Ok(display_name)
 }
 
-pub async fn update(
+async fn update(
     State(state): State<ControlApiState>,
     session: Session,
     Json(body): Json<UpdateMeRequest>,
@@ -236,7 +236,7 @@ mod tests {
     #[tokio::test]
     async fn patch_null_clears_the_persisted_display_name_and_response() {
         use tower::ServiceExt;
-        let before = crate::infra::http::middlewares::session::tests::active_user();
+        let before = crate::test_support::users::active_user();
         let mut after = before.clone();
         after.display_name = None;
         let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)

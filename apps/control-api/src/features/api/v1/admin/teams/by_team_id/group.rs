@@ -19,12 +19,12 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct AssignGroupRequest {
-    pub group_id: Uuid,
+struct AssignGroupRequest {
+    group_id: Uuid,
 }
 
 /// POST /api/v1/admin/teams/{team_id}/group
-pub async fn assign(
+async fn assign(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path(team_id): Path<Uuid>,

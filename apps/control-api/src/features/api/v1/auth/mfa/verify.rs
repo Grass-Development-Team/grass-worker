@@ -40,7 +40,7 @@ fn user_data(user: &user::Model) -> UserResponse {
     }
 }
 
-pub(crate) async fn authenticated_response(
+async fn authenticated_response(
     state: &ControlApiState,
     cache: &grass_cache::CacheStore,
     jar: CookieJar,
@@ -58,7 +58,7 @@ pub(crate) async fn authenticated_response(
         .into_response())
 }
 
-pub(crate) async fn create_authenticated_session(
+async fn create_authenticated_session(
     state: &ControlApiState,
     cache: &grass_cache::CacheStore,
     jar: CookieJar,
@@ -76,13 +76,13 @@ pub(crate) async fn create_authenticated_session(
 }
 
 #[derive(Deserialize)]
-pub struct VerifyChallengeRequest {
-    pub challenge_token: String,
-    pub factor_id: Uuid,
-    pub code: String,
+struct VerifyChallengeRequest {
+    challenge_token: String,
+    factor_id: Uuid,
+    code: String,
 }
 
-pub async fn challenge_verify(
+async fn challenge_verify(
     State(state): State<ControlApiState>,
     jar: CookieJar,
     Json(body): Json<VerifyChallengeRequest>,
@@ -184,7 +184,7 @@ fn factor_view(factor: &user_mfa_factor::Model) -> MfaFactorResponse {
     }
 }
 
-pub(crate) fn user_avatar_url(user_id: Uuid, version: Option<Uuid>) -> Option<String> {
+fn user_avatar_url(user_id: Uuid, version: Option<Uuid>) -> Option<String> {
     version.map(|version| format!("/api/v1/avatars/users/{user_id}/{version}/avatar.webp"))
 }
 

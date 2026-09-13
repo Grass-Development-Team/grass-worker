@@ -26,7 +26,7 @@ fn database<'a>(
     })
 }
 
-pub async fn mark_all_read(
+async fn mark_all_read(
     State(state): State<ControlApiState>,
     session: Session,
 ) -> Result<impl IntoResponse, AppError> {

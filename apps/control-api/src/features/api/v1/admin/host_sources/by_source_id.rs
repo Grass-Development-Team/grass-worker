@@ -144,25 +144,25 @@ fn merge_config(
 }
 
 #[derive(Deserialize)]
-pub struct UpdateHostSourceRequest {
+struct UpdateHostSourceRequest {
     #[serde(default)]
-    pub label: Option<String>,
+    label: Option<String>,
     #[serde(default)]
-    pub region: Option<String>,
+    region: Option<String>,
     #[serde(default)]
-    pub enabled: Option<bool>,
+    enabled: Option<bool>,
     #[serde(default)]
-    pub allows_auto_assign: Option<bool>,
+    allows_auto_assign: Option<bool>,
     #[serde(default)]
-    pub is_default: Option<bool>,
+    is_default: Option<bool>,
     #[serde(default)]
-    pub provider: Option<String>,
+    provider: Option<String>,
     #[serde(default)]
-    pub config: Option<serde_json::Value>,
+    config: Option<serde_json::Value>,
 }
 
 /// PATCH /api/v1/admin/host-sources/{source_id}
-pub async fn update(
+async fn update(
     State(state): State<ControlApiState>,
     Path(source_id): Path<Uuid>,
     Json(body): Json<UpdateHostSourceRequest>,
@@ -274,7 +274,7 @@ pub async fn update(
 }
 
 /// DELETE /api/v1/admin/host-sources/{source_id}
-pub async fn remove(
+async fn remove(
     State(state): State<ControlApiState>,
     Path(source_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {

@@ -16,10 +16,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     axum::Router::new().route("/me/password", axum::routing::post(change))
 }
 
-pub(super) fn removal_cookie(
-    configured_secure: bool,
-    development_enabled: bool,
-) -> Cookie<'static> {
+fn removal_cookie(configured_secure: bool, development_enabled: bool) -> Cookie<'static> {
     let secure = configured_secure && !development_enabled;
     let mut clear_cookie = Cookie::new("session_id", "");
     clear_cookie.set_path("/api");
@@ -34,12 +31,12 @@ pub(super) fn removal_cookie(
 }
 
 #[derive(Deserialize)]
-pub struct ChangePasswordRequest {
-    pub current_password: String,
-    pub password: String,
+struct ChangePasswordRequest {
+    current_password: String,
+    password: String,
 }
 
-pub async fn change(
+async fn change(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     jar: CookieJar,

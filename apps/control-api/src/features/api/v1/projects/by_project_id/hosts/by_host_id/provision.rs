@@ -241,7 +241,7 @@ fn status_value(status: &HostBindingStatus) -> &'static str {
 
 /// POST /api/v1/projects/{project_id}/hosts/{host_id}/provision — retry
 /// provisioning for pending or failed bindings.
-pub async fn provision(
+async fn provision(
     State(state): State<ControlApiState>,
     session: Session,
     Path((project_id, host_id)): Path<(Uuid, Uuid)>,
@@ -282,7 +282,7 @@ pub async fn provision(
     Ok(ok_response(ProvisionResponse { host: view }))
 }
 
-pub(super) async fn load_binding(
+async fn load_binding(
     db: &sea_orm::DatabaseConnection,
     access: &crate::domain::project_access::ProjectAccess,
     host_id: Uuid,
@@ -493,7 +493,7 @@ mod tests {
         use crate::infra::database::entity::{domain_onboarding, regional_ingress};
         use sea_orm::{DbBackend, MockDatabase};
 
-        let binding = crate::domain::certificates::tests::binding_fixture();
+        let binding = crate::test_support::certificates::binding_fixture();
         let db = MockDatabase::new(DbBackend::Postgres)
             .append_query_results([Vec::<domain_onboarding::Model>::new()])
             .append_query_results([Vec::<regional_ingress::Model>::new()])
@@ -520,7 +520,7 @@ mod tests {
     async fn domain_onboarding_response_omits_the_certificate_contact() {
         use crate::infra::database::entity::{domain_onboarding, regional_ingress};
         use sea_orm::{DbBackend, MockDatabase};
-        let binding = crate::domain::certificates::tests::binding_fixture();
+        let binding = crate::test_support::certificates::binding_fixture();
         let db = MockDatabase::new(DbBackend::Postgres)
             .append_query_results([vec![domain_onboarding::Model {
                 binding_id: binding.id,

@@ -66,7 +66,7 @@ fn parse_environment(value: &str, op: &'static str) -> Result<DeploymentEnvironm
 }
 
 // --- DTO --------------------------------------------------------------------
-pub(crate) struct UrlContext {
+struct UrlContext {
     production_host: Option<String>,
     public_scheme: &'static str,
 }
@@ -332,7 +332,7 @@ async fn effective_preview_ids(
     Ok(ids)
 }
 
-pub(crate) async fn load_users(
+async fn load_users(
     db: &sea_orm::DatabaseConnection,
     deployments: &[deployment::Model],
 ) -> anyhow::Result<HashMap<Uuid, user::Model>> {
@@ -352,7 +352,7 @@ pub(crate) async fn load_users(
         .collect())
 }
 
-pub(crate) async fn load_nodes(
+async fn load_nodes(
     db: &sea_orm::DatabaseConnection,
     deployments: &[deployment::Model],
 ) -> anyhow::Result<HashMap<Uuid, node::Model>> {
@@ -375,19 +375,19 @@ pub(crate) async fn load_nodes(
 
 // --- Create -----------------------------------------------------------------
 #[derive(Deserialize)]
-pub struct CreateDeploymentRequest {
+struct CreateDeploymentRequest {
     #[serde(default = "default_environment")]
-    pub environment: String,
+    environment: String,
     #[serde(default)]
-    pub branch: Option<String>,
+    branch: Option<String>,
     #[serde(default)]
-    pub commit_hash: Option<String>,
+    commit_hash: Option<String>,
     #[serde(default)]
-    pub commit_message: Option<String>,
+    commit_message: Option<String>,
     #[serde(default)]
-    pub serve_node_id: Option<Uuid>,
+    serve_node_id: Option<Uuid>,
     #[serde(default)]
-    pub region: Option<String>,
+    region: Option<String>,
 }
 
 fn default_environment() -> String {
@@ -395,7 +395,7 @@ fn default_environment() -> String {
 }
 
 /// POST /api/v1/projects/{project_id}/deployments
-pub async fn create(
+async fn create(
     State(state): State<ControlApiState>,
     session: Session,
     Path(project_id): Path<Uuid>,
@@ -567,19 +567,19 @@ pub async fn create(
 
 // --- List / detail ----------------------------------------------------------
 #[derive(Deserialize)]
-pub struct ListDeploymentsQuery {
+struct ListDeploymentsQuery {
     #[serde(default)]
-    pub environment: Option<String>,
+    environment: Option<String>,
     #[serde(default)]
-    pub build_status: Option<String>,
+    build_status: Option<String>,
     #[serde(default)]
-    pub limit: Option<u64>,
+    limit: Option<u64>,
     #[serde(default)]
-    pub offset: Option<u64>,
+    offset: Option<u64>,
 }
 
 /// GET /api/v1/projects/{project_id}/deployments
-pub async fn list(
+async fn list(
     State(state): State<ControlApiState>,
     session: Session,
     Path(project_id): Path<Uuid>,

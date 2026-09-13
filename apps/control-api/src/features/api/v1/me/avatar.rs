@@ -51,7 +51,7 @@ enum AvatarError {
     InvalidGeometry,
 }
 
-pub(crate) fn user_avatar_url(user_id: Uuid, version: Option<Uuid>) -> Option<String> {
+fn user_avatar_url(user_id: Uuid, version: Option<Uuid>) -> Option<String> {
     version.map(|version| format!("/api/v1/avatars/users/{user_id}/{version}/avatar.webp"))
 }
 

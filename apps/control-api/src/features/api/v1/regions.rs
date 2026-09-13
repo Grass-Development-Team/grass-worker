@@ -13,7 +13,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     axum::Router::new().route("/regions", axum::routing::get(list))
 }
 
-pub async fn list(
+async fn list(
     State(state): State<ControlApiState>,
     _session: Session,
 ) -> Result<impl IntoResponse, AppError> {

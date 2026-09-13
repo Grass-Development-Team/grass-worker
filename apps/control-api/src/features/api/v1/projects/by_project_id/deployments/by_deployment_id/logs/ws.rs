@@ -9,12 +9,11 @@ use grass_node_protocol::LogStreamMessage;
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::infra::audit as audits;
 use crate::{
     domain::deployments,
     infra::{
-        audit::{self as audits, CreateAuditEventParams},
-        database::entity::AuditEventResult,
-        error::AppError,
+        audit::CreateAuditEventParams, database::entity::AuditEventResult, error::AppError,
         http::extractors::Session,
     },
     state::ControlApiState,
@@ -32,7 +31,7 @@ pub(crate) fn router() -> axum::Router<ControlApiState> {
 /// Websocket stream of realtime frames. Downstream: log, stage_change,
 /// done. Upstream: subscribe (a no-op, the path already scopes the
 /// deployment) and cancel.
-pub async fn stream(
+async fn stream(
     State(state): State<ControlApiState>,
     session: Session,
     Path((project_id, deployment_id)): Path<(Uuid, Uuid)>,

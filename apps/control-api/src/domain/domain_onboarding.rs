@@ -339,7 +339,7 @@ mod tests {
     }
     #[test]
     fn dns_success_never_bypasses_ownership_review_or_disablement() {
-        let mut binding = super::super::certificates::tests::binding_fixture();
+        let mut binding = crate::test_support::certificates::binding_fixture();
         binding.status = HostBindingStatus::Pending;
         let now = OffsetDateTime::now_utc();
         assert_eq!(

@@ -19,13 +19,13 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct ChallengeRequest {
-    pub challenge_token: String,
+struct ChallengeRequest {
+    challenge_token: String,
     #[serde(rename = "factor_id")]
     _factor_id: Option<Uuid>,
 }
 
-pub async fn challenge_totp_start(
+async fn challenge_totp_start(
     State(state): State<ControlApiState>,
     Json(body): Json<ChallengeRequest>,
 ) -> Result<impl IntoResponse, AppError> {

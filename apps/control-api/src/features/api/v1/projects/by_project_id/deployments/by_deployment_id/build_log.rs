@@ -30,16 +30,16 @@ pub(crate) fn router() -> axum::Router<ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct BuildLogQuery {
+struct BuildLogQuery {
     #[serde(default)]
-    pub after_seq: Option<u64>,
+    after_seq: Option<u64>,
 }
 
 /// GET /api/v1/projects/{project_id}/deployments/{deployment_id}/build-log
 ///
 /// Returns persisted log lines with `seq > after_seq` so reconnecting
 /// clients can catch up before resuming the websocket stream.
-pub async fn build_log(
+async fn build_log(
     State(state): State<ControlApiState>,
     session: Session,
     Path((project_id, deployment_id)): Path<(Uuid, Uuid)>,

@@ -40,7 +40,7 @@ enum AvatarError {
     InvalidGeometry,
 }
 
-pub(crate) fn team_avatar_url(team_id: Uuid, version: Option<Uuid>) -> Option<String> {
+fn team_avatar_url(team_id: Uuid, version: Option<Uuid>) -> Option<String> {
     version.map(|version| format!("/api/v1/avatars/teams/{team_id}/{version}/avatar.webp"))
 }
 
@@ -232,7 +232,7 @@ async fn remove_old(storage: &StorageWriteGuard, key: Option<String>, op: &'stat
     }
 }
 
-pub(crate) fn kind_value(kind: &crate::infra::database::entity::TeamKind) -> &'static str {
+fn kind_value(kind: &crate::infra::database::entity::TeamKind) -> &'static str {
     use crate::infra::database::entity::TeamKind;
 
     match kind {

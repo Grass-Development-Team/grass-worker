@@ -15,7 +15,7 @@ pub(crate) fn router() -> axum::Router<ControlApiState> {
 }
 
 /// GET /api/v1/internal/log-stream
-pub async fn ingest(
+async fn ingest(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
     upgrade: WebSocketUpgrade,

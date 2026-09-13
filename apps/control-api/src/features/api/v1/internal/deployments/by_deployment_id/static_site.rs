@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::infra::audit as audits;
 use crate::{
     domain::{
         deployments,
@@ -19,7 +20,7 @@ use crate::{
         teams,
     },
     infra::{
-        audit::{self as audits, CreateAuditEventParams},
+        audit::CreateAuditEventParams,
         database::entity::{
             AuditEventResult, DeploymentArtifactKind, deployment, deployment_artifact, node, team,
         },
@@ -32,10 +33,10 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct UploadArtifactResponse {
-    pub artifact_id: Uuid,
-    pub size_bytes: i64,
-    pub checksum_sha256: String,
+struct UploadArtifactResponse {
+    artifact_id: Uuid,
+    size_bytes: i64,
+    checksum_sha256: String,
 }
 
 pub(crate) fn router() -> axum::Router<ControlApiState> {
@@ -163,7 +164,7 @@ fn optional_header(headers: &HeaderMap, name: &'static str) -> Option<String> {
 }
 
 /// PUT /api/v1/internal/deployments/{deployment_id}/static-site
-pub async fn upload_static_site(
+async fn upload_static_site(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
     Path(deployment_id): Path<Uuid>,

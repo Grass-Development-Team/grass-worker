@@ -76,7 +76,7 @@ fn require_eligible(
     Ok(())
 }
 
-pub async fn renew(
+async fn renew(
     State(state): State<ControlApiState>,
     session: Session,
     Path((project_id, host_id)): Path<(Uuid, Uuid)>,
@@ -112,7 +112,7 @@ async fn certificate_view(
     Ok(CertificateResponse::from_record(item, ingress, &issuer))
 }
 
-pub(super) async fn load_binding(
+async fn load_binding(
     db: &sea_orm::DatabaseConnection,
     access: &crate::domain::project_access::ProjectAccess,
     host_id: Uuid,

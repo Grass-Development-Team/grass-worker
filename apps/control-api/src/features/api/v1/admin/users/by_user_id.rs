@@ -40,16 +40,16 @@ fn user_view(user: &user::Model) -> UserResponse {
 }
 
 #[derive(Deserialize)]
-pub struct UpdateUserRequest {
+struct UpdateUserRequest {
     /// Explicit `null` clears the display name.
     #[serde(default, deserialize_with = "crate::infra::http::patch::nullable")]
-    pub display_name: Option<Option<String>>,
-    pub status: Option<String>,
-    pub platform_role: Option<String>,
+    display_name: Option<Option<String>>,
+    status: Option<String>,
+    platform_role: Option<String>,
 }
 
 /// PATCH /api/v1/admin/users/{user_id}
-pub async fn update(
+async fn update(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path(user_id): Path<Uuid>,

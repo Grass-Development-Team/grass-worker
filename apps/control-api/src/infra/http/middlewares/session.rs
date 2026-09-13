@@ -1,11 +1,10 @@
-use std::time::Duration;
-
 use axum::{
     body::Body,
     http::{HeaderMap, Request},
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use std::time::Duration;
 
 use crate::{infra::error::AppError, state::ControlApiState};
 
@@ -97,35 +96,18 @@ pub(crate) async fn validate_current_session(
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
     use crate::infra::{
         config::ControlApiConfig,
-        database::entity::{PlatformRole, UserStatus, user},
+        database::entity::{UserStatus, user},
         http::extractors::Session,
     };
+    use crate::test_support::users::active_user;
     use axum::{Router, middleware, routing::get};
     use grass_cache::{Cache, CacheStore, MokaCache};
     use sea_orm::{DbBackend, MockDatabase};
     use tower::ServiceExt;
-
-    pub(crate) fn active_user() -> user::Model {
-        let now = time::OffsetDateTime::now_utc();
-        user::Model {
-            id: uuid::Uuid::now_v7(),
-            email: "session@example.test".into(),
-            display_name: None,
-            avatar_version: None,
-            auth_version: 1,
-            status: UserStatus::Active,
-            platform_role: PlatformRole::User,
-            email_verified_at: Some(now),
-            last_login_at: None,
-            deleted_at: None,
-            created_at: now,
-            updated_at: now,
-        }
-    }
 
     async fn protected(_session: Session) -> &'static str {
         "allowed"

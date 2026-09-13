@@ -22,16 +22,16 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct SetQuotaPlanRequest {
+struct SetQuotaPlanRequest {
     /// `null` clears the override so the team inherits its group plan.
-    pub plan_id: Option<Uuid>,
+    plan_id: Option<Uuid>,
 }
 
 /// POST /api/v1/admin/teams/{team_id}/quota-plan
 ///
 /// Sets or clears the explicit per-team quota plan override, which wins
 /// over the team group's plan during resolution.
-pub async fn set_quota_plan(
+async fn set_quota_plan(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path(team_id): Path<Uuid>,

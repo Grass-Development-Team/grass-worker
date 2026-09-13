@@ -68,7 +68,7 @@ fn notification_view(item: &user_notification::Model) -> NotificationResponse {
     }
 }
 
-pub async fn auto_popup(
+async fn auto_popup(
     State(state): State<ControlApiState>,
     session: Session,
 ) -> Result<impl IntoResponse, AppError> {

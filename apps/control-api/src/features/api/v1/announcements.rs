@@ -19,9 +19,9 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Default, Deserialize)]
-pub struct ListQuery {
-    pub page: Option<u64>,
-    pub per_page: Option<u64>,
+struct ListQuery {
+    page: Option<u64>,
+    per_page: Option<u64>,
 }
 
 fn database<'a>(
@@ -44,7 +44,7 @@ fn view(item: &announcement::Model) -> ItemResponse {
     }
 }
 
-pub async fn list(
+async fn list(
     State(state): State<ControlApiState>,
     Session { .. }: Session,
     Query(query): Query<ListQuery>,

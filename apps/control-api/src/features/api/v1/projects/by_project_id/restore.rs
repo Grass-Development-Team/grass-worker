@@ -46,7 +46,7 @@ fn project_view(project: &project::Model) -> ProjectResponse {
 }
 
 /// POST /api/v1/projects/{project_id}/restore
-pub async fn restore(
+async fn restore(
     State(state): State<ControlApiState>,
     session: Session,
     Path(project_id): Path<Uuid>,

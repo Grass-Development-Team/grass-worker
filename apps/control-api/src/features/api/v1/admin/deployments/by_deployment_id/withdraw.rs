@@ -31,9 +31,9 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Default, Deserialize)]
-pub struct GovernanceReason {
+struct GovernanceReason {
     #[serde(default)]
-    pub reason: Option<String>,
+    reason: Option<String>,
 }
 
 fn optional_reason(value: Option<String>) -> Option<String> {
@@ -47,7 +47,7 @@ fn optional_reason(value: Option<String>) -> Option<String> {
 ///
 /// Immediately removes every route for the deployment, preserves its stored
 /// data, and invalidates the previous review by returning it to draft.
-pub async fn withdraw(
+async fn withdraw(
     State(state): State<ControlApiState>,
     session: Session,
     Path(deployment_id): Path<Uuid>,

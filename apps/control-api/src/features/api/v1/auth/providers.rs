@@ -18,9 +18,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
         .merge(by_slug::router())
 }
 
-pub async fn providers(
-    State(state): State<ControlApiState>,
-) -> Result<impl IntoResponse, AppError> {
+async fn providers(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "auth.providers.list";
     let db = state.try_database().ok_or_else(|| AppError::Internal {
         op: OP,

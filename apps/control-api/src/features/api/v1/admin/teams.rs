@@ -68,12 +68,12 @@ async fn load_groups(
 }
 
 #[derive(Deserialize)]
-pub struct ListTeamsQuery {
-    pub q: Option<String>,
-    pub limit: Option<u64>,
-    pub kind: Option<String>,
-    pub group_id: Option<Uuid>,
-    pub quota_plan_id: Option<Uuid>,
+struct ListTeamsQuery {
+    q: Option<String>,
+    limit: Option<u64>,
+    kind: Option<String>,
+    group_id: Option<Uuid>,
+    quota_plan_id: Option<Uuid>,
 }
 
 fn parse_team_kind_filter(
@@ -93,7 +93,7 @@ fn parse_team_kind_filter(
 }
 
 /// GET /api/v1/admin/teams
-pub async fn list(
+async fn list(
     State(state): State<ControlApiState>,
     Query(query): Query<ListTeamsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -137,16 +137,16 @@ pub async fn list(
 }
 
 #[derive(Deserialize)]
-pub struct CreateTeamRequest {
-    pub name: String,
+struct CreateTeamRequest {
+    name: String,
     #[serde(default)]
-    pub slug: Option<String>,
-    pub owner_user_id: Uuid,
+    slug: Option<String>,
+    owner_user_id: Uuid,
 }
 
 /// POST /api/v1/admin/teams — creates a standard team owned by an existing
 /// active user.
-pub async fn create(
+async fn create(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Json(body): Json<CreateTeamRequest>,

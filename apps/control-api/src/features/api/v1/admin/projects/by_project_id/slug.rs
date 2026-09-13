@@ -30,14 +30,14 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct UpdateSlugRequest {
-    pub slug: String,
+struct UpdateSlugRequest {
+    slug: String,
     #[serde(default)]
-    pub reason: Option<String>,
+    reason: Option<String>,
 }
 
 /// PATCH /api/v1/admin/projects/{project_id}/slug
-pub async fn update_slug(
+async fn update_slug(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path(project_id): Path<Uuid>,

@@ -14,7 +14,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     axum::Router::new().route("/me/security", axum::routing::get(security))
 }
 
-pub async fn security(
+async fn security(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
 ) -> Result<impl IntoResponse, AppError> {

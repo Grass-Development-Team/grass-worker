@@ -26,7 +26,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     )
 }
 
-pub(crate) fn timestamp_from_millis(
+fn timestamp_from_millis(
     value: Option<i64>,
     field: &'static str,
     op: &'static str,
@@ -44,19 +44,19 @@ pub(crate) fn timestamp_from_millis(
 }
 
 #[derive(Deserialize, Default)]
-pub struct BuildLogQuery {
+struct BuildLogQuery {
     #[serde(default)]
-    pub deployment_id: Option<Uuid>,
+    deployment_id: Option<Uuid>,
     #[serde(default)]
-    pub project_id: Option<Uuid>,
+    project_id: Option<Uuid>,
     #[serde(default)]
-    pub team_id: Option<Uuid>,
+    team_id: Option<Uuid>,
     #[serde(default)]
-    pub triggered_by_user_id: Option<Uuid>,
+    triggered_by_user_id: Option<Uuid>,
     #[serde(default, rename = "from")]
-    pub created_from_ms: Option<i64>,
+    created_from_ms: Option<i64>,
     #[serde(default, rename = "to")]
-    pub created_to_ms: Option<i64>,
+    created_to_ms: Option<i64>,
 }
 
 fn filter(query: BuildLogQuery, op: &'static str) -> Result<cleanup::BuildLogFilter, AppError> {
@@ -83,7 +83,7 @@ fn filter(query: BuildLogQuery, op: &'static str) -> Result<cleanup::BuildLogFil
 }
 
 /// GET /api/v1/admin/cleanup/build-logs
-pub async fn cleanup_preview(
+async fn cleanup_preview(
     State(state): State<ControlApiState>,
     Query(query): Query<BuildLogQuery>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -101,7 +101,7 @@ pub async fn cleanup_preview(
 }
 
 /// DELETE /api/v1/admin/cleanup/build-logs
-pub async fn cleanup(
+async fn cleanup(
     State(state): State<ControlApiState>,
     session: Session,
     Json(query): Json<BuildLogQuery>,

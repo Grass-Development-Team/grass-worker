@@ -42,7 +42,7 @@ fn user_data(user: &user::Model) -> UserResponse {
     }
 }
 
-pub(crate) async fn authenticated_response(
+async fn authenticated_response(
     state: &ControlApiState,
     cache: &grass_cache::CacheStore,
     jar: CookieJar,
@@ -60,7 +60,7 @@ pub(crate) async fn authenticated_response(
         .into_response())
 }
 
-pub(crate) async fn create_authenticated_session(
+async fn create_authenticated_session(
     state: &ControlApiState,
     cache: &grass_cache::CacheStore,
     jar: CookieJar,
@@ -82,15 +82,15 @@ struct RegistrationInput {
 }
 
 #[derive(Deserialize)]
-pub struct RegisterRequest {
-    pub email: String,
-    pub password: String,
-    pub display_name: Option<String>,
-    pub return_to: Option<String>,
-    pub registration_code: Option<String>,
+struct RegisterRequest {
+    email: String,
+    password: String,
+    display_name: Option<String>,
+    return_to: Option<String>,
+    registration_code: Option<String>,
 }
 
-pub async fn handler(
+async fn handler(
     State(state): State<ControlApiState>,
     jar: CookieJar,
     Json(body): Json<RegisterRequest>,
@@ -294,7 +294,7 @@ fn validate_registration_input(email: &str) -> Result<RegistrationInput, AppErro
     Ok(RegistrationInput { email })
 }
 
-pub(crate) fn user_avatar_url(user_id: Uuid, version: Option<Uuid>) -> Option<String> {
+fn user_avatar_url(user_id: Uuid, version: Option<Uuid>) -> Option<String> {
     version.map(|version| format!("/api/v1/avatars/users/{user_id}/{version}/avatar.webp"))
 }
 

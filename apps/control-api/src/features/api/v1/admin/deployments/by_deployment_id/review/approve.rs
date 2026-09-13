@@ -47,9 +47,9 @@ fn map_state_error(error: DeploymentStateError, op: &'static str) -> AppError {
 }
 
 #[derive(Deserialize, Default)]
-pub struct DecisionRequest {
+struct DecisionRequest {
     #[serde(default)]
-    pub reason: Option<String>,
+    reason: Option<String>,
 }
 
 async fn decide(
@@ -261,7 +261,7 @@ async fn decide(
 }
 
 /// POST /api/v1/admin/deployments/{deployment_id}/review/approve
-pub async fn approve(
+async fn approve(
     State(state): State<ControlApiState>,
     session: Session,
     Path(deployment_id): Path<Uuid>,

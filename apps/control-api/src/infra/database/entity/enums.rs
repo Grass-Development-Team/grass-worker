@@ -3,10 +3,13 @@ use sea_orm::entity::prelude::*;
 macro_rules! string_active_enum {
     ($name:ident, $enum_name:literal, { $($variant:ident => $value:literal),+ $(,)? }) => {
         #[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
+        #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
         #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = $enum_name)]
         pub enum $name {
-            $(#[sea_orm(string_value = $value)] $variant,)+
+            $(
+                #[sea_orm(string_value = $value)]
+                $variant,
+            )+
         }
     };
 }

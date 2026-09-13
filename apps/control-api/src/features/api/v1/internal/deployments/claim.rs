@@ -20,15 +20,15 @@ use crate::{
 
 // --- Claim ------------------------------------------------------------------
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ClaimRequest {
+struct ClaimRequest {
     /// How many additional builds the Node can take right now.
-    pub capacity: u16,
+    capacity: u16,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct ClaimResponse {
+struct ClaimResponse {
     #[serde(default)]
-    pub deployment: Option<ClaimedDeployment>,
+    deployment: Option<ClaimedDeployment>,
 }
 
 pub(crate) fn router() -> axum::Router<ControlApiState> {
@@ -63,7 +63,7 @@ fn current_node_for_claim_query(node_id: Uuid) -> sea_orm::Select<node::Entity> 
 }
 
 /// POST /api/v1/internal/deployments/claim
-pub async fn claim(
+async fn claim(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
     Json(body): Json<ClaimRequest>,

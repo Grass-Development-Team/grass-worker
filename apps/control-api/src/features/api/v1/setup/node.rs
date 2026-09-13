@@ -16,7 +16,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     axum::Router::new().route("/node", axum::routing::post(handler))
 }
 
-pub(crate) fn setup_database<'a>(
+fn setup_database<'a>(
     state: &'a ControlApiState,
     op: &'static str,
 ) -> Result<&'a DatabaseConnection, AppError> {
@@ -26,7 +26,7 @@ pub(crate) fn setup_database<'a>(
     })
 }
 
-pub(crate) async fn ensure_setup_mutation_allowed(
+async fn ensure_setup_mutation_allowed(
     db: &DatabaseConnection,
     op: &'static str,
 ) -> Result<(), AppError> {
@@ -43,11 +43,11 @@ pub(crate) async fn ensure_setup_mutation_allowed(
 }
 
 #[derive(Deserialize)]
-pub struct NodeSetupRequest {
-    pub name: Option<String>,
+struct NodeSetupRequest {
+    name: Option<String>,
 }
 
-pub async fn handler(
+async fn handler(
     State(state): State<ControlApiState>,
     Json(body): Json<NodeSetupRequest>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -160,7 +160,7 @@ pub async fn handler(
     }))
 }
 
-pub(super) fn node_work_root(storage_root: &str) -> String {
+fn node_work_root(storage_root: &str) -> String {
     format!("{}/node", storage_root.trim_end_matches('/'))
 }
 

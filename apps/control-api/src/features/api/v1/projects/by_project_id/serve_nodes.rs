@@ -45,13 +45,13 @@ pub(crate) fn router() -> axum::Router<ControlApiState> {
 }
 
 #[derive(Debug, Default, Deserialize)]
-pub struct ServeNodesQuery {
+struct ServeNodesQuery {
     #[serde(default)]
-    pub region: Option<String>,
+    region: Option<String>,
 }
 
 /// GET /api/v1/projects/{project_id}/serve-nodes
-pub async fn serve_nodes(
+async fn serve_nodes(
     State(state): State<ControlApiState>,
     session: Session,
     Path(project_id): Path<Uuid>,

@@ -19,19 +19,19 @@ use crate::{
 
 #[cfg_attr(test, derive(serde::Deserialize))]
 #[derive(Serialize)]
-pub struct StartPreviewAuthorizationResponse {
-    pub authorization_url: String,
+struct StartPreviewAuthorizationResponse {
+    authorization_url: String,
 }
 
 #[cfg_attr(test, derive(serde::Serialize))]
 #[derive(Deserialize)]
-pub struct StartPreviewAuthorizationRequest {
-    pub host: String,
-    pub return_to: String,
+struct StartPreviewAuthorizationRequest {
+    host: String,
+    return_to: String,
 }
 
 /// POST /api/v1/internal/serve/preview/authorize
-pub async fn start(
+async fn start(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(_node)): Extension<AuthenticatedNode>,
     Json(body): Json<StartPreviewAuthorizationRequest>,

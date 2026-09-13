@@ -16,7 +16,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     axum::Router::new().route("/storage", axum::routing::post(handler))
 }
 
-pub(crate) fn setup_database<'a>(
+fn setup_database<'a>(
     state: &'a ControlApiState,
     op: &'static str,
 ) -> Result<&'a DatabaseConnection, AppError> {
@@ -26,7 +26,7 @@ pub(crate) fn setup_database<'a>(
     })
 }
 
-pub(crate) async fn ensure_setup_mutation_allowed(
+async fn ensure_setup_mutation_allowed(
     db: &DatabaseConnection,
     op: &'static str,
 ) -> Result<(), AppError> {
@@ -43,16 +43,16 @@ pub(crate) async fn ensure_setup_mutation_allowed(
 }
 
 #[derive(Debug, Default, Deserialize)]
-pub struct StorageSetupRequest {
+struct StorageSetupRequest {
     #[serde(default)]
-    pub backend: Option<String>,
+    backend: Option<String>,
     #[serde(default)]
-    pub root: Option<String>,
+    root: Option<String>,
     #[serde(flatten)]
-    pub options: storage_settings::StorageOptions,
+    options: storage_settings::StorageOptions,
 }
 
-pub async fn handler(
+async fn handler(
     State(state): State<ControlApiState>,
     Json(body): Json<StorageSetupRequest>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -130,7 +130,7 @@ async fn persist_configuration(
     Ok(())
 }
 
-pub(super) fn node_work_root(storage_root: &str) -> String {
+fn node_work_root(storage_root: &str) -> String {
     nodes::work_root_for_storage(storage_root)
 }
 

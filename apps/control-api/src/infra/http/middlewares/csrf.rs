@@ -1,11 +1,10 @@
-use std::time::Duration;
-
 use axum::{
     body::Body,
     http::{Method, Request},
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use std::time::Duration;
 
 use crate::{infra::error::AppError, state::ControlApiState};
 
@@ -182,7 +181,7 @@ mod tests {
         let cache = CacheStore::connect_cache(CacheBackend::Moka, "")
             .await
             .unwrap();
-        let user = session::tests::active_user();
+        let user = crate::test_support::users::active_user();
         let session_id =
             grass_session::create_session(&cache, user.id, 1, Duration::from_secs(300))
                 .await
@@ -207,7 +206,7 @@ mod tests {
 
         let app = Router::new()
             .route("/teams", post(protected))
-            .route("/auth/logout", post(logout::handler))
+            .nest("/auth", logout::router())
             .layer(middleware::from_fn_with_state(
                 state.clone(),
                 csrf::csrf_middleware,

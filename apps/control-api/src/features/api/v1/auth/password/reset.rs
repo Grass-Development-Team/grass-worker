@@ -16,12 +16,12 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct ResetPasswordRequest {
-    pub token: String,
-    pub password: String,
+struct ResetPasswordRequest {
+    token: String,
+    password: String,
 }
 
-pub async fn reset(
+async fn reset(
     State(state): State<ControlApiState>,
     Json(body): Json<ResetPasswordRequest>,
 ) -> Result<impl IntoResponse, AppError> {

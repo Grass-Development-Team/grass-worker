@@ -22,7 +22,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     )
 }
 
-pub(crate) fn parse_role(
+fn parse_role(
     role: &str,
     op: &'static str,
 ) -> Result<crate::infra::database::entity::TeamMemberRole, AppError> {
@@ -40,7 +40,7 @@ pub(crate) fn parse_role(
     }
 }
 
-pub(crate) fn role_value(role: &crate::infra::database::entity::TeamMemberRole) -> &'static str {
+fn role_value(role: &crate::infra::database::entity::TeamMemberRole) -> &'static str {
     use crate::infra::database::entity::TeamMemberRole;
 
     match role {
@@ -52,16 +52,16 @@ pub(crate) fn role_value(role: &crate::infra::database::entity::TeamMemberRole) 
 }
 
 #[derive(Deserialize)]
-pub struct MemberPath {
-    pub user_id: Uuid,
+struct MemberPath {
+    user_id: Uuid,
 }
 
 #[derive(Deserialize)]
-pub struct UpdateRoleRequest {
-    pub role: String,
+struct UpdateRoleRequest {
+    role: String,
 }
 
-pub async fn update_role(
+async fn update_role(
     axum::extract::State(state): axum::extract::State<ControlApiState>,
     team_role: TeamRole,
     Path(path): Path<MemberPath>,
@@ -84,7 +84,7 @@ pub async fn update_role(
     }))
 }
 
-pub async fn remove(
+async fn remove(
     axum::extract::State(state): axum::extract::State<ControlApiState>,
     team_role: TeamRole,
     Path(path): Path<MemberPath>,

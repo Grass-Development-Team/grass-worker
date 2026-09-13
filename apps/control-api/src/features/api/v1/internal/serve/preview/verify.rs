@@ -19,19 +19,19 @@ use crate::{
 
 #[cfg_attr(test, derive(serde::Deserialize))]
 #[derive(Serialize)]
-pub struct VerifyPreviewGrantResponse {
-    pub allowed: bool,
+struct VerifyPreviewGrantResponse {
+    allowed: bool,
 }
 
 #[cfg_attr(test, derive(serde::Serialize))]
 #[derive(Deserialize)]
-pub struct VerifyPreviewGrantRequest {
-    pub host: String,
-    pub grant: String,
+struct VerifyPreviewGrantRequest {
+    host: String,
+    grant: String,
 }
 
 /// POST /api/v1/internal/serve/preview/verify
-pub async fn verify(
+async fn verify(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(_node)): Extension<AuthenticatedNode>,
     Json(body): Json<VerifyPreviewGrantRequest>,

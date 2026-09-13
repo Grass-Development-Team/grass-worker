@@ -22,17 +22,17 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ReportServeStatusRequest {
-    pub status: ReportedServeStatus,
+struct ReportServeStatusRequest {
+    status: ReportedServeStatus,
     #[serde(default)]
-    pub failure_code: Option<String>,
+    failure_code: Option<String>,
     #[serde(default)]
-    pub failure_message: Option<String>,
+    failure_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ReportServeStatusResponse {
-    pub acknowledged: bool,
+struct ReportServeStatusResponse {
+    acknowledged: bool,
 }
 
 pub(crate) fn router() -> axum::Router<ControlApiState> {
@@ -83,7 +83,7 @@ fn ensure_serve_node(
 }
 
 /// POST /api/v1/internal/serve/deployments/{deployment_id}/status
-pub async fn report_status(
+async fn report_status(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
     Path(deployment_id): Path<Uuid>,

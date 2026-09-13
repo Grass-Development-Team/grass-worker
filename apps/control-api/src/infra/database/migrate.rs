@@ -182,13 +182,7 @@ mod tests {
             },
             state::ControlApiState,
         };
-        use axum::{
-            Router,
-            body::Body,
-            http::Request,
-            middleware,
-            routing::{get, post},
-        };
+        use axum::{Router, body::Body, http::Request, middleware, routing::get};
         use grass_cache::Cache;
         use std::time::Duration;
         use tower::ServiceExt;
@@ -212,10 +206,10 @@ mod tests {
             async fn admin(_admin: crate::infra::http::extractors::PlatformAdmin) -> &'static str { "allowed" }
             let app = Router::new().route("/protected", get(protected).post(protected))
                 .route("/admin", get(admin))
-                .route("/login", post(crate::features::api::v1::auth::login::handler))
-                .route("/password/change", post(crate::features::api::v1::me::password::change))
-                .route("/password/reset", post(crate::features::api::v1::auth::password::reset::reset))
-                .route("/admin/users/{user_id}/password", post(crate::features::api::v1::admin::users::by_user_id::reset_password::reset_password))
+                .nest("/api/v1/auth", crate::features::api::v1::auth::login::router()
+                    .merge(crate::features::api::v1::auth::password::reset::router()))
+                .nest("/api/v1", crate::features::api::v1::me::password::router())
+                .nest("/api/v1/admin", crate::features::api::v1::admin::users::by_user_id::reset_password::router())
                 .layer(middleware::from_fn_with_state(state.clone(), session::session_middleware)).with_state(state.clone());
             let cache = state.try_cache().unwrap();
             let mut current_password = "Original-password-123!";
@@ -230,12 +224,12 @@ mod tests {
                 let key = format!("session:{second}");
                 let stale_refresh = cache.get(&key).await?.unwrap();
                 let (uri, body) = match flow {
-                    "change" => ("/password/change".into(), serde_json::json!({"current_password": current_password, "password": next_password})),
+                    "change" => ("/api/v1/me/password".into(), serde_json::json!({"current_password": current_password, "password": next_password})),
                     "reset" => {
                         let token = authentication::create_auth_token(db, user.id, AuthTokenKind::PasswordReset, time::Duration::hours(1)).await?;
-                        ("/password/reset".into(), serde_json::json!({"token": token, "password": next_password}))
+                        ("/api/v1/auth/password/reset".into(), serde_json::json!({"token": token, "password": next_password}))
                     },
-                    _ => (format!("/admin/users/{}/password", user.id), serde_json::json!({"password": next_password})),
+                    _ => (format!("/api/v1/admin/users/{}/reset-password", user.id), serde_json::json!({"password": next_password})),
                 };
                 let response = app.clone().oneshot(Request::builder().uri(uri).method("POST").header("content-type", "application/json").header("cookie", format!("session_id={first}")).body(Body::from(body.to_string()))?).await?;
                 ensure!(response.status().is_success(), "password flow {flow} failed with {}", response.status());
@@ -249,7 +243,7 @@ mod tests {
                 }
                 ensure!(users::verify_user_password(db, &user.email, next_password).await?.is_some());
                 ensure!(users::verify_user_password(db, &user.email, current_password).await?.is_none());
-                let response = app.clone().oneshot(Request::builder().uri("/login").method("POST")
+                let response = app.clone().oneshot(Request::builder().uri("/api/v1/auth/login").method("POST")
                     .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 12345))))
                     .header("content-type", "application/json")
                     .body(Body::from(serde_json::json!({"email": user.email, "password": next_password}).to_string()))?).await?;
@@ -318,9 +312,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires GRASS_TEST_DATABASE_URL"]
     async fn postgres_domain_onboarding_migrates_and_checks_customer_dns() -> anyhow::Result<()> {
-        use crate::domain::{
-            acme, certificate_settings, certificates, domain_dns, domain_onboarding,
-        };
+        use crate::domain::{acme, certificate_settings, certificates, domain_onboarding};
         use crate::infra::database::entity::{
             HostBindingStatus, managed_certificate, project_host_binding as binding,
             regional_ingress,
@@ -335,7 +327,7 @@ mod tests {
             Migrator::up(db, Some(33)).await?;
             let owner = Uuid::now_v7();
             let actor = Uuid::now_v7();
-            let mut old = certificates::tests::binding_fixture();
+            let mut old = crate::test_support::certificates::binding_fixture();
             old.host = "legacy.example.org".into();
             let entry_id = Uuid::now_v7();
             db.execute_unprepared(&format!(r#"
@@ -388,11 +380,11 @@ mod tests {
                 (Some("203.0.113.1"), token.as_str(), "ready", true),
             ] {
                 let mut records = vec![
-                    ("entry.example.org", "A", domain_dns::tests::answer("entry.example.org", 1, "203.0.113.1")),
-                    ("_grass.site.example.org", "TXT", domain_dns::tests::answer("_grass.site.example.org", 16, &format!("\"{txt}\""))),
+                    ("entry.example.org", "A", crate::test_support::dns::answer("entry.example.org", 1, "203.0.113.1")),
+                    ("_grass.site.example.org", "TXT", crate::test_support::dns::answer("_grass.site.example.org", 16, &format!("\"{txt}\""))),
                 ];
-                if let Some(address) = address { records.push(("site.example.org", "A", domain_dns::tests::answer("site.example.org", 1, address))); }
-                let (resolver, server) = domain_dns::tests::fixture(records).await;
+                if let Some(address) = address { records.push(("site.example.org", "A", crate::test_support::dns::answer("site.example.org", 1, address))); }
+                let (resolver, server) = crate::test_support::dns::fixture(records).await;
                 // Immediate checks and scheduled checks use the same persisted workflow.
                 domain_onboarding::run_check_with_resolver(db, custom.id, "secret", true, &resolver).await?;
                 server.abort();
@@ -413,7 +405,7 @@ mod tests {
             let again = certificates::ensure_record(db, &entry, Some(&custom)).await?;
             ensure!(again.id == cert.id && again.generation == cert.generation);
             // Not-yet-due checks do not query DNS; leases also protect forced checks.
-            let (resolver, server) = domain_dns::tests::fixture(vec![]).await;
+            let (resolver, server) = crate::test_support::dns::fixture(vec![]).await;
             let before = domain_onboarding::get(db, custom.id).await?.unwrap();
             domain_onboarding::run_check_with_resolver(db, custom.id, "secret", false, &resolver).await?;
             ensure!(domain_onboarding::get(db, custom.id).await?.unwrap() == before);
@@ -435,7 +427,7 @@ mod tests {
             let mut disabled: binding::ActiveModel = binding::Entity::find_by_id(custom.id).one(db).await?.unwrap().into();
             disabled.status = Set(HostBindingStatus::Disabled);
             disabled.update(db).await?;
-            let (resolver, server) = domain_dns::tests::fixture(vec![]).await;
+            let (resolver, server) = crate::test_support::dns::fixture(vec![]).await;
             domain_onboarding::run_check_with_resolver(db, custom.id, "secret", true, &resolver).await?;
             ensure!(binding::Entity::find_by_id(custom.id).one(db).await?.unwrap().status == HostBindingStatus::Disabled);
             server.abort();

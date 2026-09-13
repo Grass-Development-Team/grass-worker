@@ -51,7 +51,7 @@ fn admin_deployment_view(item: &deployment::Model) -> DeploymentResponse {
 }
 
 /// GET /api/v1/admin/projects/{project_id}/deployments
-pub async fn deployments(
+async fn deployments(
     State(state): State<ControlApiState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {

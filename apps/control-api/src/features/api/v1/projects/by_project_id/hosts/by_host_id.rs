@@ -268,15 +268,15 @@ fn parse_environment(value: &str, op: &'static str) -> Result<HostBindingEnviron
 }
 
 #[derive(Deserialize)]
-pub struct UpdateHostRequest {
+struct UpdateHostRequest {
     #[serde(default)]
-    pub environment: Option<String>,
+    environment: Option<String>,
     #[serde(default)]
-    pub status: Option<String>,
+    status: Option<String>,
 }
 
 /// PATCH /api/v1/projects/{project_id}/hosts/{host_id}
-pub async fn update(
+async fn update(
     State(state): State<ControlApiState>,
     session: Session,
     Path((project_id, host_id)): Path<(Uuid, Uuid)>,
@@ -328,7 +328,7 @@ pub async fn update(
 }
 
 /// DELETE /api/v1/projects/{project_id}/hosts/{host_id}
-pub async fn remove(
+async fn remove(
     State(state): State<ControlApiState>,
     session: Session,
     Path((project_id, host_id)): Path<(Uuid, Uuid)>,
@@ -354,7 +354,7 @@ pub async fn remove(
     Ok(ok_response(RemoveResponse { ok: true }))
 }
 
-pub(super) async fn load_binding(
+async fn load_binding(
     db: &sea_orm::DatabaseConnection,
     access: &crate::domain::project_access::ProjectAccess,
     host_id: Uuid,

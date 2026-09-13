@@ -44,7 +44,7 @@ pub(crate) fn router() -> axum::Router<ControlApiState> {
 }
 
 // --- DTO --------------------------------------------------------------------
-pub(crate) struct UrlContext {
+struct UrlContext {
     production_host: Option<String>,
     public_scheme: &'static str,
 }
@@ -282,7 +282,7 @@ async fn effective_preview_ids(
     Ok(ids)
 }
 
-pub(crate) async fn load_nodes(
+async fn load_nodes(
     db: &sea_orm::DatabaseConnection,
     deployments: &[deployment::Model],
 ) -> anyhow::Result<HashMap<Uuid, node::Model>> {
@@ -326,7 +326,7 @@ async fn load_deployment(
 }
 
 /// POST /api/v1/projects/{project_id}/deployments/{deployment_id}/retry
-pub async fn retry(
+async fn retry(
     State(state): State<ControlApiState>,
     session: Session,
     Path((project_id, deployment_id)): Path<(Uuid, Uuid)>,

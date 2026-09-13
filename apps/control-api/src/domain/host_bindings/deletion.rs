@@ -70,12 +70,26 @@ impl HostBindingService<'_> {
                 audits::create_platform_audit_event_with_changes(
                     &transaction,
                     CreateAuditEventParams {
-                        actor_user_id: Some(actor_user_id), actor_node_id: None, team_id: Some(binding.team_id),
-                        action: "domain.deleted".to_owned(), target_type: "project_host_binding".to_owned(), target_id: Some(binding.id),
-                        result: AuditEventResult::Success, reason: reason.clone(), metadata: json!({ "platform_admin": true, "project_id": binding.project_id }),
+                        actor_user_id: Some(actor_user_id),
+                        actor_node_id: None,
+                        team_id: Some(binding.team_id),
+                        action: "domain.deleted".to_owned(),
+                        target_type: "project_host_binding".to_owned(),
+                        target_id: Some(binding.id),
+                        result: AuditEventResult::Success,
+                        reason: reason.clone(),
+                        metadata: json!({
+                            "platform_admin": true,
+                            "project_id": binding.project_id,
+                        }),
                     },
-                    json!({ "before": { "host": binding.host, "deleted": false }, "after": { "deleted": true } }),
-                ).await.map_err(|source| AppError::Infrastructure { op, source })?;
+                    json!({
+                        "before": { "host": binding.host, "deleted": false },
+                        "after": { "deleted": true },
+                    }),
+                )
+                .await
+                .map_err(|source| AppError::Infrastructure { op, source })?;
                 let project = projects::get_by_id_any(&transaction, binding.project_id)
                     .await
                     .map_err(|source| AppError::Infrastructure { op, source })?

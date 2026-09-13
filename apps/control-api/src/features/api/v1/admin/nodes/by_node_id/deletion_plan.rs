@@ -18,7 +18,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 /// GET /api/v1/admin/nodes/{node_id}/deletion-plan
-pub async fn deletion_plan(
+async fn deletion_plan(
     State(state): State<ControlApiState>,
     Path(node_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {

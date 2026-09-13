@@ -21,9 +21,9 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct RouteSnapshotResponse {
-    pub revision: String,
-    pub routes: Vec<ServeRoute>,
+struct RouteSnapshotResponse {
+    revision: String,
+    routes: Vec<ServeRoute>,
 }
 
 pub(crate) fn router() -> axum::Router<ControlApiState> {
@@ -67,7 +67,7 @@ fn ensure_serve_node(
 }
 
 /// GET /api/v1/internal/serve/routes
-pub async fn routes(
+async fn routes(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(requesting_node)): Extension<AuthenticatedNode>,
 ) -> Result<impl IntoResponse, AppError> {

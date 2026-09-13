@@ -29,9 +29,9 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Default, Deserialize)]
-pub struct DomainReason {
+struct DomainReason {
     #[serde(default)]
-    pub reason: Option<String>,
+    reason: Option<String>,
 }
 
 fn optional_reason(value: Option<String>) -> Option<String> {
@@ -98,7 +98,7 @@ async fn load<C: ConnectionTrait>(
 }
 
 /// POST /api/v1/admin/domains/{domain_id}/approve
-pub async fn approve(
+async fn approve(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path(domain_id): Path<Uuid>,

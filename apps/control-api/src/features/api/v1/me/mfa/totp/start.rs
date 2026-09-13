@@ -17,7 +17,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     )
 }
 
-pub async fn account_totp_start(
+async fn account_totp_start(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
 ) -> Result<impl IntoResponse, AppError> {

@@ -28,8 +28,8 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct AddEmailRequest {
-    pub email: String,
+struct AddEmailRequest {
+    email: String,
 }
 
 fn validate_email(value: &str) -> Result<String, AppError> {
@@ -39,7 +39,7 @@ fn validate_email(value: &str) -> Result<String, AppError> {
     })
 }
 
-pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
+async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.registration.emails.list";
     let db = crate::infra::http::database(&state, OP)?;
     let entries = registration_email_allowlist::Entity::find()
@@ -92,7 +92,7 @@ pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoRespo
     }))
 }
 
-pub async fn add(
+async fn add(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Json(body): Json<AddEmailRequest>,

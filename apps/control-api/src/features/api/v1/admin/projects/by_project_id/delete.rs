@@ -19,7 +19,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 /// POST /api/v1/admin/projects/{project_id}/delete — soft delete. Serving
 /// and deployments stop resolving; restore stays possible through the
 /// team-level restore endpoint.
-pub async fn remove(
+async fn remove(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path(project_id): Path<Uuid>,

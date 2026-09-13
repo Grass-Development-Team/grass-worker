@@ -48,7 +48,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
         .merge(unarchive::router())
 }
 
-pub(crate) fn validate_repository_url(value: &str) -> Result<(), &'static str> {
+fn validate_repository_url(value: &str) -> Result<(), &'static str> {
     grass_git_source::parse_repository_url(value)
         .map(|_| ())
         .map_err(|error| match error {
@@ -83,7 +83,7 @@ fn project_view(project: &project::Model) -> ProjectResponse {
     }
 }
 
-pub(crate) fn optional_trimmed(value: Option<String>) -> Option<String> {
+fn optional_trimmed(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
         let trimmed = value.trim().to_owned();
         (!trimmed.is_empty()).then_some(trimmed)
@@ -91,7 +91,7 @@ pub(crate) fn optional_trimmed(value: Option<String>) -> Option<String> {
 }
 
 /// GET /api/v1/projects/{project_id}
-pub async fn get(
+async fn get(
     State(state): State<ControlApiState>,
     session: Session,
     Path(project_id): Path<Uuid>,
@@ -120,23 +120,23 @@ pub async fn get(
 /// PATCH semantics: an absent field is unchanged; an empty string clears the
 /// value; anything else replaces it.
 #[derive(Deserialize)]
-pub struct UpdateProjectRequest {
+struct UpdateProjectRequest {
     #[serde(default)]
-    pub name: Option<String>,
+    name: Option<String>,
     #[serde(default)]
-    pub repository_url: Option<String>,
+    repository_url: Option<String>,
     #[serde(default)]
-    pub default_branch: Option<String>,
+    default_branch: Option<String>,
     #[serde(default)]
-    pub install_command: Option<String>,
+    install_command: Option<String>,
     #[serde(default)]
-    pub build_command: Option<String>,
+    build_command: Option<String>,
     #[serde(default)]
-    pub output_directory: Option<String>,
+    output_directory: Option<String>,
     #[serde(default)]
-    pub root_directory: Option<String>,
+    root_directory: Option<String>,
     #[serde(default)]
-    pub framework_hint: Option<String>,
+    framework_hint: Option<String>,
 }
 
 fn optional_source_value(project: &project::Model, key: &str) -> Value {
@@ -218,7 +218,7 @@ fn project_update_changes(before: &project::Model, after: &project::Model) -> (V
 }
 
 /// PATCH /api/v1/projects/{project_id}
-pub async fn update(
+async fn update(
     State(state): State<ControlApiState>,
     session: Session,
     Path(project_id): Path<Uuid>,
@@ -345,7 +345,7 @@ pub async fn update(
     }))
 }
 
-pub(crate) fn role_value(role: &crate::infra::database::entity::TeamMemberRole) -> &'static str {
+fn role_value(role: &crate::infra::database::entity::TeamMemberRole) -> &'static str {
     use crate::infra::database::entity::TeamMemberRole;
 
     match role {

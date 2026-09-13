@@ -27,17 +27,17 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Default, Deserialize)]
-pub struct ResetPasswordRequest {
+struct ResetPasswordRequest {
     /// Omitted: a strong password is generated and returned once.
     #[serde(default)]
-    pub password: Option<String>,
+    password: Option<String>,
 }
 
 /// POST /api/v1/admin/users/{user_id}/reset-password
 ///
 /// Sets the given password, or issues a strong random one shown exactly
 /// once. Plaintext is never returned for administrator-chosen passwords.
-pub async fn reset_password(
+async fn reset_password(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path(user_id): Path<Uuid>,

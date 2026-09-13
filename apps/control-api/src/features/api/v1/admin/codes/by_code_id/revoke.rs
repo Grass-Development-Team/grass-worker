@@ -88,7 +88,7 @@ fn map_code_error(error: CodeUseError, op: &'static str) -> AppError {
     }
 }
 
-pub async fn revoke(
+async fn revoke(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path(code_id): Path<Uuid>,

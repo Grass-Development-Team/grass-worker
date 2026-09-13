@@ -24,7 +24,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     )
 }
 
-pub async fn remove(
+async fn remove(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path(entry_id): Path<Uuid>,

@@ -29,16 +29,16 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct CreateCredentialRequest {
-    pub name: String,
-    pub repository_url: String,
-    pub username: String,
+struct CreateCredentialRequest {
+    name: String,
+    repository_url: String,
+    username: String,
     #[serde(default)]
-    pub secret: Option<String>,
+    secret: Option<String>,
     #[serde(default)]
-    pub private_key: Option<String>,
+    private_key: Option<String>,
     #[serde(default)]
-    pub passphrase: Option<String>,
+    passphrase: Option<String>,
 }
 
 fn credential_view(credential: &source_credential::Model) -> SourceCredentialResponse {
@@ -154,7 +154,7 @@ async fn audit(
     .await
 }
 
-pub async fn list(
+async fn list(
     State(state): State<ControlApiState>,
     role: TeamRole,
 ) -> Result<impl IntoResponse, AppError> {
@@ -169,7 +169,7 @@ pub async fn list(
     }))
 }
 
-pub async fn create(
+async fn create(
     State(state): State<ControlApiState>,
     role: TeamRole,
     Json(body): Json<CreateCredentialRequest>,

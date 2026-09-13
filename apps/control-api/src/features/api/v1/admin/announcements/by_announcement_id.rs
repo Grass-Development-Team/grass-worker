@@ -30,7 +30,7 @@ fn database<'a>(
     crate::infra::http::database(state, op)
 }
 
-pub async fn remove(
+async fn remove(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path(announcement_id): Path<Uuid>,

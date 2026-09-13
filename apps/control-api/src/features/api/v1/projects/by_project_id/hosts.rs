@@ -265,7 +265,7 @@ fn parse_environment(value: &str, op: &'static str) -> Result<HostBindingEnviron
 }
 
 /// GET /api/v1/projects/{project_id}/hosts
-pub async fn list(
+async fn list(
     State(state): State<ControlApiState>,
     session: Session,
     Path(project_id): Path<Uuid>,
@@ -340,14 +340,14 @@ pub async fn list(
 }
 
 #[derive(Deserialize)]
-pub struct CreateHostRequest {
-    pub host: String,
+struct CreateHostRequest {
+    host: String,
     #[serde(default)]
-    pub region: Option<String>,
+    region: Option<String>,
     #[serde(default = "default_environment")]
-    pub environment: String,
+    environment: String,
     #[serde(default)]
-    pub host_source_id: Option<Uuid>,
+    host_source_id: Option<Uuid>,
 }
 
 fn default_environment() -> String {
@@ -355,7 +355,7 @@ fn default_environment() -> String {
 }
 
 /// POST /api/v1/projects/{project_id}/hosts
-pub async fn create(
+async fn create(
     State(state): State<ControlApiState>,
     session: Session,
     Path(project_id): Path<Uuid>,

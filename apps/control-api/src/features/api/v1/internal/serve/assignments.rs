@@ -19,8 +19,8 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ServeAssignmentsResponse {
-    pub assignments: Vec<ServeAssignment>,
+struct ServeAssignmentsResponse {
+    assignments: Vec<ServeAssignment>,
 }
 
 pub(crate) fn router() -> axum::Router<ControlApiState> {
@@ -41,7 +41,7 @@ fn ensure_serve_node(
 }
 
 /// GET /api/v1/internal/serve/assignments
-pub async fn assignments(
+async fn assignments(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
 ) -> Result<impl IntoResponse, AppError> {

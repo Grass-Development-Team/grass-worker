@@ -28,19 +28,19 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct CredentialPath {
-    pub credential_id: Uuid,
+struct CredentialPath {
+    credential_id: Uuid,
 }
 
 #[derive(Deserialize)]
-pub struct RotateCredentialRequest {
-    pub username: String,
+struct RotateCredentialRequest {
+    username: String,
     #[serde(default)]
-    pub secret: Option<String>,
+    secret: Option<String>,
     #[serde(default)]
-    pub private_key: Option<String>,
+    private_key: Option<String>,
     #[serde(default)]
-    pub passphrase: Option<String>,
+    passphrase: Option<String>,
 }
 
 fn credential_view(credential: &source_credential::Model) -> SourceCredentialResponse {
@@ -156,7 +156,7 @@ async fn audit(
     .await
 }
 
-pub async fn rotate(
+async fn rotate(
     State(state): State<ControlApiState>,
     role: TeamRole,
     Path(path): Path<CredentialPath>,

@@ -110,11 +110,11 @@ fn validate_health_check(path: &str, interval: i32, op: &'static str) -> Result<
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct UpdateRequest {
-    pub hostname: Option<String>,
-    pub enabled: Option<bool>,
-    pub health_check_path: Option<String>,
-    pub health_check_interval_seconds: Option<i32>,
+struct UpdateRequest {
+    hostname: Option<String>,
+    enabled: Option<bool>,
+    health_check_path: Option<String>,
+    health_check_interval_seconds: Option<i32>,
 }
 
 fn write_error(source: sea_orm::DbErr, op: &'static str) -> AppError {
@@ -134,7 +134,7 @@ fn write_error(source: sea_orm::DbErr, op: &'static str) -> AppError {
     }
 }
 
-pub async fn update(
+async fn update(
     State(state): State<ControlApiState>,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateRequest>,
@@ -187,7 +187,20 @@ pub async fn update(
         .map_err(|source| write_error(source, OP))?;
     // Invalidate pending connection checks when entry routing changes.
     use sea_orm::{ConnectionTrait, DbBackend, Statement};
-    transaction.execute_raw(Statement::from_sql_and_values(DbBackend::Postgres, "UPDATE domain_onboarding SET dns_status = 'pending', next_check_at = CURRENT_TIMESTAMP WHERE binding_id IN (SELECT id FROM project_host_bindings WHERE region = $1)", [item.region.clone().into()])).await.map_err(|source| write_error(source, OP))?;
+    transaction
+        .execute_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            r#"
+                UPDATE domain_onboarding
+                SET dns_status = 'pending', next_check_at = CURRENT_TIMESTAMP
+                WHERE binding_id IN (
+                    SELECT id FROM project_host_bindings WHERE region = $1
+                )
+            "#,
+            [item.region.clone().into()],
+        ))
+        .await
+        .map_err(|source| write_error(source, OP))?;
     transaction
         .commit()
         .await
@@ -199,7 +212,7 @@ pub async fn update(
     }))
 }
 
-pub async fn remove(
+async fn remove(
     State(state): State<ControlApiState>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {

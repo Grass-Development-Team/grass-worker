@@ -23,15 +23,15 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ResolveHostResponse {
-    pub deployment_id: Uuid,
-    pub project_id: Uuid,
-    pub team_id: Uuid,
-    pub host: String,
-    pub environment: String,
+struct ResolveHostResponse {
+    deployment_id: Uuid,
+    project_id: Uuid,
+    team_id: Uuid,
+    host: String,
+    environment: String,
     /// Whether a grass-output artifact upload finished for this deployment.
-    pub artifact_available: bool,
-    pub access: ServeAccess,
+    artifact_available: bool,
+    access: ServeAccess,
 }
 
 pub(crate) fn router() -> axum::Router<ControlApiState> {
@@ -39,8 +39,8 @@ pub(crate) fn router() -> axum::Router<ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct ResolveHostQuery {
-    pub host: String,
+struct ResolveHostQuery {
+    host: String,
 }
 
 async fn artifact_available(
@@ -62,7 +62,7 @@ async fn artifact_available(
 /// production bindings resolve to the active production deployment only;
 /// preview hosts resolve to their ready deployment, including production
 /// deployments waiting for moderation.
-pub async fn resolve_host(
+async fn resolve_host(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(_node)): Extension<AuthenticatedNode>,
     Query(query): Query<ResolveHostQuery>,

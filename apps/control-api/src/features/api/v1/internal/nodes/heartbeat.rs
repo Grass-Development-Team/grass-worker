@@ -12,30 +12,30 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct HeartbeatRequest {
+struct HeartbeatRequest {
     /// Number of builds currently running on the Node.
     #[serde(default)]
-    pub active_builds: u16,
+    active_builds: u16,
     /// Revision currently used by the running process.
     #[serde(default)]
-    pub effective_config_revision: u64,
+    effective_config_revision: u64,
     /// Desired revision written to disk and awaiting process restart.
     #[serde(default)]
-    pub applying_config_revision: Option<u64>,
+    applying_config_revision: Option<u64>,
     /// Last failure while persisting the desired configuration.
     #[serde(default)]
-    pub config_apply_error: Option<String>,
+    config_apply_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct HeartbeatResponse {
-    pub acknowledged: bool,
+struct HeartbeatResponse {
+    acknowledged: bool,
     /// Latest desired revision, when it differs from the running process.
     #[serde(default)]
-    pub desired_config_revision: Option<u64>,
+    desired_config_revision: Option<u64>,
     /// Complete desired non-secret configuration for the Node to persist.
     #[serde(default)]
-    pub desired_config: Option<NodeConfiguration>,
+    desired_config: Option<NodeConfiguration>,
 }
 
 pub(crate) fn router() -> axum::Router<ControlApiState> {
@@ -43,7 +43,7 @@ pub(crate) fn router() -> axum::Router<ControlApiState> {
 }
 
 /// POST /api/v1/internal/nodes/heartbeat
-pub async fn heartbeat(
+async fn heartbeat(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
     Json(body): Json<HeartbeatRequest>,

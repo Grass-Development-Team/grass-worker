@@ -32,7 +32,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
         .merge(by_factor_id::router())
 }
 
-pub async fn mfa_factors(
+async fn mfa_factors(
     State(state): State<ControlApiState>,
     Path(user_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -81,7 +81,7 @@ pub async fn mfa_factors(
     }))
 }
 
-pub async fn update_mfa_policy(
+async fn update_mfa_policy(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path(user_id): Path<Uuid>,

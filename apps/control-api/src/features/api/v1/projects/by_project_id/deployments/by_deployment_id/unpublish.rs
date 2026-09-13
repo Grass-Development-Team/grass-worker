@@ -8,10 +8,11 @@ use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
+use crate::infra::audit as audits;
 use crate::{
     domain::{delivery, deployments, hosts, projects},
     infra::{
-        audit::{self as audits, CreateAuditEventParams},
+        audit::CreateAuditEventParams,
         database::entity::{
             AuditEventResult, DeploymentEnvironment, DeploymentReleaseStatus,
             HostBindingEnvironment, HostBindingStatus, deployment, node, project_host_binding,
@@ -37,7 +38,7 @@ pub(crate) fn router() -> axum::Router<ControlApiState> {
 }
 
 // --- DTO --------------------------------------------------------------------
-pub(crate) struct UrlContext {
+struct UrlContext {
     production_host: Option<String>,
     public_scheme: &'static str,
 }
@@ -275,7 +276,7 @@ async fn effective_preview_ids(
     Ok(ids)
 }
 
-pub(crate) async fn load_nodes(
+async fn load_nodes(
     db: &sea_orm::DatabaseConnection,
     deployments: &[deployment::Model],
 ) -> anyhow::Result<HashMap<Uuid, node::Model>> {
@@ -297,7 +298,7 @@ pub(crate) async fn load_nodes(
 }
 
 /// POST /api/v1/projects/{project_id}/deployments/{deployment_id}/unpublish
-pub async fn unpublish(
+async fn unpublish(
     State(state): State<ControlApiState>,
     session: Session,
     Path((project_id, deployment_id)): Path<(Uuid, Uuid)>,

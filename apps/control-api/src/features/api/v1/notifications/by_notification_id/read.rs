@@ -30,7 +30,7 @@ fn database<'a>(
     })
 }
 
-pub async fn mark_read(
+async fn mark_read(
     State(state): State<ControlApiState>,
     session: Session,
     Path(notification_id): Path<Uuid>,

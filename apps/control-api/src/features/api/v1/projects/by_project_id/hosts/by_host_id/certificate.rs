@@ -71,7 +71,7 @@ async fn binding_and_ingress(
     Ok((binding, ingress))
 }
 
-pub async fn get(
+async fn get(
     State(state): State<ControlApiState>,
     session: Session,
     Path((project_id, host_id)): Path<(Uuid, Uuid)>,
@@ -93,13 +93,13 @@ pub async fn get(
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct UpdateRequest {
-    pub challenge_method: Option<String>,
-    pub certificate_auto_renew: Option<bool>,
-    pub certificate_issuer: Option<String>,
+struct UpdateRequest {
+    challenge_method: Option<String>,
+    certificate_auto_renew: Option<bool>,
+    certificate_issuer: Option<String>,
 }
 
-pub async fn update(
+async fn update(
     State(state): State<ControlApiState>,
     session: Session,
     Path((project_id, host_id)): Path<(Uuid, Uuid)>,
@@ -203,7 +203,7 @@ async fn certificate_view(
     Ok(CertificateResponse::from_record(item, ingress, &issuer))
 }
 
-pub(super) async fn load_binding(
+async fn load_binding(
     db: &sea_orm::DatabaseConnection,
     access: &crate::domain::project_access::ProjectAccess,
     host_id: Uuid,
@@ -288,8 +288,8 @@ mod tests {
 
     #[test]
     fn certificate_response_disables_the_entry_and_omits_private_material() {
-        let mut ingress = crate::domain::certificates::tests::ingress_fixture();
-        let mut certificate = crate::domain::certificates::tests::certificate_fixture(&ingress);
+        let mut ingress = crate::test_support::certificates::ingress_fixture();
+        let mut certificate = crate::test_support::certificates::certificate_fixture(&ingress);
         certificate.contact_email = "private-contact@example.test".to_owned();
         certificate.bundle = Some(serde_json::json!({"private_key": "private-certificate-key"}));
         ingress.enabled = false;

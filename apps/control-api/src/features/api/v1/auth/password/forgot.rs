@@ -16,11 +16,11 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct ForgotPasswordRequest {
-    pub email: String,
+struct ForgotPasswordRequest {
+    email: String,
 }
 
-pub async fn forgot(
+async fn forgot(
     State(state): State<ControlApiState>,
     Json(body): Json<ForgotPasswordRequest>,
 ) -> Result<impl IntoResponse, AppError> {

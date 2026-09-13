@@ -19,7 +19,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     axum::Router::new().route("/admin", axum::routing::post(handler))
 }
 
-pub(crate) fn setup_database<'a>(
+fn setup_database<'a>(
     state: &'a ControlApiState,
     op: &'static str,
 ) -> Result<&'a DatabaseConnection, AppError> {
@@ -29,7 +29,7 @@ pub(crate) fn setup_database<'a>(
     })
 }
 
-pub(crate) async fn ensure_setup_mutation_allowed(
+async fn ensure_setup_mutation_allowed(
     db: &DatabaseConnection,
     op: &'static str,
 ) -> Result<(), AppError> {
@@ -46,13 +46,13 @@ pub(crate) async fn ensure_setup_mutation_allowed(
 }
 
 #[derive(Deserialize)]
-pub struct AdminSetupRequest {
-    pub email: String,
-    pub password: String,
-    pub display_name: Option<String>,
+struct AdminSetupRequest {
+    email: String,
+    password: String,
+    display_name: Option<String>,
 }
 
-pub async fn handler(
+async fn handler(
     State(state): State<ControlApiState>,
     Json(body): Json<AdminSetupRequest>,
 ) -> Result<impl IntoResponse, AppError> {

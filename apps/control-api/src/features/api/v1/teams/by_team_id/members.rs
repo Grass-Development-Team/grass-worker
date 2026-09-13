@@ -17,7 +17,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
         .merge(by_user_id::router())
 }
 
-pub(crate) fn role_value(role: &crate::infra::database::entity::TeamMemberRole) -> &'static str {
+fn role_value(role: &crate::infra::database::entity::TeamMemberRole) -> &'static str {
     use crate::infra::database::entity::TeamMemberRole;
 
     match role {
@@ -28,7 +28,7 @@ pub(crate) fn role_value(role: &crate::infra::database::entity::TeamMemberRole) 
     }
 }
 
-pub async fn list(
+async fn list(
     axum::extract::State(state): axum::extract::State<ControlApiState>,
     team_role: TeamRole,
 ) -> Result<impl IntoResponse, AppError> {

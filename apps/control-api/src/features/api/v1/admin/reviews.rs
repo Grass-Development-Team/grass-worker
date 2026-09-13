@@ -21,7 +21,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 
 /// GET /api/v1/admin/reviews — pending release reviews across all teams,
 /// oldest first.
-pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
+async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.reviews.list";
     let db = crate::infra::http::database(&state, OP)?;
 

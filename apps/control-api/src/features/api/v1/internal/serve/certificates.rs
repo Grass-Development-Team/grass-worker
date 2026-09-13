@@ -11,12 +11,12 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct CertificateBundlesResponse {
-    pub bundles: Vec<CertificateBundle>,
+struct CertificateBundlesResponse {
+    bundles: Vec<CertificateBundle>,
     #[serde(default)]
-    pub challenges: Vec<HttpChallenge>,
+    challenges: Vec<HttpChallenge>,
     #[serde(default)]
-    pub challenge_revision: String,
+    challenge_revision: String,
 }
 
 pub(crate) fn router() -> axum::Router<ControlApiState> {
@@ -37,7 +37,7 @@ fn ensure_serve_node(
 }
 
 /// GET /api/v1/internal/serve/certificates
-pub async fn certificates(
+async fn certificates(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
 ) -> Result<impl IntoResponse, AppError> {

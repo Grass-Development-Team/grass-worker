@@ -77,3 +77,8 @@ pub(crate) fn ready_deployment() -> crate::infra::database::entity::deployment::
         updated_at: time::OffsetDateTime::UNIX_EPOCH,
     }
 }
+
+pub(crate) mod certificates;
+pub(crate) mod dns;
+pub(crate) mod nodes;
+pub(crate) mod users;

@@ -23,7 +23,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
         .merge(confirm::router())
 }
 
-pub async fn account_delete(
+async fn account_delete(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path(factor_id): Path<Uuid>,

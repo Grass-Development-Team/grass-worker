@@ -23,7 +23,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 /// POST /api/v1/projects/{project_id}/hosts/{host_id}/primary
-pub async fn set_primary(
+async fn set_primary(
     State(state): State<ControlApiState>,
     session: Session,
     Path((project_id, host_id)): Path<(Uuid, Uuid)>,
@@ -63,7 +63,7 @@ pub async fn set_primary(
     Ok(ok_response(SetPrimaryResponse { ok: true }))
 }
 
-pub(super) async fn load_binding(
+async fn load_binding(
     db: &sea_orm::DatabaseConnection,
     access: &crate::domain::project_access::ProjectAccess,
     host_id: Uuid,

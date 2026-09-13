@@ -39,7 +39,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     )
 }
 
-pub(crate) async fn create_authenticated_session(
+async fn create_authenticated_session(
     state: &ControlApiState,
     cache: &grass_cache::CacheStore,
     jar: CookieJar,
@@ -90,13 +90,13 @@ fn factor_view(factor: &user_mfa_factor::Model) -> MfaFactorResponse {
 const STATE_COOKIE: &str = "oauth_state";
 
 #[derive(Clone, Deserialize)]
-pub struct CallbackPayload {
-    pub code: Option<String>,
-    pub state: String,
-    pub error: Option<String>,
+struct CallbackPayload {
+    code: Option<String>,
+    state: String,
+    error: Option<String>,
 }
 
-pub async fn callback(
+async fn callback(
     State(state): State<ControlApiState>,
     Path(slug): Path<String>,
     jar: CookieJar,
@@ -105,7 +105,7 @@ pub async fn callback(
     callback_core(state, slug, jar, payload).await
 }
 
-pub async fn callback_form(
+async fn callback_form(
     State(state): State<ControlApiState>,
     Path(slug): Path<String>,
     jar: CookieJar,

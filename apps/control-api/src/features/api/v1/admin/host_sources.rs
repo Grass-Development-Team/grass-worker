@@ -150,7 +150,7 @@ fn merge_config(
 }
 
 /// GET /api/v1/admin/host-sources
-pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
+async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.host_sources.list";
     let db = crate::infra::http::database(&state, OP)?;
     let sources = hosts::list_sources(db)
@@ -163,22 +163,22 @@ pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoRespo
 }
 
 #[derive(Deserialize)]
-pub struct CreateHostSourceRequest {
-    pub kind: String,
-    pub label: String,
-    pub base_domain: String,
+struct CreateHostSourceRequest {
+    kind: String,
+    label: String,
+    base_domain: String,
     #[serde(default = "default_region")]
-    pub region: String,
+    region: String,
     #[serde(default = "default_true")]
-    pub enabled: bool,
+    enabled: bool,
     #[serde(default = "default_true")]
-    pub allows_auto_assign: bool,
+    allows_auto_assign: bool,
     #[serde(default)]
-    pub is_default: bool,
+    is_default: bool,
     #[serde(default)]
-    pub provider: Option<String>,
+    provider: Option<String>,
     #[serde(default)]
-    pub config: Option<serde_json::Value>,
+    config: Option<serde_json::Value>,
 }
 
 const fn default_true() -> bool {
@@ -190,7 +190,7 @@ fn default_region() -> String {
 }
 
 /// POST /api/v1/admin/host-sources
-pub async fn create(
+async fn create(
     State(state): State<ControlApiState>,
     Json(body): Json<CreateHostSourceRequest>,
 ) -> Result<impl IntoResponse, AppError> {

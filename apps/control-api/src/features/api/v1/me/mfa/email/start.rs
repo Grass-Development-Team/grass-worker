@@ -17,7 +17,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     )
 }
 
-pub async fn account_email_start(
+async fn account_email_start(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
 ) -> Result<impl IntoResponse, AppError> {

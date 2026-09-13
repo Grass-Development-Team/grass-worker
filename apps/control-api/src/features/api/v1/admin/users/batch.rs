@@ -18,16 +18,16 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Debug, Serialize)]
-pub struct BatchItemResult {
-    pub id: Uuid,
-    pub success: bool,
+struct BatchItemResult {
+    id: Uuid,
+    success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub code: Option<u16>,
+    code: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
+    message: Option<String>,
 }
 
-pub fn normalize_ids(ids: Vec<Uuid>, op: &'static str) -> Result<Vec<Uuid>, AppError> {
+fn normalize_ids(ids: Vec<Uuid>, op: &'static str) -> Result<Vec<Uuid>, AppError> {
     if ids.is_empty() || ids.len() > 100 {
         return Err(AppError::Validation {
             op,
@@ -39,7 +39,7 @@ pub fn normalize_ids(ids: Vec<Uuid>, op: &'static str) -> Result<Vec<Uuid>, AppE
     Ok(ids.into_iter().filter(|id| seen.insert(*id)).collect())
 }
 
-pub async fn run<F, Fut>(ids: Vec<Uuid>, mut operation: F) -> Vec<BatchItemResult>
+async fn run<F, Fut>(ids: Vec<Uuid>, mut operation: F) -> Vec<BatchItemResult>
 where
     F: FnMut(Uuid) -> Fut,
     Fut: Future<Output = Result<(), AppError>>,
@@ -66,13 +66,13 @@ where
 
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
-pub enum UserBatchRequest {
+enum UserBatchRequest {
     Enable { ids: Vec<Uuid> },
     Disable { ids: Vec<Uuid> },
 }
 
 /// POST /api/v1/admin/users/batch
-pub async fn batch(
+async fn batch(
     State(state): State<ControlApiState>,
     session: Session,
     Json(body): Json<UserBatchRequest>,

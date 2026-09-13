@@ -41,7 +41,7 @@ fn browser_authorization_response(mut response: Response) -> Response {
     response
 }
 
-pub async fn browser_authorization_headers(response: Response) -> Response {
+async fn browser_authorization_headers(response: Response) -> Response {
     browser_authorization_response(response)
 }
 
@@ -55,12 +55,12 @@ fn forbidden_page() -> Response {
 }
 
 #[derive(Deserialize)]
-pub struct AuthorizeQuery {
+struct AuthorizeQuery {
     state: String,
 }
 
 /// GET /api/v1/preview/authorize?state=...
-pub async fn authorize(
+async fn authorize(
     State(state): State<ControlApiState>,
     OptionalSession(session): OptionalSession,
     Query(query): Query<AuthorizeQuery>,

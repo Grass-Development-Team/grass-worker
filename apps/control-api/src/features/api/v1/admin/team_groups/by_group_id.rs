@@ -122,13 +122,13 @@ async fn audit_group_mutation(
 }
 
 #[derive(Deserialize)]
-pub struct ReviewPolicyOverrideRequest {
+struct ReviewPolicyOverrideRequest {
     #[serde(default)]
-    pub production: Option<String>,
+    production: Option<String>,
     #[serde(default)]
-    pub preview: Option<String>,
+    preview: Option<String>,
     #[serde(default)]
-    pub domain: Option<String>,
+    domain: Option<String>,
 }
 
 fn review_policy_value(
@@ -166,22 +166,22 @@ fn review_policy_value(
 }
 
 #[derive(Deserialize)]
-pub struct UpdateTeamGroupRequest {
+struct UpdateTeamGroupRequest {
     #[serde(default)]
-    pub name: Option<String>,
+    name: Option<String>,
     #[serde(default)]
-    pub description: Option<String>,
+    description: Option<String>,
     /// Explicit `null` detaches the quota plan.
     #[serde(default, deserialize_with = "crate::infra::http::patch::nullable")]
-    pub quota_plan_id: Option<Option<Uuid>>,
+    quota_plan_id: Option<Option<Uuid>>,
     #[serde(default)]
-    pub review_policy: Option<ReviewPolicyOverrideRequest>,
+    review_policy: Option<ReviewPolicyOverrideRequest>,
     #[serde(default)]
-    pub is_default: Option<bool>,
+    is_default: Option<bool>,
 }
 
 /// PATCH /api/v1/admin/team-groups/{group_id}
-pub async fn update(
+async fn update(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path(group_id): Path<Uuid>,
@@ -286,7 +286,7 @@ pub async fn update(
 }
 
 /// DELETE /api/v1/admin/team-groups/{group_id}
-pub async fn remove(
+async fn remove(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path(group_id): Path<Uuid>,

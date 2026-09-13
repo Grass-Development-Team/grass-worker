@@ -1,15 +1,14 @@
-use std::path::Path;
-
 use axum::{
     body::Body,
     http::{StatusCode, Uri, header},
     response::{IntoResponse, Response},
 };
+use std::path::Path;
 
 const PUBLIC_DIR: &str = "./public";
 
 /// Serves frontend assets: `./public` override → embedded → SPA fallback.
-pub async fn frontend_fallback(uri: Uri) -> Response {
+pub(super) async fn frontend_fallback(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
 

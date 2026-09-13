@@ -26,8 +26,8 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct CredentialPath {
-    pub credential_id: Uuid,
+struct CredentialPath {
+    credential_id: Uuid,
 }
 
 fn credential_view(credential: &source_credential::Model) -> SourceCredentialResponse {
@@ -108,7 +108,7 @@ async fn audit(
     .await
 }
 
-pub async fn revoke(
+async fn revoke(
     State(state): State<ControlApiState>,
     role: TeamRole,
     Path(path): Path<CredentialPath>,

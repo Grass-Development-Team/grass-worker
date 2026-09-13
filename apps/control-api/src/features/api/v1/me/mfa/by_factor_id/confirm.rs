@@ -28,11 +28,11 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct ConfirmFactorRequest {
-    pub code: String,
+struct ConfirmFactorRequest {
+    code: String,
 }
 
-pub async fn account_confirm(
+async fn account_confirm(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path(factor_id): Path<Uuid>,

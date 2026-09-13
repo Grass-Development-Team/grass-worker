@@ -18,15 +18,15 @@ use crate::{
 };
 
 #[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct RedeemGitCredentialRequest {
-    pub lease: String,
+struct RedeemGitCredentialRequest {
+    lease: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct RedeemGitCredentialResponse {
-    pub credential: GitCredential,
-    pub host: String,
-    pub port: u16,
+struct RedeemGitCredentialResponse {
+    credential: GitCredential,
+    host: String,
+    port: u16,
 }
 
 pub(crate) fn router() -> axum::Router<ControlApiState> {
@@ -59,7 +59,7 @@ async fn build_owned_deployment(
 }
 
 /// POST /api/v1/internal/deployments/{deployment_id}/source-credential
-pub async fn redeem_source_credential(
+async fn redeem_source_credential(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
     Path(deployment_id): Path<Uuid>,

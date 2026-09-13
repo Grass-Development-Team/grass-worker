@@ -23,8 +23,8 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct QueueNodeDeletionRequest {
-    pub target_node_id: Option<Uuid>,
+struct QueueNodeDeletionRequest {
+    target_node_id: Option<Uuid>,
 }
 
 fn deletion_job_view(job: &node_deletion_job::Model) -> NodeDeletionResponse {
@@ -43,7 +43,7 @@ fn deletion_job_view(job: &node_deletion_job::Model) -> NodeDeletionResponse {
 }
 
 /// POST /api/v1/admin/nodes/{node_id}/deletion
-pub async fn queue_deletion(
+async fn queue_deletion(
     State(state): State<ControlApiState>,
     crate::infra::http::extractors::Session { data, .. }: crate::infra::http::extractors::Session,
     Path(node_id): Path<Uuid>,

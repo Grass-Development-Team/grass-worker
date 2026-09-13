@@ -43,7 +43,7 @@ fn provider_view(provider: &auth_identity_provider::Model) -> IdentityProviderRe
     }
 }
 
-pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
+async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.identity_providers.list";
     let db = crate::infra::http::database(&state, OP)?;
     let providers = auth_identity_provider::Entity::find()
@@ -60,20 +60,20 @@ pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoRespo
 }
 
 #[derive(Clone, Deserialize)]
-pub struct IdentityProviderRequest {
-    pub slug: String,
-    pub template: Option<String>,
-    pub kind: Option<String>,
-    pub name: String,
-    pub client_id: String,
-    pub client_secret: Option<String>,
-    pub issuer_url: Option<String>,
-    pub authorization_url: Option<String>,
-    pub token_url: Option<String>,
-    pub userinfo_url: Option<String>,
-    pub jwks_url: Option<String>,
-    pub scopes: Option<Vec<String>>,
-    pub enabled: Option<bool>,
+struct IdentityProviderRequest {
+    slug: String,
+    template: Option<String>,
+    kind: Option<String>,
+    name: String,
+    client_id: String,
+    client_secret: Option<String>,
+    issuer_url: Option<String>,
+    authorization_url: Option<String>,
+    token_url: Option<String>,
+    userinfo_url: Option<String>,
+    jwks_url: Option<String>,
+    scopes: Option<Vec<String>>,
+    enabled: Option<bool>,
 }
 
 struct ProviderValues {
@@ -241,7 +241,7 @@ fn encrypt_client_secret(
     })
 }
 
-pub async fn create(
+async fn create(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Json(body): Json<IdentityProviderRequest>,

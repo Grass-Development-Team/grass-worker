@@ -113,15 +113,15 @@ fn default_interval() -> i32 {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CreateRequest {
-    pub region: String,
-    pub hostname: String,
+struct CreateRequest {
+    region: String,
+    hostname: String,
     #[serde(default = "default_enabled")]
-    pub enabled: bool,
+    enabled: bool,
     #[serde(default = "default_path")]
-    pub health_check_path: String,
+    health_check_path: String,
     #[serde(default = "default_interval")]
-    pub health_check_interval_seconds: i32,
+    health_check_interval_seconds: i32,
 }
 
 fn write_error(source: sea_orm::DbErr, op: &'static str) -> AppError {
@@ -141,7 +141,7 @@ fn write_error(source: sea_orm::DbErr, op: &'static str) -> AppError {
     }
 }
 
-pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
+async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.regional_ingresses.list";
     let db = crate::infra::http::database(&state, OP)?;
     let entries = ingress::list(db)
@@ -160,7 +160,7 @@ pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoRespo
     }))
 }
 
-pub async fn create(
+async fn create(
     State(state): State<ControlApiState>,
     Json(body): Json<CreateRequest>,
 ) -> Result<impl IntoResponse, AppError> {

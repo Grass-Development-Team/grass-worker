@@ -31,7 +31,7 @@ pub(crate) fn router() -> axum::Router<ControlApiState> {
 /// GET /api/v1/internal/deployments/{deployment_id}/artifact
 ///
 /// Lets a serve Node re-fetch the grass-output archive after cache loss.
-pub async fn download_artifact(
+async fn download_artifact(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(node)): Extension<AuthenticatedNode>,
     Path(deployment_id): Path<Uuid>,

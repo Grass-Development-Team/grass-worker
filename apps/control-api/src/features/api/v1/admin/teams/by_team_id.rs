@@ -74,7 +74,7 @@ async fn load_groups(
 }
 
 /// GET /api/v1/admin/teams/{team_id}
-pub async fn detail(
+async fn detail(
     State(state): State<ControlApiState>,
     Path(team_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -135,12 +135,12 @@ pub async fn detail(
 }
 
 #[derive(Deserialize)]
-pub struct UpdateTeamRequest {
-    pub name: Option<String>,
+struct UpdateTeamRequest {
+    name: Option<String>,
 }
 
 /// PATCH /api/v1/admin/teams/{team_id}
-pub async fn update(
+async fn update(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path(team_id): Path<Uuid>,
@@ -225,7 +225,7 @@ pub async fn update(
 ///
 /// Soft-deletes a standard team. Personal teams and teams that still own
 /// projects are refused.
-pub async fn remove(
+async fn remove(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path(team_id): Path<Uuid>,
@@ -234,7 +234,7 @@ pub async fn remove(
     Ok(ok_response(RemoveResponse { deleted: true }))
 }
 
-pub(crate) fn role_value(role: &crate::infra::database::entity::TeamMemberRole) -> &'static str {
+fn role_value(role: &crate::infra::database::entity::TeamMemberRole) -> &'static str {
     use crate::infra::database::entity::TeamMemberRole;
 
     match role {

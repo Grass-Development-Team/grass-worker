@@ -22,22 +22,22 @@ use crate::{
 
 #[cfg_attr(test, derive(serde::Deserialize))]
 #[derive(Serialize)]
-pub struct ExchangePreviewCodeResponse {
-    pub grant: String,
-    pub return_to: String,
-    pub max_age_seconds: u64,
-    pub cookie_secure: bool,
+struct ExchangePreviewCodeResponse {
+    grant: String,
+    return_to: String,
+    max_age_seconds: u64,
+    cookie_secure: bool,
 }
 
 #[cfg_attr(test, derive(serde::Serialize))]
 #[derive(Deserialize)]
-pub struct ExchangePreviewCodeRequest {
-    pub host: String,
-    pub code: String,
+struct ExchangePreviewCodeRequest {
+    host: String,
+    code: String,
 }
 
 /// POST /api/v1/internal/serve/preview/exchange
-pub async fn exchange(
+async fn exchange(
     State(state): State<ControlApiState>,
     Extension(AuthenticatedNode(_node)): Extension<AuthenticatedNode>,
     Json(body): Json<ExchangePreviewCodeRequest>,

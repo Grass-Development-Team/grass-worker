@@ -107,7 +107,7 @@ fn node_view(
 }
 
 /// GET /api/v1/admin/nodes/{node_id}
-pub async fn detail(
+async fn detail(
     State(state): State<ControlApiState>,
     Path(node_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -136,11 +136,11 @@ pub async fn detail(
 }
 
 #[derive(Debug, Deserialize)]
-pub struct UpdateNodeCapacityRequest {
-    pub capacity_cpu_millicores: u64,
-    pub capacity_memory_mb: u64,
-    pub capacity_disk_mb: u64,
-    pub max_deployments: u32,
+struct UpdateNodeCapacityRequest {
+    capacity_cpu_millicores: u64,
+    capacity_memory_mb: u64,
+    capacity_disk_mb: u64,
+    max_deployments: u32,
 }
 
 fn validate_capacity(
@@ -194,7 +194,7 @@ fn validate_capacity(
 }
 
 /// PATCH /api/v1/admin/nodes/{node_id}
-pub async fn update_capacity(
+async fn update_capacity(
     State(state): State<ControlApiState>,
     crate::infra::http::extractors::Session { data, .. }: crate::infra::http::extractors::Session,
     Path(node_id): Path<Uuid>,

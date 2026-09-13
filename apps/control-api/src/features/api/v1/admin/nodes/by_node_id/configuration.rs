@@ -267,7 +267,7 @@ fn prepare_desired_configuration_update(
 }
 
 /// PUT /api/v1/admin/nodes/{node_id}/configuration
-pub async fn update_configuration(
+async fn update_configuration(
     State(state): State<ControlApiState>,
     crate::infra::http::extractors::Session { data, .. }: crate::infra::http::extractors::Session,
     Path(node_id): Path<Uuid>,

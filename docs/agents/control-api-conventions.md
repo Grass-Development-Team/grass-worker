@@ -40,12 +40,12 @@ The audit table is the durable source of truth. Database commit and external log
 
 Keep business rejections distinct from infrastructure failures. Preserve safe diagnostic context; do not discard sources or convert arbitrary database errors to Conflict. Use named business state types and explicit `parse` / `as_str` storage conversions without changing database enum representation merely for style. Certificate, domain-check, ownership, and ingress-health states retain their existing TEXT/CHECK storage values; unknown values must not silently become a valid state.
 
-Place local tests after production items. Shared fixtures belong in test-only support modules; cross-endpoint tests should exercise HTTP boundaries. Do not expose one feature's test module as another feature's fixture API.
+Place local tests after production items. Shared fixtures belong in test-only support modules; cross-endpoint tests should exercise HTTP boundaries. Do not expose one feature's test module as another feature's fixture API. Shared certificate, Node, user and DNS fixtures live under `src/test_support`; invitation HTTP scenarios live under `src/integration_tests`. Large domain test suites use test-only child modules.
 
 Manually expand dense SQL, JSON, and mock closures where rustfmt cannot express the logical steps. Keep import grouping and blank lines consistent. Prefer semantic names over boolean switches and generic helpers with hidden side effects.
 
 ## Validation and tracking
 
-Protect route paths/methods, authentication middleware, response contracts, lifecycle transactions, audit isolation/redaction, and preview grants with relevant tests. A database test that returns early because no dedicated test database is configured is not an executed database regression.
+Protect route paths/methods, authentication middleware, response contracts, lifecycle transactions, audit isolation/redaction, and preview grants with relevant tests. PostgreSQL suites that create disposable schemas are explicitly ignored in ordinary runs. Running them requires `GRASS_TEST_DATABASE_URL` and authorization for disposable schema creation and cleanup; Redis cases additionally require `GRASS_TEST_REDIS_URL`. They fail when explicitly selected without that configuration. Do not count ignored or unconfigured database cases as executed regressions.
 
 Use the repository Just commands and Vite+ for Console checks. Each commit requires a successful `just quality`. Follow the issue, worktree, review, PR, merge, and TODO cleanup gates in `AGENTS.md`.

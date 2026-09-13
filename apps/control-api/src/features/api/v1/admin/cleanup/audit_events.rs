@@ -27,31 +27,31 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Default, Deserialize)]
-pub struct AuditQuery {
+struct AuditQuery {
     #[serde(default)]
-    pub action: Option<String>,
+    action: Option<String>,
     #[serde(default)]
-    pub actor_user_id: Option<Uuid>,
+    actor_user_id: Option<Uuid>,
     #[serde(default)]
-    pub actor_type: Option<String>,
+    actor_type: Option<String>,
     #[serde(default)]
-    pub target_type: Option<String>,
+    target_type: Option<String>,
     #[serde(default)]
-    pub target_id: Option<Uuid>,
+    target_id: Option<Uuid>,
     #[serde(default)]
-    pub team_id: Option<Uuid>,
+    team_id: Option<Uuid>,
     #[serde(default)]
-    pub result: Option<String>,
+    result: Option<String>,
     #[serde(default, rename = "from")]
-    pub created_from_ms: Option<i64>,
+    created_from_ms: Option<i64>,
     #[serde(default, rename = "to")]
-    pub created_to_ms: Option<i64>,
+    created_to_ms: Option<i64>,
     #[serde(default)]
-    pub page: Option<u64>,
+    page: Option<u64>,
     #[serde(default)]
-    pub per_page: Option<u64>,
+    per_page: Option<u64>,
     #[serde(default)]
-    pub snapshot_before: Option<i64>,
+    snapshot_before: Option<i64>,
 }
 
 fn parse_actor_type(
@@ -89,7 +89,7 @@ fn parse_result(
         .transpose()
 }
 
-pub(crate) fn timestamp_from_millis(
+fn timestamp_from_millis(
     value: Option<i64>,
     field: &'static str,
     op: &'static str,
@@ -106,7 +106,7 @@ pub(crate) fn timestamp_from_millis(
         .transpose()
 }
 
-pub(crate) fn event_filter(
+fn event_filter(
     query: AuditQuery,
     team_id: Option<Uuid>,
     visibility: Option<AuditEventVisibility>,
@@ -218,7 +218,7 @@ fn event_view(event: &audit_event::Model) -> AuditEventResponse {
 }
 
 /// GET /api/v1/admin/cleanup/audit-events
-pub async fn cleanup_preview(
+async fn cleanup_preview(
     State(state): State<ControlApiState>,
     Query(query): Query<AuditQuery>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -252,7 +252,7 @@ pub async fn cleanup_preview(
 }
 
 /// DELETE /api/v1/admin/cleanup/audit-events
-pub async fn cleanup(
+async fn cleanup(
     State(state): State<ControlApiState>,
     session: Session,
     Json(query): Json<AuditQuery>,
@@ -353,8 +353,86 @@ struct CleanupResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use serde_json::json;
     use time::OffsetDateTime;
+    use uuid::Uuid;
+    async fn check_cleanup_transaction(fail_audit: bool) {
+        use axum::{
+            Extension,
+            body::Body,
+            http::{Request, StatusCode},
+        };
+        use sea_orm::{DbBackend, DbErr, MockDatabase, MockExecResult};
+        use tower::ServiceExt;
+
+        let mock = MockDatabase::new(DbBackend::Postgres).append_exec_results([MockExecResult {
+            last_insert_id: 0,
+            rows_affected: 3,
+        }]);
+        let mock = if fail_audit {
+            mock.append_exec_errors([DbErr::Custom("audit insert unavailable".to_owned())])
+        } else {
+            mock.append_exec_results([MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+        };
+        let state = crate::state::ControlApiState::new(Default::default(), "unused.toml");
+        state.database.set(mock.into_connection()).unwrap();
+        let now = OffsetDateTime::now_utc();
+        let session = Some((
+            "test-session".to_owned(),
+            grass_session::SessionData {
+                user_id: Uuid::now_v7(),
+                auth_version: 0,
+                created_at: now,
+                last_accessed_at: now,
+            },
+        ));
+        let app = router().layer(Extension(session)).with_state(state.clone());
+        let request = Request::builder()
+            .method("DELETE")
+            .uri("/cleanup/audit-events")
+            .header("content-type", "application/json")
+            .body(Body::from(json!({ "snapshot_before": 0 }).to_string()))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            if fail_audit {
+                StatusCode::INTERNAL_SERVER_ERROR
+            } else {
+                StatusCode::OK
+            }
+        );
+        let log = std::sync::Arc::try_unwrap(state.database)
+            .unwrap()
+            .into_inner()
+            .unwrap()
+            .into_transaction_log();
+        let statements = format!("{log:?}");
+        assert!(statements.contains("DELETE FROM"), "{statements}");
+        assert!(statements.contains("INSERT INTO"), "{statements}");
+        assert!(
+            statements.contains(if fail_audit { "ROLLBACK" } else { "COMMIT" }),
+            "{statements}"
+        );
+        assert!(
+            !statements.contains(if fail_audit { "COMMIT" } else { "ROLLBACK" }),
+            "{statements}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_http_rolls_back_when_its_audit_cannot_be_written() {
+        check_cleanup_transaction(true).await;
+    }
+
+    #[tokio::test]
+    async fn cleanup_http_commits_deletion_and_its_audit_together() {
+        check_cleanup_transaction(false).await;
+    }
+
     #[test]
     fn cleanup_delete_requires_a_preview_snapshot() {
         let error = cleanup_event_filter(AuditQuery::default(), None, "test.cleanup")

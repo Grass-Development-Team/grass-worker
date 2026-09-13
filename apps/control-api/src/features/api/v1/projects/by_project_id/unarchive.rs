@@ -43,7 +43,7 @@ fn project_view(project: &project::Model) -> ProjectResponse {
 }
 
 /// POST /api/v1/projects/{project_id}/unarchive
-pub async fn unarchive(
+async fn unarchive(
     State(state): State<ControlApiState>,
     session: Session,
     Path(project_id): Path<Uuid>,

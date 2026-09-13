@@ -65,7 +65,7 @@ async fn resolve(
 }
 
 /// GET /api/v1/teams/{team_id}/quota
-pub async fn plan(
+async fn plan(
     State(state): State<ControlApiState>,
     role: TeamRole,
 ) -> Result<impl IntoResponse, AppError> {

@@ -24,20 +24,20 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct QuotaLimitInput {
-    pub dimension: String,
+struct QuotaLimitInput {
+    dimension: String,
     /// `null` removes the limit row (unlimited).
-    pub limit_value: Option<i64>,
+    limit_value: Option<i64>,
 }
 
 #[derive(Deserialize)]
-pub struct CreateQuotaPlanRequest {
-    pub code: String,
-    pub name: String,
+struct CreateQuotaPlanRequest {
+    code: String,
+    name: String,
     #[serde(default)]
-    pub description: Option<String>,
+    description: Option<String>,
     #[serde(default)]
-    pub limits: Vec<QuotaLimitInput>,
+    limits: Vec<QuotaLimitInput>,
 }
 
 #[derive(Serialize)]
@@ -126,7 +126,7 @@ async fn audit_plan_mutation(
 }
 
 /// GET /api/v1/admin/quota-plans
-pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
+async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.quota_plans.list";
     let db = crate::infra::http::database(&state, OP)?;
     let plans = quotas::list_plans(db)
@@ -142,7 +142,7 @@ pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoRespo
 }
 
 /// POST /api/v1/admin/quota-plans
-pub async fn create(
+async fn create(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Json(body): Json<CreateQuotaPlanRequest>,

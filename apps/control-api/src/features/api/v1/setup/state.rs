@@ -14,7 +14,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SetupStage {
+enum SetupStage {
     Database,
     Admin,
     Site,
@@ -24,7 +24,7 @@ pub enum SetupStage {
     Complete,
 }
 
-pub(crate) async fn determine_stage(state: &ControlApiState) -> Result<SetupStage, AppError> {
+async fn determine_stage(state: &ControlApiState) -> Result<SetupStage, AppError> {
     let Some(db) = state.try_database() else {
         return Ok(SetupStage::Database);
     };
@@ -74,12 +74,12 @@ fn setup_state_error(op: &'static str, source: anyhow::Error) -> AppError {
 }
 
 #[derive(Serialize)]
-pub struct SetupStateResponse {
-    pub stage: SetupStage,
-    pub is_setup_mode: bool,
+struct SetupStateResponse {
+    stage: SetupStage,
+    is_setup_mode: bool,
 }
 
-pub async fn handler(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
+async fn handler(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     let stage = determine_stage(&state).await?;
     let is_setup_mode = stage != SetupStage::Complete;
 

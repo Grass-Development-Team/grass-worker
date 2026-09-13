@@ -66,7 +66,7 @@ fn project_status(project: &project::Model) -> &'static str {
 }
 
 /// POST /api/v1/admin/projects/{project_id}/unarchive
-pub async fn unarchive(
+async fn unarchive(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Path(project_id): Path<Uuid>,

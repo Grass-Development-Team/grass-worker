@@ -16,7 +16,7 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 /// GET /api/v1/admin/nodes/{node_id}/health
-pub async fn health(
+async fn health(
     State(state): State<ControlApiState>,
     Path(node_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {

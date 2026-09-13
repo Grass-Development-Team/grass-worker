@@ -27,8 +27,8 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 }
 
 #[derive(Deserialize)]
-pub struct BindCredentialRequest {
-    pub credential_id: Uuid,
+struct BindCredentialRequest {
+    credential_id: Uuid,
 }
 
 fn map_error(error: SourceCredentialError, op: &'static str) -> AppError {
@@ -82,7 +82,7 @@ async fn audit_binding(
     .await
 }
 
-pub async fn get(
+async fn get(
     State(state): State<ControlApiState>,
     session: Session,
     Path(project_id): Path<Uuid>,
@@ -115,7 +115,7 @@ pub async fn get(
     }))
 }
 
-pub async fn bind(
+async fn bind(
     State(state): State<ControlApiState>,
     session: Session,
     Path(project_id): Path<Uuid>,
@@ -168,7 +168,7 @@ pub async fn bind(
     }))
 }
 
-pub async fn unbind(
+async fn unbind(
     State(state): State<ControlApiState>,
     session: Session,
     Path(project_id): Path<Uuid>,

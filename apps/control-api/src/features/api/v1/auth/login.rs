@@ -41,13 +41,13 @@ const LOGIN_ACCOUNT_CAPACITY: u32 = 5;
 const LOGIN_IP_CAPACITY: u32 = 30;
 
 #[derive(Deserialize)]
-pub struct LoginRequest {
-    pub email: String,
-    pub password: String,
-    pub return_to: Option<String>,
+struct LoginRequest {
+    email: String,
+    password: String,
+    return_to: Option<String>,
 }
 
-pub async fn handler(
+async fn handler(
     State(state): State<ControlApiState>,
     ConnectInfo(peer_address): ConnectInfo<std::net::SocketAddr>,
     jar: CookieJar,
@@ -133,7 +133,7 @@ async fn enforce_login_rate_limits(
     Ok(())
 }
 
-pub(crate) async fn authenticated_response(
+async fn authenticated_response(
     state: &ControlApiState,
     cache: &grass_cache::CacheStore,
     jar: CookieJar,
@@ -151,7 +151,7 @@ pub(crate) async fn authenticated_response(
         .into_response())
 }
 
-pub(crate) async fn create_authenticated_session(
+async fn create_authenticated_session(
     state: &ControlApiState,
     cache: &grass_cache::CacheStore,
     jar: CookieJar,
@@ -168,7 +168,7 @@ pub(crate) async fn create_authenticated_session(
     Ok((jar.add(cookie), issued.csrf_token))
 }
 
-pub async fn begin_login(
+async fn begin_login(
     state: &ControlApiState,
     user: &user::Model,
     return_to: Option<&str>,
@@ -209,7 +209,7 @@ fn factor_view(factor: &user_mfa_factor::Model) -> MfaFactorResponse {
     }
 }
 
-pub(crate) fn user_avatar_url(user_id: Uuid, version: Option<Uuid>) -> Option<String> {
+fn user_avatar_url(user_id: Uuid, version: Option<Uuid>) -> Option<String> {
     version.map(|version| format!("/api/v1/avatars/users/{user_id}/{version}/avatar.webp"))
 }
 
