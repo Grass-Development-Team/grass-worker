@@ -1,9 +1,10 @@
-use crate::infra::database::entity::{
-    AuditActorType, AuditEventResult, AuditEventVisibility, audit_event,
-};
 use sea_orm::{ColumnTrait, Condition, ConnectionTrait, EntityTrait, PaginatorTrait, QueryFilter};
 use time::OffsetDateTime;
 use uuid::Uuid;
+
+use crate::infra::database::entity::{
+    AuditActorType, AuditEventResult, AuditEventVisibility, audit_event,
+};
 
 #[derive(Default)]
 pub struct AuditEventFilter {
@@ -88,14 +89,22 @@ pub async fn list_events<C: ConnectionTrait>(
     db: &C,
     filter: AuditEventFilter,
 ) -> anyhow::Result<AuditEventPage> {
-    use sea_orm::{QueryOrder, QuerySelect};
-
     let page = filter.page.max(1);
     let per_page = match filter.per_page {
         0 => 50,
         value => value.clamp(1, 100),
     };
     let query = audit_event_query(&filter);
+    paginate_events(db, query, page, per_page).await
+}
+
+async fn paginate_events<C: ConnectionTrait>(
+    db: &C,
+    query: sea_orm::Select<audit_event::Entity>,
+    page: u64,
+    per_page: u64,
+) -> anyhow::Result<AuditEventPage> {
+    use sea_orm::{QueryOrder, QuerySelect};
     let total = query.clone().count(db).await?;
     let events = query
         .order_by_desc(audit_event::Column::CreatedAt)
@@ -124,4 +133,103 @@ pub async fn delete_events<C: ConnectionTrait>(
         .await
         .map(|result| result.rows_affected)
         .map_err(Into::into)
+}
+
+/// Platform project activity, including the project's deployment and host targets.
+/// The caller authorizes access and resolves the IDs belonging to this project.
+pub(crate) async fn list_project_activity<C: ConnectionTrait>(
+    db: &C,
+    project_id: Uuid,
+    deployment_ids: Vec<Uuid>,
+    binding_ids: Vec<Uuid>,
+    page: u64,
+    per_page: u64,
+) -> anyhow::Result<AuditEventPage> {
+    let query = audit_event::Entity::find().filter(project_activity_condition(
+        project_id,
+        deployment_ids,
+        binding_ids,
+    ));
+    paginate_events(db, query, page.max(1), per_page.clamp(1, 100)).await
+}
+
+fn project_activity_condition(
+    project_id: Uuid,
+    deployment_ids: Vec<Uuid>,
+    binding_ids: Vec<Uuid>,
+) -> Condition {
+    let mut targets = Condition::any().add(
+        Condition::all()
+            .add(audit_event::Column::TargetType.eq("project"))
+            .add(audit_event::Column::TargetId.eq(project_id)),
+    );
+    if !deployment_ids.is_empty() {
+        targets = targets.add(
+            Condition::all()
+                .add(audit_event::Column::TargetType.eq("deployment"))
+                .add(audit_event::Column::TargetId.is_in(deployment_ids)),
+        );
+    }
+    if !binding_ids.is_empty() {
+        targets = targets.add(
+            Condition::all()
+                .add(audit_event::Column::TargetType.is_in(["host", "project_host_binding"]))
+                .add(audit_event::Column::TargetId.is_in(binding_ids)),
+        );
+    }
+    targets
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::{DbBackend, MockDatabase, QueryTrait};
+    use std::collections::BTreeMap;
+
+    #[tokio::test]
+    async fn project_activity_keeps_legacy_host_targets_and_scoped_pagination() {
+        let project_id = Uuid::from_u128(1);
+        let deployment_id = Uuid::from_u128(2);
+        let binding_id = Uuid::from_u128(3);
+        let db = MockDatabase::new(DbBackend::Postgres)
+            .append_query_results([vec![BTreeMap::from([(
+                "num_items",
+                sea_orm::Value::BigInt(Some(3)),
+            )])]])
+            .append_query_results([Vec::<audit_event::Model>::new()])
+            .into_connection();
+        let page =
+            list_project_activity(&db, project_id, vec![deployment_id], vec![binding_id], 2, 2)
+                .await
+                .unwrap();
+        assert_eq!(
+            (page.page, page.per_page, page.total, page.total_pages),
+            (2, 2, 3, 2)
+        );
+        let sql = audit_event::Entity::find()
+            .filter(project_activity_condition(
+                project_id,
+                vec![deployment_id],
+                vec![binding_id],
+            ))
+            .build(DbBackend::Postgres)
+            .to_string();
+        assert!(
+            sql.contains("'project'") && sql.contains(&project_id.to_string()),
+            "{sql}"
+        );
+        assert!(
+            sql.contains("'deployment'") && sql.contains(&deployment_id.to_string()),
+            "{sql}"
+        );
+        assert!(
+            sql.contains("'host', 'project_host_binding'") && sql.contains(&binding_id.to_string()),
+            "{sql}"
+        );
+        let log = format!("{:?}", db.into_transaction_log());
+        assert!(
+            log.contains("ORDER BY") && log.contains("LIMIT") && log.contains("OFFSET"),
+            "{log}"
+        );
+    }
 }

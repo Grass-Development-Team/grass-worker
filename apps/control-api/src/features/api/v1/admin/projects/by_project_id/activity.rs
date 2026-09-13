@@ -2,10 +2,7 @@ use axum::{
     extract::{Path, Query, State},
     response::IntoResponse,
 };
-use sea_orm::{
-    ColumnTrait, Condition, ConnectionTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
-    QuerySelect,
-};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -72,10 +69,6 @@ struct ActivityQuery {
     per_page: Option<u64>,
 }
 
-fn binding_audit_target_types() -> [&'static str; 2] {
-    ["host", "project_host_binding"]
-}
-
 /// GET /api/v1/admin/projects/{project_id}/activity
 async fn activity(
     State(state): State<ControlApiState>,
@@ -107,54 +100,23 @@ async fn activity(
             op: OP,
             source: source.into(),
         })?;
-    let mut targets = Condition::any().add(
-        Condition::all()
-            .add(audit_event::Column::TargetType.eq("project"))
-            .add(audit_event::Column::TargetId.eq(project_id)),
-    );
-    if !deployment_ids.is_empty() {
-        targets = targets.add(
-            Condition::all()
-                .add(audit_event::Column::TargetType.eq("deployment"))
-                .add(audit_event::Column::TargetId.is_in(deployment_ids)),
-        );
-    }
-    if !binding_ids.is_empty() {
-        targets = targets.add(
-            Condition::all()
-                .add(audit_event::Column::TargetType.is_in(binding_audit_target_types()))
-                .add(audit_event::Column::TargetId.is_in(binding_ids)),
-        );
-    }
-    let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(50).clamp(1, 100);
-    let base = audit_event::Entity::find().filter(targets);
-    let total = base
-        .clone()
-        .count(db)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
-    let events = base
-        .order_by_desc(audit_event::Column::CreatedAt)
-        .order_by_desc(audit_event::Column::Id)
-        .offset((page - 1) * per_page)
-        .limit(per_page)
-        .all(db)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
+    let page = crate::infra::audit::list_project_activity(
+        db,
+        project_id,
+        deployment_ids,
+        binding_ids,
+        query.page.unwrap_or(1),
+        query.per_page.unwrap_or(50),
+    )
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     Ok(ok_response(ActivityResponse {
-        events: events.iter().map(event_view).collect::<Vec<_>>(),
+        events: page.events.iter().map(event_view).collect::<Vec<_>>(),
         pagination: ActivityPaginationResponse {
-            page,
-            per_page,
-            total,
-            total_pages: total.div_ceil(per_page),
+            page: page.page,
+            per_page: page.per_page,
+            total: page.total,
+            total_pages: page.total_pages,
         },
     }))
 }
@@ -211,16 +173,4 @@ struct ActivityPaginationResponse {
 struct ActivityResponse {
     events: Vec<AuditEventResponse>,
     pagination: ActivityPaginationResponse,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn project_activity_includes_both_host_audit_target_names() {
-        assert_eq!(
-            binding_audit_target_types(),
-            ["host", "project_host_binding"]
-        );
-    }
 }
