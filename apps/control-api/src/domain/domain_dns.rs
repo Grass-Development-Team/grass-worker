@@ -1,26 +1,10 @@
-//! Public DNS inspection for manually configured entries and customer domains.
-use anyhow::{Context, ensure};
-use serde::Deserialize;
-use std::{collections::BTreeSet, net::IpAddr, time::Duration};
+//! DNS connection and ownership decisions for customer domains.
+pub(crate) use crate::infra::dns::RecordMatch as DnsVerification;
+use anyhow::Context;
+use std::collections::BTreeSet;
 
-pub struct Resolver {
-    client: reqwest::Client,
-    endpoint: String,
-}
-#[derive(Deserialize)]
-struct Answer {
-    name: String,
-    #[serde(rename = "type")]
-    kind: u16,
-    data: String,
-}
-#[derive(Deserialize)]
-struct Response {
-    #[serde(rename = "Status")]
-    status: u16,
-    #[serde(rename = "Answer", default)]
-    answers: Vec<Answer>,
-}
+use crate::infra::dns::{Resolver, canonical};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionState {
     Ready,
@@ -28,6 +12,7 @@ pub enum ConnectionState {
     Mismatch,
     EntryUnavailable,
 }
+
 impl ConnectionState {
     pub fn status(self) -> &'static str {
         match self {
@@ -52,120 +37,72 @@ impl ConnectionState {
         }
     }
 }
-fn canonical(name: &str) -> String {
-    name.trim_end_matches('.').to_ascii_lowercase()
-}
-impl Resolver {
-    pub fn new() -> anyhow::Result<Self> {
-        Self::with_endpoint("https://cloudflare-dns.com/dns-query")
+
+pub async fn connection(
+    resolver: &Resolver,
+    host: &str,
+    target: &str,
+) -> anyhow::Result<ConnectionState> {
+    let expected = resolver.addresses(target).await?;
+    if expected.is_empty() {
+        return Ok(ConnectionState::EntryUnavailable);
     }
-    fn with_endpoint(endpoint: &str) -> anyhow::Result<Self> {
-        Ok(Self {
-            client: reqwest::Client::builder()
-                .connect_timeout(Duration::from_secs(3))
-                .timeout(Duration::from_secs(5))
-                .build()?,
-            endpoint: endpoint.to_owned(),
-        })
-    }
-    async fn query(&self, name: &str, kind: &str) -> anyhow::Result<Vec<Answer>> {
-        let response = self
-            .client
-            .get(&self.endpoint)
-            .query(&[("name", name), ("type", kind)])
-            .header("accept", "application/dns-json")
-            .send()
-            .await?
-            .error_for_status()?;
-        let bytes = response.bytes().await?;
-        ensure!(
-            bytes.len() <= 65_536,
-            "DNS response exceeds the supported size"
-        );
-        let response: Response = serde_json::from_slice(&bytes)?;
-        ensure!(
-            response.status == 0 || response.status == 3,
-            "Public DNS resolver is temporarily unavailable"
-        );
-        Ok(response.answers)
-    }
-    pub async fn addresses(&self, name: &str) -> anyhow::Result<BTreeSet<IpAddr>> {
-        let (v4, v6) = tokio::try_join!(self.query(name, "A"), self.query(name, "AAAA"))?;
-        let answers = v4.into_iter().chain(v6).collect::<Vec<_>>();
-        let mut names = BTreeSet::from([canonical(name)]);
-        for _ in 0..16 {
-            let before = names.len();
-            for answer in &answers {
-                if answer.kind == 5 && names.contains(&canonical(&answer.name)) {
-                    names.insert(canonical(&answer.data));
-                }
-            }
-            if before == names.len() {
-                break;
-            }
+    let mut cursor = canonical(host);
+    let target = canonical(target);
+    let mut seen = BTreeSet::new();
+    let mut had_cname = false;
+    for _ in 0..16 {
+        if !seen.insert(cursor.clone()) {
+            anyhow::bail!("DNS CNAME chain contains a loop");
         }
-        Ok(answers
+        let answers = resolver.query(&cursor, "CNAME").await?;
+        let next = answers
             .iter()
-            .filter(|a| matches!(a.kind, 1 | 28) && names.contains(&canonical(&a.name)))
-            .filter_map(|a| a.data.parse().ok())
-            .collect())
-    }
-    pub async fn connection(&self, host: &str, target: &str) -> anyhow::Result<ConnectionState> {
-        let expected = self.addresses(target).await?;
-        if expected.is_empty() {
-            return Ok(ConnectionState::EntryUnavailable);
-        }
-        let mut cursor = canonical(host);
-        let target = canonical(target);
-        let mut seen = BTreeSet::new();
-        let mut had_cname = false;
-        for _ in 0..16 {
-            if !seen.insert(cursor.clone()) {
-                anyhow::bail!("DNS CNAME chain contains a loop");
+            .find(|a| a.kind == 5 && canonical(&a.name) == cursor)
+            .map(|a| canonical(&a.data));
+        let Some(next) = next else {
+            if had_cname {
+                return Ok(ConnectionState::Mismatch);
             }
-            let answers = self.query(&cursor, "CNAME").await?;
-            let next = answers
-                .iter()
-                .find(|a| a.kind == 5 && canonical(&a.name) == cursor)
-                .map(|a| canonical(&a.data));
-            let Some(next) = next else {
-                if had_cname {
-                    return Ok(ConnectionState::Mismatch);
-                }
-                // Apex ALIAS/ANAME and CNAME flattening expose address records only.
-                let actual = self.addresses(host).await?;
-                return Ok(if actual.is_empty() {
-                    ConnectionState::Unresolved
-                } else if actual.is_subset(&expected) {
-                    ConnectionState::Ready
-                } else {
-                    ConnectionState::Mismatch
-                });
-            };
-            had_cname = true;
-            if next == target {
-                let actual = self.addresses(host).await?;
-                return Ok(if actual.is_empty() {
-                    ConnectionState::Unresolved
-                } else if actual.is_subset(&expected) {
-                    ConnectionState::Ready
-                } else {
-                    ConnectionState::Mismatch
-                });
-            }
-            cursor = next;
+            // Apex ALIAS/ANAME and CNAME flattening expose address records only.
+            let actual = resolver.addresses(host).await?;
+            return Ok(if actual.is_empty() {
+                ConnectionState::Unresolved
+            } else if actual.is_subset(&expected) {
+                ConnectionState::Ready
+            } else {
+                ConnectionState::Mismatch
+            });
+        };
+        had_cname = true;
+        if next == target {
+            let actual = resolver.addresses(host).await?;
+            return Ok(if actual.is_empty() {
+                ConnectionState::Unresolved
+            } else if actual.is_subset(&expected) {
+                ConnectionState::Ready
+            } else {
+                ConnectionState::Mismatch
+            });
         }
-        anyhow::bail!("DNS CNAME chain exceeds 16 links")
+        cursor = next;
     }
-    pub async fn ownership(
-        &self,
-        host: &str,
-        expected: &str,
-    ) -> anyhow::Result<super::ingress::DnsVerification> {
-        super::ingress::verify_dns_txt_at(&self.client, &self.endpoint, host, expected)
-            .await
-            .context("Ownership DNS check could not be completed")
-    }
+    anyhow::bail!("DNS CNAME chain exceeds 16 links")
+}
+
+pub async fn ownership(
+    resolver: &Resolver,
+    host: &str,
+    expected: &str,
+) -> anyhow::Result<DnsVerification> {
+    resolver
+        .verify_record(
+            &format!("_grass.{}", host.trim_end_matches('.')),
+            "TXT",
+            expected,
+        )
+        .await
+        .context("Ownership DNS check could not be completed")
 }
 
 #[cfg(test)]
@@ -209,8 +146,7 @@ pub(crate) mod tests {
             ])
             .await;
             assert_eq!(
-                resolver
-                    .connection("example.org", "entry.example.com")
+                connection(&resolver, "example.org", "entry.example.com")
                     .await
                     .unwrap(),
                 expected
@@ -252,8 +188,7 @@ pub(crate) mod tests {
             ])
             .await;
             assert_eq!(
-                resolver
-                    .connection("site.example.org", "entry.example.com")
+                connection(&resolver, "site.example.org", "entry.example.com")
                     .await
                     .unwrap(),
                 expected
@@ -270,15 +205,13 @@ pub(crate) mod tests {
         )])
         .await;
         assert_eq!(
-            resolver
-                .connection("missing.example.org", "entry.example.com")
+            connection(&resolver, "missing.example.org", "entry.example.com")
                 .await
                 .unwrap(),
             ConnectionState::Unresolved
         );
         assert_eq!(
-            resolver
-                .connection("missing.example.org", "missing.entry.com")
+            connection(&resolver, "missing.example.org", "missing.entry.com")
                 .await
                 .unwrap(),
             ConnectionState::EntryUnavailable
@@ -307,15 +240,13 @@ pub(crate) mod tests {
         ])
         .await;
         assert_eq!(
-            resolver
-                .connection("site.example.org", "entry.example.com")
+            connection(&resolver, "site.example.org", "entry.example.com")
                 .await
                 .unwrap(),
             ConnectionState::Mismatch
         );
         assert!(
-            resolver
-                .connection("broken.example.org", "entry.example.com")
+            connection(&resolver, "broken.example.org", "entry.example.com")
                 .await
                 .is_err()
         );

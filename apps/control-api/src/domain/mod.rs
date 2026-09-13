@@ -1,18 +1,38 @@
 pub mod acme;
+pub(crate) mod admin_projects;
+pub(crate) mod admin_team_groups;
+pub(crate) mod admin_teams;
+pub(crate) mod admin_users;
+pub(crate) mod authenticated_sessions;
 pub mod authentication;
+pub mod certificate_settings;
 pub mod certificates;
 pub mod cleanup;
 pub mod codes;
 pub mod delivery;
+pub(crate) mod deployment_activation;
+pub(crate) mod deployment_cancellation;
+pub(crate) mod deployment_placement;
 pub mod deployments;
+pub mod domain_dns;
+pub mod domain_onboarding;
+pub(crate) mod external_login;
+pub(crate) mod host_bindings;
 pub mod hosts;
 pub mod ingress;
+pub(crate) mod login_challenges;
+pub(crate) mod mfa;
 pub mod node_deletions;
+pub(crate) mod node_migration_access;
 pub mod nodes;
 pub mod notifications;
 pub mod platform_mail;
+pub mod preview_access;
+pub(crate) mod project_access;
+pub(crate) mod project_lifecycle;
 pub mod projects;
 pub mod quotas;
+pub mod regions;
 pub mod registration;
 pub mod retention;
 pub mod scheduler;
@@ -25,27 +45,3 @@ pub mod storage_migrations;
 pub mod storage_settings;
 pub mod teams;
 pub mod users;
-
-pub mod regions;
-
-pub mod certificate_settings;
-pub mod domain_dns;
-pub mod domain_onboarding;
-
-pub mod preview_access;
-
-pub(crate) mod deployment_activation;
-pub(crate) mod deployment_cancellation;
-pub(crate) mod deployment_placement;
-
-pub(crate) mod project_access;
-
-pub(crate) mod node_migration_access;
-
-pub(crate) mod project_lifecycle;
-
-pub(crate) mod admin_projects;
-pub(crate) mod admin_team_groups;
-pub(crate) mod admin_teams;
-
-pub(crate) mod admin_users;

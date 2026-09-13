@@ -1,11 +1,7 @@
 //! Persistent connection checks, independent from browsers and ACME order retries.
 use super::{
-    domain_dns::{ConnectionState, Resolver},
-    ingress::{self, DnsVerification},
-};
-use crate::infra::database::entity::{
-    HostBindingKind, HostBindingStatus, HostReviewStatus, domain_onboarding as check,
-    project_host_binding as binding, regional_ingress, user,
+    domain_dns::{self, ConnectionState, DnsVerification},
+    ingress,
 };
 use anyhow::Context;
 use sea_orm::{
@@ -14,6 +10,15 @@ use sea_orm::{
 };
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
+
+use crate::infra::database::entity::domain_onboarding as check;
+use crate::infra::database::entity::project_host_binding as binding;
+use crate::infra::{
+    database::entity::{
+        HostBindingKind, HostBindingStatus, HostReviewStatus, regional_ingress, user,
+    },
+    dns::Resolver,
+};
 
 pub async fn create<C: ConnectionTrait>(
     db: &C,
@@ -139,8 +144,8 @@ pub(crate) async fn run_check_with_resolver(
             let expected = ingress::dns_verification_token(secret, id, &binding.host);
             match tokio::time::timeout(std::time::Duration::from_secs(15), async {
                 tokio::try_join!(
-                    resolver.connection(&binding.host, &entry.hostname),
-                    resolver.ownership(&binding.host, &expected)
+                    domain_dns::connection(resolver, &binding.host, &entry.hostname),
+                    domain_dns::ownership(resolver, &binding.host, &expected)
                 )
             })
             .await

@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::infra::audit as audits;
 use crate::{
     domain::{
+        host_bindings::{BindHostRequest, HostBindingService},
         hosts::{self, AutoAssignSelection},
         projects::{self, CreateProjectParams},
         quotas::QuotaDimension,
@@ -24,7 +25,6 @@ use crate::{
             ProjectRuntime, project,
         },
         error::{AppError, ok_response},
-        host_provision::service::{BindHostRequest, HostBindingService},
         http::extractors::Session,
         quota::{QuotaCharge, QuotaService},
     },

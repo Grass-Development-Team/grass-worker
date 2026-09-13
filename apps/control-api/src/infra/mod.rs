@@ -1,6 +1,7 @@
 pub mod audit;
 pub mod config;
 pub mod database;
+pub(crate) mod dns;
 pub mod error;
 pub mod host_provision;
 pub mod http;

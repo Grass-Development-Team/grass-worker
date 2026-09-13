@@ -10,9 +10,9 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
+    domain::host_bindings::{DeleteHostScope, HostBindingService},
     infra::{
         error::{AppError, ok_response},
-        host_provision::service::{DeleteHostScope, HostBindingService},
         http::extractors::Session,
     },
     state::ControlApiState,

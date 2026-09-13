@@ -1,11 +1,12 @@
+use super::HostBindingService;
 use serde_json::json;
 use uuid::Uuid;
 
-use super::HostBindingService;
+use crate::infra::audit as audits;
 use crate::{
     domain::{hosts, notifications, projects, quotas::QuotaDimension},
     infra::{
-        audit::{self as audits, CreateAuditEventParams},
+        audit::CreateAuditEventParams,
         database::entity::AuditEventResult,
         error::AppError,
         quota::{QuotaCharge, QuotaService},

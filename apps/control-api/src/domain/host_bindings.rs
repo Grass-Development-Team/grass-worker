@@ -19,13 +19,12 @@ use crate::{
             HostReviewStatus, host_source, project, project_host_binding, team,
         },
         error::AppError,
+        host_provision::{
+            CompositeHostProvisioner, HostProvisionError, HostProvisioner,
+            ProvisionProjectHostInput, credentials,
+        },
         quota::{QuotaCharge, QuotaService},
     },
-};
-
-use super::{
-    CompositeHostProvisioner, HostProvisionError, HostProvisioner, ProvisionProjectHostInput,
-    credentials,
 };
 
 mod deletion;
@@ -201,10 +200,12 @@ impl<'a> HostBindingService<'a> {
         {
             Ok(runtime) => self
                 .provisioner
-                .deprovision_project_host(super::DeprovisionProjectHostInput {
-                    host: &binding.host,
-                    source: &runtime,
-                })
+                .deprovision_project_host(
+                    crate::infra::host_provision::DeprovisionProjectHostInput {
+                        host: &binding.host,
+                        source: &runtime,
+                    },
+                )
                 .await
                 .map_err(|error| credentials::redact_error(&runtime.config, error)),
             Err(error) => Err(error),

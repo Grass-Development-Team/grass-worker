@@ -3,26 +3,27 @@ use axum::{
     extract::State,
     response::{IntoResponse, Response},
 };
-use axum_extra::extract::cookie::{Cookie, CookieJar};
+use axum_extra::extract::cookie::CookieJar;
 use grass_cache::Cache;
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-use std::time::Duration;
-use totp_rs::{Algorithm, TOTP};
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::infra::audit as audits;
 use crate::{
-    domain::{authentication, users},
+    domain::{
+        authentication,
+        login_challenges::{
+            ChallengeMode, challenge_authenticated_user, challenge_key, load_challenge,
+        },
+        mfa::{enforce_attempt_limit, factor_for_user, record_factor_audit, verify_factor_code},
+    },
     infra::{
-        audit::CreateAuditEventParams,
-        database::entity::{AuditEventResult, MfaFactorKind, user, user_mfa_factor},
+        database::entity::{user, user_mfa_factor},
         error::{AppError, ok_response},
-        http::middlewares::csrf,
+        http::session_cookies::session_cookie,
     },
     state::ControlApiState,
 };
-use std::time::Duration as StdDuration;
 
 pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     axum::Router::new().route("/mfa/verify", axum::routing::post(challenge_verify))
@@ -63,109 +64,15 @@ pub(crate) async fn create_authenticated_session(
     jar: CookieJar,
     user: &crate::infra::database::entity::user::Model,
 ) -> Result<(CookieJar, String), AppError> {
-    if let Some(db) = state.try_database() {
-        users::update_last_login(db, user.id)
-            .await
-            .map_err(|source| AppError::Infrastructure {
-                op: "auth.login.update_last_login",
-                source,
-            })?;
-    }
-    let (cookie_secure, development_enabled, session_ttl) = {
-        let config = state.config.read().unwrap();
-        (
-            config.session.cookie_secure,
-            config.development_enabled(),
-            Duration::from_secs(config.session.session_ttl_seconds),
-        )
-    };
-    let session_id = grass_session::create_session(cache, user.id, user.auth_version, session_ttl)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: "auth.login.create_session",
-            source,
-        })?;
-
-    let csrf_token = csrf::generate_csrf_token(cache, &session_id)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: "auth.login.csrf_token",
-            source,
-        })?;
-
-    Ok((
-        jar.add(session_cookie(
-            session_id,
-            cookie_secure,
-            development_enabled,
-            session_ttl,
-        )),
-        csrf_token,
-    ))
-}
-
-fn session_cookie(
-    session_id: impl Into<String>,
-    configured_secure: bool,
-    development_enabled: bool,
-    session_ttl: Duration,
-) -> Cookie<'static> {
-    let secure = configured_secure && !development_enabled;
-    let mut cookie = Cookie::new("session_id", session_id.into());
-    cookie.set_path("/api");
-    cookie.set_http_only(true);
-    cookie.set_secure(secure);
-    if secure {
-        cookie.set_partitioned(true);
-    }
-    cookie.set_same_site(axum_extra::extract::cookie::SameSite::Strict);
-    cookie.set_max_age(time::Duration::seconds(session_ttl.as_secs() as i64));
-    cookie
-}
-
-const CHALLENGE_TTL: StdDuration = StdDuration::from_secs(10 * 60);
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum ChallengeMode {
-    Verify,
-    Enroll,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct LoginChallenge {
-    user_id: Uuid,
-    #[serde(default)]
-    auth_version: i64,
-    mode: ChallengeMode,
-    return_to: String,
-}
-
-fn challenge_key(token: &str) -> String {
-    format!("auth:mfa:challenge:{}", grass_token::hash_token(token))
-}
-
-fn code_key(scope: &str, factor_id: Uuid) -> String {
-    format!(
-        "auth:mfa:code:{}:{factor_id}",
-        grass_token::hash_token(scope)
-    )
-}
-
-async fn load_challenge(
-    cache: &grass_cache::CacheStore,
-    token: &str,
-    op: &'static str,
-) -> Result<LoginChallenge, AppError> {
-    cache
-        .get(&challenge_key(token))
-        .await
-        .map_err(|source| AppError::Infrastructure { op, source })?
-        .and_then(|value| serde_json::from_str(&value).ok())
-        .ok_or_else(|| AppError::Unauthorized {
-            op,
-            message: "MFA challenge is invalid or expired".to_owned(),
-        })
+    let issued = crate::domain::authenticated_sessions::issue(state, cache, user).await?;
+    let config = state.config.read().unwrap();
+    let cookie = session_cookie(
+        issued.session_id,
+        config.session.cookie_secure,
+        config.development_enabled(),
+        issued.ttl,
+    );
+    Ok((jar.add(cookie), issued.csrf_token))
 }
 
 #[derive(Deserialize)]
@@ -266,151 +173,6 @@ pub async fn challenge_verify(
     authenticated_response(&state, cache, jar, user).await
 }
 
-async fn enforce_attempt_limit(
-    cache: &grass_cache::CacheStore,
-    scope: &str,
-    op: &'static str,
-) -> Result<(), AppError> {
-    if !cache
-        .consume_rate_limit(
-            &format!("auth:mfa:attempt:{}", grass_token::hash_token(scope)),
-            5,
-            CHALLENGE_TTL,
-        )
-        .await
-        .map_err(|source| AppError::Infrastructure { op, source })?
-    {
-        return Err(AppError::TooManyRequests {
-            op,
-            message: "too many MFA attempts".to_owned(),
-        });
-    }
-    Ok(())
-}
-
-async fn verify_factor_code(
-    state: &ControlApiState,
-    factor: &user_mfa_factor::Model,
-    scope: &str,
-    code: &str,
-    op: &'static str,
-) -> Result<(), AppError> {
-    let valid = match factor.kind {
-        MfaFactorKind::Totp => {
-            let current_step = time::OffsetDateTime::now_utc().unix_timestamp() / 30;
-            if factor
-                .last_used_at
-                .is_some_and(|last_used| last_used.unix_timestamp() / 30 == current_step)
-            {
-                return Err(AppError::Unauthorized {
-                    op,
-                    message: "verification code was already used".to_owned(),
-                });
-            }
-            let secret_key = state.config.read().unwrap().secrets.secret_key.clone();
-            let secret =
-                authentication::decrypt_mfa_secret(&secret_key, factor).map_err(|error| {
-                    AppError::Internal {
-                        op,
-                        message: format!("MFA secret could not be decrypted: {error}"),
-                    }
-                })?;
-            totp(secret, None, String::new(), op)?
-                .check_current(code)
-                .unwrap_or(false)
-        }
-        MfaFactorKind::Email => {
-            let cache = state.try_cache().unwrap();
-            let key = code_key(scope, factor.id);
-            let valid = cache
-                .get(&key)
-                .await
-                .map_err(|source| AppError::Infrastructure { op, source })?
-                .is_some_and(|hash| hash == grass_token::hash_token(code));
-            if valid {
-                cache
-                    .delete(&key)
-                    .await
-                    .map_err(|source| AppError::Infrastructure { op, source })?;
-            }
-            valid
-        }
-    };
-    if !valid {
-        return Err(AppError::Unauthorized {
-            op,
-            message: "verification code is invalid or expired".to_owned(),
-        });
-    }
-    Ok(())
-}
-
-async fn record_factor_audit(
-    db: &impl audits::AuditConnection,
-    user_id: Uuid,
-    action: &str,
-    kind: &MfaFactorKind,
-) -> anyhow::Result<()> {
-    audits::create_platform_audit_event(
-        db,
-        CreateAuditEventParams {
-            actor_user_id: Some(user_id),
-            actor_node_id: None,
-            team_id: None,
-            action: action.to_owned(),
-            target_type: "user".to_owned(),
-            target_id: Some(user_id),
-            result: AuditEventResult::Success,
-            reason: None,
-            metadata: json!({ "factor_kind": kind.as_str() }),
-        },
-    )
-    .await
-}
-
-fn totp(
-    secret: Vec<u8>,
-    issuer: Option<String>,
-    account: String,
-    op: &'static str,
-) -> Result<TOTP, AppError> {
-    TOTP::new(Algorithm::SHA1, 6, 1, 30, secret, issuer, account).map_err(|error| {
-        AppError::Internal {
-            op,
-            message: format!("TOTP configuration is invalid: {error}"),
-        }
-    })
-}
-
-async fn challenge_user(
-    state: &ControlApiState,
-    user_id: Uuid,
-    op: &'static str,
-) -> Result<user::Model, AppError> {
-    users::get_user_by_id(state.try_database().unwrap(), user_id)
-        .await
-        .map_err(|source| AppError::Infrastructure { op, source })?
-        .ok_or_else(|| AppError::NotFound {
-            op,
-            message: "user not found".to_owned(),
-        })
-}
-
-async fn factor_for_user(
-    state: &ControlApiState,
-    user_id: Uuid,
-    factor_id: Uuid,
-    op: &'static str,
-) -> Result<user_mfa_factor::Model, AppError> {
-    authentication::mfa_factor(state.try_database().unwrap(), user_id, factor_id)
-        .await
-        .map_err(|source| AppError::Infrastructure { op, source })?
-        .ok_or_else(|| AppError::NotFound {
-            op,
-            message: "MFA factor not found".to_owned(),
-        })
-}
-
 fn factor_view(factor: &user_mfa_factor::Model) -> MfaFactorResponse {
     MfaFactorResponse {
         id: factor.id,
@@ -420,21 +182,6 @@ fn factor_view(factor: &user_mfa_factor::Model) -> MfaFactorResponse {
         created_at: factor.created_at,
         last_used_at: factor.last_used_at,
     }
-}
-
-async fn challenge_authenticated_user(
-    state: &ControlApiState,
-    challenge: &LoginChallenge,
-    op: &'static str,
-) -> Result<user::Model, AppError> {
-    let user = challenge_user(state, challenge.user_id, op).await?;
-    if challenge.auth_version <= 0 || challenge.auth_version != user.auth_version {
-        return Err(AppError::Unauthorized {
-            op,
-            message: "MFA challenge is invalid or expired".to_owned(),
-        });
-    }
-    Ok(user)
 }
 
 pub(crate) fn user_avatar_url(user_id: Uuid, version: Option<Uuid>) -> Option<String> {

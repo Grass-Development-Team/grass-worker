@@ -9,23 +9,28 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jw
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, TransactionTrait,
 };
-use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
-    domain::{authentication, registration, settings, teams, users},
+    domain::{
+        authentication,
+        external_login::{AuthorizationFlow, configured_site_url, flow_key, provider_by_slug},
+        registration::{self, personal_team_slug},
+        settings, teams, users,
+    },
     infra::{
         database::entity::{
             IdentityProviderKind, PlatformRole, TeamKind, UserStatus, auth_identity_provider, user,
             user_external_identity, user_mfa_factor,
         },
         error::AppError,
-        http::middlewares::csrf,
+        http::{
+            registration_errors::map_registration_access_error, session_cookies::session_cookie,
+        },
     },
     state::ControlApiState,
 };
-use std::time::Duration as StdDuration;
 
 pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     axum::Router::new().route(
@@ -40,82 +45,15 @@ pub(crate) async fn create_authenticated_session(
     jar: CookieJar,
     user: &crate::infra::database::entity::user::Model,
 ) -> Result<(CookieJar, String), AppError> {
-    if let Some(db) = state.try_database() {
-        users::update_last_login(db, user.id)
-            .await
-            .map_err(|source| AppError::Infrastructure {
-                op: "auth.login.update_last_login",
-                source,
-            })?;
-    }
-    let (cookie_secure, development_enabled, session_ttl) = {
-        let config = state.config.read().unwrap();
-        (
-            config.session.cookie_secure,
-            config.development_enabled(),
-            Duration::from_secs(config.session.session_ttl_seconds),
-        )
-    };
-    let session_id = grass_session::create_session(cache, user.id, user.auth_version, session_ttl)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: "auth.login.create_session",
-            source,
-        })?;
-
-    let csrf_token = csrf::generate_csrf_token(cache, &session_id)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: "auth.login.csrf_token",
-            source,
-        })?;
-
-    Ok((
-        jar.add(session_cookie(
-            session_id,
-            cookie_secure,
-            development_enabled,
-            session_ttl,
-        )),
-        csrf_token,
-    ))
-}
-
-fn session_cookie(
-    session_id: impl Into<String>,
-    configured_secure: bool,
-    development_enabled: bool,
-    session_ttl: Duration,
-) -> Cookie<'static> {
-    let secure = configured_secure && !development_enabled;
-    let mut cookie = Cookie::new("session_id", session_id.into());
-    cookie.set_path("/api");
-    cookie.set_http_only(true);
-    cookie.set_secure(secure);
-    if secure {
-        cookie.set_partitioned(true);
-    }
-    cookie.set_same_site(axum_extra::extract::cookie::SameSite::Strict);
-    cookie.set_max_age(time::Duration::seconds(session_ttl.as_secs() as i64));
-    cookie
-}
-
-const CHALLENGE_TTL: StdDuration = StdDuration::from_secs(10 * 60);
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum ChallengeMode {
-    Verify,
-    Enroll,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct LoginChallenge {
-    user_id: Uuid,
-    #[serde(default)]
-    auth_version: i64,
-    mode: ChallengeMode,
-    return_to: String,
+    let issued = crate::domain::authenticated_sessions::issue(state, cache, user).await?;
+    let config = state.config.read().unwrap();
+    let cookie = session_cookie(
+        issued.session_id,
+        config.session.cookie_secure,
+        config.development_enabled(),
+        issued.ttl,
+    );
+    Ok((jar.add(cookie), issued.csrf_token))
 }
 
 async fn begin_login_payload(
@@ -123,91 +61,19 @@ async fn begin_login_payload(
     user: &user::Model,
     return_to: Option<&str>,
 ) -> Result<Option<LoginChallengeResponse>, AppError> {
-    const OP: &str = "auth.mfa.begin";
-    let db = state.try_database().ok_or_else(|| AppError::Internal {
-        op: OP,
-        message: "database not available".to_owned(),
-    })?;
-    let cache = state.try_cache().ok_or_else(|| AppError::Internal {
-        op: OP,
-        message: "cache service not available".to_owned(),
-    })?;
-    let policy = authentication::mfa_policy(db)
-        .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    let factors = authentication::verified_mfa_factors(db, user.id)
-        .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?
-        .into_iter()
-        .filter(|factor| policy.allows(&factor.kind))
-        .collect::<Vec<_>>();
-    let user_policy = authentication::user_mfa_policy(db, user.id)
-        .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    let requirements = policy.requirements_for(&user_policy, &user.platform_role);
-    let mode = if !factors.is_empty() && requirements.met_by(&factors) {
-        Some(ChallengeMode::Verify)
-    } else if requirements.is_enforced() {
-        Some(ChallengeMode::Enroll)
-    } else if !factors.is_empty() {
-        Some(ChallengeMode::Verify)
-    } else {
-        None
-    };
-    let Some(mode) = mode else {
-        return Ok(None);
-    };
-    let return_to = safe_return_to(return_to);
-    let token = create_challenge(
-        cache,
-        user.id,
-        user.auth_version,
-        mode,
-        return_to.clone(),
-        OP,
+    Ok(
+        crate::domain::login_challenges::begin(state, user, return_to)
+            .await?
+            .map(|offer| LoginChallengeResponse {
+                mfa_required: offer.mode == crate::domain::login_challenges::ChallengeMode::Verify,
+                mfa_enrollment_required: offer.mode
+                    == crate::domain::login_challenges::ChallengeMode::Enroll,
+                challenge_token: offer.challenge_token,
+                factors: offer.factors.iter().map(factor_view).collect(),
+                allowed_factors: offer.allowed_factors,
+                return_to: offer.return_to,
+            }),
     )
-    .await?;
-    Ok(Some(LoginChallengeResponse {
-        mfa_required: mode == ChallengeMode::Verify,
-        mfa_enrollment_required: mode == ChallengeMode::Enroll,
-        challenge_token: token,
-        factors: factors.iter().map(factor_view).collect::<Vec<_>>(),
-        allowed_factors: policy.allowed_factors.clone(),
-        return_to,
-    }))
-}
-
-async fn create_challenge(
-    cache: &grass_cache::CacheStore,
-    user_id: Uuid,
-    auth_version: i64,
-    mode: ChallengeMode,
-    return_to: String,
-    op: &'static str,
-) -> Result<String, AppError> {
-    let token = grass_token::generate_token();
-    cache
-        .set(
-            &challenge_key(&token),
-            &serde_json::to_string(&LoginChallenge {
-                user_id,
-                auth_version,
-                mode,
-                return_to,
-            })
-            .map_err(|error| AppError::Internal {
-                op,
-                message: format!("MFA challenge serialization failed: {error}"),
-            })?,
-            CHALLENGE_TTL,
-        )
-        .await
-        .map_err(|source| AppError::Infrastructure { op, source })?;
-    Ok(token)
-}
-
-fn challenge_key(token: &str) -> String {
-    format!("auth:mfa:challenge:{}", grass_token::hash_token(token))
 }
 
 fn factor_view(factor: &user_mfa_factor::Model) -> MfaFactorResponse {
@@ -222,16 +88,6 @@ fn factor_view(factor: &user_mfa_factor::Model) -> MfaFactorResponse {
 }
 
 const STATE_COOKIE: &str = "oauth_state";
-
-#[derive(Debug, Deserialize, Serialize)]
-struct AuthorizationFlow {
-    provider_id: Uuid,
-    nonce: String,
-    pkce_verifier: String,
-    return_to: String,
-    registration_code: Option<String>,
-    redirect_uri: String,
-}
 
 #[derive(Clone, Deserialize)]
 pub struct CallbackPayload {
@@ -752,26 +608,6 @@ async fn resolve_user(
     Ok(user)
 }
 
-async fn provider_by_slug(
-    db: &sea_orm::DatabaseConnection,
-    slug: &str,
-    op: &'static str,
-) -> Result<auth_identity_provider::Model, AppError> {
-    auth_identity_provider::Entity::find()
-        .filter(auth_identity_provider::Column::Slug.eq(slug))
-        .filter(auth_identity_provider::Column::Enabled.eq(true))
-        .one(db)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op,
-            source: source.into(),
-        })?
-        .ok_or_else(|| AppError::NotFound {
-            op,
-            message: "identity provider not found".to_owned(),
-        })
-}
-
 fn decrypt_client_secret(
     state: &ControlApiState,
     provider: &auth_identity_provider::Model,
@@ -798,95 +634,6 @@ fn decrypt_client_secret(
         op,
         message: "identity provider secret is invalid".to_owned(),
     })
-}
-
-async fn configured_site_url(
-    db: &sea_orm::DatabaseConnection,
-    op: &'static str,
-) -> Result<String, AppError> {
-    settings::get_setting(db, "site.url")
-        .await
-        .map_err(|source| AppError::Infrastructure { op, source })?
-        .and_then(|setting| setting.value.as_str().map(str::to_owned))
-        .ok_or_else(|| AppError::Internal {
-            op,
-            message: "site.url is not configured".to_owned(),
-        })
-}
-
-fn flow_key(state: &str) -> String {
-    format!("auth:oauth:flow:{}", grass_token::hash_token(state))
-}
-
-pub(crate) fn safe_return_to(value: Option<&str>) -> String {
-    value
-        .filter(|value| {
-            value.starts_with('/')
-                && !value.starts_with("//")
-                && !value.contains('\\')
-                && value.len() <= 4096
-                && !value.chars().any(char::is_control)
-        })
-        .unwrap_or("/")
-        .to_owned()
-}
-
-pub(crate) fn map_registration_access_error(
-    error: registration::RegistrationAccessError,
-    op: &'static str,
-) -> AppError {
-    use crate::domain::codes::CodeUseError;
-    use registration::RegistrationAccessError;
-
-    match error {
-        RegistrationAccessError::InvalidPolicy => AppError::Internal {
-            op,
-            message: error.to_string(),
-        },
-        RegistrationAccessError::Closed | RegistrationAccessError::CredentialRequired => {
-            AppError::Forbidden {
-                op,
-                message: error.to_string(),
-            }
-        }
-        RegistrationAccessError::Code(CodeUseError::NotFound | CodeUseError::WrongScope) => {
-            AppError::Forbidden {
-                op,
-                message: "registration code is invalid".to_owned(),
-            }
-        }
-        RegistrationAccessError::Code(CodeUseError::Used) => AppError::Conflict {
-            op,
-            message: error.to_string(),
-        },
-        RegistrationAccessError::Code(CodeUseError::Expired) => AppError::Gone {
-            op,
-            message: error.to_string(),
-        },
-        RegistrationAccessError::Code(CodeUseError::Revoked) => AppError::Forbidden {
-            op,
-            message: error.to_string(),
-        },
-        RegistrationAccessError::Code(CodeUseError::Database(source))
-        | RegistrationAccessError::Database(source) => AppError::Infrastructure { op, source },
-    }
-}
-
-pub(crate) fn personal_team_slug(email: &str) -> String {
-    let slug = email
-        .split('@')
-        .next()
-        .unwrap_or("user")
-        .to_lowercase()
-        .chars()
-        .filter(char::is_ascii_alphanumeric)
-        .take(40)
-        .collect::<String>();
-    if slug.is_empty() {
-        "user".to_owned()
-    } else {
-        slug
-    }
 }
 
 #[derive(serde::Serialize)]

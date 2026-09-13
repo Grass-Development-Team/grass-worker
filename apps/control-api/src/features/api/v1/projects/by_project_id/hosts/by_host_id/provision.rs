@@ -8,14 +8,13 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
-    domain::{certificates, hosts, ingress},
+    domain::{certificates, host_bindings::HostBindingService, hosts, ingress},
     infra::{
         database::entity::{
             HostBindingEnvironment, HostBindingKind, HostBindingStatus, HostReviewStatus,
             project_host_binding,
         },
         error::{AppError, ok_response},
-        host_provision::service::HostBindingService,
         http::extractors::Session,
     },
     state::ControlApiState,

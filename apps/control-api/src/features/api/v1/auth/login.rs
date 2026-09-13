@@ -3,22 +3,21 @@ use axum::{
     extract::{ConnectInfo, State},
     response::{IntoResponse, Response},
 };
-use axum_extra::extract::cookie::{Cookie, CookieJar};
+use axum_extra::extract::cookie::CookieJar;
 use grass_cache::Cache;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{net::IpAddr, time::Duration};
 use uuid::Uuid;
 
 use crate::{
-    domain::{authentication, users},
+    domain::users,
     infra::{
         database::entity::{user, user_mfa_factor},
         error::{AppError, ok_response},
-        http::middlewares::csrf,
+        http::session_cookies::session_cookie,
     },
     state::ControlApiState,
 };
-use std::time::Duration as StdDuration;
 
 pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
     axum::Router::new().route("/login", axum::routing::post(handler))
@@ -158,82 +157,15 @@ pub(crate) async fn create_authenticated_session(
     jar: CookieJar,
     user: &crate::infra::database::entity::user::Model,
 ) -> Result<(CookieJar, String), AppError> {
-    if let Some(db) = state.try_database() {
-        users::update_last_login(db, user.id)
-            .await
-            .map_err(|source| AppError::Infrastructure {
-                op: "auth.login.update_last_login",
-                source,
-            })?;
-    }
-    let (cookie_secure, development_enabled, session_ttl) = {
-        let config = state.config.read().unwrap();
-        (
-            config.session.cookie_secure,
-            config.development_enabled(),
-            Duration::from_secs(config.session.session_ttl_seconds),
-        )
-    };
-    let session_id = grass_session::create_session(cache, user.id, user.auth_version, session_ttl)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: "auth.login.create_session",
-            source,
-        })?;
-
-    let csrf_token = csrf::generate_csrf_token(cache, &session_id)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: "auth.login.csrf_token",
-            source,
-        })?;
-
-    Ok((
-        jar.add(session_cookie(
-            session_id,
-            cookie_secure,
-            development_enabled,
-            session_ttl,
-        )),
-        csrf_token,
-    ))
-}
-
-fn session_cookie(
-    session_id: impl Into<String>,
-    configured_secure: bool,
-    development_enabled: bool,
-    session_ttl: Duration,
-) -> Cookie<'static> {
-    let secure = configured_secure && !development_enabled;
-    let mut cookie = Cookie::new("session_id", session_id.into());
-    cookie.set_path("/api");
-    cookie.set_http_only(true);
-    cookie.set_secure(secure);
-    if secure {
-        cookie.set_partitioned(true);
-    }
-    cookie.set_same_site(axum_extra::extract::cookie::SameSite::Strict);
-    cookie.set_max_age(time::Duration::seconds(session_ttl.as_secs() as i64));
-    cookie
-}
-
-const CHALLENGE_TTL: StdDuration = StdDuration::from_secs(10 * 60);
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum ChallengeMode {
-    Verify,
-    Enroll,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct LoginChallenge {
-    user_id: Uuid,
-    #[serde(default)]
-    auth_version: i64,
-    mode: ChallengeMode,
-    return_to: String,
+    let issued = crate::domain::authenticated_sessions::issue(state, cache, user).await?;
+    let config = state.config.read().unwrap();
+    let cookie = session_cookie(
+        issued.session_id,
+        config.session.cookie_secure,
+        config.development_enabled(),
+        issued.ttl,
+    );
+    Ok((jar.add(cookie), issued.csrf_token))
 }
 
 pub async fn begin_login(
@@ -251,91 +183,19 @@ async fn begin_login_payload(
     user: &user::Model,
     return_to: Option<&str>,
 ) -> Result<Option<LoginChallengeResponse>, AppError> {
-    const OP: &str = "auth.mfa.begin";
-    let db = state.try_database().ok_or_else(|| AppError::Internal {
-        op: OP,
-        message: "database not available".to_owned(),
-    })?;
-    let cache = state.try_cache().ok_or_else(|| AppError::Internal {
-        op: OP,
-        message: "cache service not available".to_owned(),
-    })?;
-    let policy = authentication::mfa_policy(db)
-        .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    let factors = authentication::verified_mfa_factors(db, user.id)
-        .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?
-        .into_iter()
-        .filter(|factor| policy.allows(&factor.kind))
-        .collect::<Vec<_>>();
-    let user_policy = authentication::user_mfa_policy(db, user.id)
-        .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    let requirements = policy.requirements_for(&user_policy, &user.platform_role);
-    let mode = if !factors.is_empty() && requirements.met_by(&factors) {
-        Some(ChallengeMode::Verify)
-    } else if requirements.is_enforced() {
-        Some(ChallengeMode::Enroll)
-    } else if !factors.is_empty() {
-        Some(ChallengeMode::Verify)
-    } else {
-        None
-    };
-    let Some(mode) = mode else {
-        return Ok(None);
-    };
-    let return_to = safe_return_to(return_to);
-    let token = create_challenge(
-        cache,
-        user.id,
-        user.auth_version,
-        mode,
-        return_to.clone(),
-        OP,
+    Ok(
+        crate::domain::login_challenges::begin(state, user, return_to)
+            .await?
+            .map(|offer| LoginChallengeResponse {
+                mfa_required: offer.mode == crate::domain::login_challenges::ChallengeMode::Verify,
+                mfa_enrollment_required: offer.mode
+                    == crate::domain::login_challenges::ChallengeMode::Enroll,
+                challenge_token: offer.challenge_token,
+                factors: offer.factors.iter().map(factor_view).collect(),
+                allowed_factors: offer.allowed_factors,
+                return_to: offer.return_to,
+            }),
     )
-    .await?;
-    Ok(Some(LoginChallengeResponse {
-        mfa_required: mode == ChallengeMode::Verify,
-        mfa_enrollment_required: mode == ChallengeMode::Enroll,
-        challenge_token: token,
-        factors: factors.iter().map(factor_view).collect::<Vec<_>>(),
-        allowed_factors: policy.allowed_factors.clone(),
-        return_to,
-    }))
-}
-
-async fn create_challenge(
-    cache: &grass_cache::CacheStore,
-    user_id: Uuid,
-    auth_version: i64,
-    mode: ChallengeMode,
-    return_to: String,
-    op: &'static str,
-) -> Result<String, AppError> {
-    let token = grass_token::generate_token();
-    cache
-        .set(
-            &challenge_key(&token),
-            &serde_json::to_string(&LoginChallenge {
-                user_id,
-                auth_version,
-                mode,
-                return_to,
-            })
-            .map_err(|error| AppError::Internal {
-                op,
-                message: format!("MFA challenge serialization failed: {error}"),
-            })?,
-            CHALLENGE_TTL,
-        )
-        .await
-        .map_err(|source| AppError::Infrastructure { op, source })?;
-    Ok(token)
-}
-
-fn challenge_key(token: &str) -> String {
-    format!("auth:mfa:challenge:{}", grass_token::hash_token(token))
 }
 
 fn factor_view(factor: &user_mfa_factor::Model) -> MfaFactorResponse {
@@ -347,19 +207,6 @@ fn factor_view(factor: &user_mfa_factor::Model) -> MfaFactorResponse {
         created_at: factor.created_at,
         last_used_at: factor.last_used_at,
     }
-}
-
-pub(crate) fn safe_return_to(value: Option<&str>) -> String {
-    value
-        .filter(|value| {
-            value.starts_with('/')
-                && !value.starts_with("//")
-                && !value.contains('\\')
-                && value.len() <= 4096
-                && !value.chars().any(char::is_control)
-        })
-        .unwrap_or("/")
-        .to_owned()
 }
 
 pub(crate) fn user_avatar_url(user_id: Uuid, version: Option<Uuid>) -> Option<String> {
@@ -413,7 +260,6 @@ mod tests {
     use std::net::IpAddr;
     use std::net::Ipv4Addr;
 
-    use std::time::Duration;
     #[tokio::test]
     async fn login_rate_limits_accounts_and_source_addresses() {
         let cache = CacheStore::connect_cache(CacheBackend::Moka, "")
@@ -440,32 +286,5 @@ mod tests {
             enforce_login_rate_limits(&cache, "last@example.com", second_ip).await,
             Err(AppError::TooManyRequests { .. })
         ));
-    }
-
-    #[test]
-    fn session_cookie_contains_all_security_attributes() {
-        let cookie = session_cookie("session", true, false, Duration::from_secs(3600));
-
-        assert_eq!(cookie.path(), Some("/api"));
-        assert_eq!(cookie.http_only(), Some(true));
-        assert_eq!(cookie.secure(), Some(true));
-        assert_eq!(
-            cookie.same_site(),
-            Some(axum_extra::extract::cookie::SameSite::Strict)
-        );
-        assert_eq!(cookie.partitioned(), Some(true));
-        assert_eq!(cookie.max_age(), Some(time::Duration::hours(1)));
-    }
-
-    #[test]
-    fn session_cookie_is_not_secure_in_development_mode() {
-        let cookie = session_cookie("session", true, true, Duration::from_secs(3600));
-
-        assert_eq!(cookie.secure(), Some(false));
-        assert_eq!(cookie.partitioned(), None);
-        assert_eq!(
-            cookie.same_site(),
-            Some(axum_extra::extract::cookie::SameSite::Strict)
-        );
     }
 }

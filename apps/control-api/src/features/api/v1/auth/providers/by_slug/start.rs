@@ -5,16 +5,13 @@ use axum::{
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use grass_cache::Cache;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use uuid::Uuid;
 
 use crate::{
-    domain::settings,
+    domain::external_login::{AuthorizationFlow, configured_site_url, flow_key, provider_by_slug},
     infra::{
-        database::entity::{IdentityProviderKind, auth_identity_provider},
-        error::AppError,
+        database::entity::IdentityProviderKind, error::AppError, http::redirects::safe_return_to,
     },
     state::ControlApiState,
 };
@@ -27,16 +24,6 @@ pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
 const FLOW_TTL: StdDuration = StdDuration::from_secs(10 * 60);
 
 const STATE_COOKIE: &str = "oauth_state";
-
-#[derive(Debug, Deserialize, Serialize)]
-struct AuthorizationFlow {
-    provider_id: Uuid,
-    nonce: String,
-    pkce_verifier: String,
-    return_to: String,
-    registration_code: Option<String>,
-    redirect_uri: String,
-}
 
 #[derive(Deserialize)]
 pub struct StartQuery {
@@ -148,44 +135,6 @@ pub async fn start(
     ))
 }
 
-async fn provider_by_slug(
-    db: &sea_orm::DatabaseConnection,
-    slug: &str,
-    op: &'static str,
-) -> Result<auth_identity_provider::Model, AppError> {
-    auth_identity_provider::Entity::find()
-        .filter(auth_identity_provider::Column::Slug.eq(slug))
-        .filter(auth_identity_provider::Column::Enabled.eq(true))
-        .one(db)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op,
-            source: source.into(),
-        })?
-        .ok_or_else(|| AppError::NotFound {
-            op,
-            message: "identity provider not found".to_owned(),
-        })
-}
-
-async fn configured_site_url(
-    db: &sea_orm::DatabaseConnection,
-    op: &'static str,
-) -> Result<String, AppError> {
-    settings::get_setting(db, "site.url")
-        .await
-        .map_err(|source| AppError::Infrastructure { op, source })?
-        .and_then(|setting| setting.value.as_str().map(str::to_owned))
-        .ok_or_else(|| AppError::Internal {
-            op,
-            message: "site.url is not configured".to_owned(),
-        })
-}
-
-fn flow_key(state: &str) -> String {
-    format!("auth:oauth:flow:{}", grass_token::hash_token(state))
-}
-
 fn state_cookie(
     state: &str,
     apple_form_post: bool,
@@ -203,19 +152,6 @@ fn state_cookie(
     });
     cookie.set_secure((apple_form_post || configured_secure) && !development_enabled);
     cookie
-}
-
-pub(crate) fn safe_return_to(value: Option<&str>) -> String {
-    value
-        .filter(|value| {
-            value.starts_with('/')
-                && !value.starts_with("//")
-                && !value.contains('\\')
-                && value.len() <= 4096
-                && !value.chars().any(char::is_control)
-        })
-        .unwrap_or("/")
-        .to_owned()
 }
 
 #[cfg(test)]

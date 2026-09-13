@@ -3,22 +3,26 @@ use axum::{
     extract::State,
     response::{IntoResponse, Response},
 };
-use axum_extra::extract::cookie::{Cookie, CookieJar};
+use axum_extra::extract::cookie::CookieJar;
 use sea_orm::TransactionTrait;
 use serde::Deserialize;
-use std::time::Duration;
 use uuid::Uuid;
 
 use crate::{
     domain::{
-        authentication, platform_mail, registration, settings,
+        authentication, platform_mail,
+        registration::{self, personal_team_slug},
+        settings,
         teams::{self, CreateTeamParams},
         users::{self, CreateUserParams},
     },
     infra::{
         database::entity::{AuthTokenKind, PlatformRole, TeamKind, user},
         error::{AppError, ok_response},
-        http::middlewares::csrf,
+        http::{
+            redirects::safe_return_to, registration_errors::map_registration_access_error,
+            session_cookies::session_cookie,
+        },
     },
     state::ControlApiState,
 };
@@ -62,77 +66,15 @@ pub(crate) async fn create_authenticated_session(
     jar: CookieJar,
     user: &crate::infra::database::entity::user::Model,
 ) -> Result<(CookieJar, String), AppError> {
-    if let Some(db) = state.try_database() {
-        users::update_last_login(db, user.id)
-            .await
-            .map_err(|source| AppError::Infrastructure {
-                op: "auth.login.update_last_login",
-                source,
-            })?;
-    }
-    let (cookie_secure, development_enabled, session_ttl) = {
-        let config = state.config.read().unwrap();
-        (
-            config.session.cookie_secure,
-            config.development_enabled(),
-            Duration::from_secs(config.session.session_ttl_seconds),
-        )
-    };
-    let session_id = grass_session::create_session(cache, user.id, user.auth_version, session_ttl)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: "auth.login.create_session",
-            source,
-        })?;
-
-    let csrf_token = csrf::generate_csrf_token(cache, &session_id)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: "auth.login.csrf_token",
-            source,
-        })?;
-
-    Ok((
-        jar.add(session_cookie(
-            session_id,
-            cookie_secure,
-            development_enabled,
-            session_ttl,
-        )),
-        csrf_token,
-    ))
-}
-
-fn session_cookie(
-    session_id: impl Into<String>,
-    configured_secure: bool,
-    development_enabled: bool,
-    session_ttl: Duration,
-) -> Cookie<'static> {
-    let secure = configured_secure && !development_enabled;
-    let mut cookie = Cookie::new("session_id", session_id.into());
-    cookie.set_path("/api");
-    cookie.set_http_only(true);
-    cookie.set_secure(secure);
-    if secure {
-        cookie.set_partitioned(true);
-    }
-    cookie.set_same_site(axum_extra::extract::cookie::SameSite::Strict);
-    cookie.set_max_age(time::Duration::seconds(session_ttl.as_secs() as i64));
-    cookie
-}
-
-pub(crate) fn safe_return_to(value: Option<&str>) -> String {
-    value
-        .filter(|value| {
-            value.starts_with('/')
-                && !value.starts_with("//")
-                && !value.contains('\\')
-                && value.len() <= 4096
-                && !value.chars().any(char::is_control)
-        })
-        .unwrap_or("/")
-        .to_owned()
+    let issued = crate::domain::authenticated_sessions::issue(state, cache, user).await?;
+    let config = state.config.read().unwrap();
+    let cookie = session_cookie(
+        issued.session_id,
+        config.session.cookie_secure,
+        config.development_enabled(),
+        issued.ttl,
+    );
+    Ok((jar.add(cookie), issued.csrf_token))
 }
 
 struct RegistrationInput {
@@ -344,70 +286,12 @@ fn registration_platform_role() -> PlatformRole {
     PlatformRole::User
 }
 
-pub(crate) fn map_registration_access_error(
-    error: registration::RegistrationAccessError,
-    op: &'static str,
-) -> AppError {
-    use crate::domain::codes::CodeUseError;
-    use registration::RegistrationAccessError;
-
-    match error {
-        RegistrationAccessError::InvalidPolicy => AppError::Internal {
-            op,
-            message: error.to_string(),
-        },
-        RegistrationAccessError::Closed | RegistrationAccessError::CredentialRequired => {
-            AppError::Forbidden {
-                op,
-                message: error.to_string(),
-            }
-        }
-        RegistrationAccessError::Code(CodeUseError::NotFound | CodeUseError::WrongScope) => {
-            AppError::Forbidden {
-                op,
-                message: "registration code is invalid".to_owned(),
-            }
-        }
-        RegistrationAccessError::Code(CodeUseError::Used) => AppError::Conflict {
-            op,
-            message: error.to_string(),
-        },
-        RegistrationAccessError::Code(CodeUseError::Expired) => AppError::Gone {
-            op,
-            message: error.to_string(),
-        },
-        RegistrationAccessError::Code(CodeUseError::Revoked) => AppError::Forbidden {
-            op,
-            message: error.to_string(),
-        },
-        RegistrationAccessError::Code(CodeUseError::Database(source))
-        | RegistrationAccessError::Database(source) => AppError::Infrastructure { op, source },
-    }
-}
-
 fn validate_registration_input(email: &str) -> Result<RegistrationInput, AppError> {
     let email = grass_validator::normalize_email(email).map_err(|error| AppError::Validation {
         op: "auth.register.invalid_email",
         message: error.to_string(),
     })?;
     Ok(RegistrationInput { email })
-}
-
-pub(crate) fn personal_team_slug(email: &str) -> String {
-    let slug = email
-        .split('@')
-        .next()
-        .unwrap_or("user")
-        .to_lowercase()
-        .chars()
-        .filter(char::is_ascii_alphanumeric)
-        .take(40)
-        .collect::<String>();
-    if slug.is_empty() {
-        "user".to_owned()
-    } else {
-        slug
-    }
 }
 
 pub(crate) fn user_avatar_url(user_id: Uuid, version: Option<Uuid>) -> Option<String> {

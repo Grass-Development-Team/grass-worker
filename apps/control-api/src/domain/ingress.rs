@@ -1,7 +1,6 @@
 use sea_orm::{
     ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Set, sea_query::OnConflict,
 };
-use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -253,7 +252,7 @@ pub async fn probe_regional_ingress(
         .dns_checked_at
         .is_none_or(|at| now - at >= time::Duration::seconds(60))
     {
-        let result = super::domain_dns::Resolver::new()?
+        let result = crate::infra::dns::Resolver::new()?
             .addresses(&ingress.hostname)
             .await;
         let mut active: regional_ingress::ActiveModel = ingress.clone().into();
@@ -330,79 +329,6 @@ pub async fn probe_regional_ingress(
             .await?;
     }
     Ok(())
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DnsVerification {
-    Verified,
-    Missing,
-    Mismatch,
-}
-
-pub async fn verify_dns_txt_at(
-    client: &reqwest::Client,
-    endpoint: &str,
-    host: &str,
-    expected: &str,
-) -> anyhow::Result<DnsVerification> {
-    let name = format!("_grass.{}", host.trim_end_matches('.'));
-    verify_dns_record_at(client, endpoint, &name, "TXT", expected).await
-}
-
-pub async fn verify_dns_record_at(
-    client: &reqwest::Client,
-    endpoint: &str,
-    name: &str,
-    record_type: &str,
-    expected: &str,
-) -> anyhow::Result<DnsVerification> {
-    let response = client
-        .get(endpoint)
-        .query(&[("name", name), ("type", record_type)])
-        .header("accept", "application/dns-json")
-        .send()
-        .await?;
-    if !response.status().is_success() {
-        anyhow::bail!("DNS TXT query returned {}", response.status());
-    }
-    let body: serde_json::Value = response.json().await?;
-    if body
-        .get("Status")
-        .and_then(serde_json::Value::as_u64)
-        .is_some_and(|status| status != 0 && status != 3)
-    {
-        anyhow::bail!("DNS resolver returned an unsuccessful status");
-    }
-    let answers = body
-        .get("Answer")
-        .and_then(serde_json::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut found = false;
-    for answer in answers {
-        let wanted = if record_type == "CNAME" { 5 } else { 16 };
-        if answer.get("type").and_then(serde_json::Value::as_u64) != Some(wanted) {
-            continue;
-        }
-        let Some(data) = answer.get("data").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        let text = if record_type == "CNAME" {
-            data.trim().trim_end_matches('.').to_ascii_lowercase()
-        } else {
-            data.trim().trim_matches('"').replace("\" \"", "")
-        };
-        let value = text.as_str();
-        if value.as_bytes().ct_eq(expected.as_bytes()).into() {
-            return Ok(DnsVerification::Verified);
-        }
-        found = true;
-    }
-    Ok(if found {
-        DnsVerification::Mismatch
-    } else {
-        DnsVerification::Missing
-    })
 }
 
 pub fn dns_verification_token(secret_key: &str, binding_id: Uuid, host: &str) -> String {
@@ -512,16 +438,28 @@ pub(crate) mod tests {
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let client = reqwest::Client::new();
         assert_eq!(
-            super::verify_dns_txt_at(&client, &endpoint, "app.example.com", "expected-token")
-                .await
-                .unwrap(),
-            super::DnsVerification::Verified
+            crate::infra::dns::verify_dns_record_at(
+                &client,
+                &endpoint,
+                "_grass.app.example.com",
+                "TXT",
+                "expected-token"
+            )
+            .await
+            .unwrap(),
+            crate::infra::dns::RecordMatch::Verified
         );
         assert_eq!(
-            super::verify_dns_txt_at(&client, &endpoint, "app.example.com", "other-token")
-                .await
-                .unwrap(),
-            super::DnsVerification::Mismatch
+            crate::infra::dns::verify_dns_record_at(
+                &client,
+                &endpoint,
+                "_grass.app.example.com",
+                "TXT",
+                "other-token"
+            )
+            .await
+            .unwrap(),
+            crate::infra::dns::RecordMatch::Mismatch
         );
         server.abort();
     }

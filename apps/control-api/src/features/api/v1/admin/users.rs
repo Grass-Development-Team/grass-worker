@@ -1,3 +1,4 @@
+use crate::domain::registration::personal_team_slug;
 pub(crate) mod batch;
 pub(crate) mod by_user_id;
 
@@ -254,23 +255,6 @@ pub async fn create(
         user: user_view(&created),
         password: generated.then_some(password),
     }))
-}
-
-pub(crate) fn personal_team_slug(email: &str) -> String {
-    let slug = email
-        .split('@')
-        .next()
-        .unwrap_or("user")
-        .to_lowercase()
-        .chars()
-        .filter(char::is_ascii_alphanumeric)
-        .take(40)
-        .collect::<String>();
-    if slug.is_empty() {
-        "user".to_owned()
-    } else {
-        slug
-    }
 }
 
 #[derive(serde::Serialize)]

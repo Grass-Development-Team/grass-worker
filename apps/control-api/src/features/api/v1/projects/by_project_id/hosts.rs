@@ -14,6 +14,7 @@ use uuid::Uuid;
 use crate::{
     domain::{
         certificates, deployments,
+        host_bindings::{BindHostRequest, HostBindingService},
         hosts::{self, DomainReviewMode},
         ingress,
     },
@@ -23,7 +24,6 @@ use crate::{
             HostReviewStatus, host_policy, project_host_binding,
         },
         error::{AppError, ok_response},
-        host_provision::service::{BindHostRequest, HostBindingService},
         http::extractors::Session,
     },
     state::ControlApiState,

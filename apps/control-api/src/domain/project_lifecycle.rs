@@ -8,12 +8,15 @@ use uuid::Uuid;
 
 use crate::infra::audit as audits;
 use crate::{
-    domain::{hosts, notifications, projects, quotas::QuotaDimension},
+    domain::{
+        host_bindings::{DeprovisionOutcome, HostBindingService},
+        hosts, notifications, projects,
+        quotas::QuotaDimension,
+    },
     infra::{
         audit::CreateAuditEventParams,
         database::entity::{AuditEventResult, ProjectRuntime, project, project_host_binding, team},
         error::AppError,
-        host_provision::service::{DeprovisionOutcome, HostBindingService},
         quota::{QuotaCharge, QuotaService},
     },
 };

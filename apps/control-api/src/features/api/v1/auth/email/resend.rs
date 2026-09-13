@@ -7,6 +7,7 @@ use crate::{
     infra::{
         database::entity::AuthTokenKind,
         error::{AppError, ok_response},
+        http::redirects::safe_return_to,
     },
     state::ControlApiState,
 };
@@ -74,19 +75,6 @@ pub async fn resend(
         .await;
     }
     Ok(ok_response(ResendResponse { accepted: true }))
-}
-
-pub(crate) fn safe_return_to(value: Option<&str>) -> String {
-    value
-        .filter(|value| {
-            value.starts_with('/')
-                && !value.starts_with("//")
-                && !value.contains('\\')
-                && value.len() <= 4096
-                && !value.chars().any(char::is_control)
-        })
-        .unwrap_or("/")
-        .to_owned()
 }
 
 #[derive(serde::Serialize)]

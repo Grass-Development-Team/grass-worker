@@ -418,9 +418,17 @@ async fn team_audit_query_requires_team_visibility() {
     );
 }
 
-// Tracing callsite interest is process-wide. Keep temporary subscriber
-// registration and removal serial while these tests capture thread-local logs.
+// Keep temporary log captures isolated from each other.
 static LOG_CAPTURE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+// With a single registered dispatcher, tracing learns a new callsite's interest
+// from the thread that first reaches it. Parallel tests have no default subscriber
+// and could cache that site as disabled. A retained inert dispatcher makes tracing
+// combine the registered subscribers when learning interest on any thread.
+fn register_capture_baseline() {
+    static BASELINE: std::sync::OnceLock<tracing::Dispatch> = std::sync::OnceLock::new();
+    BASELINE.get_or_init(|| tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default()));
+}
 
 #[derive(Clone, Default)]
 struct CapturedAuditLog(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
@@ -459,6 +467,7 @@ fn transaction_event() -> CreateAuditEventParams {
 #[tokio::test]
 async fn business_audit_logs_wait_for_commit_and_share_request_context() {
     let _capture_guard = LOG_CAPTURE_LOCK.lock().await;
+    register_capture_baseline();
     use tracing::instrument::WithSubscriber;
 
     let capture = CapturedAuditLog::default();
@@ -486,7 +495,11 @@ async fn business_audit_logs_wait_for_commit_and_share_request_context() {
         );
         transaction.commit().await.unwrap();
         let output = capture.text();
-        assert_eq!(output.matches("audit event committed").count(), 1);
+        assert_eq!(
+            output.matches("audit event committed").count(),
+            1,
+            "captured: {output}"
+        );
         assert!(output.contains(&request_id.to_string()));
         assert!(output.contains("[REDACTED]"));
         assert!(!output.contains("must-not-appear-in-audit-log"));
@@ -498,6 +511,7 @@ async fn business_audit_logs_wait_for_commit_and_share_request_context() {
 #[tokio::test]
 async fn rolled_back_audit_never_logs_committed_success() {
     let _capture_guard = LOG_CAPTURE_LOCK.lock().await;
+    register_capture_baseline();
     use tracing::instrument::WithSubscriber;
 
     let capture = CapturedAuditLog::default();
@@ -531,6 +545,7 @@ async fn rolled_back_audit_never_logs_committed_success() {
 #[tokio::test]
 async fn audit_insert_failure_is_returned_and_does_not_log_success() {
     let _capture_guard = LOG_CAPTURE_LOCK.lock().await;
+    register_capture_baseline();
     use tracing::instrument::WithSubscriber;
 
     let capture = CapturedAuditLog::default();

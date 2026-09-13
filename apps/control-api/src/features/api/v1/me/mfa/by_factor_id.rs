@@ -1,18 +1,16 @@
+use crate::domain::mfa::{challenge_user, factor_for_user, record_factor_audit};
 pub(crate) mod confirm;
 
 use axum::{
     extract::{Path, State},
     response::IntoResponse,
 };
-use serde_json::json;
 use uuid::Uuid;
 
 use crate::infra::audit as audits;
 use crate::{
-    domain::{authentication, users},
+    domain::authentication,
     infra::{
-        audit::CreateAuditEventParams,
-        database::entity::{AuditEventResult, MfaFactorKind, user, user_mfa_factor},
         error::{AppError, ok_response},
         http::extractors::Session,
     },
@@ -78,58 +76,6 @@ pub async fn account_delete(
             source: source.into(),
         })?;
     Ok(ok_response(AccountDeleteResponse { deleted: true }))
-}
-
-async fn record_factor_audit(
-    db: &impl audits::AuditConnection,
-    user_id: Uuid,
-    action: &str,
-    kind: &MfaFactorKind,
-) -> anyhow::Result<()> {
-    audits::create_platform_audit_event(
-        db,
-        CreateAuditEventParams {
-            actor_user_id: Some(user_id),
-            actor_node_id: None,
-            team_id: None,
-            action: action.to_owned(),
-            target_type: "user".to_owned(),
-            target_id: Some(user_id),
-            result: AuditEventResult::Success,
-            reason: None,
-            metadata: json!({ "factor_kind": kind.as_str() }),
-        },
-    )
-    .await
-}
-
-async fn challenge_user(
-    state: &ControlApiState,
-    user_id: Uuid,
-    op: &'static str,
-) -> Result<user::Model, AppError> {
-    users::get_user_by_id(state.try_database().unwrap(), user_id)
-        .await
-        .map_err(|source| AppError::Infrastructure { op, source })?
-        .ok_or_else(|| AppError::NotFound {
-            op,
-            message: "user not found".to_owned(),
-        })
-}
-
-async fn factor_for_user(
-    state: &ControlApiState,
-    user_id: Uuid,
-    factor_id: Uuid,
-    op: &'static str,
-) -> Result<user_mfa_factor::Model, AppError> {
-    authentication::mfa_factor(state.try_database().unwrap(), user_id, factor_id)
-        .await
-        .map_err(|source| AppError::Infrastructure { op, source })?
-        .ok_or_else(|| AppError::NotFound {
-            op,
-            message: "MFA factor not found".to_owned(),
-        })
 }
 
 #[derive(serde::Serialize)]

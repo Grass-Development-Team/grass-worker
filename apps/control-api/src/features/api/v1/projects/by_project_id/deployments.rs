@@ -491,11 +491,9 @@ pub async fn create(
             project: access.project.clone(),
             environment,
             triggered_by_user_id: Some(session.data.user_id),
-            branch: crate::features::api::v1::projects::optional_trimmed(body.branch),
-            commit_hash: crate::features::api::v1::projects::optional_trimmed(body.commit_hash),
-            commit_message: crate::features::api::v1::projects::optional_trimmed(
-                body.commit_message,
-            ),
+            branch: optional_trimmed(body.branch),
+            commit_hash: optional_trimmed(body.commit_hash),
+            commit_message: optional_trimmed(body.commit_message),
             preview_host,
             source_credential_version_id,
         },
@@ -667,6 +665,12 @@ fn parse_build_status(value: &str, op: &'static str) -> Result<DeploymentBuildSt
             message: format!("invalid build status: {other}"),
         }),
     }
+}
+
+fn optional_trimmed(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 #[cfg(test)]

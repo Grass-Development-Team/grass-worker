@@ -1,12 +1,14 @@
 //! Encrypted, write-only DNS provider configuration. Legacy JSON objects
 //! remain readable and are upgraded under a row lock before provider use.
 
-use sea_orm::sea_query::LockType;
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait, QuerySelect, TransactionTrait};
+use super::HostProvisionError;
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, EntityTrait, QuerySelect, TransactionTrait,
+    sea_query::LockType,
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::HostProvisionError;
 use crate::infra::database::entity::host_source;
 
 const FORMAT: &str = "grass-host-source-config-v1";
@@ -185,7 +187,7 @@ pub fn redact_message(config: &Value, message: &str) -> String {
     message
 }
 
-pub(super) fn redact_error(config: &Value, error: HostProvisionError) -> HostProvisionError {
+pub(crate) fn redact_error(config: &Value, error: HostProvisionError) -> HostProvisionError {
     match error {
         HostProvisionError::Provider(message) => {
             HostProvisionError::Provider(redact_message(config, &message))

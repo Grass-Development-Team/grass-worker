@@ -3,10 +3,9 @@ use axum::{
     extract::State,
     response::{IntoResponse, Response},
 };
-use axum_extra::extract::cookie::{Cookie, CookieJar};
+use axum_extra::extract::cookie::CookieJar;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set};
 use serde::Deserialize;
-use std::time::Duration;
 use uuid::Uuid;
 
 use crate::{
@@ -14,7 +13,7 @@ use crate::{
     infra::{
         database::entity::{AuthTokenKind, user},
         error::{AppError, ok_response},
-        http::middlewares::csrf,
+        http::session_cookies::session_cookie,
     },
     state::ControlApiState,
 };
@@ -104,64 +103,15 @@ pub(crate) async fn create_authenticated_session(
     jar: CookieJar,
     user: &crate::infra::database::entity::user::Model,
 ) -> Result<(CookieJar, String), AppError> {
-    if let Some(db) = state.try_database() {
-        users::update_last_login(db, user.id)
-            .await
-            .map_err(|source| AppError::Infrastructure {
-                op: "auth.login.update_last_login",
-                source,
-            })?;
-    }
-    let (cookie_secure, development_enabled, session_ttl) = {
-        let config = state.config.read().unwrap();
-        (
-            config.session.cookie_secure,
-            config.development_enabled(),
-            Duration::from_secs(config.session.session_ttl_seconds),
-        )
-    };
-    let session_id = grass_session::create_session(cache, user.id, user.auth_version, session_ttl)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: "auth.login.create_session",
-            source,
-        })?;
-
-    let csrf_token = csrf::generate_csrf_token(cache, &session_id)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: "auth.login.csrf_token",
-            source,
-        })?;
-
-    Ok((
-        jar.add(session_cookie(
-            session_id,
-            cookie_secure,
-            development_enabled,
-            session_ttl,
-        )),
-        csrf_token,
-    ))
-}
-
-fn session_cookie(
-    session_id: impl Into<String>,
-    configured_secure: bool,
-    development_enabled: bool,
-    session_ttl: Duration,
-) -> Cookie<'static> {
-    let secure = configured_secure && !development_enabled;
-    let mut cookie = Cookie::new("session_id", session_id.into());
-    cookie.set_path("/api");
-    cookie.set_http_only(true);
-    cookie.set_secure(secure);
-    if secure {
-        cookie.set_partitioned(true);
-    }
-    cookie.set_same_site(axum_extra::extract::cookie::SameSite::Strict);
-    cookie.set_max_age(time::Duration::seconds(session_ttl.as_secs() as i64));
-    cookie
+    let issued = crate::domain::authenticated_sessions::issue(state, cache, user).await?;
+    let config = state.config.read().unwrap();
+    let cookie = session_cookie(
+        issued.session_id,
+        config.session.cookie_secure,
+        config.development_enabled(),
+        issued.ttl,
+    );
+    Ok((jar.add(cookie), issued.csrf_token))
 }
 
 pub(crate) fn user_avatar_url(user_id: Uuid, version: Option<Uuid>) -> Option<String> {
