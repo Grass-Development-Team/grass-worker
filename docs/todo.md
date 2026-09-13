@@ -9,22 +9,6 @@
 - 未经用户批准，不得把较低优先级或 Future 项目提前并入当前功能。
 - 当前版本从本文档头部读取，并用于 GitHub Milestone 与 Project 命名。
 
-# Control API 规范整理
-
-## R1：路径切片、审计与类型规范
-
-父事项：[#207](https://github.com/Grass-Development-Team/grass-worker/issues/207)。按已批准计划依次实施；完成并合并的实现小项按本文规则移除，最后执行 R1.9 删除整个区块。
-
-- R1.1 定义 URL 路径与模块归属、本地 Request/Response、路由组合和兼容性基线。[#208](https://github.com/Grass-Development-Team/grass-worker/issues/208)
-- R1.2 将结构化日志、审计内容、脱敏、请求上下文、写入、查询和保留策略统一到 `infra/audit`；明确事务与失败语义。[#209](https://github.com/Grass-Development-Team/grass-worker/issues/209)
-- R1.3 按 URL 路径整理项目部署、internal Build/Serve 与预览授权接口，使用本地 DTO 并验证 Node 协议。[#210](https://github.com/Grass-Development-Team/grass-worker/issues/210)
-- R1.4 按相同规则整理其余 auth、me、teams、admin、setup、avatars 等接口。[#211](https://github.com/Grass-Development-Team/grass-worker/issues/211)
-- R1.5 明确共享业务与技术适配器归属，消除其他接口和后台任务对 controller 模块的工具依赖。[#212](https://github.com/Grass-Development-Team/grass-worker/issues/212)
-- R1.6 统一 PATCH 缺失/null/值、状态转换和错误映射，修复个人显示名清空并保留安全诊断。[#213](https://github.com/Grass-Development-Team/grass-worker/issues/213)
-- R1.7 整理测试位置与共享 fixture，改善 SQL、JSON、宏和声明的人工可读性。[#214](https://github.com/Grass-Development-Team/grass-worker/issues/214)
-- R1.8 统一 workspace 依赖继承，并验证证书解析、签发和交付相关行为。[#215](https://github.com/Grass-Development-Team/grass-worker/issues/215)
-- R1.9 在上述实现全部完成、验证并合并后，删除整个 R1 TODO 区块（包括本项），保留其他未完成范围。[#216](https://github.com/Grass-Development-Team/grass-worker/issues/216)
-
 # 第二阶段
 
 ## P2：平台扩展
