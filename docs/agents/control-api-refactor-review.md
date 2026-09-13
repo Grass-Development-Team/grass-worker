@@ -31,6 +31,6 @@ Each implementation commit is preceded by `just quality`, covering formatting, w
 
 The final full validation passed: Control API 523 passed / 32 ignored; Node 134 passed / 2 ignored; Console 239 passed across 63 files. The route ownership check found 177 endpoint owners with no violations. These counts describe the executed checks, with ignored cases reported separately.
 
-No dedicated PostgreSQL or Redis test environment was configured for this work. Ignored database/schema/Redis tests are compiled but are not executed database regressions. Node tests requiring external tools or services may also be ignored. No database schema migration or disposable database operation is part of this refactor validation.
+No dedicated local PostgreSQL or Redis test environment was configured for this work. In local validation, ignored database/schema/Redis tests are compiled but are not executed database regressions. CI explicitly selects the 10 delivery and 6 Node deletion PostgreSQL regressions against its existing disposable database, in addition to its schema checks. Node tests requiring external tools or services may also be ignored locally; CI has a separate Node delivery smoke job. This refactor does not change the database schema.
 
 The R1 TODO block remains until all implementation is validated and merged. The last task then removes the entire block, including R1.9, while preserving other unfinished TODO scope. Implementation review precedes PR creation, and merge requires separate explicit approval under `AGENTS.md`.
