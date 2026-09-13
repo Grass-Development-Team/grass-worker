@@ -1,19 +1,15 @@
-use axum::{
-    Json,
-    extract::{Path, State},
-    response::IntoResponse,
-};
-use sea_orm::TransactionTrait;
+pub(crate) mod by_plan_id;
+
+use axum::{Json, extract::State, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::infra::audit as audits;
 use crate::{
-    domain::{
-        audits::{self, CreateAuditEventParams},
-        quotas::{self, CreatePlanParams, QuotaDimension, UpdatePlanParams},
-    },
+    domain::quotas::{self, CreatePlanParams, QuotaDimension},
     infra::{
+        audit::CreateAuditEventParams,
         database::entity::{AuditEventResult, QuotaPeriod, quota_limit, quota_plan},
         error::{AppError, ok_response},
         http::extractors::Session,
@@ -21,35 +17,27 @@ use crate::{
     state::ControlApiState,
 };
 
+pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
+    axum::Router::new()
+        .route("/quota-plans", axum::routing::get(list).post(create))
+        .merge(by_plan_id::router())
+}
+
 #[derive(Deserialize)]
-pub struct QuotaLimitInput {
-    pub dimension: String,
+struct QuotaLimitInput {
+    dimension: String,
     /// `null` removes the limit row (unlimited).
-    pub limit_value: Option<i64>,
+    limit_value: Option<i64>,
 }
 
 #[derive(Deserialize)]
-pub struct CreateQuotaPlanRequest {
-    pub code: String,
-    pub name: String,
+struct CreateQuotaPlanRequest {
+    code: String,
+    name: String,
     #[serde(default)]
-    pub description: Option<String>,
+    description: Option<String>,
     #[serde(default)]
-    pub limits: Vec<QuotaLimitInput>,
-}
-
-#[derive(Deserialize)]
-pub struct UpdateQuotaPlanRequest {
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub description: Option<String>,
-    #[serde(default)]
-    pub enabled: Option<bool>,
-    #[serde(default)]
-    pub is_default: Option<bool>,
-    #[serde(default)]
-    pub limits: Vec<QuotaLimitInput>,
+    limits: Vec<QuotaLimitInput>,
 }
 
 #[derive(Serialize)]
@@ -114,13 +102,13 @@ fn parse_limits(limits: Vec<QuotaLimitInput>, op: &'static str) -> Result<Parsed
 }
 
 async fn audit_plan_mutation(
-    db: &sea_orm::DatabaseConnection,
+    db: &impl audits::AuditConnection,
     actor: Uuid,
     action: &str,
     plan_id: Uuid,
     metadata: serde_json::Value,
-) {
-    let _ = audits::create_platform_audit_event(
+) -> anyhow::Result<()> {
+    audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(actor),
@@ -134,27 +122,27 @@ async fn audit_plan_mutation(
             metadata,
         },
     )
-    .await;
+    .await
 }
 
 /// GET /api/v1/admin/quota-plans
-pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
+async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.quota_plans.list";
-    let db = super::database(&state, OP)?;
+    let db = crate::infra::http::database(&state, OP)?;
     let plans = quotas::list_plans(db)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
-    Ok(ok_response(json!({
-        "plans": plans
+    Ok(ok_response(ListResponse {
+        plans: plans
             .into_iter()
             .map(|(plan, limits)| plan_view(plan, limits))
             .collect::<Vec<_>>(),
-    })))
+    }))
 }
 
 /// POST /api/v1/admin/quota-plans
-pub async fn create(
+async fn create(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Json(body): Json<CreateQuotaPlanRequest>,
@@ -173,9 +161,8 @@ pub async fn create(
     }
     let (limits, _removed) = parse_limits(body.limits, OP)?;
 
-    let db = super::database(&state, OP)?;
-    let transaction = db
-        .begin()
+    let db = crate::infra::http::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
@@ -201,104 +188,16 @@ pub async fn create(
             AppError::Infrastructure { op: OP, source }
         }
     })?;
-    transaction
-        .commit()
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
 
     audit_plan_mutation(
-        db,
+        &transaction,
         data.user_id,
         "quota_plan.created",
         plan.id,
         json!({ "code": plan.code }),
     )
-    .await;
-
-    Ok(ok_response(json!({
-        "plan": { "id": plan.id, "code": plan.code, "name": plan.name },
-    })))
-}
-
-/// PATCH /api/v1/admin/quota-plans/{plan_id}
-pub async fn update(
-    State(state): State<ControlApiState>,
-    Session { data, .. }: Session,
-    Path(plan_id): Path<Uuid>,
-    Json(body): Json<UpdateQuotaPlanRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    const OP: &str = "admin.quota_plans.update";
-    let (limits, removed) = parse_limits(body.limits, OP)?;
-
-    let db = super::database(&state, OP)?;
-    let current = quotas::get_plan(db, plan_id)
-        .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?
-        .ok_or_else(|| AppError::NotFound {
-            op: OP,
-            message: "quota plan not found".to_owned(),
-        })?;
-
-    // The default plan is the resolution fallback for every team without a
-    // group plan; disabling or silently un-defaulting it would 500 all
-    // quota-charged requests.
-    let stays_default = body.is_default.unwrap_or(current.is_default);
-    let stays_enabled = body.enabled.unwrap_or(current.enabled);
-    if current.is_default && body.is_default == Some(false) {
-        return Err(AppError::Validation {
-            op: OP,
-            message: "promote another plan to default instead of un-defaulting this one".to_owned(),
-        });
-    }
-    if stays_default && !stays_enabled {
-        return Err(AppError::Validation {
-            op: OP,
-            message: "the default quota plan must stay enabled".to_owned(),
-        });
-    }
-    if body.is_default == Some(true) && !stays_enabled {
-        return Err(AppError::Validation {
-            op: OP,
-            message: "only an enabled plan can become the default".to_owned(),
-        });
-    }
-
-    let transaction = db
-        .begin()
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
-    let plan = quotas::update_plan(
-        &transaction,
-        plan_id,
-        UpdatePlanParams {
-            name: body.name,
-            description: body.description,
-            enabled: body.enabled,
-            limits,
-        },
-    )
     .await
-    .map_err(|source| AppError::Infrastructure { op: OP, source })?
-    .ok_or_else(|| AppError::NotFound {
-        op: OP,
-        message: "quota plan not found".to_owned(),
-    })?;
-    for dimension in &removed {
-        quotas::delete_limit(&transaction, plan_id, *dimension)
-            .await
-            .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    }
-    if body.is_default == Some(true) && !current.is_default {
-        quotas::set_default_plan(&transaction, plan_id)
-            .await
-            .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    }
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
     transaction
         .commit()
         .await
@@ -307,26 +206,28 @@ pub async fn update(
             source: source.into(),
         })?;
 
-    audit_plan_mutation(
-        db,
-        data.user_id,
-        "quota_plan.updated",
-        plan.id,
-        json!({
-            "code": plan.code,
-            "made_default": body.is_default == Some(true) && !current.is_default,
-            "removed_limits": removed.iter().map(|d| d.as_str()).collect::<Vec<_>>(),
-        }),
-    )
-    .await;
-
-    Ok(ok_response(json!({
-        "plan": {
-            "id": plan.id,
-            "code": plan.code,
-            "name": plan.name,
-            "enabled": plan.enabled,
-            "is_default": plan.is_default || body.is_default == Some(true),
+    Ok(ok_response(CreateResponse {
+        plan: CreatePlanResponse {
+            id: plan.id,
+            code: plan.code.clone(),
+            name: plan.name.clone(),
         },
-    })))
+    }))
+}
+
+#[derive(serde::Serialize)]
+struct ListResponse {
+    plans: Vec<QuotaPlanView>,
+}
+
+#[derive(serde::Serialize)]
+struct CreatePlanResponse {
+    id: uuid::Uuid,
+    code: String,
+    name: String,
+}
+
+#[derive(serde::Serialize)]
+struct CreateResponse {
+    plan: CreatePlanResponse,
 }

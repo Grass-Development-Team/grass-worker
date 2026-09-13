@@ -87,6 +87,13 @@ jobs:
         env:
           GRASS_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
 
+      - name: Test PostgreSQL deployment lifecycle regressions
+        run: |
+          cargo test -p grass-control-api domain::delivery::tests::postgres_ -- --ignored
+          cargo test -p grass-control-api domain::node_deletions::tests::postgres_ -- --ignored
+        env:
+          GRASS_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+
       - name: Test Console workspace
         run: just test console
 

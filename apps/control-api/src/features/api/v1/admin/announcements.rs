@@ -1,18 +1,19 @@
+pub(crate) mod by_announcement_id;
+
 use axum::{
     Json,
-    extract::{Path, Query, State},
+    extract::{Query, State},
     response::IntoResponse,
 };
-use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, EntityTrait, PaginatorTrait, QueryOrder, TransactionTrait,
-};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait, PaginatorTrait, QueryOrder};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::infra::audit as audits;
 use crate::{
-    domain::{audits, notifications},
+    domain::notifications,
     infra::{
         database::entity::{AuditEventResult, announcement},
         error::{AppError, ok_response},
@@ -21,18 +22,24 @@ use crate::{
     state::ControlApiState,
 };
 
+pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
+    axum::Router::new()
+        .route("/announcements", axum::routing::get(list).post(publish))
+        .merge(by_announcement_id::router())
+}
+
 #[derive(Default, Deserialize)]
-pub struct ListQuery {
-    pub page: Option<u64>,
-    pub per_page: Option<u64>,
+struct ListQuery {
+    page: Option<u64>,
+    per_page: Option<u64>,
 }
 
 #[derive(Deserialize)]
-pub struct PublishAnnouncementRequest {
-    pub title: String,
-    pub content: String,
+struct PublishAnnouncementRequest {
+    title: String,
+    content: String,
     #[serde(default)]
-    pub auto_popup: bool,
+    auto_popup: bool,
 }
 
 #[derive(Serialize)]
@@ -48,7 +55,7 @@ fn database<'a>(
     state: &'a ControlApiState,
     op: &'static str,
 ) -> Result<&'a sea_orm::DatabaseConnection, AppError> {
-    super::database(state, op)
+    crate::infra::http::database(state, op)
 }
 
 fn announcement_view(item: &announcement::Model) -> AnnouncementView {
@@ -82,7 +89,7 @@ fn prepare_announcement(
     Ok((title, content, body.auto_popup))
 }
 
-pub async fn list(
+async fn list(
     State(state): State<ControlApiState>,
     Query(query): Query<ListQuery>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -110,18 +117,21 @@ pub async fn list(
             })?;
     let total_pages = total.div_ceil(per_page);
 
-    Ok(ok_response(json!({
-        "announcements": announcements.iter().map(announcement_view).collect::<Vec<_>>(),
-        "pagination": {
-            "page": page,
-            "per_page": per_page,
-            "total": total,
-            "total_pages": total_pages,
+    Ok(ok_response(ListResponse {
+        announcements: announcements
+            .iter()
+            .map(announcement_view)
+            .collect::<Vec<_>>(),
+        pagination: ListPaginationResponse {
+            page,
+            per_page,
+            total,
+            total_pages,
         },
-    })))
+    }))
 }
 
-pub async fn publish(
+async fn publish(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Json(body): Json<PublishAnnouncementRequest>,
@@ -129,8 +139,7 @@ pub async fn publish(
     const OP: &str = "admin.announcements.publish";
     let (title, content, auto_popup) = prepare_announcement(body, OP)?;
     let db = database(&state, OP)?;
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
@@ -196,78 +205,30 @@ pub async fn publish(
             source: source.into(),
         })?;
 
-    Ok(ok_response(json!({
-        "announcement": announcement_view(&announcement),
-        "recipients": recipients,
-    })))
+    Ok(ok_response(PublishResponse {
+        announcement: announcement_view(&announcement),
+        recipients,
+    }))
 }
 
-pub async fn remove(
-    State(state): State<ControlApiState>,
-    Session { data, .. }: Session,
-    Path(announcement_id): Path<Uuid>,
-) -> Result<impl IntoResponse, AppError> {
-    const OP: &str = "admin.announcements.delete";
-    let db = database(&state, OP)?;
-    let transaction = db
-        .begin()
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
-    let announcement = announcement::Entity::find_by_id(announcement_id)
-        .one(&transaction)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?
-        .ok_or_else(|| AppError::NotFound {
-            op: OP,
-            message: "announcement not found".to_owned(),
-        })?;
+#[derive(serde::Serialize)]
+struct ListPaginationResponse {
+    page: u64,
+    per_page: u64,
+    total: u64,
+    total_pages: u64,
+}
 
-    announcement::Entity::delete_by_id(announcement_id)
-        .exec(&transaction)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
-    audits::create_platform_audit_event_with_changes(
-        &transaction,
-        audits::CreateAuditEventParams {
-            actor_user_id: Some(data.user_id),
-            actor_node_id: None,
-            team_id: None,
-            action: "site.announcement_deleted".to_owned(),
-            target_type: "announcement".to_owned(),
-            target_id: Some(announcement.id),
-            result: AuditEventResult::Success,
-            reason: None,
-            metadata: json!({}),
-        },
-        json!({
-            "before": {
-                "title": announcement.title,
-                "content": announcement.content,
-                "auto_popup": announcement.auto_popup,
-            },
-            "after": null,
-        }),
-    )
-    .await
-    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    transaction
-        .commit()
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
+#[derive(serde::Serialize)]
+struct ListResponse {
+    announcements: Vec<AnnouncementView>,
+    pagination: ListPaginationResponse,
+}
 
-    Ok(ok_response(json!({ "ok": true })))
+#[derive(serde::Serialize)]
+struct PublishResponse {
+    announcement: AnnouncementView,
+    recipients: usize,
 }
 
 #[cfg(test)]

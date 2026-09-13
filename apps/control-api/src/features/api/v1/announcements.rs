@@ -1,30 +1,27 @@
 use axum::{
-    Router,
     extract::{Query, State},
     response::IntoResponse,
-    routing::get,
 };
 use sea_orm::{EntityTrait, PaginatorTrait, QueryOrder};
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::{
     infra::{
         database::entity::announcement,
         error::{AppError, ok_response},
-        http::{extractors::Session, timestamps::ts},
+        http::extractors::Session,
     },
     state::ControlApiState,
 };
 
-pub fn router() -> Router<ControlApiState> {
-    Router::new().route("/announcements", get(list))
+pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
+    axum::Router::new().route("/announcements", axum::routing::get(list))
 }
 
 #[derive(Default, Deserialize)]
-pub struct ListQuery {
-    pub page: Option<u64>,
-    pub per_page: Option<u64>,
+struct ListQuery {
+    page: Option<u64>,
+    per_page: Option<u64>,
 }
 
 fn database<'a>(
@@ -37,17 +34,17 @@ fn database<'a>(
     })
 }
 
-fn view(item: &announcement::Model) -> serde_json::Value {
-    json!({
-        "id": item.id,
-        "title": item.title,
-        "content": item.content,
-        "auto_popup": item.auto_popup,
-        "published_at": ts(item.published_at),
-    })
+fn view(item: &announcement::Model) -> ItemResponse {
+    ItemResponse {
+        id: item.id,
+        title: item.title.clone(),
+        content: item.content.clone(),
+        auto_popup: item.auto_popup,
+        published_at: item.published_at,
+    }
 }
 
-pub async fn list(
+async fn list(
     State(state): State<ControlApiState>,
     Session { .. }: Session,
     Query(query): Query<ListQuery>,
@@ -74,13 +71,37 @@ pub async fn list(
                 op: OP,
                 source: source.into(),
             })?;
-    Ok(ok_response(json!({
-        "announcements": announcements.iter().map(view).collect::<Vec<_>>(),
-        "pagination": {
-            "page": page,
-            "per_page": per_page,
-            "total": total,
-            "total_pages": total.div_ceil(per_page),
+    Ok(ok_response(ListResponse {
+        announcements: announcements.iter().map(view).collect::<Vec<_>>(),
+        pagination: ListPaginationResponse {
+            page,
+            per_page,
+            total,
+            total_pages: total.div_ceil(per_page),
         },
-    })))
+    }))
+}
+
+#[derive(serde::Serialize)]
+struct ItemResponse {
+    id: uuid::Uuid,
+    title: String,
+    content: String,
+    auto_popup: bool,
+    #[serde(serialize_with = "crate::infra::http::timestamps::serialize")]
+    published_at: time::OffsetDateTime,
+}
+
+#[derive(serde::Serialize)]
+struct ListPaginationResponse {
+    page: u64,
+    per_page: u64,
+    total: u64,
+    total_pages: u64,
+}
+
+#[derive(serde::Serialize)]
+struct ListResponse {
+    announcements: Vec<ItemResponse>,
+    pagination: ListPaginationResponse,
 }

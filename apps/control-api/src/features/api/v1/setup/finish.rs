@@ -1,4 +1,5 @@
 use axum::{extract::State, response::IntoResponse};
+use sea_orm::DatabaseConnection;
 use serde_json::json;
 
 use crate::{
@@ -7,13 +8,44 @@ use crate::{
         database::entity::SystemSettingValueKind,
         error::{AppError, ok_response},
     },
+    init,
     state::ControlApiState,
 };
 
-pub async fn handler(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
+pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
+    axum::Router::new().route("/finish", axum::routing::post(handler))
+}
+
+fn setup_database<'a>(
+    state: &'a ControlApiState,
+    op: &'static str,
+) -> Result<&'a DatabaseConnection, AppError> {
+    state.try_database().ok_or_else(|| AppError::Validation {
+        op,
+        message: "database must be configured first".to_owned(),
+    })
+}
+
+async fn ensure_setup_mutation_allowed(
+    db: &DatabaseConnection,
+    op: &'static str,
+) -> Result<(), AppError> {
+    if init::is_setup_finished(db)
+        .await
+        .map_err(|source| AppError::Infrastructure { op, source })?
+    {
+        return Err(AppError::SetupNotAllowed {
+            op,
+            message: "setup has already finished".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+async fn handler(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     let _setup_guard = state.lock_setup().await;
-    let db = super::setup_database(&state, "setup.finish.database")?;
-    super::ensure_setup_mutation_allowed(db, "setup.finish.ready_mode").await?;
+    let db = setup_database(&state, "setup.finish.database")?;
+    ensure_setup_mutation_allowed(db, "setup.finish.ready_mode").await?;
 
     let admin_created =
         users::any_user_exists(db)
@@ -89,14 +121,20 @@ pub async fn handler(State(state): State<ControlApiState>) -> Result<impl IntoRe
         }
     }
 
-    Ok(ok_response(json!({
-        "setup_finished": true,
-        "local_node_started": local_node_started,
-    })))
+    Ok(ok_response(ResponseBody {
+        setup_finished: true,
+        local_node_started,
+    }))
 }
 
 fn setup_prerequisites_complete(admin: bool, node: bool, site: bool, storage: bool) -> bool {
     admin && node && site && storage
+}
+
+#[derive(serde::Serialize)]
+struct ResponseBody {
+    setup_finished: bool,
+    local_node_started: bool,
 }
 
 #[cfg(test)]

@@ -1,0 +1,407 @@
+//! Shared host binding orchestration used by project creation and the host
+//! binding APIs: quota check, conflict check, binding row, provisioner call,
+//! and provision event recording.
+
+use grass_cache::CacheStore;
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect, TransactionTrait,
+};
+use uuid::Uuid;
+
+use crate::{
+    domain::{
+        hosts::{self, CreateBindingParams, RecordProvisionEventParams},
+        quotas::QuotaDimension,
+    },
+    infra::{
+        database::entity::{
+            HostBindingEnvironment, HostBindingKind, HostBindingStatus, HostProvisionEventStatus,
+            HostReviewStatus, host_source, project, project_host_binding, team,
+        },
+        error::AppError,
+        host_provision::{
+            CompositeHostProvisioner, HostProvisionError, HostProvisioner,
+            ProvisionProjectHostInput, credentials,
+        },
+        quota::{QuotaCharge, QuotaService},
+    },
+};
+
+mod deletion;
+pub use deletion::DeleteHostScope;
+
+pub struct BindHostRequest<'a> {
+    pub project: &'a project::Model,
+    pub team: &'a team::Model,
+    pub source: Option<&'a host_source::Model>,
+    pub host: String,
+    pub region: String,
+    pub kind: HostBindingKind,
+    pub environment: HostBindingEnvironment,
+    pub is_primary: bool,
+    pub review_status: HostReviewStatus,
+    pub actor_user_id: Option<Uuid>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeprovisionOutcome {
+    Completed,
+    Failed,
+}
+
+fn custom_binding_status(
+    review_status: &HostReviewStatus,
+    ownership_status: &str,
+) -> HostBindingStatus {
+    match (
+        review_status,
+        hosts::OwnershipStatus::parse(ownership_status),
+    ) {
+        (HostReviewStatus::Approved, Some(hosts::OwnershipStatus::Verified)) => {
+            HostBindingStatus::Active
+        }
+        (HostReviewStatus::Rejected, _) => HostBindingStatus::Disabled,
+        _ => HostBindingStatus::Pending,
+    }
+}
+
+pub struct HostBindingService<'a> {
+    db: &'a DatabaseConnection,
+    platform_secret: &'a str,
+    cache: &'a CacheStore,
+    provisioner: CompositeHostProvisioner,
+    credential_key: [u8; 32],
+}
+
+impl<'a> HostBindingService<'a> {
+    pub fn new(
+        db: &'a DatabaseConnection,
+        cache: &'a CacheStore,
+        platform_secret: &'a str,
+    ) -> Self {
+        Self {
+            db,
+            platform_secret,
+            cache,
+            provisioner: CompositeHostProvisioner::new(),
+            credential_key: credentials::encryption_key(platform_secret),
+        }
+    }
+
+    /// Creates a host binding: consumes host quota, rejects conflicting
+    /// hosts, stores the binding, runs the provisioner, and records the
+    /// provision event. Provider failures leave the binding in `failed`
+    /// with a retry entry point instead of erroring the request.
+    pub async fn bind_host(
+        &self,
+        op: &'static str,
+        request: BindHostRequest<'_>,
+    ) -> Result<project_host_binding::Model, AppError> {
+        if hosts::find_binding_by_host(self.db, &request.host)
+            .await
+            .map_err(|source| AppError::Infrastructure { op, source })?
+            .is_some()
+        {
+            return Err(AppError::Conflict {
+                op,
+                message: format!("host {} is already bound", request.host),
+            });
+        }
+
+        let quota = QuotaService::new(self.db, self.cache);
+        let reservation = quota
+            .reserve(
+                op,
+                request.team,
+                request.actor_user_id,
+                &[QuotaCharge::one(QuotaDimension::Hosts)],
+            )
+            .await?;
+
+        let created: anyhow::Result<project_host_binding::Model> = async {
+            let transaction = self.db.begin().await?;
+            if request.kind == HostBindingKind::Custom {
+                use crate::infra::database::entity::regional_ingress;
+                let entry = regional_ingress::Entity::find()
+                    .filter(regional_ingress::Column::Region.eq(&request.region))
+                    .filter(regional_ingress::Column::Enabled.eq(true))
+                    .filter(regional_ingress::Column::DeletedAt.is_null())
+                    .lock_shared()
+                    .one(&transaction)
+                    .await?;
+                anyhow::ensure!(entry.is_some(), "This region has no enabled entry");
+            }
+            let binding = hosts::create_binding(
+                &transaction,
+                CreateBindingParams {
+                    project_id: request.project.id,
+                    team_id: request.team.id,
+                    host_source_id: request.source.map(|source| source.id),
+                    host: request.host.clone(),
+                    region: request.region.clone(),
+                    kind: request.kind.clone(),
+                    environment: request.environment,
+                    status: HostBindingStatus::Pending,
+                    failure_reason: None,
+                    is_primary: request.is_primary,
+                    review_status: request.review_status,
+                },
+            )
+            .await?;
+            if request.kind == HostBindingKind::Custom {
+                let actor = request.actor_user_id.ok_or_else(|| {
+                    anyhow::anyhow!("A user account is required to add custom domains")
+                })?;
+                crate::domain::domain_onboarding::create(&transaction, &binding, actor).await?;
+            }
+            transaction.commit().await?;
+            Ok(binding)
+        }
+        .await;
+        let binding = match created {
+            Ok(binding) => binding,
+            Err(source) => {
+                quota.rollback(reservation).await;
+                return Err(if crate::infra::database::is_unique_violation(&source) {
+                    AppError::Conflict {
+                        op,
+                        message: format!("host {} is already bound", request.host),
+                    }
+                } else {
+                    AppError::Infrastructure { op, source }
+                });
+            }
+        };
+
+        quota
+            .commit(op, reservation, "project_host_binding", Some(binding.id))
+            .await?;
+
+        let binding = match request.source {
+            Some(source) => self.provision(op, binding, source).await?,
+            // Custom-host DNS is user-managed, but manual review still gates
+            // whether the binding can become serving/active.
+            None => {
+                let status =
+                    custom_binding_status(&binding.review_status, &binding.ownership_status);
+                hosts::update_binding_status(self.db, binding, status, None)
+                    .await
+                    .map_err(|source| AppError::Infrastructure { op, source })?
+            }
+        };
+
+        Ok(binding)
+    }
+
+    /// Releases the provider side of a binding. Current provisioners are
+    /// no-ops here, but the call keeps deprovisioning observable per source.
+    pub async fn deprovision(
+        &self,
+        op: &'static str,
+        binding: &project_host_binding::Model,
+        source: &host_source::Model,
+    ) -> Result<DeprovisionOutcome, AppError> {
+        let result = match credentials::runtime_source(self.db, &self.credential_key, source).await
+        {
+            Ok(runtime) => self
+                .provisioner
+                .deprovision_project_host(
+                    crate::infra::host_provision::DeprovisionProjectHostInput {
+                        host: &binding.host,
+                        source: &runtime,
+                    },
+                )
+                .await
+                .map_err(|error| credentials::redact_error(&runtime.config, error)),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = result {
+            tracing::warn!(operation = op, %error, host = %binding.host, "deprovision failed");
+            hosts::record_provision_event(
+                self.db,
+                RecordProvisionEventParams {
+                    host_binding_id: binding.id,
+                    host_source_id: Some(source.id),
+                    status: HostProvisionEventStatus::Failed,
+                    operation: "host.deprovision".to_owned(),
+                    provider_request_id: None,
+                    error_code: Some("deprovision_failed".to_owned()),
+                    error_message: Some(error.to_string()),
+                    metadata: serde_json::json!({ "host": binding.host }),
+                },
+            )
+            .await
+            .map_err(|source| AppError::Infrastructure { op, source })?;
+            return Ok(DeprovisionOutcome::Failed);
+        }
+        Ok(DeprovisionOutcome::Completed)
+    }
+
+    /// Runs the provisioner for an existing binding and records the outcome.
+    /// Used both at bind time and by the retry entry point.
+    pub async fn provision(
+        &self,
+        op: &'static str,
+        binding: project_host_binding::Model,
+        source: &host_source::Model,
+    ) -> Result<project_host_binding::Model, AppError> {
+        let result = match credentials::runtime_source(self.db, &self.credential_key, source).await
+        {
+            Ok(runtime) => self
+                .provisioner
+                .provision_project_host(ProvisionProjectHostInput {
+                    host: &binding.host,
+                    source: &runtime,
+                })
+                .await
+                .map_err(|error| credentials::redact_error(&runtime.config, error)),
+            Err(error) => Err(error),
+        };
+
+        let (status, event_status, request_id, message) = match &result {
+            Ok(provisioned) => (
+                provisioned.status.clone(),
+                match provisioned.status {
+                    HostBindingStatus::Active => HostProvisionEventStatus::Success,
+                    _ => HostProvisionEventStatus::Pending,
+                },
+                provisioned.provider_request_id.clone(),
+                provisioned.message.clone(),
+            ),
+            Err(HostProvisionError::Provider(message)) => (
+                HostBindingStatus::Failed,
+                HostProvisionEventStatus::Failed,
+                None,
+                Some(message.clone()),
+            ),
+            Err(HostProvisionError::UnsupportedSource(message)) => (
+                HostBindingStatus::Failed,
+                HostProvisionEventStatus::Failed,
+                None,
+                Some(message.clone()),
+            ),
+        };
+
+        hosts::record_provision_event(
+            self.db,
+            RecordProvisionEventParams {
+                host_binding_id: binding.id,
+                host_source_id: Some(source.id),
+                status: event_status.clone(),
+                operation: "host.provision".to_owned(),
+                provider_request_id: request_id,
+                error_code: matches!(event_status, HostProvisionEventStatus::Failed)
+                    .then(|| "provision_failed".to_owned()),
+                error_message: matches!(event_status, HostProvisionEventStatus::Failed)
+                    .then(|| message.clone().unwrap_or_default()),
+                metadata: serde_json::json!({ "host": binding.host }),
+            },
+        )
+        .await
+        .map_err(|source| AppError::Infrastructure { op, source })?;
+
+        let failure_reason = match status {
+            HostBindingStatus::Failed | HostBindingStatus::Pending => message,
+            _ => None,
+        };
+        hosts::update_binding_status(self.db, binding, status, failure_reason)
+            .await
+            .map_err(|source| AppError::Infrastructure { op, source })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sea_orm::{DbBackend, MockDatabase};
+    use time::OffsetDateTime;
+
+    use super::*;
+    use crate::infra::database::entity::{
+        HostBindingEnvironment, HostBindingKind, HostBindingStatus, HostProvisionEventStatus,
+        HostReviewStatus, HostSourceKind, host_provision_event, host_source, project_host_binding,
+    };
+
+    #[test]
+    fn custom_binding_only_activates_after_automatic_approval() {
+        assert_eq!(
+            custom_binding_status(&HostReviewStatus::Approved, "verified"),
+            HostBindingStatus::Active
+        );
+        assert_eq!(
+            custom_binding_status(&HostReviewStatus::Pending, "pending"),
+            HostBindingStatus::Pending
+        );
+        assert_eq!(
+            custom_binding_status(&HostReviewStatus::Rejected, "pending"),
+            HostBindingStatus::Disabled
+        );
+    }
+
+    #[tokio::test]
+    async fn deprovision_provider_failure_is_not_reported_as_completed() {
+        let now = OffsetDateTime::UNIX_EPOCH;
+        let source = host_source::Model {
+            id: Uuid::now_v7(),
+            kind: HostSourceKind::DnsProvider,
+            label: "unsupported provider".to_owned(),
+            base_domain: "example.invalid".to_owned(),
+            region: "default".to_owned(),
+            enabled: true,
+            allows_auto_assign: true,
+            is_default: true,
+            provider: Some("route53".to_owned()),
+            config: serde_json::json!({}),
+            deleted_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let binding = project_host_binding::Model {
+            id: Uuid::now_v7(),
+            project_id: Uuid::now_v7(),
+            team_id: Uuid::now_v7(),
+            host_source_id: Some(source.id),
+            host: "site.example.invalid".to_owned(),
+            region: "default".to_owned(),
+            kind: HostBindingKind::Platform,
+            environment: HostBindingEnvironment::Production,
+            status: HostBindingStatus::Active,
+            failure_reason: None,
+            is_primary: true,
+            review_status: HostReviewStatus::NotRequired,
+            reviewed_by_user_id: None,
+            reviewed_at: None,
+            review_reason: None,
+            ownership_status: "pending".to_owned(),
+            ownership_checked_at: None,
+            ownership_error: None,
+            deleted_at: Some(now),
+            created_at: now,
+            updated_at: now,
+        };
+        let event = host_provision_event::Model {
+            id: Uuid::now_v7(),
+            host_binding_id: binding.id,
+            host_source_id: Some(source.id),
+            status: HostProvisionEventStatus::Failed,
+            operation: "host.deprovision".to_owned(),
+            provider_request_id: None,
+            error_code: Some("deprovision_failed".to_owned()),
+            error_message: Some("provider failure".to_owned()),
+            metadata: serde_json::json!({ "host": binding.host }),
+            created_at: now,
+        };
+        let db = MockDatabase::new(DbBackend::Postgres)
+            .append_query_results([[event]])
+            .into_connection();
+        let cache = grass_cache::CacheStore::Moka(grass_cache::MokaCache::connect());
+
+        let outcome = HostBindingService::new(&db, &cache, "test-platform-key")
+            .deprovision("test.host.deprovision", &binding, &source)
+            .await
+            .expect("the provider failure should be recorded");
+
+        assert_eq!(outcome, DeprovisionOutcome::Failed);
+        let statements = format!("{:?}", db.into_transaction_log());
+        assert!(statements.contains("host_provision_events"), "{statements}");
+    }
+}

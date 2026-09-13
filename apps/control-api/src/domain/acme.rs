@@ -1,5 +1,5 @@
 //! Automatic issuance with persistent retry state and challenge publication barriers.
-
+use super::certificates::{self, ACCOUNT_KEY, BUNDLE_KEY, PemBundle};
 use anyhow::{Context, ensure};
 use base64::{
     Engine,
@@ -13,15 +13,16 @@ use sea_orm::{
     ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect, Set, TransactionTrait,
 };
 use serde_json::Value;
+
+use crate::domain::certificates::CertificateStatus;
+
 #[cfg(test)]
 use serde_json::json;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
-use super::certificates::{self, ACCOUNT_KEY, BUNDLE_KEY, PemBundle};
-use crate::infra::database::entity::{
-    managed_certificate as cert, node_ingress_status, project_host_binding, regional_ingress,
-};
+use crate::infra::database::entity::managed_certificate as cert;
+use crate::infra::database::entity::{node_ingress_status, project_host_binding, regional_ingress};
 
 const LEASE_SECONDS: i64 = 600;
 const ATTEMPT_SECONDS: u64 = 480;
@@ -36,8 +37,12 @@ fn due(item: &cert::Model, now: OffsetDateTime) -> bool {
     item.issuer != "manual"
         && !item.lease_until.is_some_and(|until| until > now)
         && !item.retry_at.is_some_and(|until| until > now)
-        && (matches!(item.status.as_str(), "pending" | "issuing" | "failed")
-            || item.bundle.is_none()
+        && (matches!(
+            CertificateStatus::parse(&item.status),
+            Some(
+                CertificateStatus::Pending | CertificateStatus::Issuing | CertificateStatus::Failed
+            )
+        ) || item.bundle.is_none()
             || (item.auto_renew
                 && item
                     .expires_at
@@ -299,7 +304,7 @@ async fn reconcile_record(
     let settings = super::certificate_settings::load(&transaction, secret).await?;
     let mut active: cert::ActiveModel = fresh.clone().into();
     active.lease_until = Set(Some(now + Duration::seconds(LEASE_SECONDS)));
-    active.status = Set("issuing".to_owned());
+    active.status = Set(CertificateStatus::Issuing.as_str().to_owned());
     active.generation = Set(Uuid::now_v7());
     if fresh.contact_email != connection.contact_email {
         active.acme_account = Set(None);
@@ -347,7 +352,7 @@ async fn reconcile_record(
             active.revision = Set(validity.revision);
             active.issued_at = Set(Some(validity.issued_at));
             active.expires_at = Set(Some(validity.expires_at));
-            active.status = Set("active".to_owned());
+            active.status = Set(CertificateStatus::Active.as_str().to_owned());
             active.error = Set(cleanup_result
                 .err()
                 .map(|_| "HTTP challenge cleanup is pending; it will be retried".to_owned()));
@@ -356,7 +361,7 @@ async fn reconcile_record(
         }
         Err(_error) => {
             // ACME/provider errors may contain challenge/account material; expose bounded diagnostics.
-            active.status = Set("failed".to_owned());
+            active.status = Set(CertificateStatus::Failed.as_str().to_owned());
             active.error=Set(Some("Certificate issuance failed; check public HTTP access on port 80, entry acknowledgements and certificate authority settings. Automatic retry is scheduled.".to_owned()));
             active.retry_at = Set(Some(
                 OffsetDateTime::now_utc() + retry_delay(item.failure_count),
@@ -452,9 +457,9 @@ mod tests {
     #[tokio::test]
     async fn http_validation_waits_for_every_eligible_entry_revision() {
         use crate::infra::database::entity::regional_ingress_health;
-        let ingress = certificates::tests::ingress_fixture();
-        let first = super::super::ingress::tests::node_fixture();
-        let second = super::super::ingress::tests::node_fixture();
+        let ingress = crate::test_support::certificates::ingress_fixture();
+        let first = crate::test_support::nodes::node_fixture();
+        let second = crate::test_support::nodes::node_fixture();
         let now = OffsetDateTime::now_utc();
         let revision = "a".repeat(64);
         for second_revision in ["b".repeat(64), revision.clone()] {
@@ -530,23 +535,62 @@ mod tests {
                 serde_json::from_slice(&URL_SAFE_NO_PAD.decode(encoded).unwrap()).unwrap()
             }
         };
-        let order = || json!({"status":if state.issued.load(Ordering::SeqCst){"valid"}else{"ready"},"authorizations":[format!("{}/authorization",state.origin)],"finalize":format!("{}/finalize",state.origin),"certificate":if state.issued.load(Ordering::SeqCst){Some(format!("{}/certificate",state.origin))}else{None}});
-        let mut response=match uri.path(){
-            "/directory"=>axum::Json(json!({"newNonce":format!("{}/nonce",state.origin),"newAccount":format!("{}/account",state.origin),"newOrder":format!("{}/new-order",state.origin)})).into_response(),
-            "/nonce"=>axum::http::StatusCode::OK.into_response(),
-            "/account"=>{state.accounts.fetch_add(1,Ordering::SeqCst);axum::Json(json!({"status":"valid"})).into_response()},
-            "/new-order"=>{assert_eq!(payload["identifiers"][0]["value"],"site.example.org");axum::Json(order()).into_response()},
-            "/authorization"=>axum::Json(json!({"status":"valid","identifier":{"type":"dns","value":"site.example.org"},"challenges":[]})).into_response(),
-            "/finalize"=>{
-                let der=URL_SAFE_NO_PAD.decode(payload["csr"].as_str().unwrap()).unwrap();
-                let mut csr=rcgen::CertificateSigningRequestParams::from_der(&der.into()).unwrap();
-                csr.params.not_before=OffsetDateTime::now_utc()-Duration::minutes(1);csr.params.not_after=OffsetDateTime::now_utc()+Duration::days(14);
-                let issuer=rcgen::Issuer::new(rcgen::CertificateParams::default(),rcgen::KeyPair::generate().unwrap());
-                *state.certificate.lock().unwrap()=Some(csr.signed_by(&issuer).unwrap().pem());state.issued.store(true,Ordering::SeqCst);axum::Json(order()).into_response()
-            },
-            "/order"=>axum::Json(order()).into_response(),
-            "/certificate"=>state.certificate.lock().unwrap().clone().unwrap().into_response(),
-            _=>axum::http::StatusCode::NOT_FOUND.into_response(),
+        let order = || {
+            let issued = state.issued.load(Ordering::SeqCst);
+            json!({
+                "status": if issued { "valid" } else { "ready" },
+                "authorizations": [format!("{}/authorization", state.origin)],
+                "finalize": format!("{}/finalize", state.origin),
+                "certificate": issued.then(|| format!("{}/certificate", state.origin)),
+            })
+        };
+        let mut response = match uri.path() {
+            "/directory" => axum::Json(json!({
+                "newNonce": format!("{}/nonce", state.origin),
+                "newAccount": format!("{}/account", state.origin),
+                "newOrder": format!("{}/new-order", state.origin),
+            }))
+            .into_response(),
+            "/nonce" => axum::http::StatusCode::OK.into_response(),
+            "/account" => {
+                state.accounts.fetch_add(1, Ordering::SeqCst);
+                axum::Json(json!({"status": "valid"})).into_response()
+            }
+            "/new-order" => {
+                assert_eq!(payload["identifiers"][0]["value"], "site.example.org");
+                axum::Json(order()).into_response()
+            }
+            "/authorization" => axum::Json(json!({
+                "status": "valid",
+                "identifier": {"type": "dns", "value": "site.example.org"},
+                "challenges": [],
+            }))
+            .into_response(),
+            "/finalize" => {
+                let der = URL_SAFE_NO_PAD
+                    .decode(payload["csr"].as_str().unwrap())
+                    .unwrap();
+                let mut csr =
+                    rcgen::CertificateSigningRequestParams::from_der(&der.into()).unwrap();
+                csr.params.not_before = OffsetDateTime::now_utc() - Duration::minutes(1);
+                csr.params.not_after = OffsetDateTime::now_utc() + Duration::days(14);
+                let issuer = rcgen::Issuer::new(
+                    rcgen::CertificateParams::default(),
+                    rcgen::KeyPair::generate().unwrap(),
+                );
+                *state.certificate.lock().unwrap() = Some(csr.signed_by(&issuer).unwrap().pem());
+                state.issued.store(true, Ordering::SeqCst);
+                axum::Json(order()).into_response()
+            }
+            "/order" => axum::Json(order()).into_response(),
+            "/certificate" => state
+                .certificate
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap()
+                .into_response(),
+            _ => axum::http::StatusCode::NOT_FOUND.into_response(),
         };
         response
             .headers_mut()
@@ -596,8 +640,8 @@ mod tests {
             )
             .await
             .unwrap();
-        let ingress = certificates::tests::ingress_fixture();
-        let mut item = certificates::tests::certificate_fixture(&ingress);
+        let ingress = crate::test_support::certificates::ingress_fixture();
+        let mut item = crate::test_support::certificates::certificate_fixture(&ingress);
         item.hostname = "site.example.org".to_owned();
         item.acme_account = Some(
             certificates::encrypt(
@@ -636,8 +680,8 @@ mod tests {
     #[test]
     fn renewal_respects_expiry_manual_mode_backoff_and_active_lease() {
         let now = OffsetDateTime::now_utc();
-        let ingress = certificates::tests::ingress_fixture();
-        let mut item = certificates::tests::certificate_fixture(&ingress);
+        let ingress = crate::test_support::certificates::ingress_fixture();
+        let mut item = crate::test_support::certificates::certificate_fixture(&ingress);
         assert!(due(&item, now));
         item.status = "active".to_owned();
         item.bundle = Some(json!({}));
@@ -661,8 +705,8 @@ mod tests {
     #[test]
     fn interrupted_or_failed_forced_renewal_retries_with_auto_renew_disabled() {
         let now = OffsetDateTime::now_utc();
-        let ingress = certificates::tests::ingress_fixture();
-        let mut item = certificates::tests::certificate_fixture(&ingress);
+        let ingress = crate::test_support::certificates::ingress_fixture();
+        let mut item = crate::test_support::certificates::certificate_fixture(&ingress);
         item.auto_renew = false;
         item.bundle = Some(json!({}));
         item.expires_at = Some(now + Duration::days(60));

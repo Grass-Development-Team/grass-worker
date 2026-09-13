@@ -33,6 +33,14 @@ pub fn ts(value: impl ToRfc3339) -> Value {
     value.to_rfc3339_value()
 }
 
+/// Serializes a typed timestamp field with the same wire format as `ts`.
+pub(crate) fn serialize<T: ToRfc3339, S: serde::Serializer>(
+    value: &T,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serde::Serialize::serialize(&value.to_rfc3339_value(), serializer)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

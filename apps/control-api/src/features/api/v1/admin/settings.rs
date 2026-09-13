@@ -1,15 +1,16 @@
 use axum::{Json, extract::State, response::IntoResponse};
-use sea_orm::{ConnectionTrait, DatabaseTransaction, TransactionTrait};
+use sea_orm::ConnectionTrait;
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::infra::audit as audits;
 use crate::{
     domain::{
-        audits::{self, CreateAuditEventParams},
         authentication::{self, MfaPolicy, PasswordPolicy},
         retention, settings,
     },
     infra::{
+        audit::{AuditTransaction, CreateAuditEventParams},
         config::mail::{MailMode, SmtpSecurity},
         database::entity::{AuditEventResult, SystemSettingValueKind},
         error::{AppError, ok_response},
@@ -18,12 +19,22 @@ use crate::{
     state::ControlApiState,
 };
 
+pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
+    axum::Router::new().route("/settings", axum::routing::get(get).patch(update))
+}
+
 const SITE_NAME_KEY: &str = "site.name";
+
 const SITE_LOGO_URL_KEY: &str = "site.logo_url";
+
 const SITE_URL_KEY: &str = "site.url";
+
 const PUBLIC_BASE_URL_KEY: &str = "site.public_base_url";
+
 const SIGNUP_POLICY_KEY: &str = "signup.policy";
+
 const REVIEW_POLICY_KEY: &str = "release_review_policy.default";
+
 const DOMAIN_REVIEW_POLICY_KEY: &str = "domain_review_policy.default";
 
 async fn setting_string<C: ConnectionTrait>(
@@ -38,9 +49,9 @@ async fn setting_string<C: ConnectionTrait>(
 }
 
 /// GET /api/v1/admin/settings — the editable platform base configuration.
-pub async fn get(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
+async fn get(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.settings.get";
-    let db = super::database(&state, OP)?;
+    let db = crate::infra::http::database(&state, OP)?;
 
     let review = settings::get_setting(db, REVIEW_POLICY_KEY)
         .await
@@ -65,113 +76,121 @@ pub async fn get(State(state): State<ControlApiState>) -> Result<impl IntoRespon
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
-    Ok(ok_response(json!({
-        "site": {
-            "name": setting_string(db, SITE_NAME_KEY, OP).await?,
-            "logo_url": setting_string(db, SITE_LOGO_URL_KEY, OP).await?,
-            "url": setting_string(db, SITE_URL_KEY, OP).await?,
-            "public_base_url": setting_string(db, PUBLIC_BASE_URL_KEY, OP).await?,
+    Ok(ok_response(SettingsResponse {
+        site: SettingsSiteResponse {
+            name: setting_string(db, SITE_NAME_KEY, OP).await?,
+            logo_url: setting_string(db, SITE_LOGO_URL_KEY, OP).await?,
+            url: setting_string(db, SITE_URL_KEY, OP).await?,
+            public_base_url: setting_string(db, PUBLIC_BASE_URL_KEY, OP).await?,
         },
-        "signup": {
-            "policy": setting_string(db, SIGNUP_POLICY_KEY, OP)
+        signup: SettingsSignupResponse {
+            policy: setting_string(db, SIGNUP_POLICY_KEY, OP)
                 .await?
                 .unwrap_or_else(|| "open".to_owned()),
         },
-        "review": {
-            "production": review.get("production").and_then(|v| v.as_str()).unwrap_or("manual"),
-            "preview": review.get("preview").and_then(|v| v.as_str()).unwrap_or("auto"),
+        review: SettingsReviewResponse {
+            production: (review
+                .get("production")
+                .and_then(|v| v.as_str())
+                .unwrap_or("manual"))
+            .to_owned(),
+            preview: (review
+                .get("preview")
+                .and_then(|v| v.as_str())
+                .unwrap_or("auto"))
+            .to_owned(),
         },
-        "domain_review": {
-            "default": domain_review,
+        domain_review: SettingsDomainReviewResponse {
+            default: domain_review,
         },
-        "artifact_retention": {
-            "log_retention_days": artifact_retention.log_retention_days,
-            "preview_retention_days": artifact_retention.preview_retention_days,
-            "failed_retention_days": artifact_retention.failed_retention_days,
-            "production_keep": artifact_retention.production_keep,
+        artifact_retention: SettingsArtifactRetentionResponse {
+            log_retention_days: artifact_retention.log_retention_days,
+            preview_retention_days: artifact_retention.preview_retention_days,
+            failed_retention_days: artifact_retention.failed_retention_days,
+            production_keep: artifact_retention.production_keep,
         },
-        "server": {
-            "host": config.server.host,
-            "port": config.server.port,
+        server: SettingsServerResponse {
+            host: config.server.host,
+            port: config.server.port,
         },
-        "database": {
-            "url_configured": !config.database.url.trim().is_empty(),
+        database: SettingsDatabaseResponse {
+            url_configured: !config.database.url.trim().is_empty(),
         },
-        "redis": {
-            "backend": config.redis.backend,
-            "url_configured": !config.redis.url.trim().is_empty(),
+        redis: SettingsRedisResponse {
+            backend: config.redis.backend,
+            url_configured: !config.redis.url.trim().is_empty(),
         },
-        "secrets": {
-            "secret_key_configured": !secret_key.is_empty()
+        secrets: SettingsSecretsResponse {
+            secret_key_configured: !secret_key.is_empty()
                 && secret_key != "change-me"
                 && secret_key.len() >= 32,
-            "git_credentials_configured": config.secrets.git_credentials.active_key().is_ok(),
+            git_credentials_configured: config.secrets.git_credentials.active_key().is_ok(),
         },
-        "mail": {
-            "mode": config.mail.mode.as_str(),
-            "from_address": config.mail.from_address,
-            "from_name": config.mail.from_name,
-            "sendmail_command": config.mail.sendmail_command,
-            "smtp_host": config.mail.smtp_host,
-            "smtp_port": config.mail.smtp_port,
-            "smtp_security": config.mail.smtp_security.as_str(),
-            "smtp_username": config.mail.smtp_username,
-            "smtp_password_configured": !config.mail.smtp_password.is_empty(),
+        mail: SettingsMailResponse {
+            mode: config.mail.mode.as_str(),
+            from_address: config.mail.from_address,
+            from_name: config.mail.from_name,
+            sendmail_command: config.mail.sendmail_command,
+            smtp_host: config.mail.smtp_host,
+            smtp_port: config.mail.smtp_port,
+            smtp_security: config.mail.smtp_security.as_str(),
+            smtp_username: config.mail.smtp_username,
+            smtp_password_configured: !config.mail.smtp_password.is_empty(),
         },
-        "authentication": {
-            "password_policy": password_policy,
-            "registration_email_verification": registration_email_verification,
-            "mfa_policy": mfa_policy,
+        authentication: SettingsAuthenticationResponse {
+            password_policy,
+            registration_email_verification,
+            mfa_policy,
         },
-        "session": config.session,
-        "audit": config.audit,
-        "node_manager": config.node_manager,
-        "migration": config.migration,
-        "log": config.log,
-        "restart_required_sections": ["server", "redis", "node_manager", "migration", "log"],
-    })))
+        session: config.session,
+        audit: config.audit,
+        node_manager: config.node_manager,
+        migration: config.migration,
+        log: config.log,
+        restart_required_sections: ["server", "redis", "node_manager", "migration", "log"],
+    }))
 }
 
 #[derive(Default, Deserialize)]
-pub struct UpdateSettingsRequest {
-    pub site_name: Option<String>,
-    pub site_logo_url: Option<String>,
-    pub site_url: Option<String>,
-    pub public_base_url: Option<String>,
-    pub signup_policy: Option<String>,
-    pub review_production: Option<String>,
-    pub review_preview: Option<String>,
-    pub domain_review_default: Option<String>,
-    pub log_retention_days: Option<u64>,
-    pub preview_retention_days: Option<u64>,
-    pub failed_retention_days: Option<u64>,
-    pub production_keep: Option<u64>,
-    pub server_host: Option<String>,
-    pub server_port: Option<u16>,
-    pub redis_backend: Option<String>,
-    pub session_cookie_secure: Option<bool>,
-    pub session_idle_ttl_seconds: Option<u64>,
-    pub session_ttl_seconds: Option<u64>,
-    pub audit_retention_days: Option<u64>,
-    pub mail_mode: Option<String>,
-    pub mail_from_address: Option<String>,
-    pub mail_from_name: Option<String>,
-    pub mail_sendmail_command: Option<String>,
-    pub mail_smtp_host: Option<String>,
-    pub mail_smtp_port: Option<u16>,
-    pub mail_smtp_security: Option<String>,
-    pub mail_smtp_username: Option<String>,
-    pub mail_smtp_password: Option<String>,
-    pub password_policy: Option<PasswordPolicy>,
-    pub registration_email_verification: Option<bool>,
-    pub mfa_policy: Option<MfaPolicy>,
-    pub node_manager_auto_start_local_node: Option<bool>,
-    pub node_manager_local_node_binary: Option<String>,
-    pub node_manager_local_node_config: Option<String>,
-    pub node_manager_restart_on_exit: Option<bool>,
-    pub migration_auto_migrate: Option<bool>,
-    pub log_level: Option<String>,
-    pub log_format: Option<String>,
+struct UpdateSettingsRequest {
+    site_name: Option<String>,
+    site_logo_url: Option<String>,
+    site_url: Option<String>,
+    public_base_url: Option<String>,
+    signup_policy: Option<String>,
+    review_production: Option<String>,
+    review_preview: Option<String>,
+    domain_review_default: Option<String>,
+    log_retention_days: Option<u64>,
+    preview_retention_days: Option<u64>,
+    failed_retention_days: Option<u64>,
+    production_keep: Option<u64>,
+    server_host: Option<String>,
+    server_port: Option<u16>,
+    redis_backend: Option<String>,
+    session_cookie_secure: Option<bool>,
+    session_idle_ttl_seconds: Option<u64>,
+    session_ttl_seconds: Option<u64>,
+    audit_retention_days: Option<u64>,
+    mail_mode: Option<String>,
+    mail_from_address: Option<String>,
+    mail_from_name: Option<String>,
+    mail_sendmail_command: Option<String>,
+    mail_smtp_host: Option<String>,
+    mail_smtp_port: Option<u16>,
+    mail_smtp_security: Option<String>,
+    mail_smtp_username: Option<String>,
+    mail_smtp_password: Option<String>,
+    password_policy: Option<PasswordPolicy>,
+    registration_email_verification: Option<bool>,
+    mfa_policy: Option<MfaPolicy>,
+    node_manager_auto_start_local_node: Option<bool>,
+    node_manager_local_node_binary: Option<String>,
+    node_manager_local_node_config: Option<String>,
+    node_manager_restart_on_exit: Option<bool>,
+    migration_auto_migrate: Option<bool>,
+    log_level: Option<String>,
+    log_format: Option<String>,
 }
 
 struct PreparedSettingsUpdate {
@@ -551,12 +570,12 @@ fn prepare_settings_update(
     let site_url = body
         .site_url
         .as_deref()
-        .map(|value| crate::features::api::v1::setup::site::validate_site_url(value, op))
+        .map(|value| validate_site_url(value, op))
         .transpose()?;
     let public_base_url = body
         .public_base_url
         .as_deref()
-        .map(|value| crate::features::api::v1::setup::site::validate_site_url(value, op))
+        .map(|value| validate_site_url(value, op))
         .transpose()?;
 
     let signup_policy = body.signup_policy.map(|value| value.trim().to_owned());
@@ -831,7 +850,7 @@ fn prepare_settings_update(
 }
 
 async fn create_settings_audit_in_transaction(
-    transaction: &DatabaseTransaction,
+    transaction: &AuditTransaction,
     actor_user_id: uuid::Uuid,
     changed: Vec<&'static str>,
     before: serde_json::Map<String, serde_json::Value>,
@@ -856,14 +875,14 @@ async fn create_settings_audit_in_transaction(
 }
 
 /// PATCH /api/v1/admin/settings
-pub async fn update(
+async fn update(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Json(body): Json<UpdateSettingsRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.settings.update";
     let body = prepare_settings_update(body, OP)?;
-    let db = super::database(&state, OP)?;
+    let db = crate::infra::http::database(&state, OP)?;
     let config_update = if body.has_config_update() {
         let original = crate::infra::config::ControlApiConfig::load_persisted(state.config_path())
             .map_err(|error| AppError::Infrastructure {
@@ -939,8 +958,7 @@ pub async fn update(
             });
         }
     }
-    let transaction = db
-        .begin()
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
@@ -1239,24 +1257,144 @@ pub async fn update(
     get(State(state)).await
 }
 
+fn validate_site_url(value: &str, op: &'static str) -> Result<String, AppError> {
+    let value = value.trim().trim_end_matches('/');
+    let url = url::Url::parse(value).map_err(|_| AppError::Validation {
+        op,
+        message: "site URL must be an absolute http or https URL".to_owned(),
+    })?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(AppError::Validation {
+            op,
+            message: "site URL must be an absolute http or https URL".to_owned(),
+        });
+    }
+    Ok(value.to_owned())
+}
+
+#[derive(serde::Serialize)]
+struct SettingsSiteResponse {
+    name: Option<String>,
+    logo_url: Option<String>,
+    url: Option<String>,
+    public_base_url: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct SettingsSignupResponse {
+    policy: String,
+}
+
+#[derive(serde::Serialize)]
+struct SettingsReviewResponse {
+    production: String,
+    preview: String,
+}
+
+#[derive(serde::Serialize)]
+struct SettingsDomainReviewResponse {
+    default: String,
+}
+
+#[derive(serde::Serialize)]
+struct SettingsArtifactRetentionResponse {
+    log_retention_days: u64,
+    preview_retention_days: u64,
+    failed_retention_days: u64,
+    production_keep: u64,
+}
+
+#[derive(serde::Serialize)]
+struct SettingsServerResponse {
+    host: std::net::IpAddr,
+    port: u16,
+}
+
+#[derive(serde::Serialize)]
+struct SettingsDatabaseResponse {
+    url_configured: bool,
+}
+
+#[derive(serde::Serialize)]
+struct SettingsRedisResponse {
+    backend: grass_cache::CacheBackend,
+    url_configured: bool,
+}
+
+#[derive(serde::Serialize)]
+struct SettingsSecretsResponse {
+    secret_key_configured: bool,
+    git_credentials_configured: bool,
+}
+
+#[derive(serde::Serialize)]
+struct SettingsMailResponse {
+    mode: &'static str,
+    from_address: String,
+    from_name: String,
+    sendmail_command: String,
+    smtp_host: String,
+    smtp_port: u16,
+    smtp_security: &'static str,
+    smtp_username: String,
+    smtp_password_configured: bool,
+}
+
+#[derive(serde::Serialize)]
+struct SettingsAuthenticationResponse {
+    password_policy: PasswordPolicy,
+    registration_email_verification: bool,
+    mfa_policy: MfaPolicy,
+}
+
+#[derive(serde::Serialize)]
+struct SettingsResponse {
+    site: SettingsSiteResponse,
+    signup: SettingsSignupResponse,
+    review: SettingsReviewResponse,
+    domain_review: SettingsDomainReviewResponse,
+    artifact_retention: SettingsArtifactRetentionResponse,
+    server: SettingsServerResponse,
+    database: SettingsDatabaseResponse,
+    redis: SettingsRedisResponse,
+    secrets: SettingsSecretsResponse,
+    mail: SettingsMailResponse,
+    authentication: SettingsAuthenticationResponse,
+    session: crate::infra::config::session::SessionConfig,
+    audit: crate::infra::config::audit::AuditConfig,
+    node_manager: crate::infra::config::node_manager::NodeManagerConfig,
+    migration: crate::infra::config::migration::MigrationConfig,
+    log: crate::infra::config::log::LogConfig,
+    restart_required_sections: [&'static str; 5],
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{fs, time::SystemTime};
-
-    use axum::{Json, body::to_bytes, extract::State, response::IntoResponse};
-    use sea_orm::{DatabaseConnection, MockDatabase, TransactionTrait};
+    use super::*;
+    use crate::infra::config::ControlApiConfig;
+    use crate::infra::http::extractors::Session;
+    use crate::state::ControlApiState;
+    use axum::Json;
+    use axum::body::to_bytes;
+    use axum::extract::State;
+    use axum::response::IntoResponse;
+    use sea_orm::DatabaseConnection;
+    use sea_orm::MockDatabase;
+    use std::fs;
+    use std::time::SystemTime;
     use time::OffsetDateTime;
     use uuid::Uuid;
-
-    use crate::{
-        infra::{config::ControlApiConfig, http::extractors::Session},
-        state::ControlApiState,
-    };
-
-    use super::{
-        UpdateSettingsRequest, create_settings_audit_in_transaction, get, prepare_settings_update,
-        update,
-    };
+    fn session() -> Session {
+        Session {
+            data: grass_session::SessionData {
+                auth_version: 1,
+                user_id: Uuid::now_v7(),
+                created_at: OffsetDateTime::UNIX_EPOCH,
+                last_accessed_at: OffsetDateTime::UNIX_EPOCH,
+            },
+            session_id: "test-session".to_owned(),
+        }
+    }
 
     #[tokio::test]
     async fn settings_response_lists_non_secret_control_api_config_without_leaking_secrets() {
@@ -1291,7 +1429,7 @@ mod tests {
         config.session.idle_ttl_seconds = 1_200;
         config.session.session_ttl_seconds = 86_400;
         config.audit.retention_days = 120;
-        config.mail.mode = super::MailMode::Smtp;
+        config.mail.mode = MailMode::Smtp;
         config.mail.from_address = "noreply@example.com".to_owned();
         config.mail.smtp_host = "smtp.example.com".to_owned();
         config.mail.smtp_username = "mailer".to_owned();
@@ -1385,82 +1523,6 @@ mod tests {
         assert!(!serialized.contains("redis-secret"));
         assert!(!serialized.contains("control-api-secret-value"));
         assert!(!serialized.contains("smtp-secret-value"));
-    }
-
-    fn session() -> Session {
-        Session {
-            data: grass_session::SessionData {
-                auth_version: 1,
-                user_id: Uuid::now_v7(),
-                created_at: OffsetDateTime::UNIX_EPOCH,
-                last_accessed_at: OffsetDateTime::UNIX_EPOCH,
-            },
-            session_id: "test-session".to_owned(),
-        }
-    }
-
-    fn setting_model(
-        key: &str,
-        value: serde_json::Value,
-    ) -> crate::infra::database::entity::system_setting::Model {
-        crate::infra::database::entity::system_setting::Model {
-            id: Uuid::now_v7(),
-            key: key.to_owned(),
-            value_kind: crate::infra::database::entity::SystemSettingValueKind::String,
-            value,
-            is_secret: false,
-            created_at: OffsetDateTime::UNIX_EPOCH,
-            updated_at: OffsetDateTime::UNIX_EPOCH,
-        }
-    }
-
-    fn site_name_update_database(audit_succeeds: bool) -> DatabaseConnection {
-        let old = setting_model(super::SITE_NAME_KEY, serde_json::json!("Old Name"));
-        let updated = setting_model(super::SITE_NAME_KEY, serde_json::json!("New Name"));
-        let mock = MockDatabase::new(sea_orm::DbBackend::Postgres).append_query_results([
-            vec![old.clone()],
-            vec![old],
-            vec![updated.clone()],
-            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
-            vec![updated],
-            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
-            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
-            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
-            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
-            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
-            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
-            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
-            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
-            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
-            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
-            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
-            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
-            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
-        ]);
-        if audit_succeeds {
-            mock.append_exec_results([sea_orm::MockExecResult {
-                last_insert_id: 0,
-                rows_affected: 1,
-            }])
-            .into_connection()
-        } else {
-            mock.into_connection()
-        }
-    }
-
-    fn site_name_update_request() -> UpdateSettingsRequest {
-        UpdateSettingsRequest {
-            site_name: Some(" New Name ".to_owned()),
-            ..UpdateSettingsRequest::default()
-        }
-    }
-
-    fn invalid_later_field_request() -> UpdateSettingsRequest {
-        UpdateSettingsRequest {
-            site_name: Some("Valid Name".to_owned()),
-            signup_policy: Some("invalid".to_owned()),
-            ..UpdateSettingsRequest::default()
-        }
     }
 
     fn control_api_config_update_request() -> UpdateSettingsRequest {
@@ -1619,6 +1681,14 @@ mod tests {
         }
     }
 
+    fn invalid_later_field_request() -> UpdateSettingsRequest {
+        UpdateSettingsRequest {
+            site_name: Some("Valid Name".to_owned()),
+            signup_policy: Some("invalid".to_owned()),
+            ..UpdateSettingsRequest::default()
+        }
+    }
+
     #[tokio::test]
     async fn invalid_later_field_does_not_execute_an_earlier_valid_update() {
         assert!(
@@ -1628,7 +1698,7 @@ mod tests {
         let now = OffsetDateTime::UNIX_EPOCH;
         let inserted_site_name = crate::infra::database::entity::system_setting::Model {
             id: Uuid::now_v7(),
-            key: super::SITE_NAME_KEY.to_owned(),
+            key: SITE_NAME_KEY.to_owned(),
             value_kind: crate::infra::database::entity::SystemSettingValueKind::String,
             value: serde_json::json!("Valid Name"),
             is_secret: false,
@@ -1650,6 +1720,62 @@ mod tests {
         let statements = format!("{:?}", db.into_transaction_log());
         assert!(!statements.contains("INSERT"), "{statements}");
         assert!(!statements.contains("UPDATE"), "{statements}");
+    }
+
+    fn setting_model(
+        key: &str,
+        value: serde_json::Value,
+    ) -> crate::infra::database::entity::system_setting::Model {
+        crate::infra::database::entity::system_setting::Model {
+            id: Uuid::now_v7(),
+            key: key.to_owned(),
+            value_kind: crate::infra::database::entity::SystemSettingValueKind::String,
+            value,
+            is_secret: false,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+        }
+    }
+
+    fn site_name_update_database(audit_succeeds: bool) -> DatabaseConnection {
+        let old = setting_model(SITE_NAME_KEY, serde_json::json!("Old Name"));
+        let updated = setting_model(SITE_NAME_KEY, serde_json::json!("New Name"));
+        let mock = MockDatabase::new(sea_orm::DbBackend::Postgres).append_query_results([
+            vec![old.clone()],
+            vec![old],
+            vec![updated.clone()],
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            vec![updated],
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+            Vec::<crate::infra::database::entity::system_setting::Model>::new(),
+        ]);
+        if audit_succeeds {
+            mock.append_exec_results([sea_orm::MockExecResult {
+                last_insert_id: 0,
+                rows_affected: 1,
+            }])
+            .into_connection()
+        } else {
+            mock.into_connection()
+        }
+    }
+
+    fn site_name_update_request() -> UpdateSettingsRequest {
+        UpdateSettingsRequest {
+            site_name: Some(" New Name ".to_owned()),
+            ..UpdateSettingsRequest::default()
+        }
     }
 
     #[tokio::test]
@@ -1680,7 +1806,9 @@ mod tests {
                 rows_affected: 1,
             }])
             .into_connection();
-        let transaction = db.begin().await.expect("begin transaction");
+        let transaction = crate::infra::audit::AuditTransaction::begin(&db)
+            .await
+            .expect("begin transaction");
 
         create_settings_audit_in_transaction(
             &transaction,

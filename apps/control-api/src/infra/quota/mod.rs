@@ -15,11 +15,9 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
-    domain::{
-        audits::{self, CreateAuditEventParams},
-        quotas::{self, QuotaDimension, RecordEventParams, ResolvedQuota},
-    },
+    domain::quotas::{self, QuotaDimension, RecordEventParams, ResolvedQuota},
     infra::{
+        audit::{self as audits, CreateAuditEventParams},
         database::entity::{AuditEventResult, QuotaEventKind, QuotaPeriod, team},
         error::AppError,
     },
@@ -473,7 +471,7 @@ impl<'a> QuotaService<'a> {
             tracing::warn!(operation = op, %error, "failed to record quota deny event");
         }
 
-        if let Err(error) = audits::create_audit_event(
+        audits::observe_event(
             self.db,
             CreateAuditEventParams {
                 actor_user_id,
@@ -491,10 +489,7 @@ impl<'a> QuotaService<'a> {
                 }),
             },
         )
-        .await
-        {
-            tracing::warn!(operation = op, %error, "failed to record quota audit event");
-        }
+        .await;
     }
 }
 

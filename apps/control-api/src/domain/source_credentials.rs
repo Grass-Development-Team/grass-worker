@@ -221,7 +221,7 @@ fn encrypt_payload(
 }
 
 pub async fn create(
-    db: &DatabaseConnection,
+    db: &(impl ConnectionTrait + TransactionTrait<Transaction = sea_orm::DatabaseTransaction>),
     keyring: &GitCredentialEncryptionConfig,
     params: CreateCredentialParams,
 ) -> Result<source_credential::Model, SourceCredentialError> {
@@ -308,7 +308,7 @@ pub async fn get_for_team<C: ConnectionTrait>(
 }
 
 pub async fn rotate(
-    db: &DatabaseConnection,
+    db: &(impl ConnectionTrait + TransactionTrait<Transaction = sea_orm::DatabaseTransaction>),
     keyring: &GitCredentialEncryptionConfig,
     team_id: Uuid,
     credential_id: Uuid,
@@ -369,7 +369,7 @@ pub async fn rotate(
 }
 
 pub async fn revoke(
-    db: &DatabaseConnection,
+    db: &(impl ConnectionTrait + TransactionTrait<Transaction = sea_orm::DatabaseTransaction>),
     team_id: Uuid,
     credential_id: Uuid,
 ) -> Result<source_credential::Model, SourceCredentialError> {
@@ -410,7 +410,7 @@ pub fn matches_repository_url(credential: &source_credential::Model, repository_
 }
 
 pub async fn bind_project(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     project: &project::Model,
     credential_id: Uuid,
     actor_user_id: Uuid,

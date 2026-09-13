@@ -1,9 +1,8 @@
-use std::sync::LazyLock;
-
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
     EntityTrait, ExprTrait, QueryFilter, TransactionSession, TransactionTrait,
 };
+use std::sync::LazyLock;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -87,7 +86,7 @@ pub async fn get_user_by_email<C: ConnectionTrait>(
 }
 
 pub async fn get_user_by_id(
-    db: &DatabaseConnection,
+    db: &impl sea_orm::ConnectionTrait,
     user_id: Uuid,
 ) -> anyhow::Result<Option<user::Model>> {
     user::Entity::find()
@@ -317,43 +316,6 @@ fn credentials_are_valid(status: Option<&UserStatus>, password_ok: bool) -> bool
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_active_users_with_valid_passwords_can_authenticate() {
-        assert!(credentials_are_valid(Some(&UserStatus::Active), true));
-        assert!(!credentials_are_valid(Some(&UserStatus::Active), false));
-        assert!(!credentials_are_valid(Some(&UserStatus::Disabled), true));
-        assert!(!credentials_are_valid(None, true));
-    }
-
-    #[tokio::test]
-    async fn administrator_user_list_applies_status_and_role_filters() {
-        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
-            .append_query_results([Vec::<user::Model>::new()])
-            .into_connection();
-        let log = db.clone();
-
-        list_users(
-            &db,
-            UserListFilter {
-                query: None,
-                status: Some(UserStatus::Disabled),
-                platform_role: Some(PlatformRole::Admin),
-                limit: 25,
-            },
-        )
-        .await
-        .unwrap();
-
-        let statements = format!("{:?}", log.into_transaction_log());
-        assert!(statements.contains("status\\\" ="), "{statements}");
-        assert!(statements.contains("platform_role\\\" ="), "{statements}");
-    }
-}
-
-#[cfg(test)]
 mod password_revocation_tests {
     use super::*;
     use sea_orm::{DbBackend, MockDatabase, MockExecResult};
@@ -361,7 +323,7 @@ mod password_revocation_tests {
     #[tokio::test]
     async fn password_history_and_revocation_commit_or_rollback_together() {
         for affected in [1, 0] {
-            let user = crate::infra::http::middlewares::session::tests::active_user();
+            let user = crate::test_support::users::active_user();
             let now = OffsetDateTime::now_utc();
             let old = user_password_credential::Model {
                 id: Uuid::now_v7(),
@@ -399,5 +361,42 @@ mod password_revocation_tests {
                 "{log}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_active_users_with_valid_passwords_can_authenticate() {
+        assert!(credentials_are_valid(Some(&UserStatus::Active), true));
+        assert!(!credentials_are_valid(Some(&UserStatus::Active), false));
+        assert!(!credentials_are_valid(Some(&UserStatus::Disabled), true));
+        assert!(!credentials_are_valid(None, true));
+    }
+
+    #[tokio::test]
+    async fn administrator_user_list_applies_status_and_role_filters() {
+        let db = sea_orm::MockDatabase::new(sea_orm::DbBackend::Postgres)
+            .append_query_results([Vec::<user::Model>::new()])
+            .into_connection();
+        let log = db.clone();
+
+        list_users(
+            &db,
+            UserListFilter {
+                query: None,
+                status: Some(UserStatus::Disabled),
+                platform_role: Some(PlatformRole::Admin),
+                limit: 25,
+            },
+        )
+        .await
+        .unwrap();
+
+        let statements = format!("{:?}", log.into_transaction_log());
+        assert!(statements.contains("status\\\" ="), "{statements}");
+        assert!(statements.contains("platform_role\\\" ="), "{statements}");
     }
 }

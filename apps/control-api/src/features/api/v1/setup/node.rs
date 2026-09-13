@@ -1,6 +1,6 @@
 use axum::{Json, extract::State, response::IntoResponse};
+use sea_orm::DatabaseConnection;
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::{
     domain::{
@@ -8,21 +8,52 @@ use crate::{
         settings,
     },
     infra::error::{AppError, ok_response},
+    init,
     state::ControlApiState,
 };
 
-#[derive(Deserialize)]
-pub struct NodeSetupRequest {
-    pub name: Option<String>,
+pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
+    axum::Router::new().route("/node", axum::routing::post(handler))
 }
 
-pub async fn handler(
+fn setup_database<'a>(
+    state: &'a ControlApiState,
+    op: &'static str,
+) -> Result<&'a DatabaseConnection, AppError> {
+    state.try_database().ok_or_else(|| AppError::Validation {
+        op,
+        message: "database must be configured first".to_owned(),
+    })
+}
+
+async fn ensure_setup_mutation_allowed(
+    db: &DatabaseConnection,
+    op: &'static str,
+) -> Result<(), AppError> {
+    if init::is_setup_finished(db)
+        .await
+        .map_err(|source| AppError::Infrastructure { op, source })?
+    {
+        return Err(AppError::SetupNotAllowed {
+            op,
+            message: "setup has already finished".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct NodeSetupRequest {
+    name: Option<String>,
+}
+
+async fn handler(
     State(state): State<ControlApiState>,
     Json(body): Json<NodeSetupRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let _setup_guard = state.lock_setup().await;
-    let db = super::setup_database(&state, "setup.node.database")?;
-    super::ensure_setup_mutation_allowed(db, "setup.node.ready_mode").await?;
+    let db = setup_database(&state, "setup.node.database")?;
+    ensure_setup_mutation_allowed(db, "setup.node.ready_mode").await?;
 
     if nodes::any_node_exists(db)
         .await
@@ -118,16 +149,33 @@ pub async fn handler(
         }
     }
 
-    Ok(ok_response(json!({
-        "node": { "id": node.id, "name": node.name },
-        "token": token,
-        "local_node_config_generated": local_node_config_generated,
-        "warnings": warnings,
-    })))
+    Ok(ok_response(ResponseBody {
+        node: ResponseBodyNodeResponse {
+            id: node.id,
+            name: node.name.clone(),
+        },
+        token,
+        local_node_config_generated,
+        warnings,
+    }))
 }
 
-pub(super) fn node_work_root(storage_root: &str) -> String {
+fn node_work_root(storage_root: &str) -> String {
     format!("{}/node", storage_root.trim_end_matches('/'))
+}
+
+#[derive(serde::Serialize)]
+struct ResponseBodyNodeResponse {
+    id: uuid::Uuid,
+    name: String,
+}
+
+#[derive(serde::Serialize)]
+struct ResponseBody {
+    node: ResponseBodyNodeResponse,
+    token: String,
+    local_node_config_generated: bool,
+    warnings: Vec<String>,
 }
 
 #[cfg(test)]

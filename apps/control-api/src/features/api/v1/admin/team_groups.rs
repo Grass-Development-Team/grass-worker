@@ -1,8 +1,6 @@
-use axum::{
-    Json,
-    extract::{Path, State},
-    response::IntoResponse,
-};
+pub(crate) mod by_group_id;
+
+use axum::{Json, extract::State, response::IntoResponse};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter,
     QueryOrder,
@@ -12,13 +10,11 @@ use serde_json::json;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::infra::http::timestamps::ts;
+use crate::infra::audit as audits;
 use crate::{
-    domain::{
-        audits::{self, CreateAuditEventParams},
-        quotas, teams,
-    },
+    domain::quotas,
     infra::{
+        audit::CreateAuditEventParams,
         database::entity::{AuditEventResult, team, team_group},
         error::{AppError, ok_response},
         http::extractors::Session,
@@ -26,48 +22,41 @@ use crate::{
     state::ControlApiState,
 };
 
-fn group_view(group: &team_group::Model) -> serde_json::Value {
-    let review_policy = group.review_policy.as_ref();
-    json!({
-        "id": group.id,
-        "code": group.code,
-        "name": group.name,
-        "description": group.description,
-        "quota_plan_id": group.quota_plan_id,
-        "review_policy": {
-            "production": review_policy.and_then(|policy| policy.get("production")),
-            "preview": review_policy.and_then(|policy| policy.get("preview")),
-            "domain": review_policy.and_then(|policy| policy.get("domain")),
-        },
-        "is_default": group.is_default,
-        "created_at": ts(group.created_at),
-    })
+pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
+    axum::Router::new()
+        .route("/team-groups", axum::routing::get(list).post(create))
+        .merge(by_group_id::router())
 }
 
-async fn find_group(
-    db: &sea_orm::DatabaseConnection,
-    group_id: Uuid,
-    op: &'static str,
-) -> Result<team_group::Model, AppError> {
-    team_group::Entity::find()
-        .filter(team_group::Column::Id.eq(group_id))
-        .filter(team_group::Column::DeletedAt.is_null())
-        .one(db)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op,
-            source: source.into(),
-        })?
-        .ok_or_else(|| AppError::NotFound {
-            op,
-            message: "team group not found".to_owned(),
-        })
+fn group_view(group: &team_group::Model) -> TeamGroupResponse {
+    let review_policy = group.review_policy.as_ref();
+    TeamGroupResponse {
+        team_count: None,
+        id: group.id,
+        code: group.code.clone(),
+        name: group.name.clone(),
+        description: group.description.clone(),
+        quota_plan_id: group.quota_plan_id,
+        review_policy: TeamGroupReviewPolicyResponse {
+            production: review_policy
+                .and_then(|policy| policy.get("production"))
+                .cloned(),
+            preview: review_policy
+                .and_then(|policy| policy.get("preview"))
+                .cloned(),
+            domain: review_policy
+                .and_then(|policy| policy.get("domain"))
+                .cloned(),
+        },
+        is_default: group.is_default,
+        created_at: group.created_at,
+    }
 }
 
 /// Rejects a quota plan id that does not exist or is disabled, so the error
 /// is a 400 instead of a foreign-key 500 (or a silently ignored plan).
 async fn validate_plan_reference(
-    db: &sea_orm::DatabaseConnection,
+    db: &impl sea_orm::ConnectionTrait,
     plan_id: Uuid,
     op: &'static str,
 ) -> Result<(), AppError> {
@@ -88,13 +77,13 @@ async fn validate_plan_reference(
 }
 
 async fn audit_group_mutation(
-    db: &sea_orm::DatabaseConnection,
+    db: &impl audits::AuditConnection,
     actor: Uuid,
     action: &str,
     group_id: Uuid,
     metadata: serde_json::Value,
-) {
-    let _ = audits::create_platform_audit_event(
+) -> anyhow::Result<()> {
+    audits::create_platform_audit_event(
         db,
         CreateAuditEventParams {
             actor_user_id: Some(actor),
@@ -108,13 +97,13 @@ async fn audit_group_mutation(
             metadata,
         },
     )
-    .await;
+    .await
 }
 
 /// GET /api/v1/admin/team-groups
-pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
+async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.team_groups.list";
-    let db = super::database(&state, OP)?;
+    let db = crate::infra::http::database(&state, OP)?;
 
     let groups = team_group::Entity::find()
         .filter(team_group::Column::DeletedAt.is_null())
@@ -141,38 +130,38 @@ pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoRespo
         counts.insert(*group_id, count);
     }
 
-    Ok(ok_response(json!({
-        "groups": groups
+    Ok(ok_response(ListResponse {
+        groups: groups
             .iter()
             .map(|group| {
                 let mut view = group_view(group);
-                view["team_count"] = json!(counts.get(&group.id).copied().unwrap_or(0));
+                view.team_count = Some(counts.get(&group.id).copied().unwrap_or(0));
                 view
             })
             .collect::<Vec<_>>(),
-    })))
+    }))
 }
 
 #[derive(Deserialize)]
-pub struct CreateTeamGroupRequest {
-    pub code: String,
-    pub name: String,
+struct CreateTeamGroupRequest {
+    code: String,
+    name: String,
     #[serde(default)]
-    pub description: Option<String>,
+    description: Option<String>,
     #[serde(default)]
-    pub quota_plan_id: Option<Uuid>,
+    quota_plan_id: Option<Uuid>,
     #[serde(default)]
-    pub review_policy: Option<ReviewPolicyOverrideRequest>,
+    review_policy: Option<ReviewPolicyOverrideRequest>,
 }
 
 #[derive(Deserialize)]
-pub struct ReviewPolicyOverrideRequest {
+struct ReviewPolicyOverrideRequest {
     #[serde(default)]
-    pub production: Option<String>,
+    production: Option<String>,
     #[serde(default)]
-    pub preview: Option<String>,
+    preview: Option<String>,
     #[serde(default)]
-    pub domain: Option<String>,
+    domain: Option<String>,
 }
 
 fn review_policy_value(
@@ -210,13 +199,20 @@ fn review_policy_value(
 }
 
 /// POST /api/v1/admin/team-groups
-pub async fn create(
+async fn create(
     State(state): State<ControlApiState>,
     Session { data, .. }: Session,
     Json(body): Json<CreateTeamGroupRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.team_groups.create";
-    let db = super::database(&state, OP)?;
+    let db = crate::infra::http::database(&state, OP)?;
+    let transaction = crate::infra::audit::AuditTransaction::begin(db)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: OP,
+            source: source.into(),
+        })?;
+    let db = &transaction;
 
     let code =
         grass_validator::normalize_slug(&body.code).map_err(|error| AppError::Validation {
@@ -272,232 +268,51 @@ pub async fn create(
         group.id,
         json!({ "code": group.code, "review_policy": group.review_policy }),
     )
-    .await;
-
-    Ok(ok_response(json!({ "group": group_view(&group) })))
-}
-
-#[derive(Deserialize)]
-pub struct UpdateTeamGroupRequest {
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub description: Option<String>,
-    /// Explicit `null` detaches the quota plan.
-    #[serde(default, deserialize_with = "deserialize_double_option")]
-    pub quota_plan_id: Option<Option<Uuid>>,
-    #[serde(default)]
-    pub review_policy: Option<ReviewPolicyOverrideRequest>,
-    #[serde(default)]
-    pub is_default: Option<bool>,
-}
-
-fn deserialize_double_option<'de, D>(deserializer: D) -> Result<Option<Option<Uuid>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::Deserialize;
-    Option::<Uuid>::deserialize(deserializer).map(Some)
-}
-
-/// PATCH /api/v1/admin/team-groups/{group_id}
-pub async fn update(
-    State(state): State<ControlApiState>,
-    Session { data, .. }: Session,
-    Path(group_id): Path<Uuid>,
-    Json(body): Json<UpdateTeamGroupRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    const OP: &str = "admin.team_groups.update";
-    let db = super::database(&state, OP)?;
-
-    let group = find_group(db, group_id, OP).await?;
-
-    if group.is_default && body.is_default == Some(false) {
-        return Err(AppError::Validation {
-            op: OP,
-            message: "promote another group to default instead of un-defaulting this one"
-                .to_owned(),
-        });
-    }
-    if let Some(Some(plan_id)) = body.quota_plan_id {
-        validate_plan_reference(db, plan_id, OP).await?;
-    }
-    let review_policy = body
-        .review_policy
-        .map(|policy| review_policy_value(policy, OP))
-        .transpose()?;
-
-    let promote = body.is_default == Some(true) && !group.is_default;
-    let mut active: team_group::ActiveModel = group.into();
-    if let Some(name) = body.name.filter(|name| !name.trim().is_empty()) {
-        active.name = Set(name.trim().to_owned());
-    }
-    if let Some(description) = body.description {
-        active.description = Set(Some(description));
-    }
-    if let Some(quota_plan_id) = body.quota_plan_id {
-        active.quota_plan_id = Set(quota_plan_id);
-    }
-    if let Some(review_policy) = review_policy {
-        active.review_policy = Set(review_policy);
-    }
-    let group = active
-        .update(db)
+    .await
+    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    transaction
+        .commit()
         .await
         .map_err(|source| AppError::Infrastructure {
             op: OP,
             source: source.into(),
         })?;
 
-    if promote {
-        use sea_orm::sea_query::Expr;
-        team_group::Entity::update_many()
-            .col_expr(team_group::Column::IsDefault, Expr::value(false))
-            .filter(team_group::Column::IsDefault.eq(true))
-            .filter(team_group::Column::DeletedAt.is_null())
-            .exec(db)
-            .await
-            .map_err(|source| AppError::Infrastructure {
-                op: OP,
-                source: source.into(),
-            })?;
-        team_group::Entity::update_many()
-            .col_expr(team_group::Column::IsDefault, Expr::value(true))
-            .filter(team_group::Column::Id.eq(group.id))
-            .exec(db)
-            .await
-            .map_err(|source| AppError::Infrastructure {
-                op: OP,
-                source: source.into(),
-            })?;
-    }
-
-    audit_group_mutation(
-        db,
-        data.user_id,
-        "team_group.updated",
-        group.id,
-        json!({
-            "code": group.code,
-            "made_default": promote,
-            "review_policy": group.review_policy,
-        }),
-    )
-    .await;
-
-    Ok(ok_response(json!({ "group": group_view(&group) })))
+    Ok(ok_response(CreateResponse {
+        group: group_view(&group),
+    }))
 }
 
-/// DELETE /api/v1/admin/team-groups/{group_id}
-pub async fn remove(
-    State(state): State<ControlApiState>,
-    Session { data, .. }: Session,
-    Path(group_id): Path<Uuid>,
-) -> Result<impl IntoResponse, AppError> {
-    const OP: &str = "admin.team_groups.remove";
-    let db = super::database(&state, OP)?;
-
-    let group = find_group(db, group_id, OP).await?;
-    if group.is_default {
-        return Err(AppError::Validation {
-            op: OP,
-            message: "the default team group cannot be deleted".to_owned(),
-        });
-    }
-    let team_count = team::Entity::find()
-        .filter(team::Column::GroupId.eq(group.id))
-        .filter(team::Column::DeletedAt.is_null())
-        .count(db)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
-    if team_count > 0 {
-        return Err(AppError::Conflict {
-            op: OP,
-            message: format!(
-                "{team_count} team(s) are still assigned to this group; move them first"
-            ),
-        });
-    }
-
-    let code = group.code.clone();
-    let mut active: team_group::ActiveModel = group.into();
-    active.deleted_at = Set(Some(OffsetDateTime::now_utc()));
-    let group = active
-        .update(db)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
-
-    audit_group_mutation(
-        db,
-        data.user_id,
-        "team_group.deleted",
-        group.id,
-        json!({ "code": code }),
-    )
-    .await;
-
-    Ok(ok_response(json!({ "deleted": true })))
+#[derive(serde::Serialize)]
+struct TeamGroupReviewPolicyResponse {
+    production: Option<serde_json::Value>,
+    preview: Option<serde_json::Value>,
+    domain: Option<serde_json::Value>,
 }
 
-#[derive(Deserialize)]
-pub struct AssignGroupRequest {
-    pub group_id: Uuid,
+#[derive(serde::Serialize)]
+struct TeamGroupResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    team_count: Option<u64>,
+    id: uuid::Uuid,
+    code: String,
+    name: String,
+    description: Option<String>,
+    quota_plan_id: Option<uuid::Uuid>,
+    review_policy: TeamGroupReviewPolicyResponse,
+    is_default: bool,
+    #[serde(serialize_with = "crate::infra::http::timestamps::serialize")]
+    created_at: time::OffsetDateTime,
 }
 
-/// POST /api/v1/admin/teams/{team_id}/group
-pub async fn assign(
-    State(state): State<ControlApiState>,
-    Session { data, .. }: Session,
-    Path(team_id): Path<Uuid>,
-    Json(body): Json<AssignGroupRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    const OP: &str = "admin.teams.assign_group";
-    let db = super::database(&state, OP)?;
+#[derive(serde::Serialize)]
+struct ListResponse {
+    groups: Vec<TeamGroupResponse>,
+}
 
-    let target = teams::get_by_id(db, team_id)
-        .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?
-        .ok_or_else(|| AppError::NotFound {
-            op: OP,
-            message: "team not found".to_owned(),
-        })?;
-    let group = find_group(db, body.group_id, OP).await?;
-
-    let mut active: team::ActiveModel = target.into();
-    active.group_id = Set(Some(group.id));
-    let team = active
-        .update(db)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
-
-    let _ = audits::create_platform_audit_event(
-        db,
-        CreateAuditEventParams {
-            actor_user_id: Some(data.user_id),
-            actor_node_id: None,
-            team_id: Some(team.id),
-            action: "team.group_changed".to_owned(),
-            target_type: "team".to_owned(),
-            target_id: Some(team.id),
-            result: AuditEventResult::Success,
-            reason: None,
-            metadata: json!({ "group_id": group.id, "group_code": group.code }),
-        },
-    )
-    .await;
-
-    Ok(ok_response(json!({
-        "team": { "id": team.id, "slug": team.slug, "group_id": team.group_id },
-    })))
+#[derive(serde::Serialize)]
+struct CreateResponse {
+    group: TeamGroupResponse,
 }
 
 #[cfg(test)]

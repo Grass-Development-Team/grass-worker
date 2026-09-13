@@ -1,0 +1,221 @@
+{
+  "RegisterRequest": [
+    {
+      "name": "builder",
+      "version": "0.1.0",
+      "capabilities": {
+        "build": true,
+        "serve": true
+      },
+      "build_concurrency": 2
+    }
+  ],
+  "RegisterResponse": [
+    {
+      "node_id": "00000000-0000-0000-0000-000000000001",
+      "name": "builder",
+      "capabilities": {
+        "build": true,
+        "serve": true
+      }
+    }
+  ],
+  "HeartbeatRequest": [
+    {},
+    {
+      "active_builds": 2,
+      "effective_config_revision": 7,
+      "applying_config_revision": 8,
+      "config_apply_error": "fixture error"
+    }
+  ],
+  "HeartbeatResponse": [
+    {
+      "acknowledged": true
+    }
+  ],
+  "ClaimRequest": [
+    {
+      "capacity": 2
+    }
+  ],
+  "ClaimResponse": [
+    {},
+    {
+      "deployment": null
+    }
+  ],
+  "StageRequest": [
+    {},
+    {
+      "status": "building",
+      "stage": "install",
+      "build_minutes": 3
+    }
+  ],
+  "StageResponse": [
+    {
+      "cancel_requested": true
+    }
+  ],
+  "AppendBuildLogRequest": [
+    {
+      "lines": [
+        {
+          "seq": 1,
+          "stage": "build",
+          "line": "fixture output",
+          "timestamp_ms": 1234
+        }
+      ]
+    }
+  ],
+  "AppendBuildLogResponse": [
+    {
+      "last_seq": 3
+    }
+  ],
+  "UploadArtifactResponse": [
+    {
+      "artifact_id": "00000000-0000-0000-0000-000000000001",
+      "size_bytes": 123,
+      "checksum_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "ObserveSshHostKeyRequest": [
+    {
+      "host": "git.example.test",
+      "port": 2222,
+      "key_type": "ssh-ed25519",
+      "public_key": "fixture-key",
+      "fingerprint_sha256": "fixture-fingerprint"
+    }
+  ],
+  "ObserveSshHostKeyResponse": [
+    {
+      "approved": false
+    },
+    {
+      "approved": true,
+      "known_hosts_line": "fixture known-host line"
+    }
+  ],
+  "RedeemGitCredentialRequest": [
+    {
+      "lease": "fixture-lease"
+    }
+  ],
+  "RedeemGitCredentialResponse": [
+    {
+      "credential": {
+        "kind": "https",
+        "username": "fixture",
+        "secret": "fixture-only"
+      },
+      "host": "git.example.test",
+      "port": 443
+    }
+  ],
+  "ReportIngressStatusRequest": [
+    {
+      "certificates": [
+        {
+          "ingress_id": "00000000-0000-0000-0000-000000000001",
+          "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "challenge_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "tls_ready": true
+    }
+  ],
+  "CertificateBundlesResponse": [
+    {
+      "bundles": []
+    },
+    {
+      "bundles": [],
+      "challenges": [],
+      "challenge_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "ReportServeStatusRequest": [
+    {
+      "status": "ready"
+    },
+    {
+      "status": "failed",
+      "failure_code": "serve_start_failed",
+      "failure_message": "fixture failure"
+    }
+  ],
+  "ReportServeStatusResponse": [
+    {
+      "acknowledged": true
+    }
+  ],
+  "SsrLeaseResponse": [
+    {
+      "lease_id": "00000000-0000-0000-0000-000000000001",
+      "expires_at_unix": 3600,
+      "hour_block_start_unix": 0
+    }
+  ],
+  "ServeAssignmentsResponse": [
+    {
+      "assignments": []
+    }
+  ],
+  "RouteSnapshotResponse": [
+    {
+      "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "routes": []
+    }
+  ],
+  "ResolveHostResponse": [
+    {
+      "deployment_id": "00000000-0000-0000-0000-000000000001",
+      "project_id": "00000000-0000-0000-0000-000000000001",
+      "team_id": "00000000-0000-0000-0000-000000000001",
+      "host": "preview.example.test",
+      "environment": "preview",
+      "artifact_available": true,
+      "access": "team_or_platform_admin"
+    }
+  ],
+  "StartPreviewAuthorizationRequest": [
+    {
+      "host": "preview.example.test",
+      "return_to": "/docs?q=1"
+    }
+  ],
+  "StartPreviewAuthorizationResponse": [
+    {
+      "authorization_url": "https://console.example.test/api/v1/preview/authorize?state=fixture"
+    }
+  ],
+  "ExchangePreviewCodeRequest": [
+    {
+      "host": "preview.example.test",
+      "code": "fixture-code"
+    }
+  ],
+  "ExchangePreviewCodeResponse": [
+    {
+      "grant": "fixture-grant",
+      "return_to": "/docs",
+      "max_age_seconds": 60,
+      "cookie_secure": true
+    }
+  ],
+  "VerifyPreviewGrantRequest": [
+    {
+      "host": "preview.example.test",
+      "grant": "fixture-grant"
+    }
+  ],
+  "VerifyPreviewGrantResponse": [
+    {
+      "allowed": true
+    }
+  ]
+}

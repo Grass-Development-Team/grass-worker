@@ -104,6 +104,23 @@ pub async fn consume_registration_grant<C: ConnectionTrait>(
     }
 }
 
+pub(crate) fn personal_team_slug(email: &str) -> String {
+    let slug = email
+        .split('@')
+        .next()
+        .unwrap_or("user")
+        .to_lowercase()
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .take(40)
+        .collect::<String>();
+    if slug.is_empty() {
+        "user".to_owned()
+    } else {
+        slug
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use sea_orm::{DbBackend, MockDatabase, MockExecResult};

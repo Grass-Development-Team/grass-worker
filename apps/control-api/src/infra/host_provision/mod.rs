@@ -9,7 +9,6 @@ pub mod cloudflare;
 pub mod credentials;
 pub mod dnspod;
 pub mod route53;
-pub mod service;
 
 use crate::infra::database::entity::{HostBindingStatus, HostSourceKind, host_source};
 

@@ -1,37 +1,53 @@
-use std::{net::IpAddr, time::Duration};
-
 use axum::{
     Json,
     extract::{ConnectInfo, State},
     response::{IntoResponse, Response},
 };
-use axum_extra::extract::cookie::{Cookie, CookieJar};
-use serde::Deserialize;
-use serde_json::json;
-
+use axum_extra::extract::cookie::CookieJar;
 use grass_cache::Cache;
+use serde::Deserialize;
+use std::{net::IpAddr, time::Duration};
+use uuid::Uuid;
 
 use crate::{
     domain::users,
     infra::{
+        database::entity::{user, user_mfa_factor},
         error::{AppError, ok_response},
-        http::middlewares::csrf,
+        http::session_cookies::session_cookie,
     },
     state::ControlApiState,
 };
 
+pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
+    axum::Router::new().route("/login", axum::routing::post(handler))
+}
+
+fn user_data(user: &user::Model) -> UserResponse {
+    UserResponse {
+        id: user.id,
+        email: user.email.clone(),
+        display_name: user.display_name.clone(),
+        avatar_url: user_avatar_url(user.id, user.avatar_version),
+        platform_role: user.platform_role.as_str(),
+        email_verified: user.email_verified_at.is_some(),
+    }
+}
+
 const LOGIN_RATE_PERIOD: Duration = Duration::from_secs(60);
+
 const LOGIN_ACCOUNT_CAPACITY: u32 = 5;
+
 const LOGIN_IP_CAPACITY: u32 = 30;
 
 #[derive(Deserialize)]
-pub struct LoginRequest {
-    pub email: String,
-    pub password: String,
-    pub return_to: Option<String>,
+struct LoginRequest {
+    email: String,
+    password: String,
+    return_to: Option<String>,
 }
 
-pub async fn handler(
+async fn handler(
     State(state): State<ControlApiState>,
     ConnectInfo(peer_address): ConnectInfo<std::net::SocketAddr>,
     jar: CookieJar,
@@ -78,9 +94,7 @@ pub async fn handler(
             message: "email verification is required".to_owned(),
         });
     }
-    if let Some(response) =
-        super::mfa::begin_login(&state, &user, body.return_to.as_deref()).await?
-    {
+    if let Some(response) = begin_login(&state, &user, body.return_to.as_deref()).await? {
         return Ok(response);
     }
 
@@ -119,7 +133,7 @@ async fn enforce_login_rate_limits(
     Ok(())
 }
 
-pub(crate) async fn authenticated_response(
+async fn authenticated_response(
     state: &ControlApiState,
     cache: &grass_cache::CacheStore,
     jar: CookieJar,
@@ -129,87 +143,122 @@ pub(crate) async fn authenticated_response(
 
     Ok((
         session_jar,
-        ok_response(json!({
-            "user": super::user_data(&user),
-            "csrf_token": csrf_token,
-        })),
+        ok_response(AuthenticatedResponse {
+            user: user_data(&user),
+            csrf_token,
+        }),
     )
         .into_response())
 }
 
-pub(crate) async fn create_authenticated_session(
+async fn create_authenticated_session(
     state: &ControlApiState,
     cache: &grass_cache::CacheStore,
     jar: CookieJar,
     user: &crate::infra::database::entity::user::Model,
 ) -> Result<(CookieJar, String), AppError> {
-    if let Some(db) = state.try_database() {
-        users::update_last_login(db, user.id)
-            .await
-            .map_err(|source| AppError::Infrastructure {
-                op: "auth.login.update_last_login",
-                source,
-            })?;
-    }
-    let (cookie_secure, development_enabled, session_ttl) = {
-        let config = state.config.read().unwrap();
-        (
-            config.session.cookie_secure,
-            config.development_enabled(),
-            Duration::from_secs(config.session.session_ttl_seconds),
-        )
-    };
-    let session_id = grass_session::create_session(cache, user.id, user.auth_version, session_ttl)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: "auth.login.create_session",
-            source,
-        })?;
-
-    let csrf_token = csrf::generate_csrf_token(cache, &session_id)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: "auth.login.csrf_token",
-            source,
-        })?;
-
-    Ok((
-        jar.add(session_cookie(
-            session_id,
-            cookie_secure,
-            development_enabled,
-            session_ttl,
-        )),
-        csrf_token,
-    ))
+    let issued = crate::domain::authenticated_sessions::issue(state, cache, user).await?;
+    let config = state.config.read().unwrap();
+    let cookie = session_cookie(
+        issued.session_id,
+        config.session.cookie_secure,
+        config.development_enabled(),
+        issued.ttl,
+    );
+    Ok((jar.add(cookie), issued.csrf_token))
 }
 
-fn session_cookie(
-    session_id: impl Into<String>,
-    configured_secure: bool,
-    development_enabled: bool,
-    session_ttl: Duration,
-) -> Cookie<'static> {
-    let secure = configured_secure && !development_enabled;
-    let mut cookie = Cookie::new("session_id", session_id.into());
-    cookie.set_path("/api");
-    cookie.set_http_only(true);
-    cookie.set_secure(secure);
-    if secure {
-        cookie.set_partitioned(true);
+async fn begin_login(
+    state: &ControlApiState,
+    user: &user::Model,
+    return_to: Option<&str>,
+) -> Result<Option<Response>, AppError> {
+    Ok(begin_login_payload(state, user, return_to)
+        .await?
+        .map(|payload| ok_response(payload).into_response()))
+}
+
+async fn begin_login_payload(
+    state: &ControlApiState,
+    user: &user::Model,
+    return_to: Option<&str>,
+) -> Result<Option<LoginChallengeResponse>, AppError> {
+    Ok(
+        crate::domain::login_challenges::begin(state, user, return_to)
+            .await?
+            .map(|offer| LoginChallengeResponse {
+                mfa_required: offer.mode == crate::domain::login_challenges::ChallengeMode::Verify,
+                mfa_enrollment_required: offer.mode
+                    == crate::domain::login_challenges::ChallengeMode::Enroll,
+                challenge_token: offer.challenge_token,
+                factors: offer.factors.iter().map(factor_view).collect(),
+                allowed_factors: offer.allowed_factors,
+                return_to: offer.return_to,
+            }),
+    )
+}
+
+fn factor_view(factor: &user_mfa_factor::Model) -> MfaFactorResponse {
+    MfaFactorResponse {
+        id: factor.id,
+        kind: factor.kind.as_str(),
+        label: factor.label.clone(),
+        verified: factor.verified_at.is_some(),
+        created_at: factor.created_at,
+        last_used_at: factor.last_used_at,
     }
-    cookie.set_same_site(axum_extra::extract::cookie::SameSite::Strict);
-    cookie.set_max_age(time::Duration::seconds(session_ttl.as_secs() as i64));
-    cookie
+}
+
+fn user_avatar_url(user_id: Uuid, version: Option<Uuid>) -> Option<String> {
+    version.map(|version| format!("/api/v1/avatars/users/{user_id}/{version}/avatar.webp"))
+}
+
+#[derive(serde::Serialize)]
+struct UserResponse {
+    id: uuid::Uuid,
+    email: String,
+    display_name: Option<String>,
+    avatar_url: Option<String>,
+    platform_role: &'static str,
+    email_verified: bool,
+}
+
+#[derive(serde::Serialize)]
+struct LoginChallengeResponse {
+    mfa_required: bool,
+    mfa_enrollment_required: bool,
+    challenge_token: String,
+    factors: Vec<MfaFactorResponse>,
+    allowed_factors: Vec<String>,
+    return_to: String,
+}
+
+#[derive(serde::Serialize)]
+struct MfaFactorResponse {
+    id: uuid::Uuid,
+    kind: &'static str,
+    label: Option<String>,
+    verified: bool,
+    #[serde(serialize_with = "crate::infra::http::timestamps::serialize")]
+    created_at: time::OffsetDateTime,
+    #[serde(serialize_with = "crate::infra::http::timestamps::serialize")]
+    last_used_at: Option<time::OffsetDateTime>,
+}
+
+#[derive(serde::Serialize)]
+struct AuthenticatedResponse {
+    user: UserResponse,
+    csrf_token: String,
 }
 
 #[cfg(test)]
 mod tests {
-    use std::net::{IpAddr, Ipv4Addr};
-
-    use grass_cache::{CacheBackend, CacheStore};
-
     use super::*;
+    use crate::infra::error::AppError;
+    use grass_cache::CacheBackend;
+    use grass_cache::CacheStore;
+    use std::net::IpAddr;
+    use std::net::Ipv4Addr;
 
     #[tokio::test]
     async fn login_rate_limits_accounts_and_source_addresses() {
@@ -237,32 +286,5 @@ mod tests {
             enforce_login_rate_limits(&cache, "last@example.com", second_ip).await,
             Err(AppError::TooManyRequests { .. })
         ));
-    }
-
-    #[test]
-    fn session_cookie_contains_all_security_attributes() {
-        let cookie = session_cookie("session", true, false, Duration::from_secs(3600));
-
-        assert_eq!(cookie.path(), Some("/api"));
-        assert_eq!(cookie.http_only(), Some(true));
-        assert_eq!(cookie.secure(), Some(true));
-        assert_eq!(
-            cookie.same_site(),
-            Some(axum_extra::extract::cookie::SameSite::Strict)
-        );
-        assert_eq!(cookie.partitioned(), Some(true));
-        assert_eq!(cookie.max_age(), Some(time::Duration::hours(1)));
-    }
-
-    #[test]
-    fn session_cookie_is_not_secure_in_development_mode() {
-        let cookie = session_cookie("session", true, true, Duration::from_secs(3600));
-
-        assert_eq!(cookie.secure(), Some(false));
-        assert_eq!(cookie.partitioned(), None);
-        assert_eq!(
-            cookie.same_site(),
-            Some(axum_extra::extract::cookie::SameSite::Strict)
-        );
     }
 }

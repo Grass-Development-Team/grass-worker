@@ -7,6 +7,10 @@ use crate::{
     state::ControlApiState,
 };
 
+pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
+    axum::Router::new().route("/site-config", axum::routing::get(get))
+}
+
 const DEFAULT_SITE_NAME: &str = "Grass Worker";
 
 #[derive(Serialize)]
@@ -16,7 +20,7 @@ struct SiteConfigResponse {
     version: &'static str,
 }
 
-pub async fn get(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
+async fn get(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     let (site_name, logo_url) = if let Some(database) = state.try_database() {
         let site_name = settings::get_setting(database, "site.name")
             .await

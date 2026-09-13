@@ -25,3 +25,11 @@ pub(crate) fn cache<'a>(
         message: "cache not available".to_owned(),
     })
 }
+
+pub(crate) mod deployment_errors;
+
+pub(crate) mod redirects;
+pub(crate) mod registration_errors;
+pub(crate) mod session_cookies;
+
+pub(crate) mod patch;

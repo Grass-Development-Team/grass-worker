@@ -1,6 +1,7 @@
 use axum::{Json, extract::State, response::IntoResponse};
+use sea_orm::DatabaseConnection;
 use serde::Deserialize;
-use serde_json::json;
+use url::Url;
 
 use crate::{
     infra::{
@@ -11,20 +12,53 @@ use crate::{
     state::ControlApiState,
 };
 
-use super::validate_postgres_url;
-
-#[derive(Deserialize)]
-pub struct DatabaseSetupRequest {
-    pub url: String,
+pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
+    axum::Router::new().route("/database", axum::routing::post(handler))
 }
 
-pub async fn handler(
+async fn ensure_setup_mutation_allowed(
+    db: &DatabaseConnection,
+    op: &'static str,
+) -> Result<(), AppError> {
+    if init::is_setup_finished(db)
+        .await
+        .map_err(|source| AppError::Infrastructure { op, source })?
+    {
+        return Err(AppError::SetupNotAllowed {
+            op,
+            message: "setup has already finished".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_postgres_url(url: &str) -> Result<(), AppError> {
+    let parsed = Url::parse(url).map_err(|error| AppError::Validation {
+        op: "setup.database.invalid_url",
+        message: format!("invalid database URL: {error}"),
+    })?;
+
+    match parsed.scheme() {
+        "postgres" | "postgresql" => Ok(()),
+        scheme => Err(AppError::Validation {
+            op: "setup.database.unsupported_scheme",
+            message: format!("unsupported database scheme: {scheme}"),
+        }),
+    }
+}
+
+#[derive(Deserialize)]
+struct DatabaseSetupRequest {
+    url: String,
+}
+
+async fn handler(
     State(state): State<ControlApiState>,
     Json(body): Json<DatabaseSetupRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let _setup_guard = state.lock_setup().await;
     if let Some(db) = state.try_database() {
-        super::ensure_setup_mutation_allowed(db, "setup.database.ready_mode").await?;
+        ensure_setup_mutation_allowed(db, "setup.database.ready_mode").await?;
         return Err(AppError::Conflict {
             op: "setup.database.already_configured",
             message: "database is already configured".to_owned(),
@@ -71,9 +105,16 @@ pub async fn handler(
         message: "database connection already set".to_owned(),
     })?;
 
-    Ok(ok_response(json!({
-        "connected": true,
-        "migrations_applied": true,
-        "seed_completed": true,
-    })))
+    Ok(ok_response(ResponseBody {
+        connected: true,
+        migrations_applied: true,
+        seed_completed: true,
+    }))
+}
+
+#[derive(serde::Serialize)]
+struct ResponseBody {
+    connected: bool,
+    migrations_applied: bool,
+    seed_completed: bool,
 }

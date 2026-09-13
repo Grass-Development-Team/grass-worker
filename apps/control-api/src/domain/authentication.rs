@@ -322,11 +322,11 @@ impl MfaPolicy {
     }
 }
 
-pub async fn password_policy(db: &DatabaseConnection) -> anyhow::Result<PasswordPolicy> {
+pub async fn password_policy(db: &impl sea_orm::ConnectionTrait) -> anyhow::Result<PasswordPolicy> {
     load_json_setting(db, PASSWORD_POLICY_KEY).await
 }
 
-pub async fn mfa_policy(db: &DatabaseConnection) -> anyhow::Result<MfaPolicy> {
+pub async fn mfa_policy(db: &impl sea_orm::ConnectionTrait) -> anyhow::Result<MfaPolicy> {
     load_json_setting(db, MFA_POLICY_KEY).await
 }
 
@@ -365,7 +365,7 @@ fn user_mfa_policy_from_record(record: user_mfa_policy::Model) -> anyhow::Result
 }
 
 pub async fn set_user_mfa_policy(
-    db: &DatabaseConnection,
+    db: &impl sea_orm::ConnectionTrait,
     user_id: Uuid,
     policy: &UserMfaPolicy,
 ) -> anyhow::Result<()> {
@@ -400,7 +400,7 @@ pub async fn registration_verification_required(db: &DatabaseConnection) -> anyh
         .unwrap_or(false))
 }
 
-async fn load_json_setting<T>(db: &DatabaseConnection, key: &str) -> anyhow::Result<T>
+async fn load_json_setting<T>(db: &impl sea_orm::ConnectionTrait, key: &str) -> anyhow::Result<T>
 where
     T: Default + serde::de::DeserializeOwned,
 {
@@ -412,7 +412,7 @@ where
 }
 
 pub async fn password_was_used_recently(
-    db: &DatabaseConnection,
+    db: &impl sea_orm::ConnectionTrait,
     user_id: Uuid,
     password: &str,
     count: usize,
@@ -545,7 +545,7 @@ pub async fn mfa_factors(
 }
 
 pub async fn mfa_factor(
-    db: &DatabaseConnection,
+    db: &impl sea_orm::ConnectionTrait,
     user_id: Uuid,
     factor_id: Uuid,
 ) -> anyhow::Result<Option<user_mfa_factor::Model>> {
@@ -606,7 +606,7 @@ pub async fn start_mfa_factor(
 }
 
 pub async fn verify_mfa_factor(
-    db: &DatabaseConnection,
+    db: &impl sea_orm::ConnectionTrait,
     factor: user_mfa_factor::Model,
 ) -> anyhow::Result<user_mfa_factor::Model> {
     let now = OffsetDateTime::now_utc();
@@ -618,7 +618,7 @@ pub async fn verify_mfa_factor(
 }
 
 pub async fn mark_mfa_factor_used(
-    db: &DatabaseConnection,
+    db: &impl sea_orm::ConnectionTrait,
     factor: user_mfa_factor::Model,
 ) -> anyhow::Result<()> {
     let mut active: user_mfa_factor::ActiveModel = factor.into();
@@ -628,7 +628,7 @@ pub async fn mark_mfa_factor_used(
 }
 
 pub async fn delete_mfa_factor(
-    db: &DatabaseConnection,
+    db: &impl sea_orm::ConnectionTrait,
     user_id: Uuid,
     factor_id: Uuid,
 ) -> anyhow::Result<bool> {

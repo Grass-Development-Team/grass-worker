@@ -1,9 +1,8 @@
 //! Database-backed host source, host binding, and provision event functions.
 
-use sea_orm::sea_query::LockType;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter,
-    QueryOrder, QuerySelect,
+    QueryOrder, QuerySelect, sea_query::LockType,
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -376,10 +375,12 @@ pub async fn create_binding<C: ConnectionTrait>(
         reviewed_at: Set(None),
         review_reason: Set(None),
         ownership_status: Set(if params.host_source_id.is_some() {
-            "not_required".to_owned()
+            OwnershipStatus::NotRequired
         } else {
-            "pending".to_owned()
-        }),
+            OwnershipStatus::Pending
+        }
+        .as_str()
+        .to_owned()),
         ownership_checked_at: Set(None),
         ownership_error: Set(None),
         deleted_at: Set(None),
@@ -536,6 +537,35 @@ pub fn preview_host_for(project_slug: &str, deployment_id: Uuid, base_domain: &s
     let slug: String = project_slug.chars().take(63 - 9).collect();
     let slug = slug.trim_end_matches('-');
     format!("{slug}-{short}.{base_domain}")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum OwnershipStatus {
+    Pending,
+    Verified,
+    Failed,
+    NotRequired,
+}
+
+impl OwnershipStatus {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Verified => "verified",
+            Self::Failed => "failed",
+            Self::NotRequired => "not_required",
+        }
+    }
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "verified" => Some(Self::Verified),
+            "failed" => Some(Self::Failed),
+            "not_required" => Some(Self::NotRequired),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -746,5 +776,18 @@ mod tests {
         let statements = format!("{:?}", db.into_transaction_log());
         assert!(statements.contains("FOR UPDATE"), "{statements}");
         assert!(!statements.contains("deleted_at\" IS NULL"), "{statements}");
+    }
+
+    #[test]
+    fn stored_ownershipstatus_values_keep_their_wire_contract() {
+        for value in ["pending", "verified", "failed", "not_required"] {
+            let status = super::OwnershipStatus::parse(value).expect("existing database status");
+            assert_eq!(status.as_str(), value);
+            assert_eq!(
+                serde_json::to_value(status).unwrap(),
+                serde_json::json!(value)
+            );
+        }
+        assert!(super::OwnershipStatus::parse("unknown-future-state").is_none());
     }
 }

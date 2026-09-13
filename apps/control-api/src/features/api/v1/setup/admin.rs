@@ -1,7 +1,6 @@
 use axum::{Json, extract::State, response::IntoResponse};
-use sea_orm::{ConnectionTrait, TransactionTrait};
+use sea_orm::{ConnectionTrait, DatabaseConnection, TransactionTrait};
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::{
     domain::{
@@ -12,23 +11,54 @@ use crate::{
         database::entity::{PlatformRole, TeamKind},
         error::{AppError, ok_response},
     },
+    init,
     state::ControlApiState,
 };
 
-#[derive(Deserialize)]
-pub struct AdminSetupRequest {
-    pub email: String,
-    pub password: String,
-    pub display_name: Option<String>,
+pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
+    axum::Router::new().route("/admin", axum::routing::post(handler))
 }
 
-pub async fn handler(
+fn setup_database<'a>(
+    state: &'a ControlApiState,
+    op: &'static str,
+) -> Result<&'a DatabaseConnection, AppError> {
+    state.try_database().ok_or_else(|| AppError::Validation {
+        op,
+        message: "database must be configured first".to_owned(),
+    })
+}
+
+async fn ensure_setup_mutation_allowed(
+    db: &DatabaseConnection,
+    op: &'static str,
+) -> Result<(), AppError> {
+    if init::is_setup_finished(db)
+        .await
+        .map_err(|source| AppError::Infrastructure { op, source })?
+    {
+        return Err(AppError::SetupNotAllowed {
+            op,
+            message: "setup has already finished".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct AdminSetupRequest {
+    email: String,
+    password: String,
+    display_name: Option<String>,
+}
+
+async fn handler(
     State(state): State<ControlApiState>,
     Json(body): Json<AdminSetupRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let _setup_guard = state.lock_setup().await;
-    let db = super::setup_database(&state, "setup.admin.database")?;
-    super::ensure_setup_mutation_allowed(db, "setup.admin.ready_mode").await?;
+    let db = setup_database(&state, "setup.admin.database")?;
+    ensure_setup_mutation_allowed(db, "setup.admin.ready_mode").await?;
 
     let email =
         grass_validator::normalize_email(&body.email).map_err(|error| AppError::Validation {
@@ -132,19 +162,19 @@ pub async fn handler(
             source: source.into(),
         })?;
 
-    Ok(ok_response(json!({
-        "user": {
-            "id": user.id,
-            "email": user.email,
-            "display_name": user.display_name,
-            "platform_role": user.platform_role.as_str(),
+    Ok(ok_response(ResponseBody {
+        user: ResponseBodyUserResponse {
+            id: user.id,
+            email: user.email.clone(),
+            display_name: user.display_name.clone(),
+            platform_role: (user.platform_role.as_str()).to_owned(),
         },
-        "team": {
-            "id": team.id,
-            "slug": team.slug,
-            "name": team.name,
+        team: ResponseBodyTeamResponse {
+            id: team.id,
+            slug: team.slug.clone(),
+            name: team.name.clone(),
         },
-    })))
+    }))
 }
 
 fn initial_platform_role() -> PlatformRole {
@@ -170,10 +200,32 @@ fn make_slug(email: &str) -> String {
     grass_validator::normalize_slug(&candidate).unwrap_or_else(|_| "user".to_owned())
 }
 
+#[derive(serde::Serialize)]
+struct ResponseBodyUserResponse {
+    id: uuid::Uuid,
+    email: String,
+    display_name: Option<String>,
+    platform_role: String,
+}
+
+#[derive(serde::Serialize)]
+struct ResponseBodyTeamResponse {
+    id: uuid::Uuid,
+    slug: String,
+    name: String,
+}
+
+#[derive(serde::Serialize)]
+struct ResponseBody {
+    user: ResponseBodyUserResponse,
+    team: ResponseBodyTeamResponse,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use crate::infra::database::entity::PlatformRole;
     #[test]
     fn setup_creates_a_platform_administrator() {
         assert_eq!(initial_platform_role(), PlatformRole::Admin);

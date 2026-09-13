@@ -39,7 +39,7 @@ fn status_after_node_activity(current: &NodeStatus) -> NodeStatus {
 }
 
 pub async fn create_node(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     params: CreateNodeParams,
 ) -> anyhow::Result<node::Model> {
     let now = OffsetDateTime::now_utc();
@@ -459,6 +459,9 @@ pub fn config_sync_status_value(status: &NodeConfigSyncStatus) -> &'static str {
         NodeConfigSyncStatus::Failed => "failed",
     }
 }
+
+/// Heartbeats older than this mark a Node unhealthy.
+pub const HEARTBEAT_STALE_SECONDS: i64 = 90;
 
 #[cfg(test)]
 mod tests {

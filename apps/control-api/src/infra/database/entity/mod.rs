@@ -7,6 +7,7 @@ pub mod deployment_artifact;
 pub mod deployment_event;
 pub mod deployment_review;
 pub mod deployment_screenshot_job;
+pub mod domain_onboarding;
 pub mod enums;
 pub mod host_policy;
 pub mod host_provision_event;
@@ -23,6 +24,7 @@ pub mod quota_event;
 pub mod quota_limit;
 pub mod quota_plan;
 pub mod quota_usage_counter;
+pub mod region;
 pub mod regional_ingress;
 pub mod regional_ingress_health;
 pub mod registration_email_allowlist;
@@ -138,7 +140,3 @@ pub use user_notification::Entity as UserNotification;
 pub use user_password_credential::Entity as UserPasswordCredential;
 #[allow(unused_imports)]
 pub use user_password_history::Entity as UserPasswordHistory;
-
-pub mod region;
-
-pub mod domain_onboarding;

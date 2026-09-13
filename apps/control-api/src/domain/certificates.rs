@@ -1,20 +1,20 @@
 //! Persistent certificate material, eligibility and authoritative regional snapshots.
 
+use super::authentication::authentication_key;
 use anyhow::{Context, ensure};
 use grass_node_protocol::{CertificateBundle, CertificateBundlesResponse, HttpChallenge};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
     QuerySelect, Set, TransactionTrait, sea_query::OnConflict,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use super::authentication::authentication_key;
+use crate::infra::database::entity::managed_certificate as cert;
 use crate::infra::database::entity::{
-    HostBindingKind, HostBindingStatus, HostReviewStatus, managed_certificate as cert,
-    project_host_binding, regional_ingress,
+    HostBindingKind, HostBindingStatus, HostReviewStatus, project_host_binding, regional_ingress,
 };
 
 pub const ACCOUNT_KEY: &str = "regional-ingress-acme-account-v1";
@@ -108,7 +108,8 @@ pub fn binding_eligible(binding: &project_host_binding::Model) -> bool {
     binding.deleted_at.is_none()
         && matches!(binding.kind, HostBindingKind::Custom)
         && matches!(binding.status, HostBindingStatus::Active)
-        && binding.ownership_status == "verified"
+        && crate::domain::hosts::OwnershipStatus::parse(&binding.ownership_status)
+            == Some(crate::domain::hosts::OwnershipStatus::Verified)
         && matches!(
             binding.review_status,
             HostReviewStatus::Approved | HostReviewStatus::NotRequired
@@ -186,7 +187,7 @@ async fn ensure_record_inner<C: ConnectionTrait>(
             "Certificate issuance is in progress"
         );
         active.acme_account = Set(None);
-        active.status = Set("pending".to_owned());
+        active.status = Set(CertificateStatus::Pending.as_str().to_owned());
         active.error = Set(None);
         active.retry_at = Set(None);
         active.failure_count = Set(0);
@@ -251,7 +252,7 @@ pub async fn queue(db: &DatabaseConnection, item: &cert::Model) -> anyhow::Resul
         "certificate retry is temporarily delayed after failure"
     );
     let mut active: cert::ActiveModel = item.clone().into();
-    active.status = Set("pending".to_owned());
+    active.status = Set(CertificateStatus::Pending.as_str().to_owned());
     active.retry_at = Set(None);
     active.error = Set(None);
     active.generation = Set(Uuid::now_v7());
@@ -282,7 +283,7 @@ pub async fn import(
     let mut active: cert::ActiveModel = item.clone().into();
     active.issuer = Set("manual".to_owned());
     active.auto_renew = Set(false);
-    active.status = Set("active".to_owned());
+    active.status = Set(CertificateStatus::Active.as_str().to_owned());
     active.error = Set(None);
     active.bundle = Set(Some(encrypt(
         secret,
@@ -303,22 +304,6 @@ pub async fn import(
     let updated = active.update(&transaction).await?;
     transaction.commit().await?;
     Ok(updated)
-}
-
-pub fn view(item: Option<&cert::Model>, ingress: &regional_ingress::Model, issuer: &str) -> Value {
-    let mut view = match item {
-        Some(item) => {
-            json!({"enabled":ingress.enabled,"status":item.status,"issuer":item.issuer,"challenge_method":"http01","auto_renew":item.auto_renew,"issued_at":crate::infra::http::timestamps::ts(item.issued_at),"expires_at":crate::infra::http::timestamps::ts(item.expires_at),"error":item.error,"retry_at":crate::infra::http::timestamps::ts(item.retry_at),"revision":item.revision})
-        }
-        None => {
-            json!({"enabled":ingress.enabled,"status":"pending","issuer":issuer,"challenge_method":"http01","auto_renew":true,"issued_at":null,"expires_at":null,"error":null,"retry_at":null,"revision":""})
-        }
-    };
-    view["platform_issuer"] = json!(issuer);
-    if !ingress.enabled || ingress.deleted_at.is_some() {
-        view["status"] = json!("disabled");
-    }
-    view
 }
 
 pub fn challenge_revision(challenges: &[HttpChallenge]) -> String {
@@ -392,9 +377,45 @@ pub async fn snapshot(
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CertificateStatus {
+    Pending,
+    Issuing,
+    Active,
+    Failed,
+    Disabled,
+}
+
+impl CertificateStatus {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Issuing => "issuing",
+            Self::Active => "active",
+            Self::Failed => "failed",
+            Self::Disabled => "disabled",
+        }
+    }
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "issuing" => Some(Self::Issuing),
+            "active" => Some(Self::Active),
+            "failed" => Some(Self::Failed),
+            "disabled" => Some(Self::Disabled),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
+    use crate::test_support::certificates::{
+        binding_fixture, certificate_fixture, ingress_fixture,
+    };
+    use serde_json::json;
     #[tokio::test]
     async fn corrupt_bundle_does_not_block_another_domains_withdrawal() {
         let ingress = ingress_fixture();
@@ -452,75 +473,6 @@ pub(crate) mod tests {
             private_key_pem: leaf.signing_key.serialize_pem(),
         };
         assert!(validate_pem("site.example.org", &bundle, now).is_err());
-    }
-    pub(crate) fn ingress_fixture() -> regional_ingress::Model {
-        regional_ingress::Model {
-            id: Uuid::now_v7(),
-            region: "eu".to_owned(),
-            hostname: "entry.example.org".to_owned(),
-            enabled: true,
-            health_check_path: "/_grass/health".to_owned(),
-            health_check_interval_seconds: 30,
-            origin_host_preservation: true,
-            dns_status: "resolved".to_owned(),
-            dns_checked_at: Some(OffsetDateTime::now_utc()),
-            dns_error: None,
-            deleted_at: None,
-            created_at: OffsetDateTime::now_utc(),
-            updated_at: OffsetDateTime::now_utc(),
-        }
-    }
-    pub(crate) fn certificate_fixture(ingress: &regional_ingress::Model) -> cert::Model {
-        cert::Model {
-            id: ingress.id,
-            ingress_id: ingress.id,
-            host_binding_id: None,
-            hostname: ingress.hostname.clone(),
-            issuer: "letsencrypt".to_owned(),
-            contact_email: "owner@example.org".to_owned(),
-            challenge_method: "http01".to_owned(),
-            auto_renew: true,
-            status: "pending".to_owned(),
-            error: None,
-            bundle: None,
-            acme_account: None,
-            revision: String::new(),
-            issued_at: None,
-            expires_at: None,
-            retry_at: None,
-            failure_count: 0,
-            lease_until: None,
-            generation: Uuid::now_v7(),
-            challenge_token: None,
-            challenge_value: None,
-            challenge_expires_at: None,
-            updated_at: OffsetDateTime::now_utc(),
-        }
-    }
-    pub(crate) fn binding_fixture() -> project_host_binding::Model {
-        project_host_binding::Model {
-            id: Uuid::now_v7(),
-            project_id: Uuid::now_v7(),
-            team_id: Uuid::now_v7(),
-            host_source_id: None,
-            host: "site.example.org".to_owned(),
-            region: "eu".to_owned(),
-            kind: HostBindingKind::Custom,
-            environment: crate::infra::database::entity::HostBindingEnvironment::Production,
-            status: HostBindingStatus::Active,
-            failure_reason: None,
-            is_primary: false,
-            review_status: HostReviewStatus::Approved,
-            reviewed_by_user_id: None,
-            reviewed_at: None,
-            review_reason: None,
-            ownership_status: "verified".to_owned(),
-            ownership_checked_at: None,
-            ownership_error: None,
-            deleted_at: None,
-            created_at: OffsetDateTime::now_utc(),
-            updated_at: OffsetDateTime::now_utc(),
-        }
     }
 
     #[test]
@@ -674,5 +626,18 @@ pub(crate) mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn stored_certificatestatus_values_keep_their_wire_contract() {
+        for value in ["pending", "issuing", "active", "failed", "disabled"] {
+            let status = super::CertificateStatus::parse(value).expect("existing database status");
+            assert_eq!(status.as_str(), value);
+            assert_eq!(
+                serde_json::to_value(status).unwrap(),
+                serde_json::json!(value)
+            );
+        }
+        assert!(super::CertificateStatus::parse("unknown-future-state").is_none());
     }
 }

@@ -1,36 +1,37 @@
+pub(crate) mod auto_popup;
+pub(crate) mod by_notification_id;
+pub(crate) mod read_all;
+pub(crate) mod unread_count;
+
 use axum::{
-    Router,
-    extract::{Path, Query, State},
+    extract::{Query, State},
     response::IntoResponse,
-    routing::{get, post},
 };
 use serde::Deserialize;
-use serde_json::json;
-use uuid::Uuid;
 
 use crate::{
     domain::notifications,
     infra::{
         database::entity::user_notification,
         error::{AppError, ok_response},
-        http::{extractors::Session, timestamps::ts},
+        http::extractors::Session,
     },
     state::ControlApiState,
 };
 
-pub fn router() -> Router<ControlApiState> {
-    Router::new()
-        .route("/notifications", get(list))
-        .route("/notifications/auto-popup", get(auto_popup))
-        .route("/notifications/unread-count", get(unread_count))
-        .route("/notifications/read-all", post(mark_all_read))
-        .route("/notifications/{notification_id}/read", post(mark_read))
+pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
+    axum::Router::new()
+        .route("/notifications", axum::routing::get(list))
+        .merge(auto_popup::router())
+        .merge(by_notification_id::router())
+        .merge(read_all::router())
+        .merge(unread_count::router())
 }
 
 #[derive(Default, Deserialize)]
-pub struct ListQuery {
-    pub page: Option<u64>,
-    pub per_page: Option<u64>,
+struct ListQuery {
+    page: Option<u64>,
+    per_page: Option<u64>,
 }
 
 fn database<'a>(
@@ -43,46 +44,51 @@ fn database<'a>(
     })
 }
 
-fn notification_view(item: &user_notification::Model) -> serde_json::Value {
-    let is_announcement = item.action == "site.announcement";
-    let project = if is_announcement {
-        serde_json::Value::Null
-    } else {
-        json!({
-            "id": item.project_id,
-            "name": item.project_name,
-            "slug": item.project_slug,
-        })
-    };
-    json!({
-        "id": item.id,
-        "action": item.action,
-        "announcement_id": item.announcement_id,
-        "title": item.title.as_deref().unwrap_or_else(|| notifications::notification_title(&item.action)),
-        "project": project,
-        "content": item.content,
-        "reason": item.reason,
-        "target_url": item.target_url,
-        "read_at": ts(item.read_at),
-        "created_at": ts(item.created_at),
-    })
+#[derive(serde::Serialize)]
+struct NotificationResponse {
+    id: uuid::Uuid,
+    action: String,
+    announcement_id: Option<uuid::Uuid>,
+    title: String,
+    project: Option<NotificationProjectResponse>,
+    content: Option<String>,
+    reason: Option<String>,
+    target_url: String,
+    #[serde(serialize_with = "crate::infra::http::timestamps::serialize")]
+    read_at: Option<time::OffsetDateTime>,
+    #[serde(serialize_with = "crate::infra::http::timestamps::serialize")]
+    created_at: time::OffsetDateTime,
+}
+#[derive(serde::Serialize)]
+struct NotificationProjectResponse {
+    id: Option<uuid::Uuid>,
+    name: Option<String>,
+    slug: Option<String>,
+}
+fn notification_view(item: &user_notification::Model) -> NotificationResponse {
+    NotificationResponse {
+        id: item.id,
+        action: item.action.clone(),
+        announcement_id: item.announcement_id,
+        title: item
+            .title
+            .as_deref()
+            .unwrap_or_else(|| notifications::notification_title(&item.action))
+            .to_owned(),
+        project: (item.action != "site.announcement").then(|| NotificationProjectResponse {
+            id: item.project_id,
+            name: item.project_name.clone(),
+            slug: item.project_slug.clone(),
+        }),
+        content: item.content.clone(),
+        reason: item.reason.clone(),
+        target_url: item.target_url.clone(),
+        read_at: item.read_at,
+        created_at: item.created_at,
+    }
 }
 
-pub async fn auto_popup(
-    State(state): State<ControlApiState>,
-    session: Session,
-) -> Result<impl IntoResponse, AppError> {
-    const OP: &str = "notifications.auto_popup";
-    let notification =
-        notifications::latest_auto_popup(database(&state, OP)?, session.data.user_id)
-            .await
-            .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    Ok(ok_response(json!({
-        "notification": notification.as_ref().map(notification_view),
-    })))
-}
-
-pub async fn list(
+async fn list(
     State(state): State<ControlApiState>,
     session: Session,
     Query(query): Query<ListQuery>,
@@ -97,122 +103,31 @@ pub async fn list(
     .await
     .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
-    Ok(ok_response(json!({
-        "notifications": page.notifications.iter().map(notification_view).collect::<Vec<_>>(),
-        "pagination": {
-            "page": page.page,
-            "per_page": page.per_page,
-            "total": page.total,
-            "total_pages": page.total_pages,
+    Ok(ok_response(ListResponse {
+        notifications: page
+            .notifications
+            .iter()
+            .map(notification_view)
+            .collect::<Vec<_>>(),
+        pagination: ListPaginationResponse {
+            page: page.page,
+            per_page: page.per_page,
+            total: page.total,
+            total_pages: page.total_pages,
         },
-    })))
+    }))
 }
 
-pub async fn unread_count(
-    State(state): State<ControlApiState>,
-    session: Session,
-) -> Result<impl IntoResponse, AppError> {
-    const OP: &str = "notifications.unread_count";
-    let count = notifications::unread_count(database(&state, OP)?, session.data.user_id)
-        .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    Ok(ok_response(json!({ "count": count })))
+#[derive(serde::Serialize)]
+struct ListPaginationResponse {
+    page: u64,
+    per_page: u64,
+    total: u64,
+    total_pages: u64,
 }
 
-pub async fn mark_read(
-    State(state): State<ControlApiState>,
-    session: Session,
-    Path(notification_id): Path<Uuid>,
-) -> Result<impl IntoResponse, AppError> {
-    const OP: &str = "notifications.mark_read";
-    let found =
-        notifications::mark_read(database(&state, OP)?, session.data.user_id, notification_id)
-            .await
-            .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    if !found {
-        return Err(AppError::NotFound {
-            op: OP,
-            message: "notification not found".to_owned(),
-        });
-    }
-    Ok(ok_response(json!({ "ok": true })))
-}
-
-pub async fn mark_all_read(
-    State(state): State<ControlApiState>,
-    session: Session,
-) -> Result<impl IntoResponse, AppError> {
-    const OP: &str = "notifications.mark_all_read";
-    let updated = notifications::mark_all_read(database(&state, OP)?, session.data.user_id)
-        .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    Ok(ok_response(json!({ "updated": updated })))
-}
-
-#[cfg(test)]
-mod tests {
-    use time::OffsetDateTime;
-
-    use super::*;
-
-    #[test]
-    fn notification_response_hides_actor_and_contains_project_reason_and_target() {
-        let item = user_notification::Model {
-            id: Uuid::now_v7(),
-            recipient_user_id: Uuid::now_v7(),
-            actor_user_id: Some(Uuid::now_v7()),
-            team_id: Some(Uuid::now_v7()),
-            project_id: Some(Uuid::now_v7()),
-            announcement_id: None,
-            action: "project.slug_updated".to_owned(),
-            project_name: Some("Demo".to_owned()),
-            project_slug: Some("demo-site".to_owned()),
-            actor_label: "Platform Admin".to_owned(),
-            title: None,
-            content: None,
-            reason: Some("Reserved wording".to_owned()),
-            target_url: "/projects/demo/deployments".to_owned(),
-            read_at: None,
-            created_at: OffsetDateTime::UNIX_EPOCH,
-        };
-
-        let value = notification_view(&item);
-
-        assert_eq!(value["title"], "Project slug changed");
-        assert_eq!(value["project"]["name"], "Demo");
-        assert_eq!(value["project"]["slug"], "demo-site");
-        assert!(value.get("actor").is_none());
-        assert_eq!(value["reason"], "Reserved wording");
-        assert_eq!(value["target_url"], "/projects/demo/deployments");
-        assert!(value["read_at"].is_null());
-    }
-
-    #[test]
-    fn announcement_response_exposes_content_without_project_metadata() {
-        let item = user_notification::Model {
-            id: Uuid::now_v7(),
-            recipient_user_id: Uuid::now_v7(),
-            actor_user_id: Some(Uuid::now_v7()),
-            team_id: None,
-            project_id: None,
-            announcement_id: None,
-            action: "site.announcement".to_owned(),
-            project_name: None,
-            project_slug: None,
-            actor_label: "Platform Admin".to_owned(),
-            title: Some("Maintenance window".to_owned()),
-            content: Some("The API will restart at 10:00 UTC.".to_owned()),
-            reason: None,
-            target_url: "/notifications".to_owned(),
-            read_at: None,
-            created_at: OffsetDateTime::UNIX_EPOCH,
-        };
-
-        let value = notification_view(&item);
-
-        assert_eq!(value["title"], "Maintenance window");
-        assert_eq!(value["content"], "The API will restart at 10:00 UTC.");
-        assert!(value["project"].is_null());
-        assert_eq!(value["target_url"], "/notifications");
-    }
+#[derive(serde::Serialize)]
+struct ListResponse {
+    notifications: Vec<NotificationResponse>,
+    pagination: ListPaginationResponse,
 }

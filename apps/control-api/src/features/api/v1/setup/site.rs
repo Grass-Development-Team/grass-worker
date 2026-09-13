@@ -1,28 +1,58 @@
 use axum::{Json, extract::State, response::IntoResponse};
-use sea_orm::TransactionTrait;
+use sea_orm::{DatabaseConnection, TransactionTrait};
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::{
     domain::settings,
     infra::error::{AppError, ok_response},
+    init,
     state::ControlApiState,
 };
 
-#[derive(Deserialize)]
-pub struct SiteSetupRequest {
-    pub name: String,
-    pub site_url: String,
-    pub public_base_url: String,
+pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
+    axum::Router::new().route("/site", axum::routing::post(handler))
 }
 
-pub async fn handler(
+fn setup_database<'a>(
+    state: &'a ControlApiState,
+    op: &'static str,
+) -> Result<&'a DatabaseConnection, AppError> {
+    state.try_database().ok_or_else(|| AppError::Validation {
+        op,
+        message: "database must be configured first".to_owned(),
+    })
+}
+
+async fn ensure_setup_mutation_allowed(
+    db: &DatabaseConnection,
+    op: &'static str,
+) -> Result<(), AppError> {
+    if init::is_setup_finished(db)
+        .await
+        .map_err(|source| AppError::Infrastructure { op, source })?
+    {
+        return Err(AppError::SetupNotAllowed {
+            op,
+            message: "setup has already finished".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct SiteSetupRequest {
+    name: String,
+    site_url: String,
+    public_base_url: String,
+}
+
+async fn handler(
     State(state): State<ControlApiState>,
     Json(body): Json<SiteSetupRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let _setup_guard = state.lock_setup().await;
-    let db = super::setup_database(&state, "setup.site.database")?;
-    super::ensure_setup_mutation_allowed(db, "setup.site.ready_mode").await?;
+    let db = setup_database(&state, "setup.site.database")?;
+    ensure_setup_mutation_allowed(db, "setup.site.ready_mode").await?;
 
     let name = body.name.trim();
     if name.is_empty() {
@@ -68,15 +98,15 @@ pub async fn handler(
             source: source.into(),
         })?;
 
-    Ok(ok_response(json!({
-        "configured": true,
-        "name": name,
-        "site_url": site_url,
-        "public_base_url": public_base_url,
-    })))
+    Ok(ok_response(ResponseBody {
+        configured: true,
+        name: name.to_owned(),
+        site_url,
+        public_base_url,
+    }))
 }
 
-pub(crate) fn validate_site_url(value: &str, op: &'static str) -> Result<String, AppError> {
+fn validate_site_url(value: &str, op: &'static str) -> Result<String, AppError> {
     let value = value.trim().trim_end_matches('/');
     let url = url::Url::parse(value).map_err(|_| AppError::Validation {
         op,
@@ -89,6 +119,14 @@ pub(crate) fn validate_site_url(value: &str, op: &'static str) -> Result<String,
         });
     }
     Ok(value.to_owned())
+}
+
+#[derive(serde::Serialize)]
+struct ResponseBody {
+    configured: bool,
+    name: String,
+    site_url: String,
+    public_base_url: String,
 }
 
 #[cfg(test)]
