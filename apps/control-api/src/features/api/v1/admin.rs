@@ -1,211 +1,48 @@
-use crate::infra::http::{cache, database};
+pub(crate) mod announcements;
+pub(crate) mod audit_events;
+pub(crate) mod cleanup;
+pub(crate) mod codes;
+pub(crate) mod deployments;
+pub(crate) mod domain_https;
+pub(crate) mod domains;
+pub(crate) mod host_sources;
+pub(crate) mod identity_providers;
+pub(crate) mod nodes;
+pub(crate) mod projects;
+pub(crate) mod quota_plans;
+pub(crate) mod regional_ingresses;
+pub(crate) mod regions;
+pub(crate) mod registration;
+pub(crate) mod reviews;
+pub(crate) mod settings;
+pub(crate) mod status;
+pub(crate) mod storage;
+pub(crate) mod team_groups;
+pub(crate) mod teams;
+pub(crate) mod users;
 
-pub mod announcements;
-pub mod audit_events;
-pub mod batch;
-pub mod build_logs;
-pub mod codes;
-pub mod deployments;
-pub mod domain_https;
-pub mod domains;
-pub mod host_sources;
-pub mod identity_providers;
-pub mod nodes;
-pub mod projects;
-pub mod quota_plans;
-pub mod regional_ingresses;
-pub mod regions;
-pub mod registration;
-pub mod reviews;
-pub mod settings;
-pub mod storage;
-pub mod team_groups;
-pub mod teams;
-pub mod users;
-
-use axum::{
-    Router,
-    response::IntoResponse,
-    routing::{delete, get, patch, post},
-};
-use serde_json::json;
-
-use crate::{infra::error::ok_response, state::ControlApiState};
-
-pub fn router() -> Router<ControlApiState> {
-    Router::new()
-        .route("/status", get(status))
-        .route("/regions", get(regions::list).post(regions::create))
-        .route(
-            "/regions/{code}",
-            patch(regions::rename).delete(regions::remove),
-        )
-        .route("/codes", get(codes::list).post(codes::generate))
-        .route("/codes/{code_id}/revoke", post(codes::revoke))
-        .route(
-            "/registration/emails",
-            get(registration::list).post(registration::add),
-        )
-        .route(
-            "/registration/emails/{entry_id}",
-            delete(registration::remove),
-        )
-        .route(
-            "/quota-plans",
-            get(quota_plans::list).post(quota_plans::create),
-        )
-        .route("/quota-plans/{plan_id}", patch(quota_plans::update))
-        .route(
-            "/host-sources",
-            get(host_sources::list).post(host_sources::create),
-        )
-        .route(
-            "/host-sources/{source_id}",
-            patch(host_sources::update).delete(host_sources::remove),
-        )
-        .route(
-            "/regional-ingresses",
-            get(regional_ingresses::list).post(regional_ingresses::create),
-        )
-        .route(
-            "/regional-ingresses/{ingress_id}",
-            patch(regional_ingresses::update).delete(regional_ingresses::remove),
-        )
-        .route(
-            "/domain-https",
-            get(domain_https::get).patch(domain_https::update),
-        )
-        .route("/audit-events", get(audit_events::list))
-        .route(
-            "/cleanup/audit-events",
-            get(audit_events::cleanup_preview).delete(audit_events::cleanup),
-        )
-        .route(
-            "/cleanup/build-logs",
-            get(build_logs::cleanup_preview).delete(build_logs::cleanup),
-        )
-        .route(
-            "/team-groups",
-            get(team_groups::list).post(team_groups::create),
-        )
-        .route(
-            "/team-groups/{group_id}",
-            patch(team_groups::update).delete(team_groups::remove),
-        )
-        .route("/teams", get(teams::list).post(teams::create))
-        .route("/teams/batch", post(teams::batch))
-        .route(
-            "/teams/{team_id}",
-            get(teams::detail)
-                .patch(teams::update)
-                .delete(teams::remove),
-        )
-        .route("/teams/{team_id}/group", post(team_groups::assign))
-        .route("/teams/{team_id}/quota-plan", post(teams::set_quota_plan))
-        .route("/users", get(users::list).post(users::create))
-        .route("/users/batch", post(users::batch))
-        .route("/users/{user_id}", patch(users::update))
-        .route(
-            "/users/{user_id}/reset-password",
-            post(users::reset_password),
-        )
-        .route(
-            "/users/{user_id}/mfa",
-            get(users::mfa_factors).patch(users::update_mfa_policy),
-        )
-        .route(
-            "/users/{user_id}/mfa/{factor_id}",
-            delete(users::reset_mfa_factor),
-        )
-        .route("/settings", get(settings::get).patch(settings::update))
-        .route("/storage", get(storage::get))
-        .route("/storage/test", post(storage::test))
-        .route(
-            "/storage/migrations",
-            get(storage::migration).post(storage::create_migration),
-        )
-        .route(
-            "/identity-providers",
-            get(identity_providers::list).post(identity_providers::create),
-        )
-        .route(
-            "/identity-providers/{provider_id}",
-            patch(identity_providers::update).delete(identity_providers::remove),
-        )
-        .route(
-            "/announcements",
-            get(announcements::list).post(announcements::publish),
-        )
-        .route(
-            "/announcements/{announcement_id}",
-            delete(announcements::remove),
-        )
-        .route("/projects", get(projects::list))
-        .route("/projects/batch", post(projects::batch))
-        .route("/projects/{project_id}", get(projects::detail))
-        .route(
-            "/projects/{project_id}/slug",
-            axum::routing::patch(projects::update_slug),
-        )
-        .route(
-            "/projects/{project_id}/deployments",
-            get(projects::deployments),
-        )
-        .route("/projects/{project_id}/domains", get(projects::domains))
-        .route("/projects/{project_id}/activity", get(projects::activity))
-        .route("/projects/{project_id}/archive", post(projects::archive))
-        .route(
-            "/projects/{project_id}/unarchive",
-            post(projects::unarchive),
-        )
-        .route("/projects/{project_id}/delete", post(projects::remove))
-        .route("/projects/{project_id}/restore", post(projects::restore))
-        .route(
-            "/deployments/{deployment_id}/withdraw",
-            post(deployments::withdraw),
-        )
-        .route(
-            "/deployments/{deployment_id}/republish",
-            post(deployments::republish),
-        )
-        .route("/domains/{domain_id}/approve", post(domains::approve))
-        .route("/domains/{domain_id}/reject", post(domains::reject))
-        .route(
-            "/domains/{domain_id}",
-            axum::routing::delete(domains::remove),
-        )
-        .route("/reviews", get(reviews::list))
-        .route(
-            "/deployments/{deployment_id}/review/approve",
-            post(reviews::approve),
-        )
-        .route(
-            "/deployments/{deployment_id}/review/reject",
-            post(reviews::reject),
-        )
-        .route("/nodes", get(nodes::list).post(nodes::create))
-        .route(
-            "/nodes/local-process",
-            get(nodes::local_process_status).post(nodes::local_process_action),
-        )
-        .route(
-            "/nodes/{node_id}",
-            get(nodes::detail).patch(nodes::update_capacity),
-        )
-        .route("/nodes/{node_id}/health", get(nodes::health))
-        .route("/nodes/{node_id}/deletion-plan", get(nodes::deletion_plan))
-        .route("/nodes/{node_id}/deletion", post(nodes::queue_deletion))
-        .route(
-            "/nodes/{node_id}/configuration",
-            axum::routing::put(nodes::update_configuration),
-        )
-        .route("/nodes/{node_id}/rotate-token", post(nodes::rotate_token))
-}
-
-async fn status() -> impl IntoResponse {
-    ok_response(json!({
-        "service": "Grass Worker Control API",
-        "mode": "ready",
-        "version": env!("CARGO_PKG_VERSION"),
-    }))
+pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
+    axum::Router::new()
+        .merge(announcements::router())
+        .merge(audit_events::router())
+        .merge(cleanup::router())
+        .merge(codes::router())
+        .merge(deployments::router())
+        .merge(domain_https::router())
+        .merge(domains::router())
+        .merge(host_sources::router())
+        .merge(identity_providers::router())
+        .merge(nodes::router())
+        .merge(projects::router())
+        .merge(quota_plans::router())
+        .merge(regional_ingresses::router())
+        .merge(regions::router())
+        .merge(registration::router())
+        .merge(reviews::router())
+        .merge(settings::router())
+        .merge(status::router())
+        .merge(storage::router())
+        .merge(team_groups::router())
+        .merge(teams::router())
+        .merge(users::router())
 }

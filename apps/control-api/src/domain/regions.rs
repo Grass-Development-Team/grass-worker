@@ -34,17 +34,32 @@ pub async fn require<C: ConnectionTrait>(
     Ok(())
 }
 
-pub async fn available<C: ConnectionTrait>(db: &C) -> anyhow::Result<serde_json::Value> {
+pub struct AvailableRegion {
+    pub code: String,
+    pub name: String,
+    pub ingress_hostname: Option<String>,
+    pub ingress_enabled: bool,
+}
+
+pub async fn available<C: ConnectionTrait>(db: &C) -> anyhow::Result<Vec<AvailableRegion>> {
     use crate::infra::database::entity::regional_ingress;
     let entries = regional_ingress::Entity::find()
         .filter(regional_ingress::Column::DeletedAt.is_null())
         .all(db)
         .await?;
-    let regions = list(db).await?.into_iter().map(|r| {
-        let entry = entries.iter().find(|i| i.region == r.code);
-        serde_json::json!({"code":r.code, "name":r.name, "ingress_hostname":entry.map(|i| &i.hostname), "ingress_enabled":entry.is_some_and(|i| i.enabled)})
-    }).collect::<Vec<_>>();
-    Ok(serde_json::json!({"regions":regions}))
+    Ok(list(db)
+        .await?
+        .into_iter()
+        .map(|region| {
+            let entry = entries.iter().find(|entry| entry.region == region.code);
+            AvailableRegion {
+                code: region.code,
+                name: region.name,
+                ingress_hostname: entry.map(|entry| entry.hostname.clone()),
+                ingress_enabled: entry.is_some_and(|entry| entry.enabled),
+            }
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -75,8 +90,8 @@ mod tests {
             }]])
             .into_connection();
         let view = available(&db).await.unwrap();
-        assert_eq!(view["regions"][0]["code"], "hk_1");
-        assert_eq!(view["regions"][0]["ingress_enabled"], false);
-        assert!(view["regions"][0]["ingress_hostname"].is_null());
+        assert_eq!(view[0].code, "hk_1");
+        assert!(!view[0].ingress_enabled);
+        assert!(view[0].ingress_hostname.is_none());
     }
 }

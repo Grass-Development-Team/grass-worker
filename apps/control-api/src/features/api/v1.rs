@@ -10,12 +10,10 @@ pub mod projects;
 pub mod regions;
 pub mod setup;
 pub mod site_config;
+pub(crate) mod team_invitations;
 pub mod teams;
 
-use axum::{
-    Router, middleware,
-    routing::{get, post},
-};
+use axum::{Router, middleware};
 
 use crate::{
     infra::http::{
@@ -26,14 +24,14 @@ use crate::{
 };
 
 pub fn router(state: ControlApiState) -> Router<ControlApiState> {
+    let ready = middleware::from_fn_with_state(state.clone(), require_ready_mode);
     let administration = admin::router()
         .route_layer(middleware::from_extractor_with_state::<PlatformAdmin, _>(
             state.clone(),
         ));
-
     Router::new()
-        .route("/site-config", get(site_config::get))
-        .route("/regions", get(regions::list))
+        .merge(site_config::router())
+        .merge(regions::router())
         .nest(
             "/setup",
             setup::router().layer(middleware::from_fn_with_state(
@@ -41,100 +39,22 @@ pub fn router(state: ControlApiState) -> Router<ControlApiState> {
                 require_setup_mode,
             )),
         )
-        .nest(
-            "/auth",
-            auth::router().layer(middleware::from_fn_with_state(
-                state.clone(),
-                require_ready_mode,
-            )),
-        )
+        .nest("/auth", auth::router().layer(ready.clone()))
         .merge(preview::router(state.clone()))
-        .route(
-            "/me",
-            get(me::handler)
-                .patch(me::update)
-                .layer(middleware::from_fn_with_state(
-                    state.clone(),
-                    require_ready_mode,
-                )),
-        )
-        .merge(avatars::router().layer(middleware::from_fn_with_state(
-            state.clone(),
-            require_ready_mode,
-        )))
-        .route(
-            "/me/password",
-            post(auth::password::change).layer(middleware::from_fn_with_state(
-                state.clone(),
-                require_ready_mode,
-            )),
-        )
-        .route(
-            "/me/security",
-            get(auth::mfa::security).layer(middleware::from_fn_with_state(
-                state.clone(),
-                require_ready_mode,
-            )),
-        )
-        .route(
-            "/me/mfa/totp/start",
-            post(auth::mfa::account_totp_start).layer(middleware::from_fn_with_state(
-                state.clone(),
-                require_ready_mode,
-            )),
-        )
-        .route(
-            "/me/mfa/email/start",
-            post(auth::mfa::account_email_start).layer(middleware::from_fn_with_state(
-                state.clone(),
-                require_ready_mode,
-            )),
-        )
-        .route(
-            "/me/mfa/{factor_id}/confirm",
-            post(auth::mfa::account_confirm).layer(middleware::from_fn_with_state(
-                state.clone(),
-                require_ready_mode,
-            )),
-        )
-        .route(
-            "/me/mfa/{factor_id}",
-            axum::routing::delete(auth::mfa::account_delete).layer(middleware::from_fn_with_state(
-                state.clone(),
-                require_ready_mode,
-            )),
-        )
+        .merge(me::router().layer(ready.clone()))
+        .merge(avatars::router().layer(ready.clone()))
         .nest("/admin", administration)
-        .merge(teams::router().layer(middleware::from_fn_with_state(
-            state.clone(),
-            require_ready_mode,
-        )))
-        .merge(projects::router().layer(middleware::from_fn_with_state(
-            state.clone(),
-            require_ready_mode,
-        )))
-        .merge(
-            announcements::router().layer(middleware::from_fn_with_state(
-                state.clone(),
-                require_ready_mode,
-            )),
-        )
-        .merge(
-            notifications::router().layer(middleware::from_fn_with_state(
-                state.clone(),
-                require_ready_mode,
-            )),
-        )
+        .merge(teams::router().layer(ready.clone()))
+        .merge(team_invitations::router().layer(ready.clone()))
+        .merge(projects::router().layer(ready.clone()))
+        .merge(announcements::router().layer(ready.clone()))
+        .merge(notifications::router().layer(ready.clone()))
         .nest(
             "/internal",
             internal::router(state.clone())
-                // Artifact uploads carry whole build outputs; quota enforces
-                // the real per-team limit.
-                .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 1024))
-                .layer(middleware::from_fn_with_state(
-                    state.clone(),
-                    require_ready_mode,
-                )),
+            // Node artifacts carry whole build outputs; quota supplies the team limit.
+            .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 1024))
+            .layer(ready),
         )
 }
 

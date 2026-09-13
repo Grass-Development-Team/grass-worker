@@ -121,11 +121,8 @@ fn spawn_node_health_sweep(state: ControlApiState) {
             let Some(db) = state.try_database() else {
                 continue;
             };
-            match domain::nodes::mark_stale_offline(
-                db,
-                features::api::v1::admin::nodes::HEARTBEAT_STALE_SECONDS,
-            )
-            .await
+            match domain::nodes::mark_stale_offline(db, domain::nodes::HEARTBEAT_STALE_SECONDS)
+                .await
             {
                 Ok(0) => {}
                 Ok(count) => info!(

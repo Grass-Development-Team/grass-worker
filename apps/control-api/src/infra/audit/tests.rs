@@ -418,6 +418,10 @@ async fn team_audit_query_requires_team_visibility() {
     );
 }
 
+// Tracing callsite interest is process-wide. Keep temporary subscriber
+// registration and removal serial while these tests capture thread-local logs.
+static LOG_CAPTURE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[derive(Clone, Default)]
 struct CapturedAuditLog(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
 
@@ -454,6 +458,7 @@ fn transaction_event() -> CreateAuditEventParams {
 
 #[tokio::test]
 async fn business_audit_logs_wait_for_commit_and_share_request_context() {
+    let _capture_guard = LOG_CAPTURE_LOCK.lock().await;
     use tracing::instrument::WithSubscriber;
 
     let capture = CapturedAuditLog::default();
@@ -492,6 +497,7 @@ async fn business_audit_logs_wait_for_commit_and_share_request_context() {
 
 #[tokio::test]
 async fn rolled_back_audit_never_logs_committed_success() {
+    let _capture_guard = LOG_CAPTURE_LOCK.lock().await;
     use tracing::instrument::WithSubscriber;
 
     let capture = CapturedAuditLog::default();
@@ -524,6 +530,7 @@ async fn rolled_back_audit_never_logs_committed_success() {
 
 #[tokio::test]
 async fn audit_insert_failure_is_returned_and_does_not_log_success() {
+    let _capture_guard = LOG_CAPTURE_LOCK.lock().await;
     use tracing::instrument::WithSubscriber;
 
     let capture = CapturedAuditLog::default();

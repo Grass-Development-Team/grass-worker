@@ -269,15 +269,6 @@ pub async fn sweep(db: &DatabaseConnection, secret: &str) -> anyhow::Result<()> 
     Ok(())
 }
 
-pub fn view(check: &check::Model) -> serde_json::Value {
-    serde_json::json!({
-        "dns_status": check.dns_status,
-        "dns_error": check.dns_error,
-        "checked_at": crate::infra::http::timestamps::ts(check.checked_at),
-        "next_check_at": crate::infra::http::timestamps::ts(Some(check.next_check_at)),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

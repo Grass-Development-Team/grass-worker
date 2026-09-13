@@ -4,3 +4,5 @@ pub mod router;
 
 #[cfg(test)]
 mod route_contract_tests;
+
+pub(crate) mod health;

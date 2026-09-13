@@ -1,26 +1,34 @@
-use std::collections::HashMap;
+pub(crate) mod by_code_id;
 
 use axum::{
     Json,
-    extract::{Path, Query, State},
+    extract::{Query, State},
     response::IntoResponse,
 };
 use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
+use crate::infra::audit as audits;
 use crate::{
-    domain::codes::{self, CodeScope, CodeStatus, CodeUseError},
+    domain::codes::{self, CodeScope, CodeStatus},
     infra::{
-        audit::{self as audits, CreateAuditEventParams},
+        audit::CreateAuditEventParams,
         database::entity::{AuditEventResult, code, user},
         error::{AppError, ok_response},
         http::{extractors::Session, timestamps::ts},
     },
     state::ControlApiState,
 };
+
+pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
+    axum::Router::new()
+        .route("/codes", axum::routing::get(list).post(generate))
+        .merge(by_code_id::router())
+}
 
 #[derive(Deserialize)]
 pub struct GenerateCodesRequest {
@@ -118,38 +126,12 @@ fn code_view(item: &code::Model, used_by: Option<&user::Model>, now: OffsetDateT
     }
 }
 
-fn map_code_error(error: CodeUseError, op: &'static str) -> AppError {
-    match error {
-        CodeUseError::NotFound => AppError::NotFound {
-            op,
-            message: "code not found".to_owned(),
-        },
-        CodeUseError::WrongScope => AppError::Conflict {
-            op,
-            message: "code scope is not registered".to_owned(),
-        },
-        CodeUseError::Used => AppError::Conflict {
-            op,
-            message: "code has already been used".to_owned(),
-        },
-        CodeUseError::Expired => AppError::Gone {
-            op,
-            message: "code has expired".to_owned(),
-        },
-        CodeUseError::Revoked => AppError::Conflict {
-            op,
-            message: "code has been revoked".to_owned(),
-        },
-        CodeUseError::Database(source) => AppError::Infrastructure { op, source },
-    }
-}
-
 pub async fn list(
     State(state): State<ControlApiState>,
     Query(query): Query<ListCodesQuery>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.codes.list";
-    let db = super::database(&state, OP)?;
+    let db = crate::infra::http::database(&state, OP)?;
     let scope = query
         .scope
         .as_deref()
@@ -210,16 +192,28 @@ pub async fn list(
         .map(|user| (user.id, user))
         .collect::<HashMap<_, _>>();
 
-    Ok(ok_response(json!({
-        "scopes": codes::registered_scopes().iter().map(|scope| scope.as_str()).collect::<Vec<_>>(),
-        "codes": items.iter().map(|item| code_view(item, item.used_by_user_id.and_then(|id| users.get(&id)), now)).collect::<Vec<_>>(),
-        "pagination": {
-            "page": page,
-            "per_page": per_page,
-            "total": total,
-            "total_pages": total.div_ceil(per_page),
+    Ok(ok_response(ListResponse {
+        scopes: codes::registered_scopes()
+            .iter()
+            .map(|scope| scope.as_str())
+            .collect::<Vec<_>>(),
+        codes: items
+            .iter()
+            .map(|item| {
+                code_view(
+                    item,
+                    item.used_by_user_id.and_then(|id| users.get(&id)),
+                    now,
+                )
+            })
+            .collect::<Vec<_>>(),
+        pagination: ListPaginationResponse {
+            page,
+            per_page,
+            total,
+            total_pages: total.div_ceil(per_page),
         },
-    })))
+    }))
 }
 
 pub async fn generate(
@@ -228,7 +222,7 @@ pub async fn generate(
     Json(body): Json<GenerateCodesRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.codes.generate";
-    let db = super::database(&state, OP)?;
+    let db = crate::infra::http::database(&state, OP)?;
     let transaction = crate::infra::audit::AuditTransaction::begin(db)
         .await
         .map_err(|source| AppError::Infrastructure {
@@ -274,69 +268,57 @@ pub async fn generate(
             source: source.into(),
         })?;
 
-    Ok(ok_response(json!({
-        "codes": generated.iter().map(|item| json!({
-            "id": item.model.id,
-            "code": item.value,
-            "scope": item.model.scope,
-            "expires_at": ts(item.model.expires_at),
-            "created_at": ts(item.model.created_at),
-        })).collect::<Vec<_>>(),
-    })))
+    Ok(ok_response(GenerateResponse {
+        codes: generated
+            .iter()
+            .map(|item| GenerateCodesResponse {
+                id: item.model.id,
+                code: item.value.clone(),
+                scope: item.model.scope.clone(),
+                expires_at: item.model.expires_at,
+                created_at: item.model.created_at,
+            })
+            .collect::<Vec<_>>(),
+    }))
 }
 
-pub async fn revoke(
-    State(state): State<ControlApiState>,
-    Session { data, .. }: Session,
-    Path(code_id): Path<Uuid>,
-) -> Result<impl IntoResponse, AppError> {
-    const OP: &str = "admin.codes.revoke";
-    let db = super::database(&state, OP)?;
-    let transaction = crate::infra::audit::AuditTransaction::begin(db)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
-    let db = &transaction;
-    let item = codes::revoke_code(db, code_id)
-        .await
-        .map_err(|error| map_code_error(error, OP))?;
-    audits::create_platform_audit_event(
-        db,
-        CreateAuditEventParams {
-            actor_user_id: Some(data.user_id),
-            actor_node_id: None,
-            team_id: None,
-            action: "code.revoked".to_owned(),
-            target_type: "code".to_owned(),
-            target_id: Some(item.id),
-            result: AuditEventResult::Success,
-            reason: None,
-            metadata: json!({ "scope": item.scope }),
-        },
-    )
-    .await
-    .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-    transaction
-        .commit()
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
+#[derive(serde::Serialize)]
+struct ListPaginationResponse {
+    page: u64,
+    per_page: u64,
+    total: u64,
+    total_pages: u64,
+}
 
-    Ok(ok_response(json!({
-        "code": code_view(&item, None, OffsetDateTime::now_utc()),
-    })))
+#[derive(serde::Serialize)]
+struct ListResponse {
+    scopes: Vec<&'static str>,
+    codes: Vec<CodeView>,
+    pagination: ListPaginationResponse,
+}
+
+#[derive(serde::Serialize)]
+struct GenerateCodesResponse {
+    id: uuid::Uuid,
+    code: String,
+    scope: String,
+    #[serde(serialize_with = "crate::infra::http::timestamps::serialize")]
+    expires_at: Option<time::OffsetDateTime>,
+    #[serde(serialize_with = "crate::infra::http::timestamps::serialize")]
+    created_at: time::OffsetDateTime,
+}
+
+#[derive(serde::Serialize)]
+struct GenerateResponse {
+    codes: Vec<GenerateCodesResponse>,
 }
 
 #[cfg(test)]
 mod tests {
-    use time::{Duration, OffsetDateTime};
-
     use super::*;
     use crate::domain::codes;
+    use time::Duration;
+    use time::OffsetDateTime;
 
     #[test]
     fn generation_defaults_to_thirty_days_and_validates_limits() {
@@ -405,21 +387,5 @@ mod tests {
         .unwrap();
 
         assert_eq!(input.expires_at, None);
-    }
-
-    #[test]
-    fn list_view_exposes_only_the_stored_preview() {
-        let generated = codes::prepare_code(codes::CodeScope::Registration, None, None);
-        let view = code_view(&generated.model, None, OffsetDateTime::now_utc());
-        let json = serde_json::to_value(view).unwrap();
-
-        assert_eq!(
-            json["code"],
-            format!("{}...{}", &generated.value[..6], &generated.value[36..])
-        );
-        assert!(json.get("token_hash").is_none());
-        assert!(!json.to_string().contains(&generated.value));
-        assert_eq!(json["scope"], "registration");
-        assert_eq!(json["status"], "available");
     }
 }

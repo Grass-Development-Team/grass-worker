@@ -1,7 +1,6 @@
 use axum::{Json, extract::State, response::IntoResponse};
 use sea_orm::{DatabaseConnection, TransactionTrait};
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::{
     domain::{nodes, storage_settings},
@@ -9,8 +8,39 @@ use crate::{
         error::{AppError, ok_response},
         storage::{StorageBackendKind, StorageConfig, StorageCredentials, build_backend},
     },
+    init,
     state::ControlApiState,
 };
+
+pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
+    axum::Router::new().route("/storage", axum::routing::post(handler))
+}
+
+pub(crate) fn setup_database<'a>(
+    state: &'a ControlApiState,
+    op: &'static str,
+) -> Result<&'a DatabaseConnection, AppError> {
+    state.try_database().ok_or_else(|| AppError::Validation {
+        op,
+        message: "database must be configured first".to_owned(),
+    })
+}
+
+pub(crate) async fn ensure_setup_mutation_allowed(
+    db: &DatabaseConnection,
+    op: &'static str,
+) -> Result<(), AppError> {
+    if init::is_setup_finished(db)
+        .await
+        .map_err(|source| AppError::Infrastructure { op, source })?
+    {
+        return Err(AppError::SetupNotAllowed {
+            op,
+            message: "setup has already finished".to_owned(),
+        });
+    }
+    Ok(())
+}
 
 #[derive(Debug, Default, Deserialize)]
 pub struct StorageSetupRequest {
@@ -27,8 +57,8 @@ pub async fn handler(
     Json(body): Json<StorageSetupRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let _setup_guard = state.lock_setup().await;
-    let db = super::setup_database(&state, "setup.storage.database")?;
-    super::ensure_setup_mutation_allowed(db, "setup.storage.ready_mode").await?;
+    let db = setup_database(&state, "setup.storage.database")?;
+    ensure_setup_mutation_allowed(db, "setup.storage.ready_mode").await?;
 
     let (config, credentials) = prepare(body)?;
     let credentials_configured = credentials.is_configured();
@@ -82,10 +112,10 @@ pub async fn handler(
         );
     }
 
-    Ok(ok_response(json!({
-        "configured": true,
-        "storage": storage_settings::public_config(&config, credentials_configured),
-    })))
+    Ok(ok_response(ResponseBody {
+        configured: true,
+        storage: storage_view(&config, credentials_configured),
+    }))
 }
 
 async fn persist_configuration(
@@ -122,26 +152,52 @@ fn prepare(body: StorageSetupRequest) -> Result<(StorageConfig, StorageCredentia
         })
 }
 
+#[derive(serde::Serialize)]
+struct StorageResponse {
+    backend: &'static str,
+    local_root: String,
+    endpoint: String,
+    region: String,
+    bucket: String,
+    prefix: String,
+    force_path_style: bool,
+    allow_http: bool,
+    credentials_configured: bool,
+}
+fn storage_view(
+    config: &crate::infra::storage::StorageConfig,
+    credentials_configured: bool,
+) -> StorageResponse {
+    StorageResponse {
+        backend: config.backend.as_str(),
+        local_root: config.local_root.clone(),
+        endpoint: config.endpoint.clone(),
+        region: config.region.clone(),
+        bucket: config.bucket.clone(),
+        prefix: config.prefix.clone(),
+        force_path_style: config.force_path_style,
+        allow_http: config.allow_http,
+        credentials_configured,
+    }
+}
+
+#[derive(serde::Serialize)]
+struct ResponseBody {
+    configured: bool,
+    storage: StorageResponse,
+}
+
 #[cfg(test)]
 mod tests {
-    use sea_orm::{DbBackend, MockDatabase};
-
     use super::*;
-    use crate::infra::database::entity::{SystemSettingValueKind, system_setting};
 
-    fn setting(key: &str) -> system_setting::Model {
-        let now = time::OffsetDateTime::UNIX_EPOCH;
-        system_setting::Model {
-            id: uuid::Uuid::now_v7(),
-            key: key.to_owned(),
-            value_kind: SystemSettingValueKind::Json,
-            value: serde_json::Value::Null,
-            is_secret: false,
-            created_at: now,
-            updated_at: now,
-        }
-    }
-
+    use crate::domain::storage_settings;
+    use crate::infra::database::entity::SystemSettingValueKind;
+    use crate::infra::database::entity::system_setting;
+    use crate::infra::storage::StorageConfig;
+    use sea_orm::DbBackend;
+    use sea_orm::MockDatabase;
+    use serde_json::json;
     #[test]
     fn setup_root_compatibility_and_precedence_are_preserved() {
         for (input, expected) in [
@@ -163,6 +219,19 @@ mod tests {
     #[test]
     fn node_work_root_stays_local_for_remote_backends() {
         assert_eq!(node_work_root("/srv/grass"), "/srv/grass/node");
+    }
+
+    fn setting(key: &str) -> system_setting::Model {
+        let now = time::OffsetDateTime::UNIX_EPOCH;
+        system_setting::Model {
+            id: uuid::Uuid::now_v7(),
+            key: key.to_owned(),
+            value_kind: SystemSettingValueKind::Json,
+            value: serde_json::Value::Null,
+            is_secret: false,
+            created_at: now,
+            updated_at: now,
+        }
     }
 
     #[tokio::test]

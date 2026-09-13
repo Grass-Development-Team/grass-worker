@@ -41,3 +41,11 @@ pub(crate) mod deployment_placement;
 pub(crate) mod project_access;
 
 pub(crate) mod node_migration_access;
+
+pub(crate) mod project_lifecycle;
+
+pub(crate) mod admin_projects;
+pub(crate) mod admin_team_groups;
+pub(crate) mod admin_teams;
+
+pub(crate) mod admin_users;

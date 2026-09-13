@@ -3,10 +3,11 @@ use axum::{
     extract::State,
     response::{IntoResponse, Response},
 };
-use axum_extra::extract::cookie::CookieJar;
+use axum_extra::extract::cookie::{Cookie, CookieJar};
 use sea_orm::TransactionTrait;
 use serde::Deserialize;
-use serde_json::json;
+use std::time::Duration;
+use uuid::Uuid;
 
 use crate::{
     domain::{
@@ -15,11 +16,124 @@ use crate::{
         users::{self, CreateUserParams},
     },
     infra::{
-        database::entity::{AuthTokenKind, PlatformRole, TeamKind},
+        database::entity::{AuthTokenKind, PlatformRole, TeamKind, user},
         error::{AppError, ok_response},
+        http::middlewares::csrf,
     },
     state::ControlApiState,
 };
+
+pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
+    axum::Router::new().route("/register", axum::routing::post(handler))
+}
+
+fn user_data(user: &user::Model) -> UserResponse {
+    UserResponse {
+        id: user.id,
+        email: user.email.clone(),
+        display_name: user.display_name.clone(),
+        avatar_url: user_avatar_url(user.id, user.avatar_version),
+        platform_role: user.platform_role.as_str(),
+        email_verified: user.email_verified_at.is_some(),
+    }
+}
+
+pub(crate) async fn authenticated_response(
+    state: &ControlApiState,
+    cache: &grass_cache::CacheStore,
+    jar: CookieJar,
+    user: crate::infra::database::entity::user::Model,
+) -> Result<Response, AppError> {
+    let (session_jar, csrf_token) = create_authenticated_session(state, cache, jar, &user).await?;
+
+    Ok((
+        session_jar,
+        ok_response(AuthenticatedResponse {
+            user: user_data(&user),
+            csrf_token,
+        }),
+    )
+        .into_response())
+}
+
+pub(crate) async fn create_authenticated_session(
+    state: &ControlApiState,
+    cache: &grass_cache::CacheStore,
+    jar: CookieJar,
+    user: &crate::infra::database::entity::user::Model,
+) -> Result<(CookieJar, String), AppError> {
+    if let Some(db) = state.try_database() {
+        users::update_last_login(db, user.id)
+            .await
+            .map_err(|source| AppError::Infrastructure {
+                op: "auth.login.update_last_login",
+                source,
+            })?;
+    }
+    let (cookie_secure, development_enabled, session_ttl) = {
+        let config = state.config.read().unwrap();
+        (
+            config.session.cookie_secure,
+            config.development_enabled(),
+            Duration::from_secs(config.session.session_ttl_seconds),
+        )
+    };
+    let session_id = grass_session::create_session(cache, user.id, user.auth_version, session_ttl)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: "auth.login.create_session",
+            source,
+        })?;
+
+    let csrf_token = csrf::generate_csrf_token(cache, &session_id)
+        .await
+        .map_err(|source| AppError::Infrastructure {
+            op: "auth.login.csrf_token",
+            source,
+        })?;
+
+    Ok((
+        jar.add(session_cookie(
+            session_id,
+            cookie_secure,
+            development_enabled,
+            session_ttl,
+        )),
+        csrf_token,
+    ))
+}
+
+fn session_cookie(
+    session_id: impl Into<String>,
+    configured_secure: bool,
+    development_enabled: bool,
+    session_ttl: Duration,
+) -> Cookie<'static> {
+    let secure = configured_secure && !development_enabled;
+    let mut cookie = Cookie::new("session_id", session_id.into());
+    cookie.set_path("/api");
+    cookie.set_http_only(true);
+    cookie.set_secure(secure);
+    if secure {
+        cookie.set_partitioned(true);
+    }
+    cookie.set_same_site(axum_extra::extract::cookie::SameSite::Strict);
+    cookie.set_max_age(time::Duration::seconds(session_ttl.as_secs() as i64));
+    cookie
+}
+
+pub(crate) fn safe_return_to(value: Option<&str>) -> String {
+    value
+        .filter(|value| {
+            value.starts_with('/')
+                && !value.starts_with("//")
+                && !value.contains('\\')
+                && value.len() <= 4096
+                && !value.chars().any(char::is_control)
+        })
+        .unwrap_or("/")
+        .to_owned()
+}
 
 struct RegistrationInput {
     email: String,
@@ -86,7 +200,7 @@ pub async fn handler(
     let policy = registration::SignupPolicy::parse(policy_value)
         .map_err(|error| map_registration_access_error(error, "auth.register.invalid_policy"))?;
 
-    let return_to = super::oidc::safe_return_to(body.return_to.as_deref());
+    let return_to = safe_return_to(body.return_to.as_deref());
     let registration_code = body
         .registration_code
         .as_deref()
@@ -216,14 +330,14 @@ pub async fn handler(
             Some(&return_to),
         )
         .await;
-        return Ok(ok_response(json!({
-            "verification_required": true,
-            "email": user.email,
-        }))
+        return Ok(ok_response(ResponseBody {
+            verification_required: true,
+            email: user.email.clone(),
+        })
         .into_response());
     }
 
-    super::login::authenticated_response(&state, cache, jar, user).await
+    authenticated_response(&state, cache, jar, user).await
 }
 
 fn registration_platform_role() -> PlatformRole {
@@ -271,16 +385,6 @@ pub(crate) fn map_registration_access_error(
     }
 }
 
-#[cfg(test)]
-mod platform_role_tests {
-    use super::*;
-
-    #[test]
-    fn registration_creates_a_regular_platform_user() {
-        assert_eq!(registration_platform_role(), PlatformRole::User);
-    }
-}
-
 fn validate_registration_input(email: &str) -> Result<RegistrationInput, AppError> {
     let email = grass_validator::normalize_email(email).map_err(|error| AppError::Validation {
         op: "auth.register.invalid_email",
@@ -306,27 +410,74 @@ pub(crate) fn personal_team_slug(email: &str) -> String {
     }
 }
 
+pub(crate) fn user_avatar_url(user_id: Uuid, version: Option<Uuid>) -> Option<String> {
+    version.map(|version| format!("/api/v1/avatars/users/{user_id}/{version}/avatar.webp"))
+}
+
+#[derive(serde::Serialize)]
+struct UserResponse {
+    id: uuid::Uuid,
+    email: String,
+    display_name: Option<String>,
+    avatar_url: Option<String>,
+    platform_role: &'static str,
+    email_verified: bool,
+}
+
+#[derive(serde::Serialize)]
+struct AuthenticatedResponse {
+    user: UserResponse,
+    csrf_token: String,
+}
+
+#[derive(serde::Serialize)]
+struct ResponseBody {
+    verification_required: bool,
+    email: String,
+}
+
 #[cfg(test)]
 mod tests {
-    use axum::{
-        body::Body,
-        http::{Request, StatusCode},
-    };
-    use grass_cache::{CacheBackend, CacheStore};
-    use sea_orm::{ColumnTrait, DbBackend, EntityTrait, MockDatabase, QueryFilter};
-    use time::{Duration, OffsetDateTime};
+    use super::*;
+
+    use crate::domain::registration;
+    use crate::domain::teams;
+    use crate::infra::config::ControlApiConfig;
+    use crate::infra::database::entity::PlatformRole;
+    use crate::infra::database::entity::SystemSettingValueKind;
+    use crate::infra::database::entity::TeamInvitationStatus;
+    use crate::infra::database::entity::TeamKind;
+    use crate::infra::database::entity::TeamMemberRole;
+    use crate::infra::database::entity::UserStatus;
+    use crate::infra::database::entity::registration_email_allowlist;
+    use crate::infra::database::entity::system_setting;
+    use crate::infra::database::entity::team;
+    use crate::infra::database::entity::team_group;
+    use crate::infra::database::entity::team_invitation;
+    use crate::infra::database::entity::team_member;
+    use crate::infra::database::entity::user;
+    use crate::infra::database::entity::user_password_credential;
+    use crate::infra::database::entity::user_password_history;
+    use crate::infra::error::AppError;
+    use crate::state::ControlApiState;
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::http::StatusCode;
+    use grass_cache::CacheBackend;
+    use grass_cache::CacheStore;
+    use sea_orm::ColumnTrait;
+    use sea_orm::DbBackend;
+    use sea_orm::EntityTrait;
+    use sea_orm::MockDatabase;
+    use sea_orm::QueryFilter;
+    use time::Duration;
+    use time::OffsetDateTime;
     use tower::ServiceExt;
     use uuid::Uuid;
-
-    use super::*;
-    use crate::infra::{
-        config::ControlApiConfig,
-        database::entity::{
-            PlatformRole, SystemSettingValueKind, TeamInvitationStatus, TeamKind, TeamMemberRole,
-            UserStatus, registration_email_allowlist, system_setting, team, team_group,
-            team_invitation, team_member, user, user_password_credential, user_password_history,
-        },
-    };
+    #[test]
+    fn registration_creates_a_regular_platform_user() {
+        assert_eq!(registration_platform_role(), PlatformRole::User);
+    }
 
     fn signup_policy(value: &str) -> system_setting::Model {
         let now = OffsetDateTime::now_utc();
@@ -371,7 +522,7 @@ mod tests {
                     .to_string(),
                 ))
                 .unwrap();
-            let response = super::super::router()
+            let response = crate::features::api::v1::auth::router()
                 .with_state(state)
                 .oneshot(request)
                 .await
@@ -492,7 +643,7 @@ mod tests {
                 .to_string(),
             ))
             .unwrap();
-        let response = super::super::router()
+        let response = crate::features::api::v1::auth::router()
             .with_state(state)
             .oneshot(request)
             .await

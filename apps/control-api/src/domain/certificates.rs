@@ -1,20 +1,20 @@
 //! Persistent certificate material, eligibility and authoritative regional snapshots.
 
+use super::authentication::authentication_key;
 use anyhow::{Context, ensure};
 use grass_node_protocol::{CertificateBundle, CertificateBundlesResponse, HttpChallenge};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
     QuerySelect, Set, TransactionTrait, sea_query::OnConflict,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use super::authentication::authentication_key;
+use crate::infra::database::entity::managed_certificate as cert;
 use crate::infra::database::entity::{
-    HostBindingKind, HostBindingStatus, HostReviewStatus, managed_certificate as cert,
-    project_host_binding, regional_ingress,
+    HostBindingKind, HostBindingStatus, HostReviewStatus, project_host_binding, regional_ingress,
 };
 
 pub const ACCOUNT_KEY: &str = "regional-ingress-acme-account-v1";
@@ -305,22 +305,6 @@ pub async fn import(
     Ok(updated)
 }
 
-pub fn view(item: Option<&cert::Model>, ingress: &regional_ingress::Model, issuer: &str) -> Value {
-    let mut view = match item {
-        Some(item) => {
-            json!({"enabled":ingress.enabled,"status":item.status,"issuer":item.issuer,"challenge_method":"http01","auto_renew":item.auto_renew,"issued_at":crate::infra::http::timestamps::ts(item.issued_at),"expires_at":crate::infra::http::timestamps::ts(item.expires_at),"error":item.error,"retry_at":crate::infra::http::timestamps::ts(item.retry_at),"revision":item.revision})
-        }
-        None => {
-            json!({"enabled":ingress.enabled,"status":"pending","issuer":issuer,"challenge_method":"http01","auto_renew":true,"issued_at":null,"expires_at":null,"error":null,"retry_at":null,"revision":""})
-        }
-    };
-    view["platform_issuer"] = json!(issuer);
-    if !ingress.enabled || ingress.deleted_at.is_some() {
-        view["status"] = json!("disabled");
-    }
-    view
-}
-
 pub fn challenge_revision(challenges: &[HttpChallenge]) -> String {
     hex::encode(Sha256::digest(
         serde_json::to_vec(challenges).expect("challenge snapshot serializes"),
@@ -395,6 +379,7 @@ pub async fn snapshot(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use serde_json::json;
     #[tokio::test]
     async fn corrupt_bundle_does_not_block_another_domains_withdrawal() {
         let ingress = ingress_fixture();

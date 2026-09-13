@@ -1,17 +1,11 @@
-use axum::{
-    Json,
-    extract::{Path, State},
-    response::IntoResponse,
-};
-use sea_orm::sea_query::LockType;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect, TransactionTrait};
+pub(crate) mod by_source_id;
+
+use axum::{Json, extract::State, response::IntoResponse};
 use serde::Deserialize;
 use serde_json::json;
-use uuid::Uuid;
 
-use crate::infra::http::timestamps::ts;
 use crate::{
-    domain::hosts::{self, CreateHostSourceParams, HostSourceError, UpdateHostSourceParams},
+    domain::hosts::{self, CreateHostSourceParams, HostSourceError},
     infra::{
         database::entity::{HostSourceKind, host_source},
         error::{AppError, ok_response},
@@ -20,24 +14,30 @@ use crate::{
     state::ControlApiState,
 };
 
-fn source_view(source: &host_source::Model) -> serde_json::Value {
-    json!({
-        "id": source.id,
-        "kind": match source.kind {
+pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
+    axum::Router::new()
+        .route("/host-sources", axum::routing::get(list).post(create))
+        .merge(by_source_id::router())
+}
+
+fn source_view(source: &host_source::Model) -> HostSourceResponse {
+    HostSourceResponse {
+        id: source.id,
+        kind: match source.kind {
             HostSourceKind::Wildcard => "wildcard",
             HostSourceKind::DnsProvider => "dns_provider",
             HostSourceKind::Manual => "manual",
         },
-        "label": source.label,
-        "base_domain": source.base_domain,
-        "region": source.region,
-        "enabled": source.enabled,
-        "allows_auto_assign": source.allows_auto_assign,
-        "is_default": source.is_default,
-        "provider": source.provider,
-        "config_keys": credentials::config_keys(&source.config),
-        "created_at": ts(source.created_at),
-    })
+        label: source.label.clone(),
+        base_domain: source.base_domain.clone(),
+        region: source.region.clone(),
+        enabled: source.enabled,
+        allows_auto_assign: source.allows_auto_assign,
+        is_default: source.is_default,
+        provider: source.provider.clone(),
+        config_keys: credentials::config_keys(&source.config),
+        created_at: source.created_at,
+    }
 }
 
 fn parse_kind(value: &str, op: &'static str) -> Result<HostSourceKind, AppError> {
@@ -152,14 +152,14 @@ fn merge_config(
 /// GET /api/v1/admin/host-sources
 pub async fn list(State(state): State<ControlApiState>) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.host_sources.list";
-    let db = super::database(&state, OP)?;
+    let db = crate::infra::http::database(&state, OP)?;
     let sources = hosts::list_sources(db)
         .await
         .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
-    Ok(ok_response(json!({
-        "sources": sources.iter().map(source_view).collect::<Vec<_>>(),
-    })))
+    Ok(ok_response(ListResponse {
+        sources: sources.iter().map(source_view).collect::<Vec<_>>(),
+    }))
 }
 
 #[derive(Deserialize)]
@@ -195,7 +195,7 @@ pub async fn create(
     Json(body): Json<CreateHostSourceRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     const OP: &str = "admin.host_sources.create";
-    let db = super::database(&state, OP)?;
+    let db = crate::infra::http::database(&state, OP)?;
 
     let kind = parse_kind(&body.kind, OP)?;
     if body.label.trim().is_empty() {
@@ -251,166 +251,53 @@ pub async fn create(
     .await
     .map_err(|error| map_source_error(error, OP))?;
 
-    Ok(ok_response(json!({ "source": source_view(&source) })))
+    Ok(ok_response(CreateResponse {
+        source: source_view(&source),
+    }))
 }
 
-#[derive(Deserialize)]
-pub struct UpdateHostSourceRequest {
-    #[serde(default)]
-    pub label: Option<String>,
-    #[serde(default)]
-    pub region: Option<String>,
-    #[serde(default)]
-    pub enabled: Option<bool>,
-    #[serde(default)]
-    pub allows_auto_assign: Option<bool>,
-    #[serde(default)]
-    pub is_default: Option<bool>,
-    #[serde(default)]
-    pub provider: Option<String>,
-    #[serde(default)]
-    pub config: Option<serde_json::Value>,
+#[derive(serde::Serialize)]
+struct HostSourceResponse {
+    id: uuid::Uuid,
+    kind: &'static str,
+    label: String,
+    base_domain: String,
+    region: String,
+    enabled: bool,
+    allows_auto_assign: bool,
+    is_default: bool,
+    provider: Option<String>,
+    config_keys: Vec<String>,
+    #[serde(serialize_with = "crate::infra::http::timestamps::serialize")]
+    created_at: time::OffsetDateTime,
 }
 
-/// PATCH /api/v1/admin/host-sources/{source_id}
-pub async fn update(
-    State(state): State<ControlApiState>,
-    Path(source_id): Path<Uuid>,
-    Json(body): Json<UpdateHostSourceRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    const OP: &str = "admin.host_sources.update";
-    let db = super::database(&state, OP)?;
-
-    let transaction = db
-        .begin()
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
-    let source = host_source::Entity::find_by_id(source_id)
-        .filter(host_source::Column::DeletedAt.is_null())
-        .lock(LockType::Update)
-        .one(&transaction)
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?
-        .ok_or_else(|| AppError::NotFound {
-            op: OP,
-            message: "host source not found".to_owned(),
-        })?;
-
-    let provider_patch = body.provider.map(|provider| {
-        Some(provider.trim().to_ascii_lowercase()).filter(|provider| !provider.is_empty())
-    });
-    let region = body
-        .region
-        .map(|value| grass_validator::normalize_region(&value))
-        .transpose()
-        .map_err(|error| AppError::Validation {
-            op: OP,
-            message: format!("region: {error}"),
-        })?;
-    if let Some(region) = region.as_deref() {
-        crate::domain::regions::require(db, region, OP).await?;
-    }
-    let key = credentials::encryption_key(&state.config.read().unwrap().secrets.secret_key);
-    let plaintext = credentials::decrypt_config(
-        &key,
-        &source.base_domain,
-        source.provider.as_deref(),
-        &source.config,
-    )
-    .map_err(|_| AppError::Internal {
-        op: OP,
-        message: "host source credentials could not be authenticated".to_owned(),
-    })?;
-    let config_patch = body
-        .config
-        .map(|patch| merge_config(&plaintext, patch, OP))
-        .transpose()?;
-    let effective_provider = provider_patch
-        .clone()
-        .unwrap_or_else(|| source.provider.clone());
-    let effective_config = config_patch.as_ref().unwrap_or(&plaintext);
-    if source.kind == HostSourceKind::DnsProvider
-        && (provider_patch.is_some() || config_patch.is_some())
-    {
-        validate_dns_provider_source(
-            effective_provider.as_deref(),
-            &source.base_domain,
-            effective_config,
-            OP,
-        )?;
-    }
-    let encrypted_config = credentials::encrypt_config(
-        &key,
-        &source.base_domain,
-        effective_provider.as_deref(),
-        effective_config,
-    )
-    .map_err(|_| AppError::Internal {
-        op: OP,
-        message: "host source credentials could not be encrypted".to_owned(),
-    })?;
-
-    let source = hosts::update_source(
-        &transaction,
-        source,
-        UpdateHostSourceParams {
-            label: body.label.filter(|label| !label.trim().is_empty()),
-            region,
-            enabled: body.enabled,
-            allows_auto_assign: body.allows_auto_assign,
-            is_default: body.is_default,
-            provider: provider_patch,
-            config: Some(encrypted_config),
-        },
-    )
-    .await
-    .map_err(|error| map_source_error(error, OP))?;
-    transaction
-        .commit()
-        .await
-        .map_err(|source| AppError::Infrastructure {
-            op: OP,
-            source: source.into(),
-        })?;
-
-    Ok(ok_response(json!({ "source": source_view(&source) })))
+#[derive(serde::Serialize)]
+struct ListResponse {
+    sources: Vec<HostSourceResponse>,
 }
 
-/// DELETE /api/v1/admin/host-sources/{source_id}
-pub async fn remove(
-    State(state): State<ControlApiState>,
-    Path(source_id): Path<Uuid>,
-) -> Result<impl IntoResponse, AppError> {
-    const OP: &str = "admin.host_sources.remove";
-    let db = super::database(&state, OP)?;
-
-    let source = hosts::get_source_by_id(db, source_id)
-        .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?
-        .ok_or_else(|| AppError::NotFound {
-            op: OP,
-            message: "host source not found".to_owned(),
-        })?;
-
-    hosts::soft_delete_source(db, source)
-        .await
-        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
-
-    Ok(ok_response(json!({ "ok": true })))
+#[derive(serde::Serialize)]
+struct CreateResponse {
+    source: HostSourceResponse,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::Json;
     use axum::body::to_bytes;
-    use sea_orm::{DbBackend, MockDatabase};
+    use axum::extract::State;
+    use axum::response::IntoResponse;
+    use sea_orm::DbBackend;
+    use sea_orm::MockDatabase;
 
+    use crate::infra::database::entity::HostSourceKind;
+    use crate::infra::database::entity::host_source;
+    use crate::infra::host_provision::credentials;
+    use crate::state::ControlApiState;
+    use serde_json::json;
+    use uuid::Uuid;
     fn source(config: serde_json::Value) -> host_source::Model {
         host_source::Model {
             id: Uuid::now_v7(),
@@ -431,26 +318,6 @@ mod tests {
 
     fn config() -> serde_json::Value {
         json!({"api_token": "private-test-token", "zone_id": "test-zone", "record_type": "CNAME", "record_value": "entry.example.com"})
-    }
-
-    #[test]
-    fn blank_fields_preserve_secrets_and_explicit_null_removes_optional_values() {
-        let original = config();
-        let merged = merge_config(
-            &original,
-            json!({"api_token": "  ", "record_value": "new.example.com", "ttl": null}),
-            "test",
-        )
-        .unwrap();
-        assert_eq!(merged["api_token"], original["api_token"]);
-        assert_eq!(merged["zone_id"], original["zone_id"]);
-        assert_eq!(merged["record_value"], "new.example.com");
-        assert!(merge_config(&original, json!({"_format": "client-envelope"}), "test").is_err());
-        let incomplete = merge_config(&original, json!({"api_token": null}), "test").unwrap();
-        assert!(
-            validate_dns_provider_source(Some("cloudflare"), "example.com", &incomplete, "test")
-                .is_err()
-        );
     }
 
     #[tokio::test]
@@ -493,36 +360,5 @@ mod tests {
         assert!(sql.contains("ciphertext"));
         assert!(!sql.contains("private-test-token"));
         assert!(!sql.contains("test-zone"));
-    }
-
-    #[tokio::test]
-    async fn metadata_update_upgrades_legacy_config_without_exposing_values() {
-        let mut runtime_config = crate::infra::config::ControlApiConfig::default();
-        runtime_config.secrets.secret_key = "test-platform-key".to_owned();
-        let key = credentials::encryption_key(&runtime_config.secrets.secret_key);
-        let legacy = source(config());
-        let mut stored = legacy.clone();
-        stored.label = "updated".to_owned();
-        stored.config =
-            credentials::encrypt_config(&key, "example.com", Some("cloudflare"), &config())
-                .unwrap();
-        let db = MockDatabase::new(DbBackend::Postgres)
-            .append_query_results([[legacy.clone()], [stored]])
-            .into_connection();
-        let db_log = db.clone();
-        let state = ControlApiState::new(runtime_config, "unused.toml");
-        state.database.set(db).unwrap();
-        let request =
-            serde_json::from_value(json!({"label": "updated", "config": {"api_token": ""}}))
-                .unwrap();
-        let response = update(State(state), Path(legacy.id), Json(request))
-            .await
-            .unwrap()
-            .into_response();
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        assert!(!String::from_utf8_lossy(&bytes).contains("private-test-token"));
-        let sql = format!("{:?}", db_log.into_transaction_log());
-        assert!(sql.contains("ciphertext"));
-        assert!(!sql.contains("private-test-token"));
     }
 }

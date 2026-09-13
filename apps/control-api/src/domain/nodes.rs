@@ -460,6 +460,9 @@ pub fn config_sync_status_value(status: &NodeConfigSyncStatus) -> &'static str {
     }
 }
 
+/// Heartbeats older than this mark a Node unhealthy.
+pub const HEARTBEAT_STALE_SECONDS: i64 = 90;
+
 #[cfg(test)]
 mod tests {
     use super::*;

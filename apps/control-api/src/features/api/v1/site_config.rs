@@ -7,6 +7,10 @@ use crate::{
     state::ControlApiState,
 };
 
+pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
+    axum::Router::new().route("/site-config", axum::routing::get(get))
+}
+
 const DEFAULT_SITE_NAME: &str = "Grass Worker";
 
 #[derive(Serialize)]

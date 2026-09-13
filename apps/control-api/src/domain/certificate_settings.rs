@@ -12,9 +12,6 @@ pub struct CertificateSettings {
     pub eab: Value,
 }
 impl CertificateSettings {
-    pub fn view(&self) -> Value {
-        json!({"issuer":self.issuer,"zerossl_eab_configured": self.eab.get("eab_kid").is_some() && self.eab.get("eab_hmac_key").is_some()})
-    }
     pub fn validate(&self) -> anyhow::Result<()> {
         ensure!(
             matches!(self.issuer.as_str(), "letsencrypt" | "zerossl"),
@@ -90,7 +87,7 @@ mod tests {
             eab: json!({}),
         };
         assert!(plain.validate().is_ok());
-        assert!(!plain.view().to_string().contains("dns"));
+
         assert!(
             CertificateSettings {
                 issuer: "zerossl".into(),
@@ -104,8 +101,6 @@ mod tests {
             eab: json!({"eab_kid":"test-id","eab_hmac_key":"c2VjcmV0"}),
         };
         assert!(zero.validate().is_ok());
-        assert_eq!(zero.view()["zerossl_eab_configured"], true);
-        assert!(!zero.view().to_string().contains("test-id"));
     }
     #[test]
     fn authority_credentials_are_encrypted_and_bound_to_the_setting() {

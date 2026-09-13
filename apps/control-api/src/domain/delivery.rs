@@ -7,10 +7,11 @@ use std::collections::HashSet;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::infra::audit as audits;
 use crate::{
     domain::{deployments, scheduler},
     infra::{
-        audit::{self as audits, AuditTransaction, CreateAuditEventParams},
+        audit::{AuditTransaction, CreateAuditEventParams},
         database::entity::{
             AuditEventResult, AuditEventVisibility, DeploymentBuildStatus, DeploymentEnvironment,
             DeploymentReleaseStatus, DeploymentServeStatus, ReleaseReason, deployment,
@@ -1272,7 +1273,7 @@ mod tests {
         let state = ControlApiState::new(ControlApiConfig::default(), "unused.toml");
         state.database.set(test_db.db.clone()).unwrap();
         let now = OffsetDateTime::now_utc();
-        let result = crate::features::api::v1::admin::reviews::approve(
+        let result = crate::features::api::v1::admin::deployments::by_deployment_id::review::approve::approve(
             State(state),
             Session {
                 data: grass_session::SessionData {
@@ -1285,7 +1286,7 @@ mod tests {
             },
             Path(target.id),
             Some(Json(
-                crate::features::api::v1::admin::reviews::DecisionRequest { reason: None },
+                crate::features::api::v1::admin::deployments::by_deployment_id::review::approve::DecisionRequest { reason: None },
             )),
         )
         .await;
@@ -1587,7 +1588,7 @@ CREATE TRIGGER reject_queued_release_audit
         let state = ControlApiState::new(ControlApiConfig::default(), "unused.toml");
         state.database.set(test_db.db.clone()).unwrap();
         let now = OffsetDateTime::now_utc();
-        let result = crate::features::api::v1::admin::reviews::approve(
+        let result = crate::features::api::v1::admin::deployments::by_deployment_id::review::approve::approve(
             State(state),
             Session {
                 data: grass_session::SessionData {
@@ -1600,7 +1601,7 @@ CREATE TRIGGER reject_queued_release_audit
             },
             Path(target.id),
             Some(Json(
-                crate::features::api::v1::admin::reviews::DecisionRequest::default(),
+                crate::features::api::v1::admin::deployments::by_deployment_id::review::approve::DecisionRequest::default(),
             )),
         )
         .await;

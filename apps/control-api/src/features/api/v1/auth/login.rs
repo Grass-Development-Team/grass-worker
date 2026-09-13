@@ -1,27 +1,44 @@
-use std::{net::IpAddr, time::Duration};
-
 use axum::{
     Json,
     extract::{ConnectInfo, State},
     response::{IntoResponse, Response},
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar};
-use serde::Deserialize;
-use serde_json::json;
-
 use grass_cache::Cache;
+use serde::{Deserialize, Serialize};
+use std::{net::IpAddr, time::Duration};
+use uuid::Uuid;
 
 use crate::{
-    domain::users,
+    domain::{authentication, users},
     infra::{
+        database::entity::{user, user_mfa_factor},
         error::{AppError, ok_response},
         http::middlewares::csrf,
     },
     state::ControlApiState,
 };
+use std::time::Duration as StdDuration;
+
+pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
+    axum::Router::new().route("/login", axum::routing::post(handler))
+}
+
+fn user_data(user: &user::Model) -> UserResponse {
+    UserResponse {
+        id: user.id,
+        email: user.email.clone(),
+        display_name: user.display_name.clone(),
+        avatar_url: user_avatar_url(user.id, user.avatar_version),
+        platform_role: user.platform_role.as_str(),
+        email_verified: user.email_verified_at.is_some(),
+    }
+}
 
 const LOGIN_RATE_PERIOD: Duration = Duration::from_secs(60);
+
 const LOGIN_ACCOUNT_CAPACITY: u32 = 5;
+
 const LOGIN_IP_CAPACITY: u32 = 30;
 
 #[derive(Deserialize)]
@@ -78,9 +95,7 @@ pub async fn handler(
             message: "email verification is required".to_owned(),
         });
     }
-    if let Some(response) =
-        super::mfa::begin_login(&state, &user, body.return_to.as_deref()).await?
-    {
+    if let Some(response) = begin_login(&state, &user, body.return_to.as_deref()).await? {
         return Ok(response);
     }
 
@@ -129,10 +144,10 @@ pub(crate) async fn authenticated_response(
 
     Ok((
         session_jar,
-        ok_response(json!({
-            "user": super::user_data(&user),
-            "csrf_token": csrf_token,
-        })),
+        ok_response(AuthenticatedResponse {
+            user: user_data(&user),
+            csrf_token,
+        }),
     )
         .into_response())
 }
@@ -203,14 +218,202 @@ fn session_cookie(
     cookie
 }
 
+const CHALLENGE_TTL: StdDuration = StdDuration::from_secs(10 * 60);
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ChallengeMode {
+    Verify,
+    Enroll,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct LoginChallenge {
+    user_id: Uuid,
+    #[serde(default)]
+    auth_version: i64,
+    mode: ChallengeMode,
+    return_to: String,
+}
+
+pub async fn begin_login(
+    state: &ControlApiState,
+    user: &user::Model,
+    return_to: Option<&str>,
+) -> Result<Option<Response>, AppError> {
+    Ok(begin_login_payload(state, user, return_to)
+        .await?
+        .map(|payload| ok_response(payload).into_response()))
+}
+
+async fn begin_login_payload(
+    state: &ControlApiState,
+    user: &user::Model,
+    return_to: Option<&str>,
+) -> Result<Option<LoginChallengeResponse>, AppError> {
+    const OP: &str = "auth.mfa.begin";
+    let db = state.try_database().ok_or_else(|| AppError::Internal {
+        op: OP,
+        message: "database not available".to_owned(),
+    })?;
+    let cache = state.try_cache().ok_or_else(|| AppError::Internal {
+        op: OP,
+        message: "cache service not available".to_owned(),
+    })?;
+    let policy = authentication::mfa_policy(db)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let factors = authentication::verified_mfa_factors(db, user.id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?
+        .into_iter()
+        .filter(|factor| policy.allows(&factor.kind))
+        .collect::<Vec<_>>();
+    let user_policy = authentication::user_mfa_policy(db, user.id)
+        .await
+        .map_err(|source| AppError::Infrastructure { op: OP, source })?;
+    let requirements = policy.requirements_for(&user_policy, &user.platform_role);
+    let mode = if !factors.is_empty() && requirements.met_by(&factors) {
+        Some(ChallengeMode::Verify)
+    } else if requirements.is_enforced() {
+        Some(ChallengeMode::Enroll)
+    } else if !factors.is_empty() {
+        Some(ChallengeMode::Verify)
+    } else {
+        None
+    };
+    let Some(mode) = mode else {
+        return Ok(None);
+    };
+    let return_to = safe_return_to(return_to);
+    let token = create_challenge(
+        cache,
+        user.id,
+        user.auth_version,
+        mode,
+        return_to.clone(),
+        OP,
+    )
+    .await?;
+    Ok(Some(LoginChallengeResponse {
+        mfa_required: mode == ChallengeMode::Verify,
+        mfa_enrollment_required: mode == ChallengeMode::Enroll,
+        challenge_token: token,
+        factors: factors.iter().map(factor_view).collect::<Vec<_>>(),
+        allowed_factors: policy.allowed_factors.clone(),
+        return_to,
+    }))
+}
+
+async fn create_challenge(
+    cache: &grass_cache::CacheStore,
+    user_id: Uuid,
+    auth_version: i64,
+    mode: ChallengeMode,
+    return_to: String,
+    op: &'static str,
+) -> Result<String, AppError> {
+    let token = grass_token::generate_token();
+    cache
+        .set(
+            &challenge_key(&token),
+            &serde_json::to_string(&LoginChallenge {
+                user_id,
+                auth_version,
+                mode,
+                return_to,
+            })
+            .map_err(|error| AppError::Internal {
+                op,
+                message: format!("MFA challenge serialization failed: {error}"),
+            })?,
+            CHALLENGE_TTL,
+        )
+        .await
+        .map_err(|source| AppError::Infrastructure { op, source })?;
+    Ok(token)
+}
+
+fn challenge_key(token: &str) -> String {
+    format!("auth:mfa:challenge:{}", grass_token::hash_token(token))
+}
+
+fn factor_view(factor: &user_mfa_factor::Model) -> MfaFactorResponse {
+    MfaFactorResponse {
+        id: factor.id,
+        kind: factor.kind.as_str(),
+        label: factor.label.clone(),
+        verified: factor.verified_at.is_some(),
+        created_at: factor.created_at,
+        last_used_at: factor.last_used_at,
+    }
+}
+
+pub(crate) fn safe_return_to(value: Option<&str>) -> String {
+    value
+        .filter(|value| {
+            value.starts_with('/')
+                && !value.starts_with("//")
+                && !value.contains('\\')
+                && value.len() <= 4096
+                && !value.chars().any(char::is_control)
+        })
+        .unwrap_or("/")
+        .to_owned()
+}
+
+pub(crate) fn user_avatar_url(user_id: Uuid, version: Option<Uuid>) -> Option<String> {
+    version.map(|version| format!("/api/v1/avatars/users/{user_id}/{version}/avatar.webp"))
+}
+
+#[derive(serde::Serialize)]
+struct UserResponse {
+    id: uuid::Uuid,
+    email: String,
+    display_name: Option<String>,
+    avatar_url: Option<String>,
+    platform_role: &'static str,
+    email_verified: bool,
+}
+
+#[derive(serde::Serialize)]
+struct LoginChallengeResponse {
+    mfa_required: bool,
+    mfa_enrollment_required: bool,
+    challenge_token: String,
+    factors: Vec<MfaFactorResponse>,
+    allowed_factors: Vec<String>,
+    return_to: String,
+}
+
+#[derive(serde::Serialize)]
+struct MfaFactorResponse {
+    id: uuid::Uuid,
+    kind: &'static str,
+    label: Option<String>,
+    verified: bool,
+    #[serde(serialize_with = "crate::infra::http::timestamps::serialize")]
+    created_at: time::OffsetDateTime,
+    #[serde(serialize_with = "crate::infra::http::timestamps::serialize")]
+    last_used_at: Option<time::OffsetDateTime>,
+}
+
+#[derive(serde::Serialize)]
+struct AuthenticatedResponse {
+    user: UserResponse,
+    csrf_token: String,
+}
+
 #[cfg(test)]
 mod tests {
-    use std::net::{IpAddr, Ipv4Addr};
-
-    use grass_cache::{CacheBackend, CacheStore};
-
     use super::*;
+    use crate::infra::error::AppError;
+    use grass_cache::CacheBackend;
+    use grass_cache::CacheStore;
+    use std::net::IpAddr;
+    use std::net::Ipv4Addr;
 
+    use std::time::Duration;
     #[tokio::test]
     async fn login_rate_limits_accounts_and_source_addresses() {
         let cache = CacheStore::connect_cache(CacheBackend::Moka, "")

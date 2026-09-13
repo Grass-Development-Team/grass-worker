@@ -1,13 +1,45 @@
+pub(crate) mod avatar;
+pub(crate) mod mfa;
+pub(crate) mod password;
+pub(crate) mod security;
+
+use axum::{Json, extract::State, response::IntoResponse};
+use serde::Deserialize;
+use uuid::Uuid;
+
 use crate::{
     domain::users,
     infra::{
+        database::entity::user,
         error::{AppError, ok_response},
         http::extractors::Session,
     },
     state::ControlApiState,
 };
-use axum::{Json, extract::State, response::IntoResponse};
-use serde::Deserialize;
+
+pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
+    axum::Router::new()
+        .route("/me", axum::routing::get(handler).patch(update))
+        .merge(avatar::router())
+        .merge(mfa::router())
+        .merge(password::router())
+        .merge(security::router())
+}
+
+fn user_data(user: &user::Model) -> UserResponse {
+    UserResponse {
+        id: user.id,
+        email: user.email.clone(),
+        display_name: user.display_name.clone(),
+        avatar_url: user_avatar_url(user.id, user.avatar_version),
+        platform_role: user.platform_role.as_str(),
+        email_verified: user.email_verified_at.is_some(),
+    }
+}
+
+pub(crate) fn user_avatar_url(user_id: Uuid, version: Option<Uuid>) -> Option<String> {
+    version.map(|version| format!("/api/v1/avatars/users/{user_id}/{version}/avatar.webp"))
+}
 
 pub async fn handler(
     State(state): State<ControlApiState>,
@@ -29,9 +61,9 @@ pub async fn handler(
             message: "user not found".to_owned(),
         })?;
 
-    Ok(ok_response(serde_json::json!({
-        "user": super::auth::user_data(&user),
-    })))
+    Ok(ok_response(ResponseBody {
+        user: user_data(&user),
+    }))
 }
 
 #[derive(Default, Deserialize)]
@@ -98,14 +130,71 @@ pub async fn update(
     .await
     .map_err(|source| AppError::Infrastructure { op: OP, source })?;
 
-    Ok(ok_response(serde_json::json!({
-        "user": super::auth::user_data(&user),
-    })))
+    Ok(ok_response(UpdateResponse {
+        user: user_data(&user),
+    }))
+}
+
+#[derive(serde::Serialize)]
+struct UserResponse {
+    id: uuid::Uuid,
+    email: String,
+    display_name: Option<String>,
+    avatar_url: Option<String>,
+    platform_role: &'static str,
+    email_verified: bool,
+}
+
+#[derive(serde::Serialize)]
+struct ResponseBody {
+    user: UserResponse,
+}
+
+#[derive(serde::Serialize)]
+struct UpdateResponse {
+    user: UserResponse,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infra::database::entity::PlatformRole;
+    use crate::infra::database::entity::UserStatus;
+    use crate::infra::database::entity::user;
+    use time::OffsetDateTime;
+    use uuid::Uuid;
+
+    #[test]
+    fn authenticated_user_data_exposes_the_platform_role() {
+        let now = OffsetDateTime::UNIX_EPOCH;
+        let avatar_version = Uuid::max();
+        let user = user::Model {
+            auth_version: 1,
+            id: Uuid::nil(),
+            email: "admin@example.com".to_owned(),
+            display_name: Some("Admin".to_owned()),
+            avatar_version: Some(avatar_version),
+            status: UserStatus::Active,
+            platform_role: PlatformRole::Admin,
+            email_verified_at: Some(now),
+            last_login_at: None,
+            deleted_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        assert_eq!(
+            serde_json::to_value(user_data(&user)).unwrap()["platform_role"],
+            "admin"
+        );
+        assert_eq!(
+            serde_json::to_value(user_data(&user)).unwrap()["avatar_url"],
+            format!(
+                "/api/v1/avatars/users/{}/{avatar_version}/avatar.webp",
+                Uuid::nil()
+            )
+        );
+    }
 
     #[test]
     fn display_name_updates_are_normalized_and_bounded() {

@@ -1,6 +1,5 @@
 use sea_orm::{ConnectionTrait, DatabaseConnection, TransactionTrait};
 use serde::Deserialize;
-use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -222,23 +221,10 @@ fn storage_key(platform_secret: &str) -> [u8; 32] {
     Sha256::digest(format!("grass-object-storage:v1:{platform_secret}").as_bytes()).into()
 }
 
-pub fn public_config(config: &StorageConfig, credentials_configured: bool) -> serde_json::Value {
-    json!({
-        "backend": config.backend.as_str(),
-        "local_root": config.local_root,
-        "endpoint": config.endpoint,
-        "region": config.region,
-        "bucket": config.bucket,
-        "prefix": config.prefix,
-        "force_path_style": config.force_path_style,
-        "allow_http": config.allow_http,
-        "credentials_configured": credentials_configured,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn storage_input_normalizes_defaults_overrides_and_credentials() {
@@ -316,24 +302,6 @@ mod tests {
     }
 
     #[test]
-    fn public_storage_config_redacts_all_credential_fields() {
-        let config = StorageConfig {
-            backend: crate::infra::storage::StorageBackendKind::R2,
-            endpoint: "https://account.r2.cloudflarestorage.com".to_owned(),
-            region: "auto".to_owned(),
-            bucket: "artifacts".to_owned(),
-            ..StorageConfig::default()
-        };
-
-        let public = public_config(&config, true);
-
-        assert_eq!(public["credentials_configured"], true);
-        for field in ["access_key_id", "secret_access_key", "session_token"] {
-            assert!(public.get(field).is_none());
-        }
-    }
-
-    #[test]
     fn credentials_are_encrypted_and_bound_to_storage_context() {
         let credentials = StorageCredentials {
             access_key_id: Some("access".to_owned()),
@@ -347,13 +315,5 @@ mod tests {
             credentials
         );
         assert!(decrypt_credentials("wrong-secret", &encrypted).is_err());
-    }
-
-    #[test]
-    fn public_config_never_contains_credentials() {
-        let value = public_config(&StorageConfig::default(), true);
-        assert_eq!(value["credentials_configured"], true);
-        assert!(value.get("secret_access_key").is_none());
-        assert!(value.get("access_key_id").is_none());
     }
 }

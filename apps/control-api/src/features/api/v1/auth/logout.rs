@@ -1,6 +1,5 @@
 use axum::{extract::State, response::IntoResponse};
 use axum_extra::extract::cookie::{Cookie, CookieJar};
-use serde_json::json;
 
 use crate::{
     infra::{
@@ -9,6 +8,10 @@ use crate::{
     },
     state::ControlApiState,
 };
+
+pub(crate) fn router() -> axum::Router<crate::state::ControlApiState> {
+    axum::Router::new().route("/logout", axum::routing::post(handler))
+}
 
 pub async fn handler(
     State(state): State<ControlApiState>,
@@ -32,7 +35,12 @@ pub async fn handler(
     };
     let jar = jar.add(removal_cookie(configured_secure, development_enabled));
 
-    Ok((jar, ok_response(json!({"message": "logged out"}))))
+    Ok((
+        jar,
+        ok_response(ResponseBody {
+            message: "logged out",
+        }),
+    ))
 }
 
 pub(super) fn removal_cookie(
@@ -50,6 +58,11 @@ pub(super) fn removal_cookie(
     }
     clear_cookie.make_removal();
     clear_cookie
+}
+
+#[derive(serde::Serialize)]
+struct ResponseBody {
+    message: &'static str,
 }
 
 #[cfg(test)]
