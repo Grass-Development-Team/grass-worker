@@ -91,7 +91,7 @@ it("previews and deletes the filtered audit events", async () => {
 
   await user.click(screen.getByRole("button", { name: "Delete Audit Events" }));
   expect(screen.getByRole("heading", { name: "Delete audit events?" })).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "Delete", exact: true }));
+  await user.click(screen.getByRole("button", { name: "Delete" }));
 
   await waitFor(() =>
     expect(cleanupApi.deleteAudit).toHaveBeenCalledWith(
@@ -113,7 +113,7 @@ it("keeps build-log cleanup as a separate protected action", async () => {
   expect(screen.getByText("1 protected")).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "Delete Build Logs" }));
-  await user.click(screen.getByRole("button", { name: "Delete", exact: true }));
+  await user.click(screen.getByRole("button", { name: "Delete" }));
 
   await waitFor(() => expect(cleanupApi.deleteBuildLogs).toHaveBeenCalledWith({}));
   expect(await screen.findByText(/Deleted 3 records/)).toBeInTheDocument();

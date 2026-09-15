@@ -16,9 +16,23 @@ vi.mock("./projects.api", async (importOriginal) => {
 
 function renderProjects(role: "member" | "viewer") {
   vi.mocked(useTeam).mockReturnValue({
-    activeTeam: { id: "team-1", name: "Acme", slug: "acme", role },
+    teams: [],
+    isLoading: false,
+    error: null,
+    selectTeam: vi.fn(),
+    createTeam: vi.fn(),
+    refreshTeams: vi.fn(),
+    activeTeam: {
+      id: "team-1",
+      name: "Acme",
+      slug: "acme",
+      kind: "team",
+      avatar_url: null,
+      owner_user_id: null,
+      group_id: null,
+    },
     activeRole: role,
-  } as ReturnType<typeof useTeam>);
+  });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <MemoryRouter>

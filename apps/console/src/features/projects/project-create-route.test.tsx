@@ -24,10 +24,23 @@ function LocationProbe() {
 
 function renderCreate(role: "member" | "viewer" = "member", isLoading = false) {
   vi.mocked(useTeam).mockReturnValue({
-    activeTeam: { id: "team-1", name: "Acme", slug: "acme", role },
+    teams: [],
+    error: null,
+    selectTeam: vi.fn(),
+    createTeam: vi.fn(),
+    refreshTeams: vi.fn(),
+    activeTeam: {
+      id: "team-1",
+      name: "Acme",
+      slug: "acme",
+      kind: "team",
+      avatar_url: null,
+      owner_user_id: null,
+      group_id: null,
+    },
     activeRole: role,
     isLoading,
-  } as ReturnType<typeof useTeam>);
+  });
 
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -172,10 +185,15 @@ describe("ProjectCreateRoute", () => {
 
   it("waits for team permissions before deciding access", () => {
     vi.mocked(useTeam).mockReturnValue({
+      teams: [],
+      error: null,
+      selectTeam: vi.fn(),
+      createTeam: vi.fn(),
+      refreshTeams: vi.fn(),
       activeTeam: null,
       activeRole: null,
       isLoading: true,
-    } as ReturnType<typeof useTeam>);
+    });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <MemoryRouter initialEntries={["/projects/new"]}>
@@ -191,12 +209,15 @@ describe("ProjectCreateRoute", () => {
 
   it("shows a Toast and retry action when teams fail to load", () => {
     vi.mocked(useTeam).mockReturnValue({
+      teams: [],
+      selectTeam: vi.fn(),
+      createTeam: vi.fn(),
       activeTeam: null,
       activeRole: null,
       isLoading: false,
       error: new Error("Network unavailable"),
       refreshTeams: vi.fn(),
-    } as ReturnType<typeof useTeam>);
+    });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <MemoryRouter initialEntries={["/projects/new"]}>

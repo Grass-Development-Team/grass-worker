@@ -36,6 +36,12 @@ import { adminApi, type AdminTeamGroup } from "../admin.api";
 const INHERIT_NONE = "__none__";
 const INHERIT_REVIEW = "inherit";
 
+function reviewPolicy(value: string): "auto" | "manual" | null {
+  if (value === INHERIT_REVIEW) return null;
+  if (value === "auto" || value === "manual") return value;
+  throw new Error("Unknown review policy");
+}
+
 const reviewModeLabel = (mode: "auto" | "manual" | null) =>
   mode ? `${mode.charAt(0).toUpperCase()}${mode.slice(1)}` : "Inherit";
 
@@ -207,9 +213,9 @@ function GroupFormDialog({
             description,
             quota_plan_id: planId === INHERIT_NONE ? null : planId,
             review_policy: {
-              production: reviewProduction === INHERIT_REVIEW ? null : reviewProduction,
-              preview: reviewPreview === INHERIT_REVIEW ? null : reviewPreview,
-              domain: reviewDomain === INHERIT_REVIEW ? null : reviewDomain,
+              production: reviewPolicy(reviewProduction),
+              preview: reviewPolicy(reviewPreview),
+              domain: reviewPolicy(reviewDomain),
             },
           })
         : adminApi.createTeamGroup({
@@ -218,9 +224,9 @@ function GroupFormDialog({
             description: description || undefined,
             quota_plan_id: planId === INHERIT_NONE ? undefined : planId,
             review_policy: {
-              production: reviewProduction === INHERIT_REVIEW ? null : reviewProduction,
-              preview: reviewPreview === INHERIT_REVIEW ? null : reviewPreview,
-              domain: reviewDomain === INHERIT_REVIEW ? null : reviewDomain,
+              production: reviewPolicy(reviewProduction),
+              preview: reviewPolicy(reviewPreview),
+              domain: reviewPolicy(reviewDomain),
             },
           }),
     onSuccess: onSaved,

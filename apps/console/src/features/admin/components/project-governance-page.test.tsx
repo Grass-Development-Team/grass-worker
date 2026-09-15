@@ -27,7 +27,7 @@ vi.mock("../admin.api", async (importOriginal) => {
   };
 });
 
-const project = {
+const project: Awaited<ReturnType<typeof adminApi.getProject>>["project"] = {
   id: "project-1",
   uuid: "project-1",
   slug: "demo-site",
@@ -41,6 +41,8 @@ const project = {
   source_config: {},
   build_config: {},
   archived_at: null,
+  status: "active",
+  deleted_at: null,
   created_at: "2026-07-30T00:00:00Z",
   updated_at: "2026-07-30T00:00:00Z",
 };

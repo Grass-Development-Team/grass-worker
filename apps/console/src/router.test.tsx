@@ -53,7 +53,13 @@ vi.mock("@/features/projects/project-create-route", () => ({
 
 function setUser(platformRole: "admin" | "user") {
   vi.mocked(useAuth).mockReturnValue({
+    completeMfa: vi.fn(),
+    verifyEmail: vi.fn(),
+    uploadAvatar: vi.fn(),
+    removeAvatar: vi.fn(),
     user: {
+      avatar_url: null,
+      email_verified: true,
       id: "user-1",
       email: "user@example.com",
       display_name: "User",
@@ -64,18 +70,22 @@ function setUser(platformRole: "admin" | "user") {
     register: vi.fn(),
     updateProfile: vi.fn(),
     logout: vi.fn(),
-  } as ReturnType<typeof useAuth>);
+  });
 }
 
 function setGuest() {
   vi.mocked(useAuth).mockReturnValue({
+    completeMfa: vi.fn(),
+    verifyEmail: vi.fn(),
+    uploadAvatar: vi.fn(),
+    removeAvatar: vi.fn(),
     user: null,
     isLoading: false,
     login: vi.fn(),
     register: vi.fn(),
     updateProfile: vi.fn(),
     logout: vi.fn(),
-  } as ReturnType<typeof useAuth>);
+  });
 }
 
 describe("Administration routing", () => {

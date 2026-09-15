@@ -211,7 +211,11 @@ export function DashboardRoute() {
         </section>
       )}
       <AnnouncementDialog
-        announcement={selectedAnnouncement}
+        announcement={
+          selectedAnnouncement
+            ? { ...selectedAnnouncement, created_at: selectedAnnouncement.published_at }
+            : null
+        }
         onOpenChange={(open) => !open && setSelectedAnnouncement(null)}
       />
     </div>

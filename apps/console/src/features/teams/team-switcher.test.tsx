@@ -21,10 +21,11 @@ const personal: Team = {
 };
 const shared: Team = { ...personal, id: "shared", slug: "acme", name: "Acme", kind: "team" };
 
-function mockTeamContext(overrides: Record<string, unknown> = {}) {
+function mockTeamContext(overrides: Partial<ReturnType<typeof useTeam>> = {}) {
   vi.mocked(useTeam).mockReturnValue({
     teams: [personal, shared],
     activeTeam: personal,
+    activeRole: "owner",
     isLoading: false,
     error: null,
     selectTeam: vi.fn(),
