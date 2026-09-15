@@ -118,6 +118,9 @@ jobs:
         env:
           GRASS_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
 
+      - name: Verify embedded Console asset rebuilds
+        run: just assets-check
+
       - name: Check project license metadata
         run: just license-check
 

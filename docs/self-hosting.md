@@ -21,7 +21,7 @@ either service directly; they use the authenticated Control API instead.
 
 ```sh
 just install console
-just build            # builds the Console, embeds it, and builds both binaries
+just release          # builds both release binaries; Control API embeds the Console
 ```
 
 Or use the Docker image (both binaries are included):

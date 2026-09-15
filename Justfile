@@ -23,7 +23,7 @@ test target="all":
 check target="all":
     {{ if target == "rust" { "cargo check --workspace" } else if target == "console" { "cd " + console + " && vp check" } else if target == "all" { "cargo check --workspace && cd " + console + " && vp check" } else { error("unknown check target: " + target) } }}
 
-quality: fmt clippy test check build license-check
+quality: fmt clippy test check build assets-check license-check
 
 license-check:
     test -f LICENSE
@@ -52,3 +52,11 @@ migrate:
 # Verify the locked workspace with its declared minimum supported Rust version.
 msrv:
     cargo msrv verify --manifest-path apps/control-api/Cargo.toml --no-log -- cargo check --workspace --all-targets --locked
+
+# Build distributable binaries with the production Console embedded.
+release:
+    cd {{ console }} && vp build
+    cargo build --release --locked -p grass-control-api -p grass-node
+
+assets-check:
+    python3 scripts/check-embedded-assets.py

@@ -24,3 +24,11 @@ just msrv
 The lower search bound corresponds to the workspace's Rust 2024 edition. Preserve the lockfile during the search. An unavailable toolchain or network failure is a validation failure, not evidence that an older compiler is incompatible.
 
 On macOS ARM64, cargo-msrv tested Rust 1.90.0 successfully, rejected 1.87.0 because locked SeaQuery/time dependencies require 1.88, and passed 1.88.0. CI verifies the declared version on Linux x86_64 and macOS ARM64. Docker already uses Rust 1.88. Updating the minimum requires keeping the workspace declaration, Docker builder and self-hosting documentation aligned.
+
+## Embedded Console assets
+
+`just build` builds development binaries; run the Console separately with `just run console`. `just release` builds the Console and then produces distributable binaries under `target/release`. Direct `cargo build --release` requires a nonempty `apps/console/dist/index.html`, produced by `just build console` first.
+
+The asset build script watches the complete dist directory and copies resources into its profile/target-specific `OUT_DIR`. It does not generate files in the source tree. Missing or empty release HTML fails the build. Debug builds always use the development-server placeholder.
+
+`just assets-check` exercises the actual asset crate in a disposable fixture workspace: changed HTML, added and removed resources, alternating debug/release profiles, missing/empty dist HTML and a missing dist directory. It is included in `just quality` and CI. Its dependency/build cache lives under the selected Cargo target directory.
