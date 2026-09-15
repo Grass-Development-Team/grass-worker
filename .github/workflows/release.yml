@@ -100,7 +100,34 @@ jobs:
             echo EOF
           } >> "$GITHUB_OUTPUT"
 
-      - name: Build and push runtime variants
+      - name: Build release runtime variants for verification
+        uses: docker/bake-action@v6
+        with:
+          files: docker-bake.hcl
+          load: true
+        env:
+          IMAGE: ${{ env.RUNTIME_IMAGE }}
+          TAGS_DEBIAN: ${{ steps.meta.outputs.tags }}
+          TAGS_SLIM: ${{ steps.meta-slim.outputs.tags }}
+          TAGS_ALPINE: ${{ steps.meta-alpine.outputs.tags }}
+          LABELS_JSON: ${{ steps.bake-labels.outputs.labels_json }}
+
+      - name: Check packaged binaries in every runtime variant
+        shell: bash
+        env:
+          TAGS_DEBIAN: ${{ steps.meta.outputs.tags }}
+          TAGS_SLIM: ${{ steps.meta-slim.outputs.tags }}
+          TAGS_ALPINE: ${{ steps.meta-alpine.outputs.tags }}
+        run: |
+          for tags in "$TAGS_DEBIAN" "$TAGS_SLIM" "$TAGS_ALPINE"; do
+            image_ref="${tags%%$'\n'*}"
+            test -n "$image_ref"
+            docker run --rm --pull=never --network none "$image_ref" grass-control-api --version
+            docker run --rm --pull=never --network none "$image_ref" grass-node --version
+          done
+
+      # Reuse the verified build cache and retain BuildKit publication metadata.
+      - name: Publish verified runtime variants
         uses: docker/bake-action@v6
         with:
           files: docker-bake.hcl

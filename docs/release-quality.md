@@ -43,7 +43,9 @@ CI provides disposable PostgreSQL 17 and Redis 7 services in a dedicated job. Th
 
 ## Publication gate and prereleases
 
-Pull requests and feature branch pushes run Quality directly. Main, develop and version tag pushes enter Release, which calls the reusable Quality workflow from the same commit. Both image publication and binary release uploads depend on successful validation of all Quality jobs, including service regressions, both MSRV platforms and runtime image builds.
+Pull requests run Quality: formatting, lint/type checks, tests, dependency audits, service regressions and both MSRV platforms. The Node delivery smoke builds a test image to exercise real container execution; PRs do not build the three distributable runtime images. Ordinary feature branch pushes do not trigger a second Quality run.
+
+Main, develop and version tag pushes enter Release, which calls the reusable Quality workflow from the same commit. Both image publication and binary release uploads depend on successful validation of all Quality jobs. Release then builds and loads the Debian, Slim and Alpine runtime variants and checks both packaged binaries in every variant. Only after all six binary checks pass does it publish the images, reusing the verified build cache with the same inputs and preserving BuildKit publication metadata.
 
 Release tags use `vMAJOR.MINOR.PATCH` or `vMAJOR.MINOR.PATCH-PRERELEASE`. A stable `v0.1.0` publishes image aliases `0.1.0`, `0.1` and `latest`. A prerelease such as `v0.1.0-rc.1` publishes only its exact version alias and is explicitly marked as a GitHub prerelease without becoming the latest release. All image variants retain their SHA tag; main/develop retain their branch alias. Slim and Alpine apply their suffix to every alias. Build metadata (`+...`) is rejected because it is not valid in Docker tags.
 
