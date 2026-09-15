@@ -191,3 +191,35 @@ jobs:
             docker run --rm --network none "grass-worker:ci-${variant}" grass-control-api --version
             docker run --rm --network none "grass-worker:ci-${variant}" grass-node --version
           done
+
+  msrv:
+    name: Rust MSRV (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-msrv
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-msrv@0.18.4
+
+      - name: Cache minimum-version build output
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-msrv-${{ hashFiles('Cargo.toml', 'Cargo.lock') }}
+
+      - name: Verify the workspace minimum Rust version
+        run: cargo msrv verify --manifest-path apps/control-api/Cargo.toml --no-log -- cargo check --workspace --all-targets --locked

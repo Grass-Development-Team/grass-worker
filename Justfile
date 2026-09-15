@@ -48,3 +48,7 @@ preview target="console":
 
 migrate:
     cargo run -p grass-control-api -- migrate
+
+# Verify the locked workspace with its declared minimum supported Rust version.
+msrv:
+    cargo msrv verify --manifest-path apps/control-api/Cargo.toml --no-log -- cargo check --workspace --all-targets --locked

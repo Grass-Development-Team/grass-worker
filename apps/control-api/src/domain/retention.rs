@@ -229,8 +229,8 @@ pub async fn sweep(
             && let Some(size_bytes) = artifact.size_bytes
         {
             let size_mb = (size_bytes.max(0) + BYTES_PER_MB - 1) / BYTES_PER_MB;
-            if size_mb > 0 {
-                if let Err(error) = quota
+            if size_mb > 0
+                && let Err(error) = quota
                     .release_once(
                         "retention.artifact",
                         deployment.team_id,
@@ -242,9 +242,8 @@ pub async fn sweep(
                         artifact.id,
                     )
                     .await
-                {
-                    tracing::warn!(operation = "artifact_retention.release_quota", %error, artifact_id = %artifact.id, "failed to release artifact quota");
-                }
+            {
+                tracing::warn!(operation = "artifact_retention.release_quota", %error, artifact_id = %artifact.id, "failed to release artifact quota");
             }
         }
 

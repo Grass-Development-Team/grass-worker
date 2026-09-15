@@ -169,14 +169,14 @@ fn prepare_directories(work_root: &str, artifact_cache_root: &str) -> Vec<String
 fn detect_runtime() -> RuntimeSection {
     let default_build_image = "docker.io/library/node:22".to_owned();
 
-    if let Ok(host) = std::env::var("DOCKER_HOST") {
-        if host.starts_with("unix://") {
-            return RuntimeSection {
-                backend: "docker-socket".to_owned(),
-                socket: host,
-                default_build_image,
-            };
-        }
+    if let Ok(host) = std::env::var("DOCKER_HOST")
+        && host.starts_with("unix://")
+    {
+        return RuntimeSection {
+            backend: "docker-socket".to_owned(),
+            socket: host,
+            default_build_image,
+        };
     }
     if Path::new("/var/run/docker.sock").exists() {
         return RuntimeSection {

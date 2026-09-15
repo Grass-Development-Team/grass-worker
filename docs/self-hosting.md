@@ -12,7 +12,7 @@ logs, review, activation, and public access.
 - Git 2.49+ plus OpenSSH client tools (`ssh` and `ssh-keyscan`) available to
   the Node process
 - [Just](https://just.systems/) 1.56+ for repository task commands
-- Rust 1.85+ and [Vite+](https://viteplus.dev/) when building from source
+- Rust 1.88+ and [Vite+](https://viteplus.dev/) when building from source
 
 PostgreSQL and Redis belong to the Control API. Nodes do not connect to
 either service directly; they use the authenticated Control API instead.

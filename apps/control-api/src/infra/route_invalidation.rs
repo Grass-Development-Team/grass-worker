@@ -32,10 +32,10 @@ async fn invalidate_at_urls(
         endpoint.set_query(None);
         endpoint.set_fragment(None);
         let mut request = client.post(endpoint).header("x-grass-gateway-hop", "1");
-        if matches!(gateway_authentication, GatewayAuthenticationMode::Token) {
-            if let Some(gateway_token) = gateway_token {
-                request = request.header("x-grass-gateway-token", gateway_token);
-            }
+        if matches!(gateway_authentication, GatewayAuthenticationMode::Token)
+            && let Some(gateway_token) = gateway_token
+        {
+            request = request.header("x-grass-gateway-token", gateway_token);
         }
         let response = request
             .timeout(Duration::from_secs(3))

@@ -19,7 +19,7 @@ resolver = "3"
 edition = "2024"
 license = "BSD-3-Clause"
 repository = "https://github.com/Grass-Development-Team/grass-worker"
-rust-version = "1.85"
+rust-version = "1.88"
 version = "0.1.0"
 
 [workspace.dependencies]

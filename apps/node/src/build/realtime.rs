@@ -54,23 +54,22 @@ async fn forward(url: String, token: String, mut receiver: mpsc::Receiver<LogStr
         if socket.is_none() {
             socket = connect(&url, &token).await;
         }
-        if let Some(active) = socket.as_mut() {
-            if active
+        if let Some(active) = socket.as_mut()
+            && active
                 .send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
                 .await
                 .is_err()
-            {
-                // One immediate reconnect attempt per frame; otherwise the
-                // frame is dropped and catch-up covers the gap.
-                socket = connect(&url, &token).await;
-                if let Some(active) = socket.as_mut() {
-                    let Ok(text) = serde_json::to_string(&message) else {
-                        continue;
-                    };
-                    let _ = active
-                        .send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
-                        .await;
-                }
+        {
+            // One immediate reconnect attempt per frame; otherwise the
+            // frame is dropped and catch-up covers the gap.
+            socket = connect(&url, &token).await;
+            if let Some(active) = socket.as_mut() {
+                let Ok(text) = serde_json::to_string(&message) else {
+                    continue;
+                };
+                let _ = active
+                    .send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
+                    .await;
             }
         }
     }
