@@ -1,5 +1,5 @@
 //! Automatic issuance with persistent retry state and challenge publication barriers.
-use super::certificates::{self, ACCOUNT_KEY, BUNDLE_KEY, PemBundle};
+
 use anyhow::{Context, ensure};
 use base64::{
     Engine,
@@ -13,16 +13,13 @@ use sea_orm::{
     ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect, Set, TransactionTrait,
 };
 use serde_json::Value;
-
-use crate::domain::certificates::CertificateStatus;
-
-#[cfg(test)]
-use serde_json::json;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
-use crate::infra::database::entity::managed_certificate as cert;
-use crate::infra::database::entity::{node_ingress_status, project_host_binding, regional_ingress};
+use super::certificates::{self, ACCOUNT_KEY, BUNDLE_KEY, CertificateStatus, PemBundle};
+use crate::infra::database::entity::{
+    managed_certificate as cert, node_ingress_status, project_host_binding, regional_ingress,
+};
 
 const LEASE_SECONDS: i64 = 600;
 const ATTEMPT_SECONDS: u64 = 480;
@@ -362,7 +359,12 @@ async fn reconcile_record(
         Err(_error) => {
             // ACME/provider errors may contain challenge/account material; expose bounded diagnostics.
             active.status = Set(CertificateStatus::Failed.as_str().to_owned());
-            active.error=Set(Some("Certificate issuance failed; check public HTTP access on port 80, entry acknowledgements and certificate authority settings. Automatic retry is scheduled.".to_owned()));
+            active.error = Set(Some(
+                "Certificate issuance failed; check public HTTP access on port 80, \
+                 entry acknowledgements and certificate authority settings. \
+                 Automatic retry is scheduled."
+                    .to_owned(),
+            ));
             active.retry_at = Set(Some(
                 OffsetDateTime::now_utc() + retry_delay(item.failure_count),
             ));
@@ -381,7 +383,11 @@ pub async fn sweep(db: &DatabaseConnection, secret: &str) -> anyhow::Result<()> 
         let secret = secret.to_owned();
         tasks.spawn(async move {
             if sweep_ingress(&db, ingress.id, &secret).await.is_err() {
-                tracing::warn!(operation="control_api.acme.ingress_sweep_failed",ingress_id=%ingress.id,"regional certificate sweep failed; other regions will continue");
+                tracing::warn!(
+                    operation = "control_api.acme.ingress_sweep_failed",
+                    ingress_id = %ingress.id,
+                    "regional certificate sweep failed; other regions will continue"
+                );
             }
         });
         if tasks.len() >= 4 {
@@ -453,7 +459,10 @@ async fn sweep_ingress(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
+
     #[tokio::test]
     async fn http_validation_waits_for_every_eligible_entry_revision() {
         use crate::infra::database::entity::regional_ingress_health;
@@ -509,6 +518,7 @@ mod tests {
             );
         }
     }
+
     #[derive(Clone)]
     struct MockCa {
         origin: String,
@@ -522,8 +532,10 @@ mod tests {
         uri: axum::http::Uri,
         body: axum::body::Bytes,
     ) -> axum::response::Response {
-        use axum::response::IntoResponse;
         use std::sync::atomic::Ordering;
+
+        use axum::response::IntoResponse;
+
         let payload = if body.is_empty() {
             json!({})
         } else {
@@ -554,7 +566,7 @@ mod tests {
             "/nonce" => axum::http::StatusCode::OK.into_response(),
             "/account" => {
                 state.accounts.fetch_add(1, Ordering::SeqCst);
-                axum::Json(json!({"status": "valid"})).into_response()
+                axum::Json(json!({ "status": "valid" })).into_response()
             }
             "/new-order" => {
                 assert_eq!(payload["identifiers"][0]["value"], "site.example.org");
@@ -562,7 +574,7 @@ mod tests {
             }
             "/authorization" => axum::Json(json!({
                 "status": "valid",
-                "identifier": {"type": "dns", "value": "site.example.org"},
+                "identifier": { "type": "dns", "value": "site.example.org" },
                 "challenges": [],
             }))
             .into_response(),
@@ -677,6 +689,7 @@ mod tests {
         assert!(state.issued.load(std::sync::atomic::Ordering::SeqCst));
         server.abort();
     }
+
     #[test]
     fn renewal_respects_expiry_manual_mode_backoff_and_active_lease() {
         let now = OffsetDateTime::now_utc();
@@ -702,6 +715,7 @@ mod tests {
         item.issuer = "manual".to_owned();
         assert!(!due(&item, now));
     }
+
     #[test]
     fn interrupted_or_failed_forced_renewal_retries_with_auto_renew_disabled() {
         let now = OffsetDateTime::now_utc();
@@ -718,15 +732,19 @@ mod tests {
         assert!(!due(&item, now));
         assert!(due(&item, now + Duration::seconds(2)));
     }
+
     #[test]
     fn retry_delay_is_bounded_and_zero_ssl_requires_complete_eab() {
         assert_eq!(retry_delay(0), Duration::minutes(5));
         assert_eq!(retry_delay(20), Duration::seconds(76_800));
-        assert!(external_account_key(&json!({"eab_kid":"id"})).is_err());
+        assert!(external_account_key(&json!({ "eab_kid": "id" })).is_err());
         assert!(
-            external_account_key(&json!({"eab_kid":"id","eab_hmac_key":"c2VjcmV0"}))
-                .unwrap()
-                .is_some()
+            external_account_key(&json!({
+                "eab_kid": "id",
+                "eab_hmac_key": "c2VjcmV0",
+            }))
+            .unwrap()
+            .is_some()
         );
     }
 }

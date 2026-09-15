@@ -9,6 +9,20 @@
 - 未经用户批准，不得把较低优先级或 Future 项目提前并入当前功能。
 - 当前版本从本文档头部读取，并用于 GitHub Milestone 与 Project 命名。
 
+# 发布质量与 Rust 整理
+
+父事项：[#219](https://github.com/Grass-Development-Team/grass-worker/issues/219)。当前版本按已批准范围实施；A 部分的 Console 架构和错误反馈整理留待后续。
+
+- Q01 补齐 Console 类型环境、修复诊断并启用统一类型门禁。[#220](https://github.com/Grass-Development-Team/grass-worker/issues/220)
+- Q02 使用 cargo-msrv 实测并验证 workspace 最低 Rust 版本，统一声明、Docker、文档和 CI。[#221](https://github.com/Grass-Development-Team/grass-worker/issues/221)
+- Q03 修复 Console 嵌入资源追踪、profile 隔离和 release 构建入口。[#222](https://github.com/Grass-Development-Team/grass-worker/issues/222)
+- Q04 完整接入 PostgreSQL/Redis 回归，明确快速测试与集成测试边界。[#223](https://github.com/Grass-Development-Team/grass-worker/issues/223)
+- Q05 发布依赖同一提交的质量验证，并明确正式版与预发布元数据。[#224](https://github.com/Grass-Development-Team/grass-worker/issues/224)
+- A02-node 按职责拆分 Node serve，保持 Host、预览、Peer Hop、静态与 SSR 行为。[#225](https://github.com/Grass-Development-Team/grass-worker/issues/225)
+- A02-storage 拆分存储配置、后端适配、写入协调和流校验。[#226](https://github.com/Grass-Development-Team/grass-worker/issues/226)
+- A02-tests 整理迁移测试模块与共享 fixture，保持回归清单和 CI 选择正确。[#227](https://github.com/Grass-Development-Team/grass-worker/issues/227)
+- A03 统一剩余 Rust 导入、声明和复杂 SQL/JSON/mock 排版。[#228](https://github.com/Grass-Development-Team/grass-worker/issues/228)
+
 # 第二阶段
 
 ## P2：平台扩展

@@ -20,8 +20,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validation:
+    name: Validate release commit
+    uses: ./.github/workflows/quality.yml
+    permissions:
+      contents: read
+
+  metadata:
+    name: Validate release metadata
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      docker_tags: ${{ steps.policy.outputs.docker_tags }}
+      prerelease: ${{ steps.policy.outputs.prerelease }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Derive branch or version policy
+        id: policy
+        run: python3 scripts/release-metadata.py
+
   docker:
     name: Docker image
+    needs: [validation, metadata]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -43,35 +66,28 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.RUNTIME_IMAGE }}
-          tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha
+          flavor: latest=false
+          tags: ${{ needs.metadata.outputs.docker_tags }}
 
       - name: Derive Slim image metadata
         id: meta-slim
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.RUNTIME_IMAGE }}
-          flavor: suffix=-slim
-          tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha
+          flavor: |
+            latest=false
+            suffix=-slim
+          tags: ${{ needs.metadata.outputs.docker_tags }}
 
       - name: Derive Alpine image metadata
         id: meta-alpine
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.RUNTIME_IMAGE }}
-          flavor: suffix=-alpine
-          tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha
+          flavor: |
+            latest=false
+            suffix=-alpine
+          tags: ${{ needs.metadata.outputs.docker_tags }}
 
       - name: Prepare Bake labels
         id: bake-labels
@@ -84,7 +100,34 @@ jobs:
             echo EOF
           } >> "$GITHUB_OUTPUT"
 
-      - name: Build and push runtime variants
+      - name: Build release runtime variants for verification
+        uses: docker/bake-action@v6
+        with:
+          files: docker-bake.hcl
+          load: true
+        env:
+          IMAGE: ${{ env.RUNTIME_IMAGE }}
+          TAGS_DEBIAN: ${{ steps.meta.outputs.tags }}
+          TAGS_SLIM: ${{ steps.meta-slim.outputs.tags }}
+          TAGS_ALPINE: ${{ steps.meta-alpine.outputs.tags }}
+          LABELS_JSON: ${{ steps.bake-labels.outputs.labels_json }}
+
+      - name: Check packaged binaries in every runtime variant
+        shell: bash
+        env:
+          TAGS_DEBIAN: ${{ steps.meta.outputs.tags }}
+          TAGS_SLIM: ${{ steps.meta-slim.outputs.tags }}
+          TAGS_ALPINE: ${{ steps.meta-alpine.outputs.tags }}
+        run: |
+          for tags in "$TAGS_DEBIAN" "$TAGS_SLIM" "$TAGS_ALPINE"; do
+            image_ref="${tags%%$'\n'*}"
+            test -n "$image_ref"
+            docker run --rm --pull=never --network none "$image_ref" grass-control-api --version
+            docker run --rm --pull=never --network none "$image_ref" grass-node --version
+          done
+
+      # Reuse the verified build cache and retain BuildKit publication metadata.
+      - name: Publish verified runtime variants
         uses: docker/bake-action@v6
         with:
           files: docker-bake.hcl
@@ -98,6 +141,7 @@ jobs:
 
   binaries:
     name: Release binaries
+    needs: [validation, metadata]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -141,7 +185,7 @@ jobs:
         run: vp build
 
       - name: Build release binaries
-        run: cargo build --release --target ${{ matrix.target }} -p grass-control-api -p grass-node
+        run: cargo build --release --locked --target ${{ matrix.target }} -p grass-control-api -p grass-node
 
       - name: Package artifacts
         run: |
@@ -155,3 +199,5 @@ jobs:
         with:
           files: dist/*.tar.gz
           generate_release_notes: true
+          prerelease: ${{ needs.metadata.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.metadata.outputs.prerelease == 'true' && 'false' || 'true' }}

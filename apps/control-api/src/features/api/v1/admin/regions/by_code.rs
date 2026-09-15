@@ -131,7 +131,12 @@ async fn remove(
                 source: source.into(),
             })?;
     if referenced || item.code == "default" {
-        return Err(AppError::Conflict { op: OP, message: "This region is reserved or still referenced by nodes, configurations, entries, domains, or deployments.".to_owned() });
+        return Err(AppError::Conflict {
+            op: OP,
+            message: "This region is reserved or still referenced by nodes, configurations, \
+                      entries, domains, or deployments."
+                .to_owned(),
+        });
     }
     region::Entity::delete_by_id(item.code)
         .exec(&transaction)

@@ -31,6 +31,8 @@ it("updates the current user after saving the profile", async () => {
       email: "leo@example.com",
       display_name: "Leo",
       platform_role: "user",
+      avatar_url: null,
+      email_verified: true,
     },
   });
   vi.mocked(authApi.updateMe).mockResolvedValue({
@@ -39,6 +41,8 @@ it("updates the current user after saving the profile", async () => {
       email: "leo@example.com",
       display_name: "Leonard",
       platform_role: "user",
+      avatar_url: null,
+      email_verified: true,
     },
   });
   const wrapper = ({ children }: { children: ReactNode }) => (
@@ -60,6 +64,8 @@ it("clears local authentication when an API request reports an expired session",
       email: "leo@example.com",
       display_name: "Leo",
       platform_role: "user",
+      avatar_url: null,
+      email_verified: true,
     },
   });
   setCsrfToken("csrf-token");
@@ -87,6 +93,7 @@ it("keeps a newer login when the initial session restore fails late", async () =
       email: "new-session@example.com",
       display_name: "New session",
       platform_role: "user",
+      avatar_url: null,
       email_verified: true,
     },
     csrf_token: "new-csrf-token",

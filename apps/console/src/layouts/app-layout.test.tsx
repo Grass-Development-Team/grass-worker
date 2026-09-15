@@ -30,21 +30,44 @@ function renderLayout(
   isLoading = false,
 ) {
   vi.mocked(useAuth).mockReturnValue({
+    isLoading: false,
+    login: vi.fn(),
+    register: vi.fn(),
+    completeMfa: vi.fn(),
+    verifyEmail: vi.fn(),
+    updateProfile: vi.fn(),
+    uploadAvatar: vi.fn(),
+    removeAvatar: vi.fn(),
     user: {
+      avatar_url: null,
+      email_verified: true,
       id: "user-1",
       email: "user@example.com",
       display_name: "User",
       platform_role: platformRole,
     },
     logout: vi.fn(),
-  } as ReturnType<typeof useAuth>);
+  });
   vi.mocked(useTeam).mockReturnValue({
-    activeTeam: isLoading ? null : { id: "team-1", slug: "team", name: "Team", kind: "team" },
+    teams: [],
+    selectTeam: vi.fn(),
+    createTeam: vi.fn(),
+    activeTeam: isLoading
+      ? null
+      : {
+          id: "team-1",
+          slug: "team",
+          name: "Team",
+          kind: "team",
+          avatar_url: null,
+          owner_user_id: null,
+          group_id: null,
+        },
     activeRole: teamRole,
     error: null,
     isLoading,
     refreshTeams: vi.fn(),
-  } as ReturnType<typeof useTeam>);
+  });
 
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(

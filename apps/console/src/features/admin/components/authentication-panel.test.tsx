@@ -19,8 +19,31 @@ vi.mock("../admin.api", async (importOriginal) => {
   };
 });
 
-const settings = {
-  mail: { mode: "smtp" },
+const settings: AdminSettings = {
+  site: {
+    name: "Old Name",
+    logo_url: "/assets/old-logo.svg",
+    url: "https://console.example.com",
+    public_base_url: "https://apps.example.com",
+  },
+  signup: { policy: "open" },
+  review: { production: "manual", preview: "auto" },
+  domain_review: { default: "auto" },
+  server: { host: "127.0.0.1", port: 7817 },
+  database: { url_configured: true },
+  redis: { backend: "redis", url_configured: true },
+  secrets: { secret_key_configured: true, git_credentials_configured: false },
+  mail: {
+    mode: "smtp",
+    from_address: "noreply@example.com",
+    from_name: "Grass Worker",
+    sendmail_command: "/usr/sbin/sendmail",
+    smtp_host: "smtp.example.com",
+    smtp_port: 587,
+    smtp_security: "starttls",
+    smtp_username: "mailer",
+    smtp_password_configured: true,
+  },
   authentication: {
     password_policy: {
       min_length: 8,
@@ -39,7 +62,18 @@ const settings = {
       required_factors: [],
     },
   },
-} as AdminSettings;
+  session: { cookie_secure: true, idle_ttl_seconds: 900, session_ttl_seconds: 2_592_000 },
+  audit: { retention_days: 90 },
+  node_manager: {
+    auto_start_local_node: false,
+    local_node_binary: "grass-node",
+    local_node_config: "./node.toml",
+    restart_on_exit: true,
+  },
+  migration: { auto_migrate: false },
+  log: { level: "info", format: "pretty" },
+  restart_required_sections: ["server", "redis", "node_manager", "migration", "log"],
+};
 
 beforeEach(() => {
   vi.clearAllMocks();

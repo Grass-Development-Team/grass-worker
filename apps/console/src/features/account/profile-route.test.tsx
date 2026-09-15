@@ -13,14 +13,24 @@ beforeEach(() => {
   vi.clearAllMocks();
   updateProfile.mockResolvedValue(undefined);
   vi.mocked(useAuth).mockReturnValue({
+    isLoading: false,
+    login: vi.fn(),
+    register: vi.fn(),
+    completeMfa: vi.fn(),
+    verifyEmail: vi.fn(),
+    uploadAvatar: vi.fn(),
+    removeAvatar: vi.fn(),
+    logout: vi.fn(),
     user: {
+      avatar_url: null,
+      email_verified: true,
       id: "user-1",
       email: "user@example.com",
       display_name: "Old Name",
       platform_role: "user",
     },
     updateProfile,
-  } as ReturnType<typeof useAuth>);
+  });
 });
 
 it("updates the display name while keeping the email read-only", async () => {

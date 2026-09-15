@@ -163,7 +163,9 @@ it("shows every non-secret Control API setting and only secret configuration sta
   expect(screen.getByLabelText("Log filter")).toHaveValue("info");
   expect(screen.getByLabelText("Log format")).toHaveTextContent("Pretty");
 
-  const sensitive = screen.getByText("Sensitive configuration").closest("[data-slot='card']");
+  const sensitive = screen
+    .getByText("Sensitive configuration")
+    .closest<HTMLElement>("[data-slot='card']");
   expect(sensitive).not.toBeNull();
   expect(within(sensitive!).getByText("Database URL")).toBeInTheDocument();
   expect(within(sensitive!).getByText("Redis URL")).toBeInTheDocument();

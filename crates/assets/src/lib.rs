@@ -1,13 +1,9 @@
 //! grass-assets — embedded Console build assets.
 //!
-//! Embeds `public/` at compile time via `rust-embed`.
-//! The build pipeline copies `apps/console/dist/` here before compilation.
+//! Release builds embed `apps/console/dist/` via a profile-local `OUT_DIR` copy.
+//! Development builds use a placeholder and a separate Vite development server.
 
-use rust_embed::RustEmbed;
-
-#[derive(RustEmbed)]
-#[folder = "assets/public/"]
-pub struct ConsoleAssets;
+include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
 
 pub fn get(path: &str) -> Option<rust_embed::EmbeddedFile> {
     ConsoleAssets::get(path)

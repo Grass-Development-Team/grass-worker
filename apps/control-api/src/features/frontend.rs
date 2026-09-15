@@ -19,15 +19,15 @@ pub(super) async fn frontend_fallback(uri: Uri) -> Response {
 
     // Try ./public override first.
     let public_path = Path::new(PUBLIC_DIR).join(path);
-    if public_path.is_file() {
-        if let Ok(content) = tokio::fs::read(&public_path).await {
-            let mime = mime_guess::from_path(&public_path).first_or_octet_stream();
-            return Response::builder()
-                .header(header::CONTENT_TYPE, mime.as_ref())
-                .header(header::CACHE_CONTROL, "public, max-age=0")
-                .body(Body::from(content))
-                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
-        }
+    if public_path.is_file()
+        && let Ok(content) = tokio::fs::read(&public_path).await
+    {
+        let mime = mime_guess::from_path(&public_path).first_or_octet_stream();
+        return Response::builder()
+            .header(header::CONTENT_TYPE, mime.as_ref())
+            .header(header::CACHE_CONTROL, "public, max-age=0")
+            .body(Body::from(content))
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
     }
 
     // Try embedded asset.

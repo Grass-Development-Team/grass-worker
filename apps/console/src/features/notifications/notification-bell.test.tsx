@@ -74,7 +74,7 @@ it("opens announcement content in a dialog and marks it as read", async () => {
   expect(await screen.findByRole("dialog")).toHaveTextContent(
     "The service will restart at 10:00 UTC.",
   );
-  expect(notificationsApi.markRead.mock.calls[0]?.[0]).toBe("announcement-1");
+  expect(vi.mocked(notificationsApi.markRead).mock.calls[0]?.[0]).toBe("announcement-1");
 });
 
 it("opens a compact inbox from the notification bell", async () => {
@@ -132,7 +132,7 @@ it("marks an automatically opened announcement as read when it closes", async ()
   expect(await screen.findByRole("dialog")).toHaveTextContent("Please read this update.");
   await user.click(screen.getByRole("button", { name: "Close" }));
 
-  expect(notificationsApi.markRead.mock.calls[0]?.[0]).toBe("announcement-auto");
+  expect(vi.mocked(notificationsApi.markRead).mock.calls[0]?.[0]).toBe("announcement-auto");
 });
 
 it("marks every message as read from the inbox footer", async () => {

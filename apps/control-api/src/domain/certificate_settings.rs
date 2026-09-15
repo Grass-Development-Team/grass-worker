@@ -1,8 +1,9 @@
-use super::{certificates, settings};
 use anyhow::{Context, ensure};
 use sea_orm::ConnectionTrait;
 use serde_json::{Value, json};
 use uuid::Uuid;
+
+use super::{certificates, settings};
 
 const SETTINGS_KEY: &str = "domain_https";
 const SECRET_KEY: &str = "domain-https-eab-v1";
@@ -11,6 +12,7 @@ pub struct CertificateSettings {
     pub issuer: String,
     pub eab: Value,
 }
+
 impl CertificateSettings {
     pub fn validate(&self) -> anyhow::Result<()> {
         ensure!(
@@ -26,12 +28,14 @@ impl CertificateSettings {
         Ok(())
     }
 }
+
 async fn stored<C: ConnectionTrait>(db: &C) -> anyhow::Result<Value> {
     Ok(settings::get_setting(db, SETTINGS_KEY)
         .await?
         .map(|s| s.value)
-        .unwrap_or_else(|| json!({"issuer":"letsencrypt"})))
+        .unwrap_or_else(|| json!({ "issuer": "letsencrypt" })))
 }
+
 pub async fn issuer<C: ConnectionTrait>(db: &C) -> anyhow::Result<String> {
     let value = stored(db).await?;
     let issuer = value["issuer"]
@@ -43,6 +47,7 @@ pub async fn issuer<C: ConnectionTrait>(db: &C) -> anyhow::Result<String> {
     );
     Ok(issuer.to_owned())
 }
+
 pub async fn load<C: ConnectionTrait>(db: &C, secret: &str) -> anyhow::Result<CertificateSettings> {
     let value = stored(db).await?;
     let eab = match value.get("eab") {
@@ -62,6 +67,7 @@ pub async fn load<C: ConnectionTrait>(db: &C, secret: &str) -> anyhow::Result<Ce
     settings.validate()?;
     Ok(settings)
 }
+
 pub async fn save<C: ConnectionTrait>(
     db: &C,
     settings: &CertificateSettings,
@@ -72,7 +78,10 @@ pub async fn save<C: ConnectionTrait>(
     super::settings::set_json(
         db,
         SETTINGS_KEY,
-        json!({"issuer":settings.issuer,"eab":eab}),
+        json!({
+            "issuer": settings.issuer,
+            "eab": eab,
+        }),
     )
     .await
 }
@@ -80,6 +89,7 @@ pub async fn save<C: ConnectionTrait>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn lets_encrypt_needs_no_provider_credentials_and_zerossl_needs_eab() {
         let plain = CertificateSettings {
@@ -98,13 +108,20 @@ mod tests {
         );
         let zero = CertificateSettings {
             issuer: "zerossl".into(),
-            eab: json!({"eab_kid":"test-id","eab_hmac_key":"c2VjcmV0"}),
+            eab: json!({
+                "eab_kid": "test-id",
+                "eab_hmac_key": "c2VjcmV0",
+            }),
         };
         assert!(zero.validate().is_ok());
     }
+
     #[test]
     fn authority_credentials_are_encrypted_and_bound_to_the_setting() {
-        let secret = json!({"eab_kid":"test-id","eab_hmac_key":"c2VjcmV0"});
+        let secret = json!({
+            "eab_kid": "test-id",
+            "eab_hmac_key": "c2VjcmV0",
+        });
         let encrypted = certificates::encrypt("key", Uuid::nil(), SECRET_KEY, &secret).unwrap();
         assert!(!encrypted.to_string().contains("test-id"));
         assert_eq!(

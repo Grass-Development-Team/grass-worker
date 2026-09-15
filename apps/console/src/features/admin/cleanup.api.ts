@@ -42,7 +42,7 @@ function query(filters: Record<string, string | number | undefined>) {
 
 export const cleanupApi = {
   previewAudit: (filters: AuditCleanupFilters) =>
-    request<AuditCleanupPreview>(`/api/v1/admin/cleanup/audit-events${query(filters)}`),
+    request<AuditCleanupPreview>(`/api/v1/admin/cleanup/audit-events${query({ ...filters })}`),
 
   deleteAudit: (filters: AuditCleanupFilters) =>
     request<CleanupResult>("/api/v1/admin/cleanup/audit-events", {
@@ -51,7 +51,7 @@ export const cleanupApi = {
     }),
 
   previewBuildLogs: (filters: BuildLogCleanupFilters) =>
-    request<CleanupPreview>(`/api/v1/admin/cleanup/build-logs${query(filters)}`),
+    request<CleanupPreview>(`/api/v1/admin/cleanup/build-logs${query({ ...filters })}`),
 
   deleteBuildLogs: (filters: BuildLogCleanupFilters) =>
     request<CleanupResult>("/api/v1/admin/cleanup/build-logs", {

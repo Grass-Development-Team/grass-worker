@@ -12,7 +12,7 @@ logs, review, activation, and public access.
 - Git 2.49+ plus OpenSSH client tools (`ssh` and `ssh-keyscan`) available to
   the Node process
 - [Just](https://just.systems/) 1.56+ for repository task commands
-- Rust 1.85+ and [Vite+](https://viteplus.dev/) when building from source
+- Rust 1.88+ and [Vite+](https://viteplus.dev/) when building from source
 
 PostgreSQL and Redis belong to the Control API. Nodes do not connect to
 either service directly; they use the authenticated Control API instead.
@@ -21,7 +21,7 @@ either service directly; they use the authenticated Control API instead.
 
 ```sh
 just install console
-just build            # builds the Console, embeds it, and builds both binaries
+just release          # builds both release binaries; Control API embeds the Console
 ```
 
 Or use the Docker image (both binaries are included):

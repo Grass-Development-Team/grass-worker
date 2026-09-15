@@ -68,7 +68,7 @@ export function ProjectSettingsBuildRoute() {
   });
 
   const credentialMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: async () =>
       selectedCredentialId === "none"
         ? projectsApi.unbindSourceCredential(project.id)
         : projectsApi.bindSourceCredential(project.id, selectedCredentialId),

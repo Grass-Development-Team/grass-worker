@@ -274,9 +274,10 @@ mod tests {
     use super::super::Cache;
     use super::*;
 
-    async fn test_cache() -> Option<RedisCache> {
-        let url = std::env::var("GRASS_TEST_REDIS_URL").ok()?;
-        Some(RedisCache::connect(&url).await.unwrap())
+    async fn test_cache() -> RedisCache {
+        let url = std::env::var("GRASS_TEST_REDIS_URL")
+            .expect("GRASS_TEST_REDIS_URL is required for this ignored test");
+        RedisCache::connect(&url).await.unwrap()
     }
 
     fn unique_key(suffix: &str) -> String {
@@ -288,10 +289,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires GRASS_TEST_REDIS_URL pointing to a disposable Redis service"]
     async fn conditional_update_does_not_recreate_deleted_value() {
-        let Some(cache) = test_cache().await else {
-            return;
-        };
+        let cache = test_cache().await;
         let key = unique_key("conditional");
         cache
             .set(&key, "old", Duration::from_secs(60))
@@ -309,10 +309,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires GRASS_TEST_REDIS_URL pointing to a disposable Redis service"]
     async fn take_returns_a_value_to_only_one_concurrent_caller() {
-        let Some(cache) = test_cache().await else {
-            return;
-        };
+        let cache = test_cache().await;
         let key = unique_key("take");
         cache
             .set(&key, "value", Duration::from_secs(60))
@@ -334,10 +333,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires GRASS_TEST_REDIS_URL pointing to a disposable Redis service"]
     async fn token_bucket_is_atomic_in_redis() {
-        let Some(cache) = test_cache().await else {
-            return;
-        };
+        let cache = test_cache().await;
         let key = unique_key("rate-limit");
 
         assert!(

@@ -63,6 +63,11 @@ function deploymentFixture(overrides: Partial<Deployment> = {}): Deployment {
     build_status: "ready",
     serve_status: "failed",
     release_status: "draft",
+    release_pending: false,
+    pending_release_reason: null,
+    pending_release_requested_at: null,
+    screenshot_status: "pending",
+    screenshot_url: null,
     serve_resources: { cpu_millicores: 50, memory_mb: 64, disk_mb: 256 },
     overcommitted: false,
     build_stage: null,
@@ -91,15 +96,41 @@ function deploymentFixture(overrides: Partial<Deployment> = {}): Deployment {
 }
 
 it("keeps polling while build or serve work is in progress", () => {
-  expect(deploymentRefetchInterval({ build_status: "building", serve_status: "pending" })).toBe(
-    4000,
-  );
-  expect(deploymentRefetchInterval({ build_status: "ready", serve_status: "pending" })).toBe(4000);
-  expect(deploymentRefetchInterval({ build_status: "ready", serve_status: "syncing" })).toBe(4000);
-  expect(deploymentRefetchInterval({ build_status: "ready", serve_status: "ready" })).toBe(false);
-  expect(deploymentRefetchInterval({ build_status: "failed", serve_status: "pending" })).toBe(
-    false,
-  );
+  expect(
+    deploymentRefetchInterval({
+      release_pending: false,
+      build_status: "building",
+      serve_status: "pending",
+    }),
+  ).toBe(4000);
+  expect(
+    deploymentRefetchInterval({
+      release_pending: false,
+      build_status: "ready",
+      serve_status: "pending",
+    }),
+  ).toBe(4000);
+  expect(
+    deploymentRefetchInterval({
+      release_pending: false,
+      build_status: "ready",
+      serve_status: "syncing",
+    }),
+  ).toBe(4000);
+  expect(
+    deploymentRefetchInterval({
+      release_pending: false,
+      build_status: "ready",
+      serve_status: "ready",
+    }),
+  ).toBe(false);
+  expect(
+    deploymentRefetchInterval({
+      release_pending: false,
+      build_status: "failed",
+      serve_status: "pending",
+    }),
+  ).toBe(false);
 });
 
 it("shows serve placement and serve failures in the serve column", async () => {

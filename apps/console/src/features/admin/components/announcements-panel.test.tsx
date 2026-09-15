@@ -56,7 +56,7 @@ it("publishes a new announcement to active users", async () => {
   await user.click(screen.getByRole("button", { name: "Publish" }));
 
   await waitFor(() => expect(adminApi.publishAnnouncement).toHaveBeenCalled());
-  expect(adminApi.publishAnnouncement.mock.calls[0]?.[0]).toEqual({
+  expect(vi.mocked(adminApi.publishAnnouncement).mock.calls[0]?.[0]).toEqual({
     title: "Planned maintenance",
     content: "The service will restart.",
     auto_popup: false,
@@ -89,6 +89,6 @@ it("deletes an announcement from the history", async () => {
   await user.click(screen.getByRole("button", { name: "Delete announcement" }));
 
   await waitFor(() =>
-    expect(adminApi.removeAnnouncement.mock.calls[0]?.[0]).toBe("announcement-1"),
+    expect(vi.mocked(adminApi.removeAnnouncement).mock.calls[0]?.[0]).toBe("announcement-1"),
   );
 });

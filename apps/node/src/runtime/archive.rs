@@ -270,23 +270,23 @@ fn preflight(file: &mut File, budget: &mut Budget, control: &TransferControl) ->
             }
             budget.entry(0)?;
             budget.names(bytes)?;
-            if kind.is_pax_local_extensions() {
-                if let Some(fields) = entry.pax_extensions()? {
-                    for field in fields {
-                        let field = field?;
-                        let key = field.key().map_err(io::Error::other)?;
-                        if key.starts_with("GNU.sparse") {
-                            return Err(io::Error::other("sparse export metadata is unsupported"));
-                        }
-                        if key == "size" {
-                            pax_size = Some(
-                                field
-                                    .value()
-                                    .map_err(io::Error::other)?
-                                    .parse::<u64>()
-                                    .map_err(io::Error::other)?,
-                            );
-                        }
+            if kind.is_pax_local_extensions()
+                && let Some(fields) = entry.pax_extensions()?
+            {
+                for field in fields {
+                    let field = field?;
+                    let key = field.key().map_err(io::Error::other)?;
+                    if key.starts_with("GNU.sparse") {
+                        return Err(io::Error::other("sparse export metadata is unsupported"));
+                    }
+                    if key == "size" {
+                        pax_size = Some(
+                            field
+                                .value()
+                                .map_err(io::Error::other)?
+                                .parse::<u64>()
+                                .map_err(io::Error::other)?,
+                        );
                     }
                 }
             }
