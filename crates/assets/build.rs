@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 
 fn main() {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest = PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo provides CARGO_MANIFEST_DIR"),
+    );
     let dist = manifest.join("../../apps/console/dist");
     let output = PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo provides OUT_DIR"));
     let public = output.join("public");
