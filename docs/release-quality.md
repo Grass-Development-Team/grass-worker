@@ -32,3 +32,11 @@ On macOS ARM64, cargo-msrv tested Rust 1.90.0 successfully, rejected 1.87.0 beca
 The asset build script watches the complete dist directory and copies resources into its profile/target-specific `OUT_DIR`. It does not generate files in the source tree. Missing or empty release HTML fails the build. Debug builds always use the development-server placeholder.
 
 `just assets-check` exercises the actual asset crate in a disposable fixture workspace: changed HTML, added and removed resources, alternating debug/release profiles, missing/empty dist HTML and a missing dist directory. It is included in `just quality` and CI. Its dependency/build cache lives under the selected Cargo target directory.
+
+## PostgreSQL and Redis regressions
+
+`just test rust` runs the fast suite and reports environment-dependent tests as ignored. `just test-services` requires `GRASS_TEST_DATABASE_URL` and `GRASS_TEST_REDIS_URL` for disposable test services. It exits before running any command when either variable is absent. Do not point it at production databases or shared infrastructure: the PostgreSQL tests create and remove their own test schemas.
+
+The service suite applies current migrations using a temporary runtime configuration, runs every ignored Control API test except the Chromium screenshot case, and runs all ignored Redis cache tests. This currently covers 30 PostgreSQL-related cases, one standalone Redis session authorization case and three Redis cache cases. It includes authentication-version shape/revocation, region backfill, domain onboarding, lifecycle transactions, upgrade/rollback and native schema assertions.
+
+CI provides disposable PostgreSQL 17 and Redis 7 services in a dedicated job. The Node Docker smoke test and Chromium screenshot test retain their separate runtime requirements; Chromium is not counted as an executed database regression.

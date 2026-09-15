@@ -60,3 +60,7 @@ release:
 
 assets-check:
     python3 scripts/check-embedded-assets.py
+
+# This suite creates and removes test schemas in the configured disposable services.
+test-services:
+    python3 scripts/test-services.py
