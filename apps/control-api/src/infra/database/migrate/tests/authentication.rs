@@ -1,12 +1,14 @@
+use std::collections::BTreeMap;
+
+use anyhow::{Context, ensure};
+use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
+use sea_orm_migration::MigratorTrait;
+use uuid::Uuid;
+
 use super::super::{MIGRATION_TEST_LOCK, Migrator};
 use super::support::{
     PostgresMigrationDatabase, assert_migration_tracking, column, object_count, query_column_shapes,
 };
-use anyhow::{Context, ensure};
-use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
-use sea_orm_migration::MigratorTrait;
-use std::collections::BTreeMap;
-use uuid::Uuid;
 
 #[tokio::test]
 #[ignore = "requires GRASS_TEST_DATABASE_URL"]
@@ -208,7 +210,8 @@ async fn assert_mfa_policy_schema_absent(
     ensure!(
         object_count(
             db,
-            "SELECT count(*)::bigint AS count FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'user_mfa_policies'",
+            "SELECT count(*)::bigint AS count FROM information_schema.tables WHERE \
+             table_schema = current_schema() AND table_name = 'user_mfa_policies'",
         )
         .await?
             == 0
@@ -289,7 +292,9 @@ ORDER BY table_name, ordinal_position
 SELECT t.typname, string_agg(e.enumlabel, ',' ORDER BY e.enumsortorder) AS labels
 FROM pg_type t
 JOIN pg_enum e ON e.enumtypid = t.oid
-WHERE t.typname IN ('identity_provider_kind', 'auth_token_kind', 'mfa_factor_kind')
+JOIN pg_namespace n ON n.oid = t.typnamespace
+WHERE n.nspname = current_schema()
+  AND t.typname IN ('identity_provider_kind', 'auth_token_kind', 'mfa_factor_kind')
 GROUP BY t.typname
 ORDER BY t.typname
 "#,
@@ -422,8 +427,10 @@ NOT EXISTS (
       AND column_name = 'email_verified_at'
 ) AS column_absent,
 NOT EXISTS (
-    SELECT 1 FROM pg_type
-    WHERE typname IN ('identity_provider_kind', 'auth_token_kind', 'mfa_factor_kind')
+    SELECT 1 FROM pg_type t
+    JOIN pg_namespace n ON n.oid = t.typnamespace
+    WHERE n.nspname = current_schema()
+      AND t.typname IN ('identity_provider_kind', 'auth_token_kind', 'mfa_factor_kind')
 ) AS types_absent
 "#,
         ))
