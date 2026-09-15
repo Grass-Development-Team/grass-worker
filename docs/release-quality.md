@@ -40,3 +40,11 @@ The asset build script watches the complete dist directory and copies resources 
 The service suite applies current migrations using a temporary runtime configuration, runs every ignored Control API test except the Chromium screenshot case, and runs all ignored Redis cache tests. This currently covers 30 PostgreSQL-related cases, one standalone Redis session authorization case and three Redis cache cases. It includes authentication-version shape/revocation, region backfill, domain onboarding, lifecycle transactions, upgrade/rollback and native schema assertions.
 
 CI provides disposable PostgreSQL 17 and Redis 7 services in a dedicated job. The Node Docker smoke test and Chromium screenshot test retain their separate runtime requirements; Chromium is not counted as an executed database regression.
+
+## Publication gate and prereleases
+
+Pull requests and feature branch pushes run Quality directly. Main, develop and version tag pushes enter Release, which calls the reusable Quality workflow from the same commit. Both image publication and binary release uploads depend on successful validation of all Quality jobs, including service regressions, both MSRV platforms and runtime image builds.
+
+Release tags use `vMAJOR.MINOR.PATCH` or `vMAJOR.MINOR.PATCH-PRERELEASE`. A stable `v0.1.0` publishes image aliases `0.1.0`, `0.1` and `latest`. A prerelease such as `v0.1.0-rc.1` publishes only its exact version alias and is explicitly marked as a GitHub prerelease without becoming the latest release. All image variants retain their SHA tag; main/develop retain their branch alias. Slim and Alpine apply their suffix to every alias. Build metadata (`+...`) is rejected because it is not valid in Docker tags.
+
+`just release-check` verifies stable, prerelease, branch and rejected-ref policies without creating tags or publishing artifacts. It is included in `just quality` and CI.

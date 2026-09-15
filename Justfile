@@ -23,7 +23,7 @@ test target="all":
 check target="all":
     {{ if target == "rust" { "cargo check --workspace" } else if target == "console" { "cd " + console + " && vp check" } else if target == "all" { "cargo check --workspace && cd " + console + " && vp check" } else { error("unknown check target: " + target) } }}
 
-quality: fmt clippy test check build assets-check license-check
+quality: fmt clippy test check build assets-check release-check license-check
 
 license-check:
     test -f LICENSE
@@ -64,3 +64,6 @@ assets-check:
 # This suite creates and removes test schemas in the configured disposable services.
 test-services:
     python3 scripts/test-services.py
+
+release-check:
+    python3 -m unittest discover -s scripts -p "test_release_metadata.py"

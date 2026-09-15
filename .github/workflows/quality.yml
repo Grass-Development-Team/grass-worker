@@ -1,10 +1,13 @@
 name: Quality
 
 on:
+  workflow_call:
   pull_request:
   push:
     branches:
-      - main
+      - "**"
+      - "!main"
+      - "!develop"
 
 concurrency:
   group: quality-${{ github.workflow }}-${{ github.ref }}
@@ -75,6 +78,9 @@ jobs:
 
       - name: Verify embedded Console asset rebuilds
         run: just assets-check
+
+      - name: Verify release metadata policy
+        run: just release-check
 
       - name: Check project license metadata
         run: just license-check
