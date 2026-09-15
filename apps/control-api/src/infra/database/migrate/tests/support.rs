@@ -1,9 +1,11 @@
-use super::super::Migrator;
+use std::collections::BTreeMap;
+
 use anyhow::{Context, ensure};
 use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement};
 use sea_orm_migration::MigratorTrait;
-use std::collections::BTreeMap;
 use uuid::Uuid;
+
+use super::super::Migrator;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(super) struct ColumnShape {

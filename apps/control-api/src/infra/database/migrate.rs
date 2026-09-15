@@ -1,6 +1,7 @@
-use super::migration;
 use sea_orm::DatabaseConnection;
 use sea_orm_migration::{MigratorTrait, prelude::*};
+
+use super::migration;
 
 #[cfg(test)]
 pub(crate) static MIGRATION_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());

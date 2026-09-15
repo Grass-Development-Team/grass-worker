@@ -1,9 +1,11 @@
-use super::super::{MIGRATION_TEST_LOCK, Migrator};
-use super::support::{PostgresMigrationDatabase, assert_migration_tracking};
+use std::collections::BTreeMap;
+
 use anyhow::{Context, ensure};
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 use sea_orm_migration::MigratorTrait;
-use std::collections::BTreeMap;
+
+use super::super::{MIGRATION_TEST_LOCK, Migrator};
+use super::support::{PostgresMigrationDatabase, assert_migration_tracking};
 
 #[tokio::test]
 #[ignore = "requires GRASS_TEST_DATABASE_URL"]

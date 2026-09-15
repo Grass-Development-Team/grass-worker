@@ -1,7 +1,9 @@
-use super::super::{MIGRATION_TEST_LOCK, Migrator, migration};
-use sea_orm_migration::MigratorTrait;
 use std::future::Future;
+
+use sea_orm_migration::MigratorTrait;
 use tokio::sync::oneshot;
+
+use super::super::{MIGRATION_TEST_LOCK, Migrator, migration};
 
 #[test]
 fn registers_audit_foundation_migration() {

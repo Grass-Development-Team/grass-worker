@@ -1,11 +1,13 @@
+use std::collections::BTreeMap;
+
+use anyhow::ensure;
+use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
+use sea_orm_migration::MigratorTrait;
+
 use super::super::{MIGRATION_TEST_LOCK, Migrator};
 use super::support::{
     PostgresMigrationDatabase, assert_migration_tracking, column, object_count, query_column_shapes,
 };
-use anyhow::ensure;
-use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
-use sea_orm_migration::MigratorTrait;
-use std::collections::BTreeMap;
 
 #[tokio::test]
 #[ignore = "requires GRASS_TEST_DATABASE_URL"]
@@ -177,7 +179,8 @@ ORDER BY indexname
     ensure!(
         object_count(
             db,
-            "SELECT count(*)::bigint AS count FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'regional_ingress_health'",
+            "SELECT count(*)::bigint AS count FROM information_schema.tables WHERE \
+             table_schema = current_schema() AND table_name = 'regional_ingress_health'",
         )
         .await?
             == 1,
@@ -192,7 +195,8 @@ pub(super) async fn assert_regional_ingress_lifecycle_absent(
     ensure!(
         object_count(
             db,
-            "SELECT count(*)::bigint AS count FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'regional_ingress_health'",
+            "SELECT count(*)::bigint AS count FROM information_schema.tables WHERE \
+             table_schema = current_schema() AND table_name = 'regional_ingress_health'",
         )
         .await?
             == 0,
@@ -201,7 +205,10 @@ pub(super) async fn assert_regional_ingress_lifecycle_absent(
     ensure!(
         object_count(
             db,
-            "SELECT count(*)::bigint AS count FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'regional_ingresses' AND column_name IN ('acme_account', 'certificate_bundle', 'certificate_issued_at')",
+            "SELECT count(*)::bigint AS count FROM information_schema.columns WHERE \
+             table_schema = current_schema() AND table_name = 'regional_ingresses' AND \
+             column_name IN ('acme_account', 'certificate_bundle', \
+             'certificate_issued_at')",
         )
         .await?
             == 0,

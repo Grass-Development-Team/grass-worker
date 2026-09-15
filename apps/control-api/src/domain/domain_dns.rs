@@ -127,6 +127,7 @@ mod tests {
             server.abort();
         }
     }
+
     #[tokio::test]
     async fn accepts_cname_chains_and_rejects_a_different_entry_on_shared_ip() {
         for (target, expected) in [
@@ -142,11 +143,26 @@ mod tests {
                 (
                     "site.example.org",
                     "A",
-                    json!({"Status":0,"Answer":[
-                        {"name":"site.example.org.","type":5,"data":"alias.example.org."},
-                        {"name":"alias.example.org.","type":5,"data":"entry.example.com."},
-                        {"name":"entry.example.com.","type":1,"data":"203.0.113.1"}
-                    ]}),
+                    json!({
+                        "Status": 0,
+                        "Answer": [
+                            {
+                                "name": "site.example.org.",
+                                "type": 5,
+                                "data": "alias.example.org.",
+                            },
+                            {
+                                "name": "alias.example.org.",
+                                "type": 5,
+                                "data": "entry.example.com.",
+                            },
+                            {
+                                "name": "entry.example.com.",
+                                "type": 1,
+                                "data": "203.0.113.1",
+                            },
+                        ],
+                    }),
                 ),
                 (
                     "site.example.org",
@@ -169,6 +185,7 @@ mod tests {
             server.abort();
         }
     }
+
     #[tokio::test]
     async fn distinguishes_unresolved_customer_dns_from_missing_entry_dns() {
         let (resolver, server) = fixture(vec![(
@@ -191,6 +208,7 @@ mod tests {
         );
         server.abort();
     }
+
     #[tokio::test]
     async fn wrong_ipv6_and_resolver_failures_do_not_pass_verification() {
         let (resolver, server) = fixture(vec![
@@ -209,7 +227,7 @@ mod tests {
                 "AAAA",
                 answer("site.example.org", 28, "2001:db8::2"),
             ),
-            ("broken.example.org", "A", json!({"Status":2})),
+            ("broken.example.org", "A", json!({ "Status": 2 })),
         ])
         .await;
         assert_eq!(
