@@ -5,19 +5,14 @@
 # Control API. Start a Node with: docker run ... grass-node --config ...
 
 # --- Console build -----------------------------------------------------------
-FROM oven/bun:1.3 AS console-builder
+FROM node:24-bookworm-slim AS console-builder
+COPY --from=oven/bun:1.3.14 /usr/local/bin/bun /usr/local/bin/bun
 WORKDIR /app
-ENV PATH="/root/.local/share/vite-plus/bin:${PATH}"
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl unzip ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL https://vite.plus | bash
-RUN vp --version
 COPY apps/console/package.json apps/console/bun.lock apps/console/
 WORKDIR /app/apps/console
-RUN vp install --frozen-lockfile
+RUN bun install --frozen-lockfile
 COPY apps/console/ /app/apps/console/
-RUN vp build
+RUN bun run build
 
 # --- Rust build --------------------------------------------------------------
 FROM rust:1.88-slim-bookworm AS rust-base

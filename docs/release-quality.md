@@ -1,14 +1,19 @@
 # Release quality checks
 
-## Console types
+## Console checks
 
-Use `just check console` (or `vp check` in `apps/console`) for formatting, linting and type checking. Vite+ enables its type-aware checker through `lint.options.typeAware` and `lint.options.typeCheck`. Type errors fail this command and the shared repository quality gate.
+Use `just check console` (or `bun run check` in `apps/console`) for TypeScript,
+ESLint, and Prettier checks. Console uses Bun, Vite 8, TypeScript, and Lit. Strict
+checking includes Node and Vite client types; tests use Vitest globals.
 
-`vp exec tsc --noEmit` is the independent TypeScript compiler check. The project retains strict checking and includes Vite client, Node and Vite+ test global types. React and React DOM declarations are explicit development dependencies.
+`bunx --no-install tsc --noEmit` runs the independent TypeScript compiler check.
+`just build console` also checks types before Vite produces `dist/`. CI installs
+Node.js 24 LTS and the Bun version declared in `package.json`, restores the Bun
+cache, and installs the committed lockfile with `bun install --frozen-lockfile`.
+Dependency audits use `bun audit`.
 
-The type-checking change repairs incomplete test fixtures, unsupported component variants, concrete API filter shapes and mismatched announcement timestamps and mutation return types. Both checkers were verified with a temporary incompatible assignment, which failed with TS2322; the probe was removed afterwards.
-
-Enabling the type-aware lint engine also surfaces advisory warnings in existing frontend code. They remain visible and are not suppressed; frontend architecture and advisory lint cleanup are deferred from this Rust cleanup round. Type errors are blocking.
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for setup and the
+[Console code-style guide](../apps/console/CODE_STYLE.md) for formatting and tests.
 
 ## Minimum supported Rust version
 

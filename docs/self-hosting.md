@@ -12,7 +12,8 @@ logs, review, activation, and public access.
 - Git 2.49+ plus OpenSSH client tools (`ssh` and `ssh-keyscan`) available to
   the Node process
 - [Just](https://just.systems/) 1.56+ for repository task commands
-- Rust 1.88+ and [Vite+](https://viteplus.dev/) when building from source
+- Rust 1.88+, Node.js 24 LTS, and [Bun](https://bun.sh/) when building from source
+  (Console uses Vite 8; see [CONTRIBUTING.md](../CONTRIBUTING.md) for setup)
 
 PostgreSQL and Redis belong to the Control API. Nodes do not connect to
 either service directly; they use the authenticated Control API instead.
@@ -53,10 +54,10 @@ docker build --target runtime-slim -t grass-worker:slim .
 docker build --target runtime-alpine -t grass-worker:alpine .
 ```
 
-The Quality workflow builds all three release variants on pull requests and
-checks that the packaged Control API and Node binaries can start. These
-validation images stay local to the runner; the Release workflow publishes
-the branch and version tags.
+Pull requests run the Quality workflow, including a Node container delivery smoke
+test. The Release workflow first runs Quality for the same commit, then builds all
+three runtime variants and checks their packaged binaries before publishing the
+branch and version tags.
 
 ## 2. Start the Control API
 

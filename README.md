@@ -10,7 +10,7 @@ Grass Worker is a self-hosted deployment platform.
 See [docs/self-hosting.md](docs/self-hosting.md) for the full walkthrough.
 
 ```sh
-just install console   # Console dependencies (Vite+)
+just install console   # Console dependencies (Bun + Vite 8)
 just quality           # fmt + clippy + tests + checks + build
 just run api           # Control API (setup mode on an empty database)
 just run node          # Build/serve Node
@@ -18,6 +18,10 @@ just run console       # Console dev server
 ```
 
 Current version and remaining work live in [docs/todo.md](docs/todo.md).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, checks, and contribution conventions.
 
 ## License
 

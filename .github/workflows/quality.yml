@@ -35,15 +35,25 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Set up Vite+
-        uses: voidzero-dev/setup-vp@v1.10.0
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
         with:
-          working-directory: apps/console
-          node-version: "lts"
-          cache: true
-          run-install: |
-            - cwd: .
-              args: ["--frozen-lockfile"]
+          node-version: "24"
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: apps/console/package.json
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('apps/console/bun.lock') }}
+
+      - name: Install Console dependencies
+        working-directory: apps/console
+        run: bun install --frozen-lockfile
 
       - name: Install Just
         uses: extractions/setup-just@v4
@@ -71,6 +81,9 @@ jobs:
       - name: Test Console workspace
         run: just test console
 
+      - name: Build Console
+        run: just build console
+
       - name: Verify embedded Console asset rebuilds
         run: just assets-check
 
@@ -84,7 +97,7 @@ jobs:
         run: cargo audit
 
       - name: Audit Console dependencies
-        run: cd apps/console && vp pm audit
+        run: cd apps/console && bun audit
 
   node-delivery-smoke:
     name: Node delivery smoke

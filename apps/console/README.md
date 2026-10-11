@@ -1,10 +1,10 @@
 # Grass Worker Console
 
-Console uses Bun, Vite, TypeScript, and Lit Web Components. Run all frontend commands from this directory.
+Console uses Bun, Vite 8, TypeScript, and Lit Web Components. Run all frontend commands from this directory.
 
 ## Quick start
 
-Install Bun, preferably the version declared in `package.json`, then run:
+Install Node.js 24 LTS and the Bun version declared in `package.json`, then run:
 
 ```bash
 cd apps/console
@@ -57,7 +57,7 @@ bun run preview
 
 Vite preview does not inherit the development proxy. Point `VITE_API_BASE_URL` at an available API, or deploy `dist/` to a server that provides a same-origin API and SPA fallback. The existing Control API asset-embedding entry point reads this directory's `dist/` output.
 
-This migration is limited to Console. The legacy `vp` entry points in root-level Just, CI, and Docker configuration belong to separate build integrations. The Bun scripts above are the direct entry points for the new frontend.
+The root Justfile, CI, and Docker build use the same Bun scripts and committed lockfile. See [CONTRIBUTING.md](../../CONTRIBUTING.md) for repository-wide setup and contribution conventions.
 
 ## Structure and development
 

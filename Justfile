@@ -12,16 +12,16 @@ _default:
     just --list
 
 fmt target="all":
-    {{ if target == "rust" { "cargo fmt --all" } else if target == "console" { "cd " + console + " && vp check --fix" } else if target == "all" { "cargo fmt --all && cd " + console + " && vp check --fix" } else { error("unknown fmt target: " + target) } }}
+    {{ if target == "rust" { "cargo fmt --all" } else if target == "console" { "cd " + console + " && bun run fmt" } else if target == "all" { "cargo fmt --all && cd " + console + " && bun run fmt" } else { error("unknown fmt target: " + target) } }}
 
 clippy:
     cargo clippy --workspace --all-targets -- -D warnings
 
 test target="all":
-    {{ if target == "rust" { "cargo test --workspace" } else if target == "console" { "cd " + console + " && vp test" } else if target == "all" { "cargo test --workspace && cd " + console + " && vp test" } else { error("unknown test target: " + target) } }}
+    {{ if target == "rust" { "cargo test --workspace" } else if target == "console" { "cd " + console + " && bun run test" } else if target == "all" { "cargo test --workspace && cd " + console + " && bun run test" } else { error("unknown test target: " + target) } }}
 
 check target="all":
-    {{ if target == "rust" { "cargo check --workspace" } else if target == "console" { "cd " + console + " && vp check" } else if target == "all" { "cargo check --workspace && cd " + console + " && vp check" } else { error("unknown check target: " + target) } }}
+    {{ if target == "rust" { "cargo check --workspace" } else if target == "console" { "cd " + console + " && bun run check" } else if target == "all" { "cargo check --workspace && cd " + console + " && bun run check" } else { error("unknown check target: " + target) } }}
 
 quality: fmt clippy test check build assets-check release-check license-check
 
@@ -32,19 +32,19 @@ license-check:
 
 audit:
     cargo audit
-    cd {{ console }} && vp pm audit
+    cd {{ console }} && bun audit
 
 run target:
-    {{ if target == "api" { "cargo run -p grass-control-api" } else if target == "node" { "cargo run -p grass-node" } else if target == "console" { "cd " + console + " && vp dev" } else { error("unknown run target: " + target) } }}
+    {{ if target == "api" { "cargo run -p grass-control-api" } else if target == "node" { "cargo run -p grass-node" } else if target == "console" { "cd " + console + " && bun run dev" } else { error("unknown run target: " + target) } }}
 
 build target="all":
-    {{ if target == "api" { "cd " + console + " && vp build && cargo build -p grass-control-api" } else if target == "node" { "cargo build -p grass-node" } else if target == "console" { "cd " + console + " && vp build" } else if target == "rust" { "cd " + console + " && vp build && cargo build --workspace" } else if target == "all" { "cd " + console + " && vp build && cargo build --workspace" } else { error("unknown build target: " + target) } }}
+    {{ if target == "api" { "cd " + console + " && bun run build && cargo build -p grass-control-api" } else if target == "node" { "cargo build -p grass-node" } else if target == "console" { "cd " + console + " && bun run build" } else if target == "rust" { "cd " + console + " && bun run build && cargo build --workspace" } else if target == "all" { "cd " + console + " && bun run build && cargo build --workspace" } else { error("unknown build target: " + target) } }}
 
 install target="all":
-    {{ if target == "console" { "cd " + console + " && vp install" } else if target == "all" { "cd " + console + " && vp install" } else { error("unknown install target: " + target) } }}
+    {{ if target == "console" { "cd " + console + " && bun install --frozen-lockfile" } else if target == "all" { "cd " + console + " && bun install --frozen-lockfile" } else { error("unknown install target: " + target) } }}
 
 preview target="console":
-    {{ if target == "console" { "cd " + console + " && vp preview" } else { error("unknown preview target: " + target) } }}
+    {{ if target == "console" { "cd " + console + " && bun run preview" } else { error("unknown preview target: " + target) } }}
 
 migrate:
     cargo run -p grass-control-api -- migrate
@@ -55,7 +55,7 @@ msrv:
 
 # Build distributable binaries with the production Console embedded.
 release:
-    cd {{ console }} && vp build
+    cd {{ console }} && bun run build
     cargo build --release --locked -p grass-control-api -p grass-node
 
 assets-check:
