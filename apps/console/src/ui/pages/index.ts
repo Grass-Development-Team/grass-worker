@@ -388,27 +388,6 @@ export const routes: RouteDefinition[] = [
     "admin",
   ),
   route(
-    "/admin/settings/authentication/providers",
-    "gw-page-admin-providers",
-    "Identity providers",
-    () => import("./admin/providers"),
-    "admin",
-  ),
-  route(
-    "/admin/settings/authentication/providers/new",
-    "gw-page-admin-providers",
-    "Add identity provider",
-    () => import("./admin/providers"),
-    "admin",
-  ),
-  route(
-    "/admin/settings/authentication/providers/:resourceId",
-    "gw-page-admin-providers",
-    "Provider settings",
-    () => import("./admin/providers"),
-    "admin",
-  ),
-  route(
     "/admin/settings/infrastructure/:kind",
     "gw-page-admin-infrastructure",
     "Infrastructure",

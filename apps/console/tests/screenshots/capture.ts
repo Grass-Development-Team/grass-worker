@@ -80,9 +80,7 @@ function concreteURL(pattern: string): string {
             ? "u1"
             : pattern.includes("/teams/")
               ? "t1"
-              : pattern.includes("/providers/")
-                ? "ip1"
-                : "n1";
+              : "n1";
   const parameters: Record<string, string> = {
     projectId: "p1",
     deploymentId: "d1",
@@ -239,7 +237,6 @@ async function installScreenshotData(page: Page, entry: CaptureEntry): Promise<v
     const ok = (data: unknown) => route.fulfill({ json: { code: 200, message: "OK", data } });
     if (pathname === "/api/v1/auth/providers")
       return ok({
-        providers: [{ slug: "github", name: "GitHub", kind: "github" }],
         password_recovery_available: true,
         registration_email_verification: false,
         signup_policy: "open",

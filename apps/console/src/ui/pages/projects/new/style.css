@@ -1,0 +1,185 @@
+.project-create-page {
+  display: block;
+}
+.project-create-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: 1fr auto;
+  grid-template-areas: "details presets" "submit presets";
+  min-height: calc(100svh - 64px);
+}
+.project-create-details,
+.project-create-presets {
+  padding: 40px;
+  min-width: 0;
+}
+.project-create-details {
+  grid-area: details;
+  border-right: 1px solid var(--border);
+}
+.project-create-presets {
+  grid-area: presets;
+}
+.project-create-heading {
+  margin-bottom: 40px;
+}
+.project-create-heading h1,
+.project-create-heading h2 {
+  font-size: 32px;
+  line-height: 1.2;
+  letter-spacing: -0.04em;
+  margin-bottom: 16px;
+}
+.project-create-heading p {
+  line-height: 1.7;
+  margin-bottom: 0;
+  max-width: 560px;
+}
+.project-create-heading .project-create-eyebrow {
+  font-weight: 500;
+  margin-bottom: 12px;
+}
+.project-create-fields {
+  display: grid;
+  gap: 24px;
+  max-width: 560px;
+}
+.project-create-details > gw-alert {
+  display: block;
+  margin-bottom: 24px;
+}
+.project-create-build {
+  border-top: 1px solid var(--border);
+  padding-top: 20px;
+}
+.project-create-build summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 500;
+  cursor: pointer;
+  list-style: none;
+}
+.project-create-build summary::-webkit-details-marker {
+  display: none;
+}
+.project-create-build[open] summary {
+  margin-bottom: 16px;
+}
+.project-create-build[open] summary gw-icon {
+  transform: rotate(180deg);
+}
+.project-create-build p {
+  font-size: 12px;
+  margin-bottom: 24px;
+}
+.project-create-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.project-create-preset {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 24px;
+  min-width: 0;
+  min-height: 156px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  text-align: left;
+  background: var(--background);
+  color: var(--text);
+  transition:
+    background var(--motion-fast),
+    border-color var(--motion-fast);
+}
+.project-create-preset:hover {
+  border-color: var(--strong-border);
+  background: var(--surface);
+}
+.project-create-preset[aria-pressed="true"] {
+  border-color: var(--text);
+  background: var(--surface);
+}
+.project-create-preset-icons {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.project-create-preset-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 5px);
+  background: var(--background);
+  color: var(--muted);
+}
+.project-create-preset-copy {
+  display: grid;
+  gap: 4px;
+}
+.project-create-preset-copy strong {
+  font-weight: 600;
+}
+.project-create-preset-copy > span {
+  font-size: 12px;
+  color: var(--muted);
+}
+.project-create-submit {
+  grid-area: submit;
+  padding: 0 40px 40px;
+  border-right: 1px solid var(--border);
+}
+.project-create-submit gw-button {
+  display: flex;
+  width: 100%;
+  max-width: 560px;
+}
+.project-create-access {
+  display: grid;
+  justify-items: center;
+  gap: 24px;
+  padding: 64px 24px;
+}
+@media (max-width: 1023px) {
+  .project-create-form {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+    grid-template-areas: "details" "presets" "submit";
+  }
+  .project-create-details {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .project-create-fields,
+  .project-create-submit gw-button {
+    max-width: none;
+  }
+  .project-create-submit {
+    border-right: 0;
+  }
+}
+@media (max-width: 600px) {
+  .project-create-details,
+  .project-create-presets {
+    padding: 24px;
+  }
+  .project-create-heading {
+    margin-bottom: 32px;
+  }
+  .project-create-heading h1,
+  .project-create-heading h2 {
+    font-size: 28px;
+  }
+  .project-create-preset-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .project-create-submit {
+    padding: 8px 24px 32px;
+  }
+}

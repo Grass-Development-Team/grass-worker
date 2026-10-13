@@ -22,7 +22,6 @@ export class GwInput extends GwElement {
     max: {},
     step: {},
     pattern: {},
-    size: { reflect: true },
   };
   static styles = componentStyles(styles);
   value = "";
@@ -43,7 +42,6 @@ export class GwInput extends GwElement {
   max = "";
   step = "";
   pattern = "";
-  size = "md";
   protected internals = this.attachInternals();
   private initialValue = "";
   private fieldsetDisabled = false;

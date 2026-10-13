@@ -1,4 +1,3 @@
-import { apiUrl } from "@/infra/api";
 import { StoreController } from "@/infra/controllers/store";
 import { QueryController } from "@/infra/query";
 import { authApi, isAuthResponse, type LoginResponse } from "@/services/auth";
@@ -47,34 +46,6 @@ export class AuthPage extends Page {
       <h1>${title}</h1>
       ${description}
     </header>`;
-  }
-  protected providers() {
-    const configuration = this.configuration.result.data;
-    return configuration?.providers.length
-      ? html`<div class="auth-providers">
-          <div class="or"><span></span>or<span></span></div>
-          ${configuration.providers.map(
-            (provider) =>
-              html`<gw-button
-                variant="outline"
-                @click=${() => {
-                  const params = new URLSearchParams();
-                  if (this.returnTo) params.set("return_to", this.returnTo);
-                  const code = this.querySelector<HTMLInputElement>(
-                    "gw-input[name='registration_code']",
-                  );
-                  if (code?.value) params.set("registration_code", code.value.trim());
-                  window.location.assign(
-                    apiUrl(
-                      `/api/v1/auth/providers/${encodeURIComponent(provider.slug)}/start${params.size ? `?${params}` : ""}`,
-                    ),
-                  );
-                }}
-                >Continue with ${provider.name}</gw-button
-              >`,
-          )}
-        </div>`
-      : nothing;
   }
   protected submit(event: Event): void {
     const data = readForm(event);
@@ -142,17 +113,17 @@ export class AuthPage extends Page {
     const signup = this.kind === "signup",
       login = this.kind === "login",
       passwords = login || signup || this.kind === "reset";
-    return html`${this.brandHeader(titles[this.kind], html`<p>${login ? html`New here? <a href=${authHref("/signup", this.returnTo)}>Create an account</a>` : signup ? html`Already have an account? <a href=${authHref("/login", this.returnTo)}>Sign in</a>` : html`<a href=${authHref("/login", this.returnTo)}>Back to sign in</a>`}</p>`)}${this.error()}${this.configuration.result.isError ? html`<gw-alert tone="warning">Sign-in options could not be loaded. <gw-button variant="ghost" @click=${() => this.configuration.refresh()}>Retry</gw-button></gw-alert>` : nothing}${
+    return html`${this.brandHeader(titles[this.kind], html`<p>${login ? html`New here? <a href=${authHref("/signup", this.returnTo)}>Create an account</a>` : signup ? html`Already have an account? <a href=${authHref("/login", this.returnTo)}>Sign in</a>` : html`<a href=${authHref("/login", this.returnTo)}>Back to sign in</a>`}</p>`)}${this.error()}${this.configuration.result.isError ? html`<gw-alert tone="warning">Sign-in settings could not be loaded. <gw-button variant="ghost" @click=${() => this.configuration.refresh()}>Retry</gw-button></gw-alert>` : nothing}${
       signup && configuration?.signup_policy === "closed"
         ? html`<gw-alert tone="warning">Registration is currently closed.</gw-alert>`
         : html`<form class="auth-form" @submit=${this.submit}>
-            ${signup ? field({ name: "display_name", label: "Name", required: true, autocomplete: "name" }) : nothing}${this.kind !== "reset" ? html`<gw-input name="email" type="email" label="Email" placeholder="you@example.com" autocomplete="username" required size="lg" .value=${this.context.search.get("email") || ""}><gw-icon slot="prefix" name="user"></gw-icon></gw-input>` : nothing}${passwords ? html`<gw-password-input name="password" label=${login ? "Password" : "New password"} autocomplete=${login ? "current-password" : "new-password"} required size="lg" .minLength=${login ? -1 : (policy?.min_length ?? 8)} .maxLength=${policy?.max_length ?? 1024}><gw-icon slot="prefix" name="key"></gw-icon></gw-password-input>` : nothing}${signup || this.kind === "reset" ? field({ name: "confirm", label: "Confirm password", type: "password", required: true }) : nothing}${signup && configuration?.signup_policy === "invite_only" ? field({ name: "registration_code", label: "Registration code", required: true }) : nothing}${login && configuration?.password_recovery_available ? html`<a class="forgot-link" href="/forgot-password">Forgot password?</a>` : nothing}${this.sent ? html`<gw-alert tone="success">${this.kind === "verify" ? "Verification email sent." : "If an account exists, a recovery email is on its way."}</gw-alert>` : nothing}
+            ${signup ? field({ name: "display_name", label: "Name", required: true, autocomplete: "name" }) : nothing}${this.kind !== "reset" ? html`<gw-input name="email" type="email" label="Email" placeholder="you@example.com" autocomplete="username" required .value=${this.context.search.get("email") || ""}><gw-icon slot="prefix" name="user"></gw-icon></gw-input>` : nothing}${passwords ? html`<gw-password-input name="password" label=${login ? "Password" : "New password"} autocomplete=${login ? "current-password" : "new-password"} required .minLength=${login ? -1 : (policy?.min_length ?? 8)} .maxLength=${policy?.max_length ?? 1024}><gw-icon slot="prefix" name="key"></gw-icon></gw-password-input>` : nothing}${signup || this.kind === "reset" ? field({ name: "confirm", label: "Confirm password", type: "password", required: true }) : nothing}${signup && configuration?.signup_policy === "invite_only" ? field({ name: "registration_code", label: "Registration code", required: true }) : nothing}${login && configuration?.password_recovery_available ? html`<a class="forgot-link" href="/forgot-password">Forgot password?</a>` : nothing}${this.sent ? html`<gw-alert tone="success">${this.kind === "verify" ? "Verification email sent." : "If an account exists, a recovery email is on its way."}</gw-alert>` : nothing}
             <div class="auth-submit">
               <gw-button type="submit" size="lg" .loading=${this.busy}
                 >${login ? "Login" : signup ? "Create account" : this.kind === "reset" ? "Save password" : this.kind === "verify" ? "Resend verification" : "Send recovery email"}</gw-button
               >
             </div>
           </form>`
-    }${login || (signup && configuration?.signup_policy !== "closed") ? this.providers() : nothing}`;
+    }`;
   }
 }

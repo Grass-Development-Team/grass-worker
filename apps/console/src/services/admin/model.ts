@@ -319,24 +319,6 @@ export interface AdminMfaFactor {
   created_at: string;
 }
 
-export interface AdminIdentityProvider {
-  id: string;
-  slug: string;
-  kind: "oidc" | "github";
-  name: string;
-  enabled: boolean;
-  client_id: string;
-  client_secret_configured: boolean;
-  issuer_url: string | null;
-  authorization_url: string;
-  token_url: string;
-  userinfo_url: string | null;
-  jwks_url: string | null;
-  scopes: string[];
-  created_at: string;
-  updated_at: string;
-}
-
 export interface AdminTeamGroupRef {
   id: string;
   code: string;

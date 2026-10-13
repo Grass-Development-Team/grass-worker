@@ -11,4 +11,5 @@
   --control-sm: 32px;
   --control-md: 40px;
   --control-lg: 48px;
+  --input-height: var(--control-lg);
 }

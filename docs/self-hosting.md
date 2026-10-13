@@ -197,9 +197,8 @@ The signup policy on that page can be `Open`, `Invite only`, or `Closed`.
 Invite-only registration accepts either a single-use `registration` scope Code
 from **Administration → Code** or an exact email entry from **Administration →
 Registration**. Email entries are removed after successful registration. The
-same authorization applies to password, OIDC, and GitHub registration, while
-the independent email-verification switch continues to control whether a new
-password account must verify its email.
+independent email-verification switch controls whether a new password account
+must verify its email.
 
 Team invitations are separate from platform registration authorization. Team
 administrators select an active platform user from the member dialog. With an
@@ -210,10 +209,9 @@ user. A Team invitation never acts as a registration credential and is never
 accepted automatically during signup; after authentication, the recipient
 returns to the invitation page and explicitly accepts it.
 
-Identity providers are configured on the same Authentication page. Google,
-Apple, GitHub, and custom OIDC templates are available; custom endpoints must
-use HTTPS. OAuth callbacks use state, nonce, and PKCE validation and only
-accept local return paths.
+Console exposes email/password sign-in and registration. Third-party sign-in
+and identity-provider management are not available in the frontend. The
+Control API retains its identity-provider endpoints independently.
 
 MFA is disabled by default. Administrators can allow TOTP and/or email codes
 and enforce MFA for platform administrators, all users, or a selected set of

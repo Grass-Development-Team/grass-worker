@@ -16,6 +16,8 @@ export const paths: Record<string, string[]> = {
   close: ["M6 6l12 12M18 6 6 18"],
   check: ["m5 12 4 4 10-10"],
   chevron: ["m9 5 7 7-7 7"],
+  back: ["m12 5-7 7 7 7M5 12h15"],
+  code: ["m8 6-6 6 6 6m8-12 6 6-6 6"],
   down: ["m6 9 6 6 6-6"],
   plus: ["M12 5v14M5 12h14"],
   search: ["M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0", "m16 16 5 5"],

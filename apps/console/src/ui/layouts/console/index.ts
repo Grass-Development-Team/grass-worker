@@ -84,9 +84,50 @@ export class ConsoleLayout extends GwElement {
       notify(errorMessage(cause), "error");
     }
   }
+  protected accountMenu(compact = false) {
+    const user = this.context.value?.value.user ?? this.auth.value.user;
+    return html`<gw-dropdown-menu label="Account menu"
+      ><span slot="trigger" class=${compact ? "account compact" : "account"}
+        ><gw-avatar
+          src=${user?.avatar_url || ""}
+          alt=${user?.display_name || user?.email || "Account"}
+        ></gw-avatar
+        >${compact ? nothing : html`<span>${user?.display_name || user?.email}</span>`}</span
+      ><a href="/account/profile" role="menuitem">Personal settings</a
+      ><a href="/account/security" role="menuitem">Security</a
+      >${user?.platform_role === "admin" ? html`<a href="/admin/reviews" role="menuitem">Administration</a>` : nothing}<button
+        role="menuitem"
+        @click=${() => this.signOut()}
+      >
+        Sign out
+      </button></gw-dropdown-menu
+    >`;
+  }
+  protected headerActions() {
+    return html`<div class="header-actions">
+      <gw-notification-center></gw-notification-center
+      ><gw-button
+        variant="ghost"
+        size="icon"
+        aria-label="Toggle theme"
+        @click=${(event: MouseEvent) => {
+          const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+          void changeTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark", {
+            x: event.clientX || rect.left + rect.width / 2,
+            y: event.clientY || rect.top + rect.height / 2,
+          });
+        }}
+        ><gw-icon
+          name=${document.documentElement.dataset.theme === "dark" ? "moon" : "sun"}
+        ></gw-icon></gw-button
+      ><gw-dropdown-menu label="Theme preference"
+        ><span slot="trigger"><gw-icon name="down"></gw-icon></span
+        >${["light", "dark", "system"].map((value) => html`<button role="menuitem" @click=${(event: MouseEvent) => changeTheme(value as "light" | "dark" | "system", { x: event.clientX, y: event.clientY })}>${value[0].toUpperCase() + value.slice(1)}</button>`)}</gw-dropdown-menu
+      >
+    </div>`;
+  }
   render() {
-    const user = this.context.value?.value.user ?? this.auth.value.user,
-      brand = this.brand.value;
+    const brand = this.brand.value;
     return html`<div
       class=${`shell ${this.open ? "open" : ""} ${this.collapsed ? "collapsed" : ""}`}
     >
@@ -102,22 +143,7 @@ export class ConsoleLayout extends GwElement {
         </div>
         <div class="navigation">${this.nav()}</div>
         <div class="aside-footer">
-          <gw-dropdown-menu label="Account menu"
-            ><span slot="trigger" class="account"
-              ><gw-avatar
-                src=${user?.avatar_url || ""}
-                alt=${user?.display_name || user?.email || "Account"}
-              ></gw-avatar
-              ><span>${user?.display_name || user?.email}</span></span
-            ><a href="/account/profile" role="menuitem">Personal settings</a
-            ><a href="/account/security" role="menuitem">Security</a
-            >${user?.platform_role === "admin" ? html`<a href="/admin/reviews" role="menuitem">Administration</a>` : nothing}<button
-              role="menuitem"
-              @click=${() => this.signOut()}
-            >
-              Sign out
-            </button></gw-dropdown-menu
-          ><small>Grass Worker · v${brand.version}</small>
+          ${this.accountMenu()}<small>Grass Worker · v${brand.version}</small>
         </div>
       </aside>
       <div class="main">
@@ -135,30 +161,7 @@ export class ConsoleLayout extends GwElement {
             ><a href="/">${this.teams.value.active?.name || "Workspace"}</a><span>/</span
             ><span>${this.heading}</span></gw-breadcrumb
           >
-          <div class="header-actions">
-            <gw-notification-center></gw-notification-center
-            ><gw-button
-              variant="ghost"
-              size="icon"
-              aria-label="Toggle theme"
-              @click=${(event: MouseEvent) => {
-                const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-                void changeTheme(
-                  document.documentElement.dataset.theme === "dark" ? "light" : "dark",
-                  {
-                    x: event.clientX || rect.left + rect.width / 2,
-                    y: event.clientY || rect.top + rect.height / 2,
-                  },
-                );
-              }}
-              ><gw-icon
-                name=${document.documentElement.dataset.theme === "dark" ? "moon" : "sun"}
-              ></gw-icon></gw-button
-            ><gw-dropdown-menu label="Theme preference"
-              ><span slot="trigger"><gw-icon name="down"></gw-icon></span
-              >${["light", "dark", "system"].map((value) => html`<button role="menuitem" @click=${(event: MouseEvent) => changeTheme(value as "light" | "dark" | "system", { x: event.clientX, y: event.clientY })}>${value[0].toUpperCase() + value.slice(1)}</button>`)}</gw-dropdown-menu
-            >
-          </div>
+          ${this.headerActions()}
         </header>
         <main><slot></slot></main>
       </div>

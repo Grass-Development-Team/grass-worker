@@ -1,0 +1,38 @@
+:host {
+  display: flex;
+  flex-direction: column;
+  min-height: 100svh;
+  background: var(--background);
+}
+.create-title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  font-weight: 500;
+}
+.create-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+main {
+  width: 100%;
+  max-width: 1440px;
+  padding: 0;
+  flex: 1;
+}
+@media (max-width: 600px) {
+  .create-header {
+    gap: 4px;
+    padding-inline: 8px;
+  }
+  .create-title {
+    position: static;
+    transform: none;
+    font-size: 12px;
+  }
+  .create-actions {
+    gap: 4px;
+  }
+}

@@ -44,7 +44,7 @@ export class SettingsPage extends Page {
     if (section === "authentication") {
       const policy = data.authentication.password_policy,
         mfa = data.authentication.mfa_policy;
-      return html`${heading("Authentication", "Password requirements, MFA policy, and identity providers.")}${this.error()}<gw-card
+      return html`${heading("Authentication", "Password requirements, registration, and MFA policy.")}${this.error()}<gw-card
           heading="Password and registration"
           ><form
             class="form"
@@ -125,12 +125,6 @@ export class SettingsPage extends Page {
               <gw-button type="submit" .loading=${this.busy}>Save MFA policy</gw-button>
             </div>
           </form></gw-card
-        ><gw-card
-          heading="Identity providers"
-          description="Configure Google, Apple, GitHub, or a custom OIDC provider."
-          ><gw-button variant="outline" href="/admin/settings/authentication/providers"
-            >Manage identity providers</gw-button
-          ></gw-card
         >`;
     }
     return html`${heading(`${section[0].toUpperCase() + section.slice(1)} settings`, section === "runtime" ? "These settings require a Control API restart after saving." : "Configure platform defaults.")}${this.error()}${section === "runtime" ? html`<gw-alert tone="info">A Control API restart is required for changes to take effect.</gw-alert>` : nothing}<gw-card

@@ -174,11 +174,13 @@ export class MfaPage extends AuthPage {
                       </div>`
                   : nothing
               }
-              <form class="form" @submit=${this.verify}>
-                <gw-input-otp name="code" required></gw-input-otp
-                ><gw-button type="submit" size="lg" .loading=${this.busy}
-                  >${enrolling ? "Add verification method" : "Verify and continue"}</gw-button
-                >
+              <form class="auth-form" @submit=${this.verify}>
+                <gw-input-otp name="code" required></gw-input-otp>
+                <div class="auth-submit">
+                  <gw-button type="submit" size="lg" .loading=${this.busy}
+                    >${enrolling ? "Add verification method" : "Verify and continue"}</gw-button
+                  >
+                </div>
               </form>
               <div class="row">
                 <gw-button

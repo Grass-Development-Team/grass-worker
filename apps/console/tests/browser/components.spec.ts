@@ -34,6 +34,30 @@ test("native validation prevents submission and focuses invalid control", async 
   await expect(page.getByText('"email"', { exact: false })).toHaveCount(0);
 });
 
+test("single-line controls and password visibility buttons share the primary height", async ({
+  page,
+}) => {
+  const controls = page.locator(
+    "gw-page-components gw-input .control, gw-password-input .control, gw-select .control, gw-combobox .control, gw-input-otp .control",
+  );
+  await expect(controls).toHaveCount(7);
+  expect(
+    await controls.evaluateAll((elements) =>
+      elements.map((element) => element.getBoundingClientRect().height),
+    ),
+  ).toEqual(Array(7).fill(48));
+  const reveal = await page.getByRole("button", { name: "Show password" }).boundingBox();
+  expect(reveal!.height).toBe(48);
+  expect(reveal!.width).toBe(48);
+  await page.getByRole("button", { name: "Show password" }).click();
+  expect((await page.getByRole("button", { name: "Hide password" }).boundingBox())!.height).toBe(
+    48,
+  );
+  expect(
+    (await page.getByLabel("Textarea", { exact: true }).boundingBox())!.height,
+  ).toBeGreaterThan(48);
+});
+
 test("dialog traps focus and restores it after Escape", async ({ page }) => {
   const trigger = page.getByRole("button", { name: "Open dialog", exact: true });
   await trigger.click();

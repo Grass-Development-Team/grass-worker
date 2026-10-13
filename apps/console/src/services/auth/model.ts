@@ -40,7 +40,6 @@ export interface MfaChallenge {
 }
 
 export interface AuthConfiguration {
-  providers: Array<{ slug: string; name: string; kind: "oidc" | "github" }>;
   password_recovery_available: boolean;
   registration_email_verification: boolean;
   signup_policy: "open" | "invite_only" | "closed";

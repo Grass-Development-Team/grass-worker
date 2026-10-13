@@ -329,6 +329,7 @@ export interface FixtureOptions {
   role?: string;
   teamRole?: string;
   mfa?: boolean;
+  mfaEmail?: boolean;
   setup?: boolean;
 }
 export async function installApi(page: Page, options: FixtureOptions = {}) {
@@ -340,7 +341,7 @@ export async function installApi(page: Page, options: FixtureOptions = {}) {
     mfa_required: true,
     mfa_enrollment_required: false,
     challenge_token: "fixture-challenge",
-    factors: [factor],
+    factors: [factor, ...(options.mfaEmail ? [{ ...factor, id: "f2", kind: "email" }] : [])],
     allowed_factors: ["totp", "email"],
     return_to: "/projects",
   };
@@ -371,7 +372,6 @@ export async function installApi(page: Page, options: FixtureOptions = {}) {
       return ok({ site_name: "Grass Worker", logo_url: null, version: "0.1.0" });
     if (path === "/api/v1/auth/providers")
       return ok({
-        providers: [],
         password_recovery_available: true,
         registration_email_verification: false,
         signup_policy: "open",
@@ -449,7 +449,12 @@ export async function installApi(page: Page, options: FixtureOptions = {}) {
       });
     if (path.endsWith("/audit-events") && !path.includes("/cleanup/"))
       return ok({ events: [], pagination });
-    if (path === "/api/v1/projects") return ok({ projects: [project] });
+    if (path === "/api/v1/projects")
+      return ok(
+        method === "POST"
+          ? { project, host_assignment: { assigned: true } }
+          : { projects: [project] },
+      );
     if (path === "/api/v1/projects/p1")
       return ok({ project, team, role: options.teamRole ?? "owner" });
     if (path === "/api/v1/projects/p1/deployments") return ok({ deployments: [deployment] });
@@ -558,27 +563,6 @@ export async function installApi(page: Page, options: FixtureOptions = {}) {
             dns_status: "resolved",
             healthy_nodes: [],
             node_statuses: [],
-            created_at: project.created_at,
-          },
-        ],
-      });
-    if (path === "/api/v1/admin/identity-providers")
-      return ok({
-        providers: [
-          {
-            id: "ip1",
-            slug: "google",
-            kind: "oidc",
-            name: "Google",
-            enabled: true,
-            client_id: "fixture-id",
-            client_secret_configured: true,
-            issuer_url: "https://accounts.google.com",
-            authorization_url: "https://accounts.google.com/o/oauth2/v2/auth",
-            token_url: "https://oauth2.googleapis.com/token",
-            userinfo_url: "https://openidconnect.googleapis.com/v1/userinfo",
-            jwks_url: "https://www.googleapis.com/oauth2/v3/certs",
-            scopes: ["openid", "email", "profile"],
             created_at: project.created_at,
           },
         ],

@@ -4,7 +4,6 @@ import { hostSourcesApi } from "./host-sources";
 import { nodesApi } from "./nodes";
 import { platformApi } from "./platform";
 import { projectsApi } from "./projects";
-import { providersApi } from "./providers";
 import { quotaPlansApi } from "./quota-plans";
 import { regionalIngressesApi } from "./regional-ingresses";
 import { registrationApi } from "./registration";
@@ -30,6 +29,5 @@ export const adminApi = {
   ...reviewsApi,
   ...settingsApi,
   ...storageApi,
-  ...providersApi,
   ...announcementsApi,
 };

@@ -1,6 +1,6 @@
 .split {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 40px;
+  grid-template-columns: minmax(0, 1fr) var(--input-height);
   gap: 4px;
 }
 .split .control {
@@ -16,7 +16,4 @@
 }
 .reveal:hover {
   background: var(--hover);
-}
-:host([size="lg"]) .split {
-  grid-template-columns: minmax(0, 1fr) 48px;
 }

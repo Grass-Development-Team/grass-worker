@@ -67,11 +67,13 @@ Use a 4px spacing unit: 4, 8, 12, 16, 24, 32, and 48px. Use 12–24px between ne
 
 Control sizes:
 
-| Size | Minimum height | Use case                                 |
-| ---- | -------------- | ---------------------------------------- |
-| `sm` | 32px           | Table-row actions and supporting buttons |
-| `md` | 40px           | Regular inputs, buttons, and selects     |
-| `lg` | 48px           | Login forms and prominent submissions    |
+| Size | Minimum height | Use case                                            |
+| ---- | -------------- | --------------------------------------------------- |
+| `sm` | 32px           | Table-row actions and supporting buttons            |
+| `md` | 40px           | Regular buttons                                     |
+| `lg` | 48px           | Single-line form controls and prominent submissions |
+
+All single-line inputs, password fields, selects, comboboxes, and verification-code fields use **48px**, defined by `--input-height`. Use this shared height across authentication, setup, settings, and project forms; pages must not choose separate input heights. Password visibility buttons are square and match the input height. Labels and feedback sit outside the control height. Textareas retain their multiline height and vertical resizing.
 
 Icons default to 18px; brand icons are approximately 24px. Icon buttons provide a full 40px interaction area. Maintain sufficient spacing between dense actions on mobile.
 
@@ -97,8 +99,10 @@ Tables provide native table semantics, accessible names, empty states, and horiz
 
 ## 7. Layouts and business patterns
 
-- Login pages use a centered content area with a maximum width of approximately 560px and no decorative outer card. Retain site branding, email sign-in, registration, password recovery, and available third-party sign-in options.
+- Login pages use a centered content area with a maximum width of approximately 560px and no decorative outer card. Retain site branding, email sign-in, registration, and password recovery. Console exposes email/password authentication only.
+- Authentication submit buttons, including MFA verification and enrollment, are centered and sized to their label on desktop, with a 148px minimum width and 48px height. Below 600px they fill the form width.
 - The desktop Console sidebar is 240px wide and collapses to 76px. The top bar is 64px high, and the content area has a maximum width of 1280px.
+- Project creation uses a dedicated 64px top bar with back navigation, notifications, theme controls, and the account menu. The content spans up to 1440px, with project details on the left and framework preset cards on the right. Build settings are expandable; the creation button fills the left form column. Below 1024px, details, presets, and submission stack vertically. Preset cards use two columns above 600px and one column on smaller screens.
 - Below 900px, the sidebar becomes mobile navigation. Below 760px, forms with two columns become a single column. Below 600px, reduce page padding.
 - Tables may scroll horizontally within their own containers. The page must not overflow horizontally.
 - Extensive settings, member editing, credential rotation, certificate import, and MFA enrollment use dedicated pages with clear back navigation.

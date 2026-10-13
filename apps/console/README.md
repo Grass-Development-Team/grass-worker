@@ -72,6 +72,10 @@ The root Justfile, CI, and Docker build use the same Bun scripts and committed l
 
 See [DESIGN.md](./DESIGN.md) for the design specification and [CODE_STYLE.md](./CODE_STYLE.md) for coding conventions. In development, open `/ui` to inspect shared component variants and states.
 
+All single-line form controls share a 48px height. Authentication submit buttons are centered at their content width on desktop and fill the form width on mobile, including MFA verification. Console supports email/password sign-in and registration; it does not expose third-party sign-in or identity-provider management.
+
+Project creation uses a dedicated header and a two-column workspace for project details and framework presets. Expand **Build settings** to customize the runtime, root directory, commands, and output directory before submission. Narrow screens stack the form, presets, and creation action.
+
 To add a page, place it in the corresponding business directory and register its route, permissions, layout, and dynamic import in `src/ui/pages/index.ts`. Keep business requests in service modules; components do not request business APIs directly.
 
 ## Screenshot review
