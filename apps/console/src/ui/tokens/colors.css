@@ -1,0 +1,51 @@
+/* Semantic tokens also inherit into component shadow roots. */
+:root {
+  color-scheme: light;
+  --background: #fff;
+  --surface: #fafafa;
+  --control: #f1f1f1;
+  --hover: #e9e9e9;
+  --text: #171717;
+  --muted: #666;
+  --subtle: #767676;
+  --border: #e5e5e5;
+  --strong-border: #b9b9b9;
+  --primary: #171717;
+  --primary-text: #fff;
+  --focus: #171717;
+  --success: #15803d;
+  --success-bg: #f0fdf4;
+  --warning: #92400e;
+  --warning-bg: #fffbeb;
+  --error: #b91c1c;
+  --error-bg: #fef2f2;
+  --info: #1d4ed8;
+  --info-bg: #eff6ff;
+  --overlay: rgb(0 0 0 / 38%);
+  --shadow: 0 12px 40px rgb(0 0 0 / 12%);
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --background: #111;
+  --surface: #171717;
+  --control: #242424;
+  --hover: #303030;
+  --text: #ededed;
+  --muted: #aaa;
+  --subtle: #888;
+  --border: #333;
+  --strong-border: #555;
+  --primary: #ededed;
+  --primary-text: #171717;
+  --focus: #ededed;
+  --success: #86efac;
+  --success-bg: #14261a;
+  --warning: #fcd34d;
+  --warning-bg: #2c2412;
+  --error: #fca5a5;
+  --error-bg: #301919;
+  --info: #93c5fd;
+  --info-bg: #172439;
+  --overlay: rgb(0 0 0 / 65%);
+  --shadow: 0 12px 40px rgb(0 0 0 / 40%);
+}

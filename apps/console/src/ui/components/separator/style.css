@@ -1,0 +1,11 @@
+:host {
+  display: block;
+}
+div {
+  height: 1px;
+  background: var(--border);
+}
+:host([orientation="vertical"]) div {
+  width: 1px;
+  height: 24px;
+}

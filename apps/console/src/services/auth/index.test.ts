@@ -1,0 +1,293 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { getCsrfToken, setCsrfToken } from "@/infra/api/csrf";
+import { API_UNAUTHORIZED_EVENT, ApiError, request } from "@/infra/api/index";
+import { authApi } from "@/services/auth/index";
+
+const response = (data: unknown) =>
+  new Response(JSON.stringify({ code: 200, message: "ok", data }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+
+describe("authApi.register", () => {
+  afterEach(() => {
+    setCsrfToken(null);
+    vi.restoreAllMocks();
+  });
+
+  it("registers with a local return destination and stores the returned csrf token", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      response({
+        user: {
+          id: "user-1",
+          email: "leo@example.com",
+          display_name: "Leo",
+          platform_role: "user",
+        },
+        csrf_token: "csrf-token",
+      }),
+    );
+
+    await authApi.register({
+      email: "leo@example.com",
+      display_name: "Leo",
+      password: "correct horse battery staple",
+      return_to: "/invitations/accept?token=invite-token",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/auth/register",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        body: JSON.stringify({
+          email: "leo@example.com",
+          display_name: "Leo",
+          password: "correct horse battery staple",
+          return_to: "/invitations/accept?token=invite-token",
+        }),
+      }),
+    );
+    expect(getCsrfToken()).toBe("csrf-token");
+  });
+
+  it("keeps csrf empty while registration is waiting for email verification", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      response({ verification_required: true, email: "leo@example.com" }),
+    );
+
+    const result = await authApi.register({
+      email: "leo@example.com",
+      display_name: "Leo",
+      password: "correct horse battery staple",
+    });
+
+    expect(result).toEqual({ verification_required: true, email: "leo@example.com" });
+    expect(getCsrfToken()).toBeNull();
+  });
+
+  it("restores the csrf token before a mutation is sent", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        response({
+          user: {
+            id: "user-1",
+            email: "leo@example.com",
+            display_name: "Leo",
+            platform_role: "user",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(response({ csrf_token: "restored-token" }))
+      .mockResolvedValueOnce(response({ ok: true }));
+
+    await authApi.restore();
+    await request<{ ok: boolean }>("/api/v1/teams", {
+      method: "POST",
+      body: JSON.stringify({ name: "Team", slug: "team" }),
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/auth/csrf",
+      expect.objectContaining({ credentials: "include" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/v1/teams",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "x-csrf-token": "restored-token" }),
+      }),
+    );
+  });
+
+  it("shares concurrent session restoration to avoid replacing the csrf token", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        response({
+          user: {
+            id: "user-1",
+            email: "leo@example.com",
+            display_name: "Leo",
+            platform_role: "user",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(response({ csrf_token: "restored-token" }))
+      .mockResolvedValueOnce(
+        response({
+          user: {
+            id: "user-1",
+            email: "leo@example.com",
+            display_name: "Leo",
+            platform_role: "user",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(response({ csrf_token: "stale-token" }));
+
+    const [first, second] = await Promise.all([authApi.restore(), authApi.restore()]);
+
+    expect(first).toEqual(second);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(getCsrfToken()).toBe("restored-token");
+  });
+
+  it("does not broadcast an unauthenticated initial session restore", async () => {
+    const unauthorized = vi.fn();
+    window.addEventListener(API_UNAUTHORIZED_EVENT, unauthorized);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: 40101,
+          message: "authentication required",
+          data: null,
+          op: "auth.session_required",
+        }),
+        {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    await expect(authApi.restore()).rejects.toBeInstanceOf(ApiError);
+
+    expect(unauthorized).not.toHaveBeenCalled();
+    window.removeEventListener(API_UNAUTHORIZED_EVENT, unauthorized);
+  });
+
+  it("updates the current display name", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      response({
+        user: {
+          id: "user-1",
+          email: "leo@example.com",
+          display_name: "Leonard",
+          platform_role: "user",
+        },
+      }),
+    );
+
+    await authApi.updateMe({ display_name: "Leonard" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/me",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ display_name: "Leonard" }),
+      }),
+    );
+  });
+
+  it("uploads and removes the current user avatar as raw PNG", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      response({
+        user: {
+          id: "user-1",
+          email: "leo@example.com",
+          display_name: "Leo",
+          avatar_url: "/api/v1/avatars/users/user-1/version/avatar.webp",
+          platform_role: "user",
+        },
+      }),
+    );
+    const png = new Blob(["png"], { type: "image/png" });
+
+    await authApi.uploadAvatar(png);
+    await authApi.deleteAvatar();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/me/avatar",
+      expect.objectContaining({
+        method: "PUT",
+        body: png,
+        headers: expect.objectContaining({ "content-type": "image/png" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/me/avatar",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+});
+
+describe("authApi.changePassword", () => {
+  afterEach(() => {
+    setCsrfToken(null);
+    vi.restoreAllMocks();
+  });
+  it("clears authentication after a successful password change", async () => {
+    setCsrfToken("old-csrf");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(response({ changed: true }));
+    const event = vi.fn();
+    window.addEventListener(API_UNAUTHORIZED_EVENT, event);
+    try {
+      await authApi.changePassword("old-password", "new-password");
+      expect(getCsrfToken()).toBeNull();
+      expect(event).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener(API_UNAUTHORIZED_EVENT, event);
+    }
+  });
+  it("keeps authentication when a password change is rejected", async () => {
+    setCsrfToken("old-csrf");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ code: 400, message: "password rejected" }), { status: 400 }),
+    );
+    await expect(authApi.changePassword("old-password", "invalid")).rejects.toThrow();
+    expect(getCsrfToken()).toBe("old-csrf");
+  });
+});
+
+describe("authentication races", () => {
+  afterEach(() => {
+    setCsrfToken(null);
+    vi.restoreAllMocks();
+  });
+  it("does not replace a newer login token with an older restoration", async () => {
+    let complete: ((value: Response) => void) | undefined;
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(response({ user: { id: "old" } }))
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            complete = resolve;
+          }),
+      );
+    const restoring = authApi.restore();
+    await vi.waitFor(() => expect(complete).toBeDefined());
+    setCsrfToken("new-session-token");
+    complete!(response({ csrf_token: "old-restored-token" }));
+    await restoring;
+    expect(getCsrfToken()).toBe("new-session-token");
+  });
+  it("does not sign out a newer session when an older request returns 401", async () => {
+    let complete: ((value: Response) => void) | undefined;
+    const unauthorized = vi.fn();
+    window.addEventListener(API_UNAUTHORIZED_EVENT, unauthorized);
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          complete = resolve;
+        }),
+    );
+    const pending = request("/api/v1/teams").catch((cause) => cause);
+    setCsrfToken("new-session-token");
+    complete!(
+      new Response(JSON.stringify({ code: 401, message: "Expired", data: null }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await pending;
+    expect(unauthorized).not.toHaveBeenCalled();
+    expect(getCsrfToken()).toBe("new-session-token");
+    window.removeEventListener(API_UNAUTHORIZED_EVENT, unauthorized);
+  });
+});

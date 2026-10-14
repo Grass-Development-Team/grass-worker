@@ -1,0 +1,11 @@
+nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+::slotted(a) {
+  color: var(--muted);
+  text-decoration: none;
+}

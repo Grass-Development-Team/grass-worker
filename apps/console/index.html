@@ -1,13 +1,26 @@
 <!doctype html>
-<html lang="en" suppresshydrationwarning>
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Self-hosted deployment platform console" />
+    <meta name="description" content="Grass Worker deployment platform console" />
     <title>Console</title>
+    <script>
+      try {
+        const preference = localStorage.getItem("grass-worker.theme") || "system";
+        document.documentElement.dataset.theme =
+          preference === "system"
+            ? matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light"
+            : preference;
+      } catch {
+        document.documentElement.dataset.theme = "light";
+      }
+    </script>
   </head>
   <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <gw-app></gw-app>
+    <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -1,0 +1,177 @@
+.shell {
+  min-height: 100svh;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 28px 24px;
+  text-decoration: none;
+  font-size: 15px;
+  letter-spacing: -0.02em;
+}
+.brand gw-icon {
+  width: 22px;
+  height: 22px;
+}
+.brand strong {
+  white-space: nowrap;
+}
+aside {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: 240px;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  z-index: 8;
+}
+.workspace {
+  padding: 0 16px 20px;
+}
+.new-team {
+  font-size: 11px;
+  color: var(--muted);
+  display: block;
+  padding: 8px 12px 0;
+  text-decoration: none;
+}
+.navigation {
+  overflow: auto;
+  flex: 1;
+  padding: 0 12px 16px;
+}
+.aside-footer {
+  padding: 16px;
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 12px;
+}
+.aside-footer small {
+  font-size: 10px;
+  color: var(--subtle);
+}
+.account {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.account > span {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.main {
+  margin-left: 240px;
+}
+header {
+  height: 64px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 24px;
+  position: sticky;
+  top: 0;
+  background: var(--background);
+  z-index: 4;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+main {
+  padding: 40px 40px 64px;
+  max-width: 1280px;
+  margin-inline: auto;
+}
+.collapsed aside {
+  width: 76px;
+}
+.collapsed .main {
+  margin-left: 76px;
+}
+.collapsed .brand {
+  padding: 28px 24px;
+}
+.collapsed .brand strong,
+.collapsed .workspace,
+.collapsed .aside-footer small,
+.collapsed gw-sidebar a span {
+  display: none;
+}
+.collapsed .aside-footer {
+  padding: 12px;
+}
+.collapsed .account > span {
+  display: none;
+}
+.collapsed gw-sidebar a {
+  justify-content: center;
+}
+.backdrop {
+  display: none;
+}
+.sr-only {
+  position: absolute;
+  clip-path: inset(50%);
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+@media (max-width: 900px) {
+  aside,
+  .collapsed aside {
+    width: 260px;
+    transform: translateX(-100%);
+    transition: transform var(--motion-normal);
+  }
+  .main,
+  .collapsed .main {
+    margin-left: 0;
+  }
+  .open aside {
+    transform: translateX(0);
+  }
+  .open .backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: var(--overlay);
+    z-index: 7;
+  }
+  .collapsed .workspace,
+  .collapsed .aside-footer small,
+  .collapsed gw-sidebar a span,
+  .collapsed .brand strong {
+    display: block;
+  }
+  .collapsed gw-sidebar a {
+    justify-content: flex-start;
+  }
+  main {
+    padding: 28px 24px 48px;
+  }
+  header {
+    padding-inline: 16px;
+  }
+  gw-breadcrumb {
+    min-width: 0;
+    overflow: hidden;
+  }
+}
+@media (max-width: 600px) {
+  main {
+    padding: 24px 16px 40px;
+  }
+  gw-breadcrumb {
+    display: none;
+  }
+}

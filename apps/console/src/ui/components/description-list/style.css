@@ -1,0 +1,10 @@
+dl {
+  margin: 0;
+  display: grid;
+  gap: 12px;
+}
+::slotted(div) {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) 2fr;
+  gap: 16px;
+}

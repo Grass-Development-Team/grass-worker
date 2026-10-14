@@ -1,0 +1,40 @@
+:host {
+  display: block;
+  min-width: 0;
+}
+section {
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+header {
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+  position: relative;
+}
+h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.content {
+  padding: 24px;
+}
+footer {
+  padding: 0 24px;
+}
+footer:has(slot:not(:empty)) {
+  padding-bottom: 20px;
+}
+::slotted([slot="action"]) {
+  position: absolute;
+  right: 24px;
+  top: 16px;
+}

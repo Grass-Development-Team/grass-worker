@@ -1,0 +1,87 @@
+:host {
+  display: block;
+  min-width: 0;
+}
+label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+label span {
+  color: var(--muted);
+}
+.control {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: var(--control-md);
+  padding: 0 12px;
+  background: var(--control);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  transition:
+    background var(--motion-fast),
+    border-color var(--motion-fast);
+}
+.control:focus-within {
+  border-color: var(--strong-border);
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+input,
+textarea,
+select {
+  width: 100%;
+  min-width: 0;
+  outline: none;
+  background: transparent;
+  border: 0;
+  min-height: 38px;
+  padding: 8px 0;
+}
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+textarea {
+  min-height: 112px;
+  resize: vertical;
+}
+.description,
+.error {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.error {
+  color: var(--error);
+}
+:host([disabled]) {
+  opacity: 0.5;
+}
+:host([size="lg"]) .control {
+  min-height: 48px;
+  padding-inline: 16px;
+}
+:host([size="lg"]) input {
+  font-size: 16px;
+  min-height: 46px;
+}
+:host([size="sm"]) .control {
+  min-height: 32px;
+}
+:host([size="sm"]) input {
+  min-height: 30px;
+}
+
+.control:has([aria-invalid="true"]) {
+  border-color: var(--error);
+}

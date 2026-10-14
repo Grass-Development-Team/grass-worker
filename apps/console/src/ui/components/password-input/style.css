@@ -1,0 +1,22 @@
+.split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  gap: 4px;
+}
+.split .control {
+  border-top-right-radius: var(--radius-join);
+  border-bottom-right-radius: var(--radius-join);
+}
+.reveal {
+  border: 1px solid transparent;
+  border-radius: var(--radius-join) var(--radius) var(--radius) var(--radius-join);
+  background: var(--control);
+  display: grid;
+  place-items: center;
+}
+.reveal:hover {
+  background: var(--hover);
+}
+:host([size="lg"]) .split {
+  grid-template-columns: minmax(0, 1fr) 48px;
+}

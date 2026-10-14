@@ -1,0 +1,17 @@
+:host {
+  display: block;
+}
+img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.fallback {
+  display: grid;
+  place-items: center;
+  min-height: 40px;
+  color: var(--muted);
+  background: var(--control);
+  border-radius: var(--radius);
+}

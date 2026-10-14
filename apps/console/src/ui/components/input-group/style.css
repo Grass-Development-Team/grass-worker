@@ -1,0 +1,9 @@
+div {
+  display: flex;
+  gap: 4px;
+  border-radius: var(--radius);
+}
+::slotted(*) {
+  flex: 1;
+  min-width: 0;
+}

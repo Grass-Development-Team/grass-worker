@@ -1,0 +1,10 @@
+nav {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  align-items: center;
+}
+span {
+  color: var(--muted);
+  font-size: 12px;
+}

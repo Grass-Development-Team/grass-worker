@@ -1,0 +1,174 @@
+import { getCsrfRevision, restoreCsrfToken, setCsrfToken } from "@/infra/api/csrf";
+import { API_UNAUTHORIZED_EVENT, request } from "@/infra/api/index";
+import type {
+  AccountSecurity,
+  AuthConfiguration,
+  AuthResponse,
+  CsrfResponse,
+  LoginResponse,
+  MeResponse,
+  MfaChallenge,
+  MfaFactor,
+  RegisterInput,
+  RegisterResponse,
+  TotpEnrollment,
+} from "./model";
+export type * from "./model";
+
+export function isAuthResponse(value: LoginResponse | RegisterResponse): value is AuthResponse {
+  return "user" in value && "csrf_token" in value;
+}
+
+function storeAuthenticatedResponse(data: AuthResponse): AuthResponse {
+  setCsrfToken(data.csrf_token);
+  return data;
+}
+
+let restorePromise: Promise<MeResponse> | null = null;
+
+function getMe(broadcastUnauthorized = true): Promise<MeResponse> {
+  return request<MeResponse>(
+    "/api/v1/me",
+    { credentials: "include" as RequestCredentials },
+    { broadcastUnauthorized },
+  );
+}
+
+async function getCsrf(
+  broadcastUnauthorized = true,
+  version = getCsrfRevision(),
+): Promise<CsrfResponse> {
+  const data = await request<CsrfResponse>(
+    "/api/v1/auth/csrf",
+    { credentials: "include" as RequestCredentials },
+    { broadcastUnauthorized },
+  );
+  restoreCsrfToken(data.csrf_token, version);
+  return data;
+}
+
+function restoreSession(): Promise<MeResponse> {
+  if (!restorePromise) {
+    const version = getCsrfRevision();
+    const pending = (async () => {
+      const data = await getMe(false);
+      await getCsrf(false, version);
+      return data;
+    })();
+    const shared = pending.finally(() => {
+      if (restorePromise === shared) restorePromise = null;
+    });
+    restorePromise = shared;
+  }
+  return restorePromise;
+}
+
+export const authApi = {
+  configuration: () => request<AuthConfiguration>("/api/v1/auth/providers"),
+  login: async (email: string, password: string, returnTo?: string) => {
+    const data = await request<LoginResponse>("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email, password, ...(returnTo ? { return_to: returnTo } : {}) }),
+      credentials: "include" as RequestCredentials,
+    });
+    return isAuthResponse(data) ? storeAuthenticatedResponse(data) : data;
+  },
+  register: async (input: RegisterInput) => {
+    const data = await request<RegisterResponse>("/api/v1/auth/register", {
+      method: "POST",
+      body: JSON.stringify(input),
+      credentials: "include" as RequestCredentials,
+    });
+    return isAuthResponse(data) ? storeAuthenticatedResponse(data) : data;
+  },
+  logout: async () => {
+    const data = await request<{ message: string }>("/api/v1/auth/logout", {
+      method: "POST",
+      credentials: "include" as RequestCredentials,
+    });
+    setCsrfToken(null);
+    return data;
+  },
+  updateMe: (input: { display_name: string | null }) =>
+    request<MeResponse>("/api/v1/me", {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+  uploadAvatar: (png: Blob) =>
+    request<MeResponse>("/api/v1/me/avatar", {
+      method: "PUT",
+      headers: { "Content-Type": "image/png" },
+      body: png,
+    }),
+  deleteAvatar: () => request<MeResponse>("/api/v1/me/avatar", { method: "DELETE" }),
+  forgotPassword: (email: string) =>
+    request<{ accepted: true }>("/api/v1/auth/password/forgot", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+  resetPassword: (token: string, password: string) =>
+    request<{ reset: true }>("/api/v1/auth/password/reset", {
+      method: "POST",
+      body: JSON.stringify({ token, password }),
+    }),
+  verifyEmail: async (token: string) =>
+    storeAuthenticatedResponse(
+      await request<AuthResponse>("/api/v1/auth/email/verify", {
+        method: "POST",
+        body: JSON.stringify({ token }),
+        credentials: "include" as RequestCredentials,
+      }),
+    ),
+  resendVerification: (email: string, returnTo?: string) =>
+    request<{ accepted: true }>("/api/v1/auth/email/resend", {
+      method: "POST",
+      body: JSON.stringify({ email, ...(returnTo ? { return_to: returnTo } : {}) }),
+    }),
+  mfaChallenge: (challengeToken: string) =>
+    request<MfaChallenge>("/api/v1/auth/mfa/challenge", {
+      method: "POST",
+      body: JSON.stringify({ challenge_token: challengeToken }),
+    }),
+  mfaTotpStart: (challengeToken: string) =>
+    request<TotpEnrollment>("/api/v1/auth/mfa/totp/start", {
+      method: "POST",
+      body: JSON.stringify({ challenge_token: challengeToken }),
+    }),
+  mfaEmailSend: (challengeToken: string, factorId?: string) =>
+    request<{ factor: MfaFactor }>("/api/v1/auth/mfa/email/send", {
+      method: "POST",
+      body: JSON.stringify({
+        challenge_token: challengeToken,
+        ...(factorId ? { factor_id: factorId } : {}),
+      }),
+    }),
+  mfaVerify: async (challengeToken: string, factorId: string, code: string) => {
+    const data = await request<LoginResponse>("/api/v1/auth/mfa/verify", {
+      method: "POST",
+      body: JSON.stringify({ challenge_token: challengeToken, factor_id: factorId, code }),
+      credentials: "include" as RequestCredentials,
+    });
+    return isAuthResponse(data) ? storeAuthenticatedResponse(data) : data;
+  },
+  security: () => request<AccountSecurity>("/api/v1/me/security"),
+  changePassword: async (currentPassword: string, password: string) => {
+    const result = await request<{ changed: true }>("/api/v1/me/password", {
+      method: "POST",
+      body: JSON.stringify({ current_password: currentPassword, password }),
+    });
+    setCsrfToken(null);
+    window.dispatchEvent(new Event(API_UNAUTHORIZED_EVENT));
+    return result;
+  },
+  accountTotpStart: () => request<TotpEnrollment>("/api/v1/me/mfa/totp/start", { method: "POST" }),
+  accountEmailStart: () =>
+    request<{ factor: MfaFactor }>("/api/v1/me/mfa/email/start", { method: "POST" }),
+  accountMfaConfirm: (factorId: string, code: string) =>
+    request<{ factor: MfaFactor }>(`/api/v1/me/mfa/${factorId}/confirm`, {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
+  accountMfaDelete: (factorId: string) =>
+    request<{ deleted: true }>(`/api/v1/me/mfa/${factorId}`, { method: "DELETE" }),
+  restore: restoreSession,
+};

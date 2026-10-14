@@ -1,0 +1,31 @@
+:host {
+  display: block;
+}
+div {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  font-size: 13px;
+  color: var(--info);
+  background: var(--info-bg);
+}
+strong {
+  display: block;
+  margin-bottom: 4px;
+}
+:host([tone="error"]) div {
+  color: var(--error);
+  background: var(--error-bg);
+}
+:host([tone="warning"]) div {
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+:host([tone="success"]) div {
+  color: var(--success);
+  background: var(--success-bg);
+}
+:host([tone="neutral"]) div {
+  color: var(--muted);
+  background: var(--surface);
+}

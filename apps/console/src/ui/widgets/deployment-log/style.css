@@ -1,0 +1,39 @@
+:host {
+  display: block;
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.output {
+  height: 400px;
+  overflow: auto;
+  padding: 16px;
+  border-radius: var(--radius);
+  border: 1px solid #303030;
+  background: #111;
+  color: #eee;
+  font: 12px/1.8 var(--font-mono);
+}
+.output > div {
+  display: flex;
+  gap: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.stage {
+  min-width: 64px;
+  color: #999;
+  flex-shrink: 0;
+}
+.output p {
+  color: #999;
+}
+.error {
+  color: var(--warning);
+  font-size: 12px;
+}

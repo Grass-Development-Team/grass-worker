@@ -1,0 +1,44 @@
+:host {
+  display: block;
+}
+label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 400;
+  margin: 0;
+  cursor: pointer;
+}
+input {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--primary);
+}
+.switch {
+  appearance: none;
+  width: 34px;
+  height: 20px;
+  border-radius: 20px;
+  background: var(--strong-border);
+  position: relative;
+  transition: background var(--motion-fast);
+}
+.switch::before {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  background: var(--background);
+  top: 3px;
+  left: 3px;
+  border-radius: 50%;
+  transition: transform var(--motion-fast);
+}
+.switch:checked {
+  background: var(--primary);
+}
+.switch:checked::before {
+  transform: translateX(14px);
+}

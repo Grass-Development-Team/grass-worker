@@ -1,0 +1,15 @@
+:host {
+  display: block;
+}
+span {
+  display: block;
+  min-height: 20px;
+  border-radius: 6px;
+  background: var(--control);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.5;
+  }
+}

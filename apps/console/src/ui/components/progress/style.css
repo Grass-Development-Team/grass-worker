@@ -1,0 +1,11 @@
+.track {
+  background: var(--control);
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.bar {
+  background: var(--text);
+  height: 100%;
+  transition: width var(--motion-normal);
+}

@@ -1,0 +1,39 @@
+.stack {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  display: grid;
+  gap: 8px;
+  z-index: 20;
+  max-width: min(400px, calc(100vw - 32px));
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--background);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+  font-size: 13px;
+}
+.toast[data-tone="error"] gw-icon {
+  color: var(--error);
+}
+.toast[data-tone="success"] gw-icon {
+  color: var(--success);
+}
+button {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 20px;
+}
+@media (max-width: 600px) {
+  .stack {
+    bottom: 16px;
+    right: 16px;
+  }
+}

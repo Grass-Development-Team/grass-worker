@@ -1,0 +1,40 @@
+:host {
+  display: block;
+  min-width: 0;
+}
+.scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 480px;
+  text-align: left;
+  font-size: 13px;
+}
+th {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--surface);
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+td {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+tr:last-child td {
+  border: 0;
+}
+tbody tr:hover {
+  background: var(--surface);
+}
+.empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 40px;
+}

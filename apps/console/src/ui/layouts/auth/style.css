@@ -1,0 +1,28 @@
+:host {
+  display: flex;
+  flex-direction: column;
+  min-height: 100svh;
+  background: var(--background);
+}
+main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  place-items: center;
+  flex: 1;
+  padding: 72px 24px;
+}
+footer {
+  color: var(--subtle);
+  text-align: center;
+  padding: 16px;
+  font-size: 11px;
+}
+::slotted(*) {
+  width: 100%;
+  max-width: 560px;
+}
+@media (max-width: 600px) {
+  main {
+    padding: 48px 24px;
+  }
+}

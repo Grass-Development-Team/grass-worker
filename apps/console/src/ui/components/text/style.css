@@ -1,0 +1,15 @@
+:host {
+  display: block;
+}
+:host([variant="muted"]) {
+  color: var(--muted);
+}
+:host([variant="heading"]) {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.04em;
+}
+:host([variant="code"]) {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}

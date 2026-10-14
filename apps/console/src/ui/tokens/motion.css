@@ -1,0 +1,24 @@
+:root {
+  --motion-fast: 120ms;
+  --motion-normal: 180ms;
+}
+.theme-transition::view-transition-old(root),
+.theme-transition::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+.theme-transition::view-transition-old(root) {
+  z-index: 1;
+}
+.theme-transition::view-transition-new(root) {
+  z-index: 2;
+}
+.theme-transition::view-transition-group(root) {
+  animation-duration: 300ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms;
+    --motion-normal: 0ms;
+  }
+}

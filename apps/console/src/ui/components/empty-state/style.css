@@ -1,0 +1,14 @@
+section {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  gap: 12px;
+  padding: 64px 24px;
+  color: var(--muted);
+}
+h2 {
+  margin: 0;
+  color: var(--text);
+  font-weight: 500;
+  font-size: 16px;
+}

@@ -1,0 +1,12 @@
+fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 16px;
+}
+legend {
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 12px;
+}

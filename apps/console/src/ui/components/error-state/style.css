@@ -1,0 +1,10 @@
+section {
+  padding: 48px 24px;
+  text-align: center;
+}
+h2 {
+  font-size: 18px;
+}
+p {
+  color: var(--muted);
+}
