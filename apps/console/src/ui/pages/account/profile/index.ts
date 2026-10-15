@@ -9,7 +9,8 @@ export class ProfilePage extends Page {
   private auth = new StoreController(this, session);
   render() {
     this.classList.add("page");
-    const user = this.auth.value.user!;
+    const user = this.auth.value.user;
+    if (!user) return html``;
     return html`${heading("Personal settings", "Manage your profile and account information.")}
       <nav class="page-tabs">
         <a href="/account/profile" aria-current="page">Profile</a
